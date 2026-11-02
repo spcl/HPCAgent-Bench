@@ -21,18 +21,23 @@ PINS = paths.ROOT / ".github" / "user-plugins.toml"
 
 
 def git(*args: str, cwd: pathlib.Path | None = None) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+    done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)} failed (exit {done.returncode}):\n{done.stderr.strip()}")
+    return done.stdout.strip()
 
 
-def pins() -> dict[str, dict[str, str]]:
-    return tomllib.loads(PINS.read_text(encoding="utf-8"))["plugins"]
+def pins(names: list[str]) -> dict[str, dict[str, str]]:
+    """The pins of ``names`` (none: all); a name :data:`PINS` does not hold stops the run."""
+    known = tomllib.loads(PINS.read_text(encoding="utf-8"))["plugins"]
+    if unknown := sorted(set(names) - set(known)):
+        raise SystemExit(f"{PINS}: no plugin {unknown}; known: {sorted(known)}")
+    return {name: pin for name, pin in known.items() if not names or name in names}
 
 
 def checkout(dest: pathlib.Path, names: list[str]) -> str:
     folders: list[str] = []
-    for name, pin in pins().items():
-        if names and name not in names:
-            continue
+    for name, pin in pins(names).items():
         repo = dest / name
         if not (repo / ".git").is_dir():
             repo.mkdir(parents=True, exist_ok=True)
@@ -46,10 +51,11 @@ def checkout(dest: pathlib.Path, names: list[str]) -> str:
 
 def bump(names: list[str]) -> None:
     text = PINS.read_text(encoding="utf-8")
-    for name, pin in pins().items():
-        if names and name not in names:
-            continue
-        tip = git("ls-remote", pin["repository"], "refs/heads/main").split()[0]
+    for name, pin in pins(names).items():
+        remote = git("ls-remote", pin["repository"], "refs/heads/main").split()
+        if not remote:
+            raise SystemExit(f"{pin['repository']}: no branch main")
+        tip = remote[0]
         block = re.compile(rf'(\[plugins\.{re.escape(name)}\][^\[]*?commit = ")[0-9a-f]{{40}}(")', re.S)
         text, count = block.subn(rf"\g<1>{tip}\g<2>", text)
         if count != 1:
