@@ -27,18 +27,14 @@ POLICY = {
 }
 
 
-def load(name: str) -> ModuleType:
-    return fresh(name)
-
-
 @pytest.fixture(name="driver", scope="module")
 def driver_fixture() -> ModuleType:
-    return load("agent_driver")
+    return fresh("agent_driver")
 
 
 @pytest.fixture(name="harnesses", scope="module")
 def harnesses_fixture() -> ModuleType:
-    return load("harnesses")
+    return fresh("harnesses")
 
 
 def env_values(path: str) -> dict[str, str]:

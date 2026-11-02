@@ -9,7 +9,6 @@ import sqlite3
 import subprocess
 import sys
 import types
-from types import ModuleType
 
 import pytest
 
@@ -27,19 +26,14 @@ MONITOR_ROW = "2026-01-01T00:00:00Z,10.0,0.1,100,1000,0.0,0,0"
 GARBAGE_BYTES = b"\xff\xfe" * 100
 
 
-def load_example_module(name: str) -> ModuleType:
-    """Registered in ``sys.modules`` before exec, as a real import does."""
-    return fresh(name)
-
-
 @pytest.fixture(name="validate_run")
 def validate_run_fixture() -> types.ModuleType:
-    return load_example_module("validate_run")
+    return fresh("validate_run")
 
 
 @pytest.fixture(name="monitor_report")
 def monitor_report_fixture() -> types.ModuleType:
-    return load_example_module("monitor_report")
+    return fresh("monitor_report")
 
 
 def seed_shard(path: pathlib.Path, *, episode_id: str, kernel: str = "gemm", ts: int = 1) -> None:

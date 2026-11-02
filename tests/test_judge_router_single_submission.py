@@ -43,7 +43,7 @@ def router_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType
     monkeypatch.setenv("AGENT_SUBMISSION_MODE", "single")
     monkeypatch.setenv("SETUP", SETUP)
     with stub_judge() as url:
-        module = load_router("judge_service_single_submission")
+        module = load_router()
         monkeypatch.setattr(module, "UPSTREAM_URL", url)
         with TestClient(module.app) as client:
             yield module, client
