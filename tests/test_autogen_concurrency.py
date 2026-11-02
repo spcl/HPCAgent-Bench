@@ -21,12 +21,15 @@ from hpcagent_bench.spec import BenchSpec
 #: A small dense kernel with a generated (not hand-written) dace sibling.
 KERNEL = "scaled_add"
 
+#: How long a rank waits for its peers: a peer that died must not strand the others at the barrier.
+BARRIER_TIMEOUT_S = 120.0
+
 
 def generate_and_import(start: multiprocessing.synchronize.Barrier, outcome: multiprocessing.queues.Queue[str]) -> None:
     """One rank: generate the dace sibling (or wait for the rank that does), then find it to import."""
-    spec = BenchSpec.load(KERNEL)
-    start.wait()
     try:
+        spec = BenchSpec.load(KERNEL)
+        start.wait(timeout=BARRIER_TIMEOUT_S)
         ensure(KERNEL, ("dace",))
         # Found by the import system (its module binds the framework's dtypes, so it is not imported bare here).
         name = f"hpcagent_bench.benchmarks.{spec.relative_path.replace('/', '.')}.{spec.module_name}_dace"
@@ -55,7 +58,8 @@ def test_four_ranks_generating_one_sibling_all_import_it() -> None:
     finally:
         for worker in workers:
             worker.join(timeout=60)
-            worker.terminate()
+            worker.kill()
+            worker.join()
     assert outcomes == ["ok"] * 4, outcomes
 
 

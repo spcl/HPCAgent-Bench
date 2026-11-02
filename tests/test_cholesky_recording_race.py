@@ -16,6 +16,9 @@ from hpcagent_bench import osinfo
 from hpcagent_bench.categories import Preset
 from hpcagent_bench.frameworks.benchmark import Benchmark
 
+#: How long a rank waits for its peers: a peer that died must not strand the others at the barrier.
+BARRIER_TIMEOUT_S = 60.0
+
 
 def test_cholesky_numpy_reference_produces_finite_output_at_the_fuzzed_preset() -> None:
     """Rules out "cholesky's own math is broken" -- the manifest's ``initialize`` builds A @ A.T,
@@ -44,10 +47,10 @@ def run_framework_worker(
     fresh canon DB."""
     os.environ.pop("SLURM_PROCID", None)
     os.environ.pop("HPCAGENT_BENCH_DB_SHARD", None)
-    from hpcagent_bench.support.collect.sweep import CanonTarget, run_framework_sweep
-
-    start.wait()
     try:
+        from hpcagent_bench.support.collect.sweep import CanonTarget, run_framework_sweep
+
+        start.wait(timeout=BARRIER_TIMEOUT_S)
         canon = CanonTarget(pathlib.Path(canon_path), "race")
         failed = run_framework_sweep("cholesky", "numba", Preset.S, True, 1, 60.0, True, None, canon=canon)
         outcome.put("failed:" + ",".join(failed) if failed else "ok")
@@ -71,7 +74,8 @@ def test_cholesky_survives_four_ranks_recording_through_run_framework_sweep(tmp_
     finally:
         for worker in workers:
             worker.join(timeout=30)
-            worker.terminate()
+            worker.kill()
+            worker.join()
     assert outcomes == ["ok"] * 4, outcomes
     from hpcagent_bench.support.collect import canon_db
 
