@@ -281,8 +281,17 @@ def test_export_builds_once_and_pushes_the_validated_folder(
         captured["builds"] = captured.get("builds", 0) + 1
         return real_build(*a, **k)
 
-    def fake_push(out_dir: pathlib.Path, repo_id: str, *, token: str, private: bool | None = None) -> None:
+    def fake_push(
+        out_dir: pathlib.Path,
+        repo_id: str,
+        *,
+        token: str,
+        private: bool | None = None,
+        release_tag: str | None = None,
+        source_commit: str = "",
+    ) -> None:
         captured.update(out_dir=pathlib.Path(out_dir), repo=repo_id, token=token, private=private)
+        captured.update(release_tag=release_tag)
         captured["ids"] = [
             json.loads(line)["id"]
             for line in (captured["out_dir"] / "data" / "loop_level_reasoning_tsvc_2_s212.jsonl")
@@ -300,6 +309,7 @@ def test_export_builds_once_and_pushes_the_validated_folder(
     assert captured["repo"] == "org/demo"
     assert captured["token"] == "hf_test"
     assert captured["private"] is None  # --private absent: the Hub's default stays
+    assert captured["release_tag"] is None
 
 
 def test_export_push_private_flag_reaches_the_push(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,6 +321,63 @@ def test_export_push_private_flag_reaches_the_push(tmp_path: pathlib.Path, monke
     monkeypatch.setenv("HF_TOKEN", "hf_test")
     assert cli.cmd_export_hf(export_args(tmp_path, "--push", "org/demo", "--private")) == 0
     assert captured["private"] is True
+
+
+def test_a_release_push_tags_the_card_and_loads_back_from_the_hub_at_that_tag(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hpcagent_bench import cli
+    from hpcagent_bench.export import hf as H
+
+    pushed: dict[str, object] = {}
+    loaded: list[tuple[object, object]] = []
+
+    def fake_load_back(source: object, counts: dict[str, int], revision: str | None = None) -> list[str]:
+        loaded.append((source, revision))
+        return []
+
+    monkeypatch.setattr(H, "push_folder", lambda *a, **k: pushed.update(k) or "hub-sha")
+    monkeypatch.setattr(H, "load_back", fake_load_back)
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    assert cli.cmd_export_hf(export_args(tmp_path, "--push", "org/demo", "--release-tag", "v0.5.0")) == 0
+    assert pushed["release_tag"] == "v0.5.0"
+    assert pushed["source_commit"] == hf_export.paths.git_head()
+    assert 'revision="v0.5.0"' in (tmp_path / "ds" / "README.md").read_text()
+    assert loaded == [(str(tmp_path / "ds"), None), ("org/demo", "v0.5.0")]
+
+
+@pytest.mark.parametrize("failure", [["config: loaded 0 rows, wrote 1"], OSError("hub unreachable")])
+def test_a_release_that_does_not_load_back_from_the_hub_exits_3(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, failure: list[str] | OSError
+) -> None:
+    from hpcagent_bench import cli
+    from hpcagent_bench.export import hf as H
+
+    def fake_load_back(source: object, counts: dict[str, int], revision: str | None = None) -> list[str]:
+        if revision is None:
+            return []
+        if isinstance(failure, OSError):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(H, "push_folder", lambda *a, **k: "hub-sha")
+    monkeypatch.setattr(H, "load_back", fake_load_back)
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        assert cli.cmd_export_hf(export_args(tmp_path, "--push", "org/demo", "--release-tag", "v0.5.0")) == 3
+    assert "publish a new patch tag" in err.getvalue()
+
+
+@pytest.mark.parametrize("extra", [("--release-tag", "v0.5.0"), ("--push", "org/demo", "--release-tag", "0.5")])
+def test_a_bad_release_request_is_refused_before_building(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, extra: tuple[str, ...]
+) -> None:
+    from hpcagent_bench import cli
+    from hpcagent_bench.export import hf as H
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr(H, "build_rows", lambda *a, **k: pytest.fail("built rows for a bad release request"))
+    assert cli.cmd_export_hf(export_args(tmp_path, *extra)) == 2
 
 
 def test_push_without_token_is_refused_before_building(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
