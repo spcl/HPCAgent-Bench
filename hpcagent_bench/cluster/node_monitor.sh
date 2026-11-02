@@ -30,13 +30,9 @@ trap 'STOP=1' TERM INT
 
 # A wedged GPU driver can hang its smi tool forever, which would stall this monitor at startup (no
 # probe answer, so no header and no CSV at all) or mid-run (no more rows, silently): cap every smi
-# call (SMI_TIMEOUT seconds, default 15) so a hang costs one probe or one blank sample, and the
-# loop keeps sampling.
-if command -v timeout >/dev/null 2>&1; then
-    smi() { timeout "${SMI_TIMEOUT:-15}" "$@"; }
-else
-    smi() { "$@"; }
-fi
+# call so a hang costs one probe or one blank sample, and the loop keeps sampling. The bound is
+# generous because a healthy slow startup probe that times out loses the GPU columns for the whole CSV.
+smi() { timeout -k 5 30 "$@"; }
 
 # Decide once which GPU tool works and how many GPUs it reports; per-sample code
 # below just calls that one tool, so a missing/broken rocm-smi never costs a second
