@@ -95,8 +95,9 @@ dace-fortran (SPCL)
 ====================================================================================================
 
 Project: https://github.com/spcl/dace-fortran
-License: BSD-3-Clause
+License: GPL-3.0-or-later
 Copyright ETH Zurich (SPCL)
+License text: https://spdx.org/licenses/GPL-3.0-or-later.html
 Covers: aes_graupel, cloudsc_monolith, icon_one_loop, lulesh, velocity_tendencies, velocity_tendencies_multiblock
 Intermediary that inlined the ICON and LULESH Fortran into single translation units.
 
@@ -767,7 +768,7 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
---- BSD-3-Clause (applies to: CFD Python: 12 Steps to Navier-Stokes, CP2K real-space grid backend (src/grid), dace-fortran (SPCL), ExaMiniMD, GridTools GT4Py (stencil_definitions.py integration tests), hmmlearn, ICON dynamical core and AES physics, LS3DF (linear-scaling three-dimensional fragment method), LULESH (LLNL), miniMD (Mantevo) and CoMD (ECP-copa), NetworkX, NPBench, numpy-benchmarks (Serge Guelton), QuaTrEx (Computational Nanoelectronics Group, ETH Zurich), SciPy (scipy.sparse.csgraph.laplacian))
+--- BSD-3-Clause (applies to: CFD Python: 12 Steps to Navier-Stokes, CP2K real-space grid backend (src/grid), ExaMiniMD, GridTools GT4Py (stencil_definitions.py integration tests), hmmlearn, ICON dynamical core and AES physics, LS3DF (linear-scaling three-dimensional fragment method), LULESH (LLNL), miniMD (Mantevo) and CoMD (ECP-copa), NetworkX, NPBench, numpy-benchmarks (Serge Guelton), QuaTrEx (Computational Nanoelectronics Group, ETH Zurich), SciPy (scipy.sparse.csgraph.laplacian))
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:

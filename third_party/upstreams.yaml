@@ -134,7 +134,7 @@ upstreams:
   dace_fortran:
     name: dace-fortran (SPCL)
     url: https://github.com/spcl/dace-fortran
-    license: BSD-3-Clause
+    license: GPL-3.0-or-later
     copyright: Copyright ETH Zurich (SPCL)
     note: Intermediary that inlined the ICON and LULESH Fortran into single translation units.
   dbcsr:
