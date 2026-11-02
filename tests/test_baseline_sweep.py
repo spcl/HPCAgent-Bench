@@ -54,6 +54,12 @@ HANGING_CLI = (
     "import sys\nimport time\n\nif sys.argv[1:2] == ['preflight']:\n    raise SystemExit(0)\ntime.sleep(9999)\n"
 )
 
+#: A ``run-framework`` that dies by SIGKILL mid-sweep, as an outside killer (the OOM killer, the site) leaves one.
+KILLED_CLI = (
+    "import os, signal, sys\n\nif sys.argv[1:2] == ['preflight']:\n    raise SystemExit(0)\n"
+    "os.kill(os.getpid(), signal.SIGKILL)\n"
+)
+
 RLIMIT_CLI = (
     "import resource\n\n"
     "data_soft, data_hard = resource.getrlimit(resource.RLIMIT_DATA)\n"
@@ -153,6 +159,20 @@ def test_a_hung_kernel_is_killed_and_recorded_as_a_timeout_row_not_a_silent_gap(
     assert (row["run"], row["status"], row["failure"]) == (sweep.run_label, "timeout", "timeout")
     # status != ok, so the row is tallied as crashed, and the nonzero-exit counter agrees with it.
     assert "1 rows -- 0 ok, 0 unsupported, 0 tool-missing, 1 crashed, 0 failed-in-column, 1 nonzero-exit" in out
+
+
+def test_a_kernel_killed_by_a_signal_gets_a_crash_row_not_a_silent_gap(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Popen reports a signal death as a negative code: neither 0 nor the cap's 124."""
+    opt = stub_checkout(tmp_path, KILLED_CLI)
+    sweep = sweep_of(tmp_path, opt, ("onlykernel",), managed=False)
+    assert baseline.run(sweep, jobs.Rank(0, 1)) == 0
+    row = canon_rows(sweep)["onlykernel"]
+    assert (row["status"], row["failure"], row["error"]) == ("crash", "crash", "killed by signal 9")
+    assert "1 rows -- 0 ok, 0 unsupported, 0 tool-missing, 1 crashed, 0 failed-in-column, 1 nonzero-exit" in (
+        capsys.readouterr().out
+    )
 
 
 @pytest.mark.parametrize(
