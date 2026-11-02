@@ -1131,9 +1131,9 @@ class DesugarUnreplacedCalls(ast.NodeTransformer):
         self.ranks = ranks
 
     def outer_operand(self, node: ast.expr) -> str:
-        """``node`` as a vector: ``np.outer`` ravels whatever is not one already."""
+        """``node`` as a vector: ``np.outer`` ravels an operand known to have more than one axis."""
         text = ast.unparse(node)
-        return f"({text})" if expr_rank(node, self.ranks) == 1 else f"({text}).ravel()"
+        return f"({text}).ravel()" if (expr_rank(node, self.ranks) or 1) > 1 else f"({text})"
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
         self.generic_visit(node)

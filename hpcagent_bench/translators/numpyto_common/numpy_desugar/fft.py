@@ -15,7 +15,7 @@ __all__ = ["NATIVE_FFT_BACKENDS", "FftInline", "SubstituteFftCalls", "fft_axes",
 
 def fft_axes(fattr: str, call: ast.Call, rank: int) -> tuple[list[int] | None, bool]:
     """``(transform_axes, inverse)`` for an ``np.fft.<fattr>`` call; axes are ``None`` for a form the DFT loops
-    do not reproduce: a transform length, a ``norm``, or non-constant axes.
+    do not reproduce: a transform length, a ``norm``, non-constant axes, or axes past ``rank``.
 
     ``fft``: one ``axis`` (default last); ``fftn``: ``axes`` (default all); ``fft2``: last two.
     Negative axes wrap modulo ``rank``."""
@@ -32,7 +32,7 @@ def fft_axes(fattr: str, call: ast.Call, rank: int) -> tuple[list[int] | None, b
         if axes is None:
             return [rank - 1], inverse
         axis = const_int(axes)
-        return (None if axis is None else [axis % rank]), inverse
+        return (None if axis is None or not -rank <= axis < rank else [axis % rank]), inverse
     if base == "fft2":
         return ([rank - 2, rank - 1] if rank >= 2 and axes is None else None), inverse
     if base == "fftn":
@@ -40,7 +40,7 @@ def fft_axes(fattr: str, call: ast.Call, rank: int) -> tuple[list[int] | None, b
             return list(range(rank)), inverse
         if isinstance(axes, (ast.Tuple, ast.List)):
             literals = [const_int(e) for e in axes.elts]
-            if None not in literals:
+            if all(axis is not None and -rank <= axis < rank for axis in literals):
                 return [axis % rank for axis in literals if axis is not None], inverse
     return None, inverse
 
