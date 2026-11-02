@@ -591,7 +591,15 @@ def test_main_keeps_a_submission_no_final_grade_retimed_on_record_uncredited(
     monkeypatch.setattr(extract, "read_db", lambda *args, **kwargs: result)
     monkeypatch.setattr(extract, "load_regrades", lambda files: {})
     monkeypatch.setattr(extract, "load_final_regrades", lambda files: {})
-    argv = ["--runs", "unused", "--benchmarks", str(tmp_path), "--out", str(tmp_path / "out"), "--no-sources"]
+    argv = [
+        "--runs",
+        "unused",
+        "--benchmarks",
+        str(tmp_path / "corpus"),
+        "--out",
+        str(tmp_path / "out"),
+        "--no-sources",
+    ]
     assert extract.main(argv) == 0
     with (tmp_path / "out" / "llr40_observations.csv").open(newline="", encoding="utf-8") as handle:
         (row,) = [r for r in csv.DictReader(handle) if r["row_kind"] == "submission"]
