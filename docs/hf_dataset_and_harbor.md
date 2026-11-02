@@ -56,13 +56,21 @@ The exporter is a pure regenerator over the manifest tree; nothing is cached in 
 ```bash
 hpcagent-bench export-hf --selector all --out hf_dataset                    # build + validate the folder
 HF_TOKEN=... hpcagent-bench export-hf --selector all --push <org>/<dataset> [--private]
+HF_TOKEN=... hpcagent-bench export-hf --selector all --push <org>/<dataset> --release-tag vX.Y.Z
 helpers/scripts/do_dataset_release.sh --selector all --out hf_dataset     # the same, under the job environment
 ```
 
 The validated folder written to `--out` is exactly what `--push` uploads. `tests/test_hf_export.py`
 fails CI when a kernel stops exporting. The `coverage` job of `.github/workflows/tests.yml` builds the dataset on
-every run, uploads it as a workflow artifact, and pushes it to `vars.HF_DATASET_REPO` on a push to `main` once the
-unit, integration and translators jobs are green.
+every run, uploads it as a workflow artifact, and pushes it to `vars.HF_DATASET_REPO` on a push to `main` or of a
+version tag once the unit, integration and translators jobs are green.
+
+A push without `--release-tag` is a rolling update of the default branch. `--release-tag vX.Y.Z` (`vX.Y.Z-suffix` for a
+pre-release) makes the folder the whole of branch `release/vX.Y.Z`, tags that commit, and names the tag in the dataset
+card; a tag that exists is refused, never moved. The export then loads every config back from the Hub at the tag and
+exits 3 if that fails: the tag stays, so publish a new patch tag. A consumer pins a release with
+`datasets.load_dataset("<org>/<dataset>", name=..., revision="vX.Y.Z")`. The Hub has tags and no Releases, so the tag
+is the whole of a dataset release. Pushing a version tag to this repository publishes the dataset tag of that name.
 
 ## Harbor adapter
 
