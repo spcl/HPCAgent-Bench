@@ -96,7 +96,8 @@ def violations(path: pathlib.Path) -> list[str]:
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "isinstance"
-            and any(numpy_array_type(each) for each in ast.walk(node.args[1]) if len(node.args) > 1)
+            and len(node.args) > 1
+            and any(numpy_array_type(each) for each in ast.walk(node.args[1]))
         ):
             found.append(f"{node.lineno}: isinstance(..., np.ndarray) is False for a cupy array (use is_array)")
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):

@@ -562,9 +562,12 @@ def tbb_backend(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_the_multi_source_kernel_link_carries_the_stdpar_runtime(tbb_backend: None, tmp_path: pathlib.Path) -> None:
-    src = tmp_path / "k.cpp"
-    src.write_text("int main() { return 0; }")
-    link = languages.build_kernel_lib_commands([(Language.CPP, src)], tmp_path / "libk.so")[-1]
+    main = tmp_path / "k.cpp"
+    helper = tmp_path / "helper.cpp"
+    main.write_text("int helper(); int main() { return helper(); }")
+    helper.write_text("int helper() { return 0; }")
+    sources = [(Language.CPP, main), (Language.CPP, helper)]
+    link = languages.build_kernel_lib_commands(sources, tmp_path / "libk.so")[-1]
     assert flags.STDPAR_LINK_TBB in link
 
 

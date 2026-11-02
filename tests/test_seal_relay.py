@@ -7,6 +7,7 @@ traceback of its own: SIGKILL's disposition cannot be set, so resetting it to th
 """
 
 import os
+import resource
 import signal
 
 import pytest
@@ -21,6 +22,7 @@ def relayed_status(sig: int) -> int:
         try:
             child = os.fork()
             if child == 0:
+                resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
                 os.kill(os.getpid(), sig)
                 os._exit(0)
             seal.relay(child)
