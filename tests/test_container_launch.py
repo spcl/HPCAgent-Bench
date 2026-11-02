@@ -29,6 +29,16 @@ def test_launch_script_is_sudoless() -> None:
     assert "sudo" not in text, "Apptainer launch must never require sudo"
 
 
+def test_launch_binds_the_checkout_where_the_image_hook_reads_it(tmp_path: pathlib.Path) -> None:
+    """The judge image's ENTRYPOINT syncs from /opt/hpcagent-bench, so the local launch binds the checkout there."""
+    docker = tmp_path / "docker"
+    docker.write_text('#!/bin/sh\n[ "$1" = image ] || printf "%s\\n" "$@"\n')
+    docker.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "HPCAGENT_BENCH_RUNTIME_BACKEND": "docker"}
+    argv = subprocess.run([SCRIPT, "cpu", "--", "noop"], capture_output=True, text=True, check=True, env=env).stdout
+    assert f"{REPO}:/opt/hpcagent-bench\n" in argv
+
+
 def test_apptainer_runs_unprivileged() -> None:
     if shutil.which("apptainer") is None:
         pytest.skip("apptainer not installed")

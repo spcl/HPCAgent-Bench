@@ -274,7 +274,7 @@ run time. With no hook, the image's own `LD_LIBRARY_PATH` reaches `/opt/ofi-fall
 libfabric with the `tcp` and `sockets` providers, so MPI runs over TCP with nothing from the host:
 
 ```bash
-podman run --rm --device /dev/kfd --device /dev/dri <image> fi_info -p tcp -l
+podman run --rm -e HPCAGENT_BENCH_LAUNCH_VENV=0 --device /dev/kfd --device /dev/dri <image> fi_info -p tcp -l
 ```
 
 For a fast fabric there are two ways in, lightest first:
