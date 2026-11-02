@@ -149,8 +149,9 @@ class DropsTheCall(http.server.BaseHTTPRequestHandler):
 
 
 def test_a_connection_dropped_after_the_request_is_classified_and_spends_no_submission() -> None:
+    from hpcagent_agent.tools import submit
+
     tools = load_http_json()
-    submit = module_at(REPO / "agent" / "hpcagent_agent" / "tools" / "submit.py", "submit_dropped_call")
     with http.server.ThreadingHTTPServer(("127.0.0.1", 0), DropsTheCall) as server:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         result = tools.call_json(f"http://127.0.0.1:{server.server_address[1]}/submit", b"{}", 10.0)
