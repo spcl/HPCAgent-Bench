@@ -50,9 +50,12 @@ def test_four_ranks_generating_one_sibling_all_import_it() -> None:
     workers = [ctx.Process(target=generate_and_import, args=(barrier, outcome)) for _ in range(4)]
     for worker in workers:
         worker.start()
-    outcomes = [outcome.get(timeout=600) for _ in workers]
-    for worker in workers:
-        worker.join(timeout=60)
+    try:
+        outcomes = [outcome.get(timeout=600) for _ in workers]
+    finally:
+        for worker in workers:
+            worker.join(timeout=60)
+            worker.terminate()
     assert outcomes == ["ok"] * 4, outcomes
 
 
