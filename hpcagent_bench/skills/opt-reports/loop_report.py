@@ -541,6 +541,8 @@ def compiler_family(compiler: str) -> str:
 
 def resolve_compiler(choice: str, sources: Sequence[pathlib.Path]) -> str:
     if choice != "auto":
+        if shutil.which(choice) is None:
+            raise SystemExit(f"no such compiler: {choice!r} -- pass --compiler")
         return choice
     cxx = any(source.suffix in CXX_SUFFIXES for source in sources)
     for name in ("g++", "clang++") if cxx else ("gcc", "clang"):
@@ -584,7 +586,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if proc.returncode != 0:
             failed.append(f"{source.name} (rc={proc.returncode})")
         parsed.append(parse_report(proc.stderr, family, roots=[str(source.resolve().parent)]))
-        sources[display_path(str(source))] = source.read_text()
+        try:
+            sources[display_path(str(source))] = source.read_text()
+        except OSError:
+            pass  # unreadable (absent, a directory, permissions): the compile failure above says why
         report_paths.append(os.path.relpath(report_path, pathlib.Path.cwd()))
 
     if failed:
