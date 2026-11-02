@@ -95,6 +95,7 @@ __all__ = [
     "column_ddl",
     "copy_into",
     "credited_cells",
+    "direct_inputs",
     "discover_databases",
     "distinct",
     "episode_rows",
@@ -131,6 +132,7 @@ __all__ = [
     "rederived_episode",
     "rederived_row_suspect",
     "regrade_files",
+    "regrade_shard",
     "regraded",
     "results_database",
     "row_key",
@@ -442,8 +444,10 @@ def floor_override(kernel: str) -> BenchSpec | None:
 
 
 def clocks_agree_on_delta(host_minus_event_ns: object) -> bool:
-    """:func:`timing.clocks_agree` from a ``regrade_cells`` row's ``host_event_delta_ns``: delta <= (factor - 1) *
-    event + slack. An undecidable delta (or ``None``) disagrees; a disabled gate (factor 0) agrees."""
+    """A conservative stand-in for :func:`timing.clocks_agree`, from a ``regrade_cells`` row's stored
+    ``host_event_delta_ns``: the row keeps no event time, so the gate is delta <= slack -- stricter than the live
+    gate's delta <= (factor - 1) * event + slack whenever divergence_factor > 1, so it only ever keeps a flag. An
+    undecidable delta (or ``None``) disagrees; a disabled gate (factor 0) agrees."""
     if host_minus_event_ns is not None and not isinstance(host_minus_event_ns, (int, float, str)):
         raise TypeError(f"host_event_delta_ns is {host_minus_event_ns!r}, not a number")
     gate = config.current().measurement.quiescence
@@ -521,10 +525,17 @@ def write_db(path: pathlib.Path, fields: Iterable[str], rows: Iterable[dict[str,
     return len(values)
 
 
-def source_roots(args: argparse.Namespace) -> list[pathlib.Path]:
-    """Everything the extraction reads: the protected roots, the run roots, the regrade shards."""
-    globbed = [pathlib.Path(p) for pattern in (*args.runs, *args.regrades) for p in glob.glob(pattern)]  # noqa: PTH207 -- the caller's pattern
-    return [*data_guard.protected_roots(), *globbed]
+def source_roots(runs: Iterable[str]) -> list[pathlib.Path]:
+    """The trees the run scan reads, which skips ``--out``: the protected roots and what the globs ``runs`` match."""
+    return [*data_guard.protected_roots(), *(pathlib.Path(p) for pattern in runs for p in glob.glob(pattern))]  # noqa: PTH207 -- the caller's pattern
+
+
+def direct_inputs(
+    benchmarks: pathlib.Path, regrades: Iterable[str], platform_regrades: Iterable[tuple[str, str]]
+) -> list[pathlib.Path]:
+    """What the extraction reads with no skip of ``--out``: the corpus and every regrade shard."""
+    patterns = (*regrades, *(pattern for _, pattern in platform_regrades))
+    return [benchmarks, *(pathlib.Path(p) for pattern in patterns for p in glob.glob(pattern))]  # noqa: PTH207 -- the caller's pattern
 
 
 class DbResult(NamedTuple):
@@ -926,11 +937,21 @@ ORDER BY p.ts_ms, p.id
 """
 
 
+@contextlib.contextmanager
+def regrade_shard(path: str) -> Iterator[sqlite3.Connection]:
+    """``path`` open for reading; a truncated or corrupt shard fails as a :class:`ValueError` naming it."""
+    try:
+        with results_db.reading(path) as conn:
+            yield conn
+    except sqlite3.Error as exc:
+        raise ValueError(f"{path}: {exc}") from exc
+
+
 def load_regrades(files: Iterable[str]) -> dict[RegradeKey, dict[str, Any]]:
     """Every graded promotion or re-verify in ``files``, keyed by the grade re-graded; the later row wins."""
     found: dict[RegradeKey, dict[str, Any]] = {}
     for path in files:
-        with results_db.reading(path) as conn:
+        with regrade_shard(path) as conn:
             for row in conn.execute(REGRADE_ROWS):
                 key = (job_of(row["episode_job"]), str(row["label"]), str(row["original_benchmark"]))
                 verified = row["credited_speedup"] != 0
@@ -1003,7 +1024,7 @@ def load_final_regrades(files: Iterable[str]) -> dict[FinalKey, dict[str, Any]]:
     ONE is kept: graded beats error, then the newest wins."""
     found: dict[FinalKey, dict[str, Any]] = {}
     for path in files:
-        with results_db.reading(path) as conn:
+        with regrade_shard(path) as conn:
             tasks = list(final_episodes(conn, path))
         for graded, task, tally in tasks:
             key = (*graded, str(task.get("denominator") or ""))
@@ -1473,11 +1494,14 @@ def extract(options: Options) -> Extracted:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
-        sources = source_roots(args)
-        # --out may lie inside a run root it reads: the scan skips it.
+        sources = source_roots(args.runs)
+        inputs = direct_inputs(args.benchmarks, args.regrades, args.platform_regrades)
+        inputs += [args.canon] if args.canon is not None else []
         for dest in (args.out, args.db):
             if dest is not None:
+                # --out may lie inside a run root it reads: the scan skips it.
                 data_guard.check_output(dest, sources, unscanned=[args.out])
+                data_guard.check_output(dest, inputs)
     except data_guard.ProtectedPathError as exc:
         print(exc, file=sys.stderr)
         return 1

@@ -47,6 +47,14 @@ def test_a_sqlite_file_with_no_results_tables_is_skipped_in_silence(
     assert capsys.readouterr().err == ""
 
 
+def test_a_truncated_regrade_shard_is_named(tmp_path: pathlib.Path) -> None:
+    """A regrade shard is read directly, so the failure must carry its path."""
+    shard = results_file(tmp_path / "shard.db")
+    shard.write_bytes(shard.read_bytes()[:4096])
+    with pytest.raises(ValueError, match=r"shard\.db"):
+        extract.load_final_regrades([str(shard)])
+
+
 def test_a_db_that_fails_mid_read_is_named_and_contributes_no_row(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -45,6 +45,15 @@ def test_a_canon_db_alone_draws_its_columns_over_the_baseline(tmp_path: pathlib.
     assert dace["k2"] == pytest.approx(1.0)  # never timed: entered at 1x, not dropped
 
 
+def test_an_indented_comment_in_a_tag_file_is_not_a_kernel(tmp_path: pathlib.Path) -> None:
+    """A phantom kernel would leave every setup incomplete over the tag."""
+    tag = tmp_path / "tag.txt"
+    tag.write_text("  # dace_cpu still pending\n", encoding="utf-8")
+    args = plot.build_parser().parse_args(["--tag-file", str(tag), "--out", str(tmp_path / "f.pdf")])
+    with pytest.raises(SystemExit, match="no tag kernel named"):
+        plot.draw(args, cost.resolve())
+
+
 def test_observations_need_the_experiment(tmp_path: pathlib.Path) -> None:
     args = plot.build_parser().parse_args([str(tmp_path / "obs.db"), "--canon-db", str(tmp_path / "c.db")])
     with pytest.raises(SystemExit, match="--experiment"):

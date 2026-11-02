@@ -125,6 +125,15 @@ def test_verify_reports_tampering(sources: pathlib.Path, tmp_path: pathlib.Path)
     ]
 
 
+def test_verify_reports_a_malformed_sums_line(sources: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """A cut checksum line is a problem to report: verify is what a damaged copy is checked with."""
+    out = tmp_path / "data"
+    collect.copy(roots(sources), out)
+    sums = out / collect.SUMS
+    sums.write_text(sums.read_text() + "truncated\n")
+    assert collect.verify(out) == ["malformed SHA256SUMS line: truncated"]
+
+
 @pytest.mark.parametrize("inside", ["runs/data", "regrades/data", "."])
 def test_copy_refuses_an_output_overlapping_a_source(sources: pathlib.Path, inside: str) -> None:
     """An output inside, or wrapping, a source is refused before anything is written."""

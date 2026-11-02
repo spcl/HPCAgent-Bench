@@ -9,7 +9,6 @@ import itertools
 import math
 import pathlib
 import sys
-import tempfile
 import warnings
 
 import matplotlib.colors
@@ -796,8 +795,8 @@ def one_setup_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
     return path
 
 
-def test_build_multi_comparison_reads_treatments_as_a_comma_list() -> None:
-    obs = one_setup_observations_csv(pathlib.Path(tempfile.mkdtemp()))
+def test_build_multi_comparison_reads_treatments_as_a_comma_list(tmp_path: pathlib.Path) -> None:
+    obs = one_setup_observations_csv(tmp_path)
     built = plot.build_multi_comparison(
         {"treatments": "skills,cpf-tool", "title": "CPU"}, [obs], "exp", False, plot.cost.resolve()
     )
@@ -835,6 +834,39 @@ def test_several_treatments_of_one_experiment_draw_one_dot_row(
         sys.argv = old_argv
     assert drawn == [["skills", "cpf-tool"]]
     assert out.exists()
+
+
+def test_the_experiment_route_reads_every_observations_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scored experiment and its blind control are TWO extracted databases (the ``hpcagent-bench plot
+    efficacy scored.csv blind.csv`` example): every named file is read, so a treated setup recorded
+    only in the second file is paired against the control the first one holds."""
+    monkeypatch.setattr(
+        efficacy_figures, "figure_setup_dots",
+        lambda *args, **kwargs: args[2],  # the drawing itself is not this test's concern
+    )  # fmt: skip
+    control = [{**row, "language": "c", "packet": ""} for row in observation_rows("exp-qwen38-c", 2.0, 1000.0)]
+    treated = [
+        {**row, "language": "c", "packet": "skills"} for row in observation_rows("exp-qwen38-c-skills", 2.4, 900.0)
+    ]
+    blind, scored = tmp_path / "blind.csv", tmp_path / "scored.csv"
+    pd.DataFrame(control).to_csv(blind, index=False)
+    pd.DataFrame(treated).to_csv(scored, index=False)
+
+    old_argv = sys.argv
+    sys.argv = [
+        "hpcagent-bench-plot-efficacy", str(scored), str(blind), "--experiment", "exp", "--treatment", "skills",
+        "--out", str(tmp_path / "fig.pdf"), "--table", str(tmp_path / "table.csv"),
+    ]  # fmt: skip
+    try:
+        plot.main()
+    finally:
+        sys.argv = old_argv
+
+    stats = pd.read_csv(tmp_path / "table.csv")
+    assert list(stats.model) == ["qwen38"]
+    assert list(stats.leg) == ["C"]
 
 
 def test_write_panel_tables_merges_a_multi_treatment_panel_into_one_packet_tagged_csv(

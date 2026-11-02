@@ -349,6 +349,21 @@ def test_the_mode_grid_is_one_row_per_law_one_column_per_picked_kernel_and_the_g
         plt.close(fig)
 
 
+def test_an_efficiency_mode_grid_names_eta_on_a_linear_axis_from_zero() -> None:
+    """Quantity.EFFICIENCY is the command's default: the speedup label and the log-decade ruling would misname it."""
+    import matplotlib.pyplot as plt
+
+    rows = perfect_strong("llr40-qwen38-c", "dist_sdpa") + perfect_weak("llr40-qwen38-c", "dist_sdpa")
+    fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_sdpa"], scaling.Quantity.EFFICIENCY)
+    assert fig is not None
+    try:
+        assert scaling.axis_label(scaling.Quantity.EFFICIENCY, "strong") in [text.get_text() for text in fig.texts]
+        assert all(ax.get_yscale() == "linear" and ax.get_ylim()[0] == 0.0 for ax in fig.axes)
+        assert all(1.0 in ax.get_yticks() and 0.1 not in ax.get_yticks() for ax in fig.axes)
+    finally:
+        plt.close(fig)
+
+
 def test_the_band_at_a_rank_count_is_the_bootstrap_interval_of_the_kernels_geomean() -> None:
     """Six kernels at P = 2 with efficiency 1, 0.5, 0.25 twice: GM = 0.5, log2 values 0, -1, -2 twice. The BCa
     resample means are multiples of 1/6 in log2 and the band lands on 0.5 * 2^(-/+ 2/3)."""

@@ -269,6 +269,8 @@ def place_key(
     """The key drawn below ``fig`` by meaning (:func:`key_columns`), over the most columns up to ``ncol`` that fit
     the canvas, at :func:`~hpcagent_bench.stats.style.legend_below`'s ``y``, ``fontsize``, ``markerscale`` and
     ``spacing``. Returns its height."""
+    if not any(groups):
+        return 0.0  # nothing to explain (a figure of stub columns): no key, and no band reserved for one
     for columns in range(max(1, ncol), 0, -1):
         handles, count = key_columns(groups, columns)
         height = style.legend_below(
@@ -279,7 +281,7 @@ def place_key(
     return 0.0
 
 
-def legend_tail(symbols: Significance = NO_SIGNIFICANCE) -> list[Line2D]:
+def legend_tail(symbols: Significance = NO_SIGNIFICANCE, config: FigureConfig = DEFAULT_CONFIG) -> list[Line2D]:
     """The rows every key ends on: the two interval notes, and one row per significance superscript
     the figure actually drew (``symbols``, from :func:`drawn_symbols`). Every one is FIXED TEXT
     (:func:`interval_note`, :func:`significance_legend_marks`)."""
@@ -288,7 +290,7 @@ def legend_tail(symbols: Significance = NO_SIGNIFICANCE) -> list[Line2D]:
         Line2D(
             [],
             [],
-            linestyle=DEFAULT_CONFIG.cost_linestyle,
+            linestyle=config.cost_linestyle,
             linewidth=1.3,
             color=style.MUTED,
             label=interval_note("Token Cost"),
@@ -782,13 +784,9 @@ def dot_rows_key_groups(
 ) -> list[list[Line2D]]:
     """:func:`dot_rows_legend` as its :func:`key_columns` groups: the models; the treatment and its baseline;
     the interval and band notes; the significance superscripts and alias footnotes."""
-    tail = legend_tail(symbols)
-    return [
-        colour_legend_marks(rows, config),
-        [packet_legend_mark(treatment, config), control_legend_mark([treatment], control_name, config)],
-        tail[:2],
-        [*joint_significance_mark(*symbols), *alias_footnotes([row.leg for row in rows])],
-    ]
+    who = colour_legend_marks(rows, config)
+    what = [packet_legend_mark(treatment, config), control_legend_mark([treatment], control_name, config)]
+    return note_key_groups(who, what, rows, symbols, config)
 
 
 #: A single comparison's stacked row height, inches: taller than a joined row's (:data:`DOT_ROW_HEIGHT_IN`).
@@ -934,10 +932,18 @@ def dot_row_key_groups(columns: Sequence[DotColumn], config: FigureConfig = DEFA
     who = first_per_label(colour_legend_marks(rows, config) + comparator_legend_marks(rows, config))
     what = first_per_label(treatment_legend_marks(drawn, config)) + control_key_marks(drawn, config)
     symbols = any_significance(column.symbols for column in columns)
+    return note_key_groups(who, what, rows, symbols, config)
+
+
+def note_key_groups(
+    who: list[Line2D], what: list[Line2D], rows: Sequence[SetupRow], symbols: Significance, config: FigureConfig
+) -> list[list[Line2D]]:
+    """A key's groups after the models ``who`` and the treatments ``what``: the interval, band and few-kernel notes
+    and the significance superscripts."""
     if not config.key_notes:
         # The two interval line styles are named in the caption; the key keeps only the significance.
         return [who, what, note_marks(rows, config), joint_significance_mark(*symbols)]
-    tail = legend_tail(symbols)
+    tail = legend_tail(symbols, config)
     return [
         who,
         what,
@@ -960,8 +966,9 @@ def fit_panel_names(
     if not top:
         return
     fig.canvas.draw()
-    # Measured at the size the titles were ACTUALLY drawn at (the first pass may already have shrunk them).
-    em = max((measured_char_em(ax, drawn_pt) for ax in top if ax.get_title()), default=NAME_CHAR_EM)
+    # Measured at the size the names were ACTUALLY drawn at (the first pass may already have shrunk them);
+    # the names are PANEL_NAME_GID annotations, so there is no ax.title to test for.
+    em = max((measured_char_em(ax, drawn_pt) for ax in top), default=NAME_CHAR_EM)
     # A name that fills its span to the last glyph runs straight into the next one ("(LLR)ii)").
     spans = [span - NAME_CLEARANCE_IN for span in spans[:-1]] + list(spans[-1:])
     size, folds = name_layout(tagged, spans, config.type_.title_pt, config.max_name_lines, em)
@@ -974,11 +981,10 @@ def draw_column_names(top: Sequence[Axes], names: Sequence[str], config: FigureC
         draw_panel_subtitle(ax, index, names[index], config, folds[index], MEASURE_PAD_IN * style.POINTS_PER_INCH)
 
 
-def fit_legend(
-    fig: Figure, groups: Sequence[Sequence[Line2D]], config: FigureConfig, span: tuple[float, float] | None = None
-) -> float:
-    """Draw the key below ``fig`` in the ``legend_chrome_in`` band, shrinking its type where it does not fit (no
-    wider than ``span``); returns its height, which may exceed the band (the caller grows the canvas)."""
+def fit_legend(fig: Figure, groups: Sequence[Sequence[Line2D]], config: FigureConfig) -> float:
+    """Draw the key below ``fig`` in the ``legend_chrome_in`` band, shrinking its type where it does not fit (never
+    wider than the canvas, centred on it); returns its height, which may exceed the band (the caller grows the
+    canvas)."""
     scale = 1.0
     # A wrap-width figure: a compact key, allowed the whole canvas rather than the plot body, so it
     # keeps two columns instead of one tall one.
@@ -1051,10 +1057,9 @@ def figure_dot_row(
     fit_column_gaps(fig, axes)
     # The names are fitted to the columns as finally placed: a widened gap narrows every column.
     fit_panel_names(fig, list(axes[0]), tagged, names, placed_spans(axes, row_width_in), config, size)
-    body = (axes[0][0].get_position().x0, axes[0][-1].get_position().x1)
     stagger_crowded_ticks(fig, axes[-1], config)
     # The canvas grows by the key's own height, not the reserve.
-    legend_in = fit_legend(fig, groups, config, body)
+    legend_in = fit_legend(fig, groups, config)
     fit_canvas(fig, axes, row_width_in, data_height, legend_in)
     even_row_labels(np.asarray(axes).ravel(), config)
     return style.save(fig, out.with_suffix(""), fixed=True, print_size=config.type_ == PAPER_CONFIG.type_)

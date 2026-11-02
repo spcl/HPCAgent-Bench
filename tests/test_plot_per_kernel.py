@@ -12,7 +12,6 @@ import pytest
 
 mpl.use("Agg")
 
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.collections import PathCollection
 

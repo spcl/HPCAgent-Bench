@@ -37,9 +37,14 @@ RECORDS: dict[str, type[pydantic.BaseModel]] = {
 
 
 def golden_files() -> list[pathlib.Path]:
-    files = sorted(GOLDEN.glob("*.json"))
-    assert {path.name.partition("_")[0] for path in files} == set(RECORDS), "a fixture for every record"
-    return files
+    """The parametrize source, collection-safe: a missing fixture costs one failed test below,
+    not a COLLECTION error that reports the whole module as ``1 error, 0 tests``."""
+    return sorted(GOLDEN.glob("*.json"))
+
+
+def test_a_fixture_exists_for_every_record() -> None:
+    """The completeness assert lives in a TEST, not in the parametrize source."""
+    assert {path.name.partition("_")[0] for path in golden_files()} == set(RECORDS), "a fixture for every record"
 
 
 @pytest.mark.parametrize("path", golden_files(), ids=lambda path: path.stem)

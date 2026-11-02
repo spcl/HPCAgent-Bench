@@ -1,7 +1,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One colour and one shape per entity, decided by its identity (its registered ``order``), so dropping a series
-never repaints the others. Shape is the MODEL and colour what the figure varies, except the packet efficacy panels
+never repaints the others. Shape is the MODEL and colour what the figure varies, except the packet figures
 (colour = model, shape = packet). One palette: ``tab20``, extended by ``tab20b``."""
 
 import colorsys

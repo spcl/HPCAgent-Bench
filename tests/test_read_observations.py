@@ -8,12 +8,15 @@ between the two files would change a published figure without anyone touching th
 """
 
 import pathlib
+import sqlite3
 
 import pandas as pd
+import pytest
 
 #: The pair is written by the extractor that writes every shipped artifact, not by a hand-rolled
 #: CREATE TABLE here: the two files have to agree on the COLUMN TYPES as well as on the rows, and a
 #: writer invented in the test body agrees with nothing.
+from hpcagent_bench.harness import results_db
 from hpcagent_bench.results import extract as extract_llr40
 from hpcagent_bench.results import studies
 
@@ -78,8 +81,19 @@ def test_the_token_columns_have_the_same_dtype_from_either_file(tmp_path: pathli
     assert from_db["tokens"].sum() == 1200.0
 
 
-def test_a_db_is_opened_read_only(tmp_path: pathlib.Path) -> None:
+def test_a_db_is_opened_read_only(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The handle ``read_observations`` reads through refuses a write, so a live judge DB is never locked by a reader."""
     _, db_path = write_pair(tmp_path)
-    before = db_path.stat().st_mtime_ns
+    connect_ro = results_db.connect_ro
+    opened: list[pathlib.Path] = []
+
+    def refusing_writes(path: pathlib.Path) -> sqlite3.Connection:
+        conn = connect_ro(path)
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute("CREATE TABLE t (x)")
+        opened.append(path)
+        return conn
+
+    monkeypatch.setattr(studies.results_db, "connect_ro", refusing_writes)
     studies.read_observations(db_path)
-    assert db_path.stat().st_mtime_ns == before
+    assert opened == [db_path]
