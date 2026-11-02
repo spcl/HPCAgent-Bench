@@ -157,6 +157,24 @@ def test_polycc_rejection_declines_and_surfaces_its_own_diagnostic(
     assert "data dependent conditions not supported" in str(excinfo.value)
 
 
+def test_a_polycc_timeout_declines_instead_of_hanging_the_build(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The build path bounds polycc under the oracle's ``polycc_timeout_s`` like the Polygeist
+    pipeline does: a wedged polycc (isl's code generation can livelock) is a DECLINE, never a
+    measurement session that hangs forever."""
+    write_scop(tmp_path)
+    monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
+
+    def wedged(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess:  # noqa: ANN401
+        raise subprocess.TimeoutExpired(cmd, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(pluto_transform, "run_bounded", wedged)
+    with pytest.raises(NotSupportedByFramework) as excinfo:
+        pluto_transform.transformed_sources(tmp_path, "mm")
+    assert "timed out" in str(excinfo.value)
+
+
 def test_a_failed_polycc_never_writes_out_directly(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """polycc is pointed at a private scratch name, never ``out``, so a failed (or killed mid-emit)
     run cannot leave a truncated ``out`` behind -- there is nothing at ``out`` for it to truncate.
