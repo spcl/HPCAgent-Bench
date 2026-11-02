@@ -30,7 +30,8 @@ name or path, required), ``HPCAGENT_BENCH_MPI_RANKS_PER_NODE`` (default 4),
 ``HPCAGENT_BENCH_MPI_GANG_LOCK`` (lock file; default ``$TMPDIR/hpcagent_bench_gang_<first
 node>.lock``), ``HPCAGENT_BENCH_MPI_GANG_SRUN`` (the srun the RELAY runs, default ``srun``). A
 launch waiting on the lock spends its own timeout (:func:`launch_timeout`), so a gang judge grades one
-submission at a time (one device slot, see run_cluster.sh JUDGE_GANG_NODES).
+submission at a time (one device slot, see run_cluster.sh JUDGE_GANG_NODES). A launch the judge times out is
+SIGTERMed: it asks the relay to cancel its step (:data:`CANCEL_MARK`) and keeps the lock until the step's rc arrives.
 
 The judge's environment rides to the ranks in an ``env K=V ...`` prefix, since the relay's srun
 exports the batch host's environment, not the judge container's.
@@ -42,6 +43,7 @@ import fcntl
 import math
 import os
 import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -55,6 +57,8 @@ import pydantic
 from hpcagent_bench import config, osinfo
 
 __all__ = [
+    "CANCEL_GRACE_S",
+    "CANCEL_MARK",
     "GANG_MODULE",
     "HEARTBEAT_S",
     "LAUNCH_FAULT_ENV",
@@ -100,6 +104,11 @@ STALL_S = 10.0
 
 #: gang_relay.STALE_MARK: the relay cancelled the step because this judge's heartbeat went stale.
 STALE_MARK = ".stale"
+
+#: Suffix of the file a timed-out launch leaves for the relay, which then cancels its step at once.
+CANCEL_MARK = ".cancel"
+#: What a timed-out launch gets to see its step gone: the relay's squeue and scancel caps and SIGTERM grace, plus slack.
+CANCEL_GRACE_S = 80.0
 
 #: Exit status of a launch the RELAY failed (:class:`RelayFault`), never the launched program.
 RELAY_FAULT_EXIT = 75
@@ -308,7 +317,7 @@ def relay_call(directory: Path, ident: str, cmd: Sequence[str], timeout: float, 
     sys.stderr.flush()
     rc = int(rc_file.read_text().strip() or "1")
     cancelled = base.with_name(base.name + STALE_MARK).exists()
-    for suffix in (".alive", ".run", ".out", ".err", ".rc", STALE_MARK):
+    for suffix in (".alive", ".run", ".out", ".err", ".rc", STALE_MARK, CANCEL_MARK):
         base.with_name(base.name + suffix).unlink(missing_ok=True)
     if cancelled:
         raise RelayFault(f"the gang relay cancelled the step (exit {rc}): this judge's heartbeat went stale")
@@ -337,6 +346,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     with Path(lock).open("a", encoding="ascii") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         ident = request_id()
+        signal.signal(signal.SIGTERM, lambda *_: Path(relay, ident + CANCEL_MARK).touch())
         cmd = srun_argv(gang, ranks, [*relay_env_prefix(os.environ), *program], timeout, ident)
         try:
             return relay_call(Path(relay), ident, cmd, timeout)

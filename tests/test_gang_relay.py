@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The host-side srun relay (hpcagent_bench/cluster/gang_relay.py) and mpi_gang's relay mode, on a fake srun."""
 
+import fcntl
 import functools
 import json
 import os
@@ -290,3 +291,47 @@ def test_a_pass_that_loses_the_directory_does_not_end_the_relay(
     relay.serve(str(tmp_path), real_getppid())
     assert len(passes) == 3
     assert capsys.readouterr().err.count("Stale file handle") == 1
+
+
+def test_a_cancel_mark_ends_the_step_without_waiting_for_the_heartbeat(tmp_path: Path) -> None:
+    relay = load_relay()
+    (tmp_path / "x.alive").touch()
+    (tmp_path / "x.req").write_text(mpi_gang.GangRequest(argv=["sleep", "60"]).model_dump_json())
+    running: dict[str, subprocess.Popen[bytes]] = {}
+    relay.step(str(tmp_path), running)
+    assert running["x"].poll() is None
+    (tmp_path / ("x" + mpi_gang.CANCEL_MARK)).touch()
+    relay.step(str(tmp_path), running)
+    assert not running
+    assert (tmp_path / "x.rc").exists()
+    assert not (tmp_path / ("x" + relay.STALE_MARK)).exists()
+
+
+def test_a_terminated_launcher_asks_for_the_cancel_and_holds_the_gang_until_the_rc(tmp_path: Path) -> None:
+    lock, relay_dir = tmp_path / "gang.lock", tmp_path / "relay"
+    env = {
+        **os.environ,
+        **GANG_ENV,
+        mpi_gang.RELAY_DIR_ENV: str(relay_dir),
+        "HPCAGENT_BENCH_MPI_GANG_LOCK": str(lock),
+        mpi_gang.LAUNCH_TIMEOUT_ENV: "60",
+    }
+    launcher = subprocess.Popen([sys.executable, "-m", mpi_gang.GANG_MODULE, "-n", "1", "/run/bench"], env=env)
+    try:
+        while not list(relay_dir.glob("*.req")):
+            assert launcher.poll() is None
+            time.sleep(0.05)
+        ident = next(relay_dir.glob("*.req")).stem
+        launcher.terminate()
+        while not (relay_dir / (ident + mpi_gang.CANCEL_MARK)).exists():
+            time.sleep(0.05)
+        assert launcher.poll() is None
+        with lock.open("a") as handle:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            (relay_dir / (ident + ".rc")).write_text("143\n")
+            assert launcher.wait(timeout=30) == 143
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        launcher.kill()
+        launcher.wait()
