@@ -1,0 +1,4 @@
+# GH200 variance pilot (RECIPE proposal, Appendix A.2): the first two temperature3 kernels, 20 agents each,
+# served and graded on Daint GH200.
+scan_affine_decay
+kmp

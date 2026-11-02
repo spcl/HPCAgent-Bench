@@ -208,3 +208,12 @@ temperature:
       INFERENCE_NODES: 2
       AGENTS_PER_NODE: 60
     oss120b: *temperature-shape
+
+# gh200pilot2 (tags/gh200pilot2.txt): the RECIPE GH200 variance pilot. Same as temperature but with the budget
+# the temperature3 jobs ran under (10M tokens, 8 h), so the GH200 runs compare with Figure A1 of the proposal;
+# the serving shape comes from layers/hardware-gh200-<model>.env.
+gh200pilot2:
+  extends: temperature
+  env:
+    AGENT_TIMEOUT_SECONDS: 28800
+    AGENT_MAX_TOKENS: 10000000
