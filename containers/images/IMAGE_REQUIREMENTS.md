@@ -162,6 +162,11 @@ each an environment knob:
   edits under a copied path make the inputs unknown: no pull. `CE_PULL=only` pulls the tag whatever
   its label (and fails when it cannot); `CE_PULL=0` always builds. A role with no tag in
   `images.env` always builds.
+* **The pins key their steps, not the image.** No judge-agent stage `COPY`s `uv.lock` or `pyproject.toml`: the steps
+  that read them bind them from the context. The build args `IMAGE_PYTHON_LOCK` (the source-built groups and their
+  build tools) and `HARNESS_LOCK` (the harness venvs and the playwright version) stand for them in the fingerprint and
+  the layer cache (`ce_lock_keys`, which needs `uv` on the build host), so a moved wheel that only the launch venv
+  installs rebuilds nothing. A job gates such a pin with `VERIFY_ONLY=1`, not with a rebuild.
 
 ## Verification
 

@@ -11,7 +11,7 @@
 #
 #   package_hook.sh <workspace> <package dir> <environment> [uv sync flags]
 #
-# <workspace> holds the COPY'd pyproject.toml and uv.lock (and agent/pyproject.toml, the workspace member);
+# <workspace> holds the image's copies of pyproject.toml and uv.lock (and agent/pyproject.toml, the workspace member);
 # <package dir> is the stub package directory the editable build needs; <environment> is the venv or
 # interpreter prefix that receives the install. The dependencies are already there from the image's first
 # `uv sync`, so this one only adds the project: the Dockerfile passes `--package hpcagent-agent` for the

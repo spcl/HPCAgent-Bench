@@ -581,6 +581,35 @@ ce_pin_commits() {
     printf 'dace @ %s, relayout @ %s\n' "${DACE_COMMIT}" "${RELAYOUT_COMMIT}"
 }
 
+# ce_lock_digest <uv export flags>: a digest of the locked packages a `uv sync` with those flags installs, whatever
+# else uv.lock and pyproject.toml hold.
+ce_lock_digest() {
+    local locked
+    locked="$(uv export --frozen --no-header --no-annotate --no-emit-workspace --project "${CE_REPO_DIR}" "$@")" \
+        || { echo "uv export $* failed: nothing keys the image's locked packages" >&2; return 2; }
+    sha256sum <<<"${locked}" | cut -c1-16
+}
+
+# Exports IMAGE_PYTHON_LOCK and HARNESS_LOCK, the build args that stand for the pins in the fingerprint and the layer
+# cache: the Dockerfiles bind uv.lock and pyproject.toml for the steps that read them, so a moved wheel the image does
+# not carry rebuilds nothing. IMAGE_PYTHON_LOCK covers the source builds ($@ names an image's extra groups), HARNESS_LOCK
+# the harness venvs and the playwright version the launch gate fetches chromium for. CE_PULL=only compares nothing.
+#   ce_lock_keys [uv export flags]
+ce_lock_keys() {
+    local group harness=""
+    IMAGE_PYTHON_LOCK="" HARNESS_LOCK=""
+    if [[ "${CE_PULL}" != only ]]; then
+        IMAGE_PYTHON_LOCK="$(ce_lock_digest --only-group image-python --only-group openblas-build "$@")" || return 2
+        for group in $(sed -n 's/^\(harness-[a-z]*\) = \[$/\1/p' "${CE_REPO_DIR}/agent/pyproject.toml"); do
+            harness+="$(ce_lock_digest --package hpcagent-agent --group "${group}")" || return 2
+        done
+        harness+="$(sed -n '/^name = "playwright"$/,/^$/p' "${CE_REPO_DIR}/uv.lock")"
+        HARNESS_LOCK="$(sha256sum <<<"${harness}" | cut -c1-16)"
+    fi
+    export IMAGE_PYTHON_LOCK HARNESS_LOCK
+    printf 'image python lock %s, harness lock %s\n' "${IMAGE_PYTHON_LOCK}" "${HARNESS_LOCK}"
+}
+
 # Exports LIBFABRIC_REF (default v2.6.0) and LIBFABRIC_COMMIT, the tag resolved to its commit here so
 # the sha is the cache key and the Dockerfile asserts it: a git tag is mutable. libfabric is only
 # spack MPICH's compile-time link target; the netstack hook supplies the runtime one.

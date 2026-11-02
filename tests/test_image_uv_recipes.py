@@ -79,8 +79,6 @@ def test_a_judge_agent_image_installs_only_what_it_builds_from_source(image: str
     """Every other locked package is installed when a job starts. An image sync names its groups with --only-group:
     --no-install-project alone still installs the project's dependencies (dace and torch were baked that way)."""
     text = recipe(image)
-    assert "COPY pyproject.toml uv.lock /opt/hpcagent-bench/" in text
-    assert "COPY agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml" in text
     sync = re.search(
         r"uv sync --frozen --(?:exact|inexact)[^;]*--only-group image-python "
         r"--no-binary-package mpi4py;",
