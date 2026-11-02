@@ -3693,7 +3693,10 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         return node
 
     def visit_While(self, node: ast.While | ast.If) -> ast.AST:
+        hoisted = len(self.prelude)
         node.test = self.visit(node.test)
+        if isinstance(node, ast.While) and len(self.prelude) > hoisted:
+            raise NotImplementedError(f"while test {ast.unparse(node.test)}: a hoisted call would not re-run per trip")
         node.body, node.orelse = self.block(node.body), self.block(node.orelse)
         return node
 

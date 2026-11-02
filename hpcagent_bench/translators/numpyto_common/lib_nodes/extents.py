@@ -708,7 +708,11 @@ def diagonal_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallS
     if not expr.args:
         return UNHANDLED
     base = iter_extent_of(expr.args[0], shape_table)
-    return (base[0],) if base else None
+    if not base:
+        return None
+    # numpy's diagonal length is min(rows, cols); returning rows for a non-square operand
+    # over-allocates and the expander reads past the columns axis.
+    return (base[0],) if len(base) >= 2 and base[0] == base[1] else UNHANDLED
 
 
 def diag_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
