@@ -313,8 +313,11 @@ async def crawl_with_crawl4ai(
         except Exception:  # noqa: BLE001 -- a failed crawl falls back to the search snippets
             crawl_results = []
             for result in selected:
-                with contextlib.redirect_stdout(sys.stderr):
-                    crawl_results.append(await crawler.arun(url=result.url, config=run_config))
+                try:
+                    with contextlib.redirect_stdout(sys.stderr):
+                        crawl_results.append(await crawler.arun(url=result.url, config=run_config))
+                except Exception as exc:  # noqa: BLE001 -- this page keeps its snippet
+                    debug(f"crawl of {result.url} failed: {exc!r}")
 
     seen_urls = set()
     for crawled in crawl_results:
@@ -431,7 +434,6 @@ def call_llm(query: str, pages: list[CrawledPage], timeout: float) -> str:
                     payload["max_tokens"] = retry_limit
                 else:
                     payload[token_field] = retry_limit
-                payload.setdefault("reasoning_effort", "minimal")
                 response = retryable_post_json(url, payload, timeout, headers)
                 answer = str(response["choices"][0]["message"]["content"] or "")
             if not answer.strip():
@@ -494,7 +496,7 @@ def main() -> int:
     DEBUG = args.debug
     try:
         output = run_web_search(args.query, args.max_results, args.max_pages, args.max_chars_per_page, args.timeout)
-    except (RuntimeError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+    except Exception as exc:  # noqa: BLE001 -- the CLI's contract is the JSON error object, whatever failed
         body: dict[str, Any] = {"ok": False, "error": str(exc), "query": args.query}
         if isinstance(exc, NotProvisionedError):
             body["cause"] = "not_provisioned"
