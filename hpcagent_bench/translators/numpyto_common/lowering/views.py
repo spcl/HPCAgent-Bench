@@ -6,12 +6,11 @@ from collections.abc import Iterator, Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import is_scalar_axis, slice_axes
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     compose_kept_axis,
     has_negative_step,
     is_fancy_dim,
-    is_scalar_index,
-    slice_dims,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
@@ -131,7 +130,7 @@ class PadImplicitTrailingSlices(ast.NodeTransformer):
         for e in elts:
             if isinstance(e, ast.Slice) or is_newaxis(e):
                 continue
-            if is_scalar_index(e) and not any(
+            if is_scalar_axis(e) and not any(
                 isinstance(n, ast.Name) and n.id in self.array_shapes for n in walk_nodes(e)
             ):
                 continue
@@ -404,7 +403,7 @@ def is_rank_preserving_slice_view(
     shape = array_shapes.get(node.value.id)
     if not shape or len(shape) != target_rank:
         return False
-    elts = slice_dims(node)
+    elts = slice_axes(node)
     if len(elts) > len(shape) or has_negative_step(elts):
         return False
     return all(isinstance(e, ast.Slice) and not is_fancy_dim(e, array_shapes) for e in elts)
@@ -497,7 +496,7 @@ class SliceViewFold(AliasFold):
             return node
         base_name, view_elts = self.good[node.value.id]
         kept_positions = [i for i, e in enumerate(view_elts) if isinstance(e, ast.Slice)]
-        use_elts = slice_dims(node)
+        use_elts = slice_axes(node)
         use_elts = use_elts + [
             ast.Slice(lower=None, upper=None, step=None) for unused in range(len(kept_positions) - len(use_elts))
         ]
@@ -525,7 +524,7 @@ def view_alias_candidates(
         shape = array_shapes.get(base_name)
         if not shape:
             continue
-        elts = slice_dims(val)
+        elts = slice_axes(val)
         if len(elts) > len(shape) or any(is_fancy_dim(e, array_shapes) for e in elts):
             continue
         elts = elts + [ast.Slice(lower=None, upper=None, step=None) for unused in range(len(shape) - len(elts))]
@@ -553,7 +552,7 @@ def composable_view_aliases(
             name = node.value.id
             sub_value_ids.add(id(node.value))
             kept = sum(1 for e in aliases[name][1] if isinstance(e, ast.Slice))
-            use_elts = slice_dims(node)
+            use_elts = slice_axes(node)
             ok = (
                 len(use_elts) <= kept
                 and not any(is_fancy_dim(e, array_shapes) for e in use_elts)

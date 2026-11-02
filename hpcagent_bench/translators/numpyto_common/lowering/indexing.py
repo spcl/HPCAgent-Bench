@@ -6,13 +6,20 @@ from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, slice_step_any, step_is_negative
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_,
+    slice_axes,
+    slice_step_any,
+    step_is_negative,
+)
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_BUILTINS
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
+from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 __all__ = [
     "LOWERED_ELEMENTWISE",
     "advanced_runs",
+    "broadcast_reshape_entries",
     "basic_axis_count",
     "binop",
     "compose_kept_axis",
@@ -20,32 +27,29 @@ __all__ = [
     "has_any_slice",
     "has_negative_step",
     "is_fancy_dim",
-    "is_scalar_index",
     "iter_var_name",
     "name_of_subscript",
     "np_func_name",
     "rebases_onto_view_axis",
     "shift_index",
-    "slice_dims",
     "slice_free_gather_layout",
     "view_offset",
     "view_scale",
 ]
 
 
-def slice_dims(node: ast.Subscript) -> list[ast.expr]:
-    """Return per-axis slice entries (either ``Slice`` or non-slice index)."""
-    sl = node.slice
-    if isinstance(sl, ast.Tuple):
-        return list(sl.elts)
-    return [sl]
-
-
 def has_any_slice(node: ast.expr) -> bool:
     """``True`` iff ``node`` is a subscript whose dim list contains a ``Slice``."""
     if not isinstance(node, ast.Subscript):
         return False
-    return any(isinstance(d, ast.Slice) for d in slice_dims(node))
+    return any(isinstance(d, ast.Slice) for d in slice_axes(node))
+
+
+def broadcast_reshape_entries(node: ast.Subscript) -> list[ast.expr] | None:
+    """The entries of a pure broadcast-reshape, only ``:`` and newaxis with at least one ``:``, else ``None``."""
+    entries = slice_axes(node)
+    pure = all(is_full_slice(e) or is_newaxis(e) for e in entries) and any(is_full_slice(e) for e in entries)
+    return entries if pure else None
 
 
 def advanced_runs(dims: Sequence[ast.expr]) -> list[list[int]]:
@@ -140,19 +144,6 @@ def shift_index(idx: ast.expr, offset: ast.expr) -> ast.expr:
     if isinstance(offset, ast.Constant) and offset.value == 0:
         return idx
     return binop(idx, ast.Add(), copy.deepcopy(offset))
-
-
-def is_scalar_index(elt: ast.expr) -> bool:
-    """A subscript element that selects (consumes) a single source axis: an int
-    Constant, a bare Name (loop iter / symbol), or integer ARITHMETIC over those
-    (``hn[2 * l][:]``) -- NOT a Slice, Ellipsis, or newaxis (``None``)."""
-    if isinstance(elt, ast.Constant):
-        return elt.value is not Ellipsis and elt.value is not None
-    if isinstance(elt, ast.BinOp):
-        return is_scalar_index(elt.left) and is_scalar_index(elt.right)
-    if isinstance(elt, ast.UnaryOp):
-        return is_scalar_index(elt.operand)
-    return isinstance(elt, ast.Name)
 
 
 def rebases_onto_view_axis(view_slice: ast.Slice, use_slice: ast.Slice) -> bool:

@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import extent_is_scalar, iter_extent_of
@@ -467,14 +467,4 @@ class ResolveArrShape(ast.NodeTransformer):
         if not src or node.slice.value >= len(src):
             return node
         tok = src[node.slice.value]
-        # Plain literal int / identifier shortcut.
-        try:
-            return ast.Constant(value=int(tok))
-        except (TypeError, ValueError):
-            pass
-        # Try parsing as a pure expression -- ``H - K + 1`` / ``N`` /
-        # ``(N + 1)``. Strip any surrounding parens for cleanliness.
-        try:
-            return ast.parse(str(tok), mode="eval").body
-        except (SyntaxError, ValueError):
-            return name_(str(tok))
+        return const_or_name(tok)
