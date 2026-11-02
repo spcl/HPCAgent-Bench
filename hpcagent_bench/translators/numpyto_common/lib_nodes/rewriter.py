@@ -12,7 +12,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_LOWERI
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist import CallHoister, numpy_call_key
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import UNARY_C_MATH
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr, iter_extent_of
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr, iter_extent_of, reshape_tokens
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
@@ -534,22 +534,12 @@ class LibNodeRewriter(ast.NodeTransformer):
         newshape that is not a tuple, a Name or an int literal."""
         newshape = rhs.args[1]
         if isinstance(newshape, (ast.Tuple, ast.List)):
-            toks = tuple(ast.unparse(e) for e in newshape.elts)
-        elif isinstance(newshape, ast.Name):
-            toks = (newshape.id,)
-        elif const_int(newshape) is not None:
-            toks = (str(const_int(newshape)),)
+            elts = list(newshape.elts)
+        elif isinstance(newshape, ast.Name) or const_int(newshape) is not None:
+            elts = [newshape]
         else:
             return None
-        neg1 = [i for i, t in enumerate(toks) if t.strip() == "-1"]
-        src = rhs.args[0]
-        src_shape = self.shape_table.get(src.id) if isinstance(src, ast.Name) else None
-        if len(neg1) == 1 and src_shape:
-            total = " * ".join(f"({t})" for t in src_shape)
-            others = [t for j, t in enumerate(toks) if j != neg1[0]]
-            denom = " * ".join(f"({t})" for t in others) if others else "1"
-            toks = tuple(f"({total}) / ({denom})" if j == neg1[0] else t for j, t in enumerate(toks))
-        return toks
+        return reshape_tokens(elts, rhs.args[0], self.shape_table)
 
     def update_broadcast_result(self, target_id: str, rhs: ast.expr) -> None:
         """BinOp/UnaryOp/IfExp/Call/Subscript: the broadcast extent. ``Subscript`` covers a dynamic-bound
