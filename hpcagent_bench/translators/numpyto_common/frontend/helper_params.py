@@ -126,6 +126,16 @@ def infer_param_desc(
     return ScalarDesc(name=pname, dtype="float64")
 
 
+def once_bound_value(fn: ast.FunctionDef, name: str) -> ast.expr | None:
+    """The value of the one assignment naming ``name`` as a target anywhere in ``fn``, else ``None``."""
+    bound = [
+        s.value
+        for s in walk_nodes(fn)
+        if isinstance(s, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in s.targets)
+    ]
+    return bound[0] if len(bound) == 1 else None
+
+
 def boolean_valued_argument(
     arg: ast.expr, fn: ast.FunctionDef | None, sca_by: dict[str, ScalarDesc], depth: int = 0
 ) -> bool:
@@ -161,12 +171,8 @@ def boolean_valued_argument(
             return False
         # A local bound once to a predicate: resolve through that binding, the same single-binding
         # rule the integer probe uses -- more than one and the value is not decided here.
-        bound = [
-            st.value
-            for st in walk_nodes(fn)
-            if isinstance(st, ast.Assign) and any(isinstance(t, ast.Name) and t.id == arg.id for t in st.targets)
-        ]
-        return len(bound) == 1 and boolean_valued_argument(bound[0], fn, sca_by, depth + 1)
+        bound = once_bound_value(fn, arg.id)
+        return bound is not None and boolean_valued_argument(bound, fn, sca_by, depth + 1)
     return False
 
 
@@ -199,12 +205,8 @@ def integer_valued_argument(
         if fn is None:
             return False
         # A local bound once to an integer expression: resolve through that binding.
-        bound = [
-            s.value
-            for s in walk_nodes(fn)
-            if isinstance(s, ast.Assign) and any(isinstance(t, ast.Name) and t.id == arg.id for t in s.targets)
-        ]
-        return len(bound) == 1 and integer_valued_argument(bound[0], fn, sca_by, sym_by, depth + 1)
+        bound = once_bound_value(fn, arg.id)
+        return bound is not None and integer_valued_argument(bound, fn, sca_by, sym_by, depth + 1)
     if isinstance(arg, ast.BinOp) and isinstance(arg.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod)):
         return integer_valued_argument(arg.left, fn, sca_by, sym_by, depth + 1) and integer_valued_argument(
             arg.right, fn, sca_by, sym_by, depth + 1

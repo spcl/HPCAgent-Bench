@@ -4,7 +4,13 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, nested_blocks, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    name_,
+    nested_blocks,
+    positional_defaults,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.limits import HELPER_NESTING_ROUNDS
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.subscripts import base_name
@@ -71,9 +77,7 @@ def resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> list[ast.expr]
     untouched.
     """
     param_names = [a.arg for a in helper.args.args]
-    defaults = dict(
-        zip(param_names[len(param_names) - len(helper.args.defaults) :], helper.args.defaults, strict=False)
-    )
+    defaults = positional_defaults(helper.args)
     call_args = list(call.args)
     if len(call_args) > len(param_names) or any(kw.arg is None for kw in call.keywords):
         return None  # too many positionals, or a **kwargs splat we cannot resolve
@@ -261,10 +265,7 @@ def static_flag_params(tree: ast.Module) -> dict[str, frozenset[str]]:
         pnames = [a.arg for a in hdef.args.args]
         # An unsupplied trailing parameter takes its default, which is itself a compile-time value
         # when the default is a literal -- ``_logsumexp(x, axis=1)`` leaves keepdims=False.
-        bound: dict[str, ast.expr | None] = {}
-        offset = len(pnames) - len(hdef.args.defaults)
-        for i, default in enumerate(hdef.args.defaults):
-            bound[pnames[offset + i]] = default
+        bound: dict[str, ast.expr | None] = {**positional_defaults(hdef.args)}
         for i, arg in enumerate(call.args):
             if i < len(pnames):
                 bound[pnames[i]] = arg

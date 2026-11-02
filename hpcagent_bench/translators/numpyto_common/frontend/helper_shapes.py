@@ -32,7 +32,6 @@ __all__ = [
     "plain_local_array",
     "propagate_local_extents",
     "reads_no_array",
-    "rhs_value_names",
     "scalar_value_names",
     "statements_in_order",
     "structure_key",
@@ -501,24 +500,10 @@ def assigns_in_run_order(fn: ast.FunctionDef) -> list[ast.Assign]:
     return out
 
 
-def rhs_value_names(value: ast.expr) -> set[str]:
-    """Every name a statement's RHS reads as a VALUE. A call's own Name callee (``int(...)``) and
-    the numpy module are spellings, not operands, so neither has to be classified."""
-    callees = {id(n.func) for n in walk_nodes(value) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-    return {
-        n.id
-        for n in walk_nodes(value)
-        if isinstance(n, ast.Name)
-        and isinstance(n.ctx, ast.Load)
-        and id(n) not in callees
-        and n.id not in ("np", "numpy", "math")
-    }
-
-
 def reads_no_array(value: ast.expr, known: dict[str, ArrayDesc]) -> bool:
     """Whether the RHS reads nothing that carries an extent -- so its target is a scalar rather
     than an array this pass merely failed to size (``head_dim = embed_dim // num_heads``)."""
-    return not (rhs_value_names(value) & set(known))
+    return not (value_names(value) & set(known))
 
 
 def plain_local_array(
@@ -536,7 +521,7 @@ def plain_local_array(
     target = site.targets[0]
     if not isinstance(target, ast.Name):
         return None
-    reads = rhs_value_names(value)
+    reads = value_names(value)
     if not reads or not reads <= (set(known) | scalar_names):
         return None
     table = {n: tuple(str(s) for s in a.shape) for n, a in known.items()}

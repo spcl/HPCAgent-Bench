@@ -29,21 +29,21 @@ __all__ = [
 
 
 def value_names(node: ast.AST) -> set[str]:
-    """Every name an expression reads as a VALUE -- a call's callee is not one of them.
+    """Every name an expression reads as a VALUE.
 
-    ``int`` in ``(height - 1) // int(conv_stride) + 1`` is the builtin, not an extent the caller
-    has to hold; counting it made an otherwise fully-resolved shape look unresolvable.
+    A call's own Name callee and the numpy module are spellings, not operands: ``int`` in ``(height - 1) //
+    int(conv_stride) + 1`` is the builtin, not an extent the caller has to hold, and counting it made an otherwise
+    fully-resolved shape look unresolvable. A method receiver is a real operand.
     """
-    names: set[str] = set()
-    for child in ast.iter_child_nodes(node):
-        if isinstance(child, ast.Name):
-            names.add(child.id)
-        elif isinstance(child, ast.Call):
-            for arg in list(child.args) + [kw.value for kw in child.keywords]:
-                names |= value_names(ast.Expression(body=arg)) | ({arg.id} if isinstance(arg, ast.Name) else set())
-        else:
-            names |= value_names(child)
-    return names
+    callees = {id(n.func) for n in walk_nodes(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    return {
+        n.id
+        for n in walk_nodes(node)
+        if isinstance(n, ast.Name)
+        and isinstance(n.ctx, ast.Load)
+        and id(n) not in callees
+        and n.id not in ("np", "numpy", "math")
+    }
 
 
 def held_before_table(owner_fn: ast.FunctionDef) -> dict[int | None, set[str]]:
@@ -263,7 +263,7 @@ def caller_side_shape(
         # ``(height - 1) // int(conv_stride) + 1`` is the builtin, and asking
         # :func:`caller_side_symbol` to respell it refused the whole call ("needs shape symbol
         # 'int'"). :func:`value_names` already draws that line for the free-name check below.
-        operands = value_names(ast.Expression(body=expr))
+        operands = value_names(expr)
         subst = {
             n.id: ast.parse(
                 caller_side_symbol(n.id, held, decl_pnames, site_args, hfn, hname, 0, arr_by), mode="eval"
