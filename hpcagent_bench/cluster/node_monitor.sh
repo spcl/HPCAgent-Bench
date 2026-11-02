@@ -6,7 +6,7 @@
 # give per-GPU utilization, for spotting judge-to-GPU imbalance.
 #
 # env: ROLE (vllm|judge|agent, required), OUT_DIR (default "${RUN_DIR:-.}/monitor"),
-#      INTERVAL (default 5, seconds)
+#      INTERVAL (default 5, seconds), SMI_TIMEOUT (default 15, seconds)
 set -uo pipefail
 # no set -e: a bad read must produce a blank field, never kill the loop
 
@@ -32,11 +32,7 @@ trap 'STOP=1' TERM INT
 # probe answer, so no header and no CSV at all) or mid-run (no more rows, silently): cap every smi
 # call (SMI_TIMEOUT seconds, default 15) so a hang costs one probe or one blank sample, and the
 # loop keeps sampling.
-if command -v timeout >/dev/null 2>&1; then
-    smi() { timeout "${SMI_TIMEOUT:-15}" "$@"; }
-else
-    smi() { "$@"; }
-fi
+smi() { timeout "${SMI_TIMEOUT:-15}" "$@"; }
 
 # Decide once which GPU tool works and how many GPUs it reports; per-sample code
 # below just calls that one tool, so a missing/broken rocm-smi never costs a second
