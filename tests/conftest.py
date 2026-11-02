@@ -9,6 +9,7 @@ import os
 import pathlib
 import re
 import shutil
+import sys
 import tempfile
 import threading
 from collections.abc import Callable, Iterator, Mapping
@@ -484,6 +485,15 @@ def no_numba_pool_left_launched() -> Iterator[None]:
     yield
     if not launched_before and not os.environ.get(ISOLATED_ENV) and omp_context.numba_omp_pool_launched():
         pytest.fail("this test launched numba's omp pool in the worker; fork the kernel or mark the test isolated")
+
+
+@pytest.fixture(autouse=True)
+def close_figures() -> Iterator[None]:
+    """Close every matplotlib figure a test left open, whichever way it ended, so a test has no figure cleanup of its
+    own. A test that never imported pyplot has no figure, and this does not import it for one."""
+    yield
+    if (pyplot := sys.modules.get("matplotlib.pyplot")) is not None:
+        pyplot.close("all")
 
 
 @pytest.fixture

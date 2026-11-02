@@ -401,11 +401,8 @@ def test_a_marks_significance_superscript_reads_off_the_corrected_verdict_per_ax
         drawn: dict[Measure, list[str]] = {}
         for measure in (Measure.SPEEDUP, Measure.COST):
             fig, ax = plt.subplots()
-            try:
-                efficacy_figures.draw_measure_row(ax, [row], measure, "^", significance)
-                drawn[measure] = [text.get_text() for text in ax.texts]
-            finally:
-                plt.close(fig)
+            efficacy_figures.draw_measure_row(ax, [row], measure, "^", significance)
+            drawn[measure] = [text.get_text() for text in ax.texts]
         return drawn
 
     neither = symbols_of(one_setup_stats())
@@ -445,10 +442,7 @@ def y_axis_left_margin(low: float, high: float) -> float:
     ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: plotstyle.ratio_tick_label(value)))
     ax.set_ylabel("Token-Cost Ratio, Treated / Control", fontsize=plotstyle.LABEL_PT * 0.68)
     ax.tick_params(axis="both", labelsize=plotstyle.TICK_PT * 0.6)
-    try:
-        return efficacy_figures.required_left_margin(fig, ax)
-    finally:
-        plt.close(fig)
+    return efficacy_figures.required_left_margin(fig, ax)
 
 
 def test_required_left_margin_grows_with_the_widest_tick_the_range_draws() -> None:
@@ -708,11 +702,8 @@ def test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor(measure
 
     def texts(differences: frozenset[tuple[str, str]]) -> list[str]:
         fig, ax = plt.subplots()
-        try:
-            efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, differences=differences)
-            return [text.get_text() for text in ax.texts]
-        finally:
-            plt.close(fig)
+        efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, differences=differences)
+        return [text.get_text() for text in ax.texts]
 
     # Printed as every value beside a mark is, to one decimal (``style.ratio_label``).
     assert plotstyle.ratio_label(4.0) in texts(frozenset({("qwen38", "HIP")}))
@@ -727,19 +718,16 @@ def test_a_measure_row_border_never_opens_an_empty_tick_step(measure: Measure) -
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, efficacy_figures.PAPER_CONFIG)
-        low, high = ax.get_ylim()
-        data_low, data_high = ax.dataLim.y0, ax.dataLim.y1
-        ticks = sorted(ax.get_yticks())
-        log = ax.get_yscale() == "log"
-        span = (lambda a, b: math.log(b / a)) if log else (lambda a, b: b - a)
-        step = min(span(a, b) for a, b in itertools.pairwise(ticks))
-        reach = efficacy_figures.SNAP_REACH * step + 1e-9
-        assert span(low, data_low) <= reach, (low, data_low, step)
-        assert span(data_high, high) <= reach, (high, data_high, step)
-    finally:
-        plt.close(fig)
+    efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, efficacy_figures.PAPER_CONFIG)
+    low, high = ax.get_ylim()
+    data_low, data_high = ax.dataLim.y0, ax.dataLim.y1
+    ticks = sorted(ax.get_yticks())
+    log = ax.get_yscale() == "log"
+    span = (lambda a, b: math.log(b / a)) if log else (lambda a, b: b - a)
+    step = min(span(a, b) for a, b in itertools.pairwise(ticks))
+    reach = efficacy_figures.SNAP_REACH * step + 1e-9
+    assert span(low, data_low) <= reach, (low, data_low, step)
+    assert span(data_high, high) <= reach, (high, data_high, step)
 
 
 @pytest.mark.parametrize(
@@ -1000,7 +988,6 @@ def test_a_full_tag_mark_on_the_ceiling_is_drawn_whole() -> None:
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert marks
     assert not any(mark.get_clip_on() for mark in marks)
-    plt.close(fig)
 
 
 def test_the_success_row_draws_its_marks_and_no_interval() -> None:
@@ -1011,7 +998,6 @@ def test_the_success_row_draws_its_marks_and_no_interval() -> None:
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved Rate")
     assert [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert not [collection for collection in ax.collections if isinstance(collection, LineCollection)]
-    plt.close(fig)
 
 
 @pytest.mark.parametrize(("solved", "served", "want"), [
@@ -1032,7 +1018,6 @@ def test_a_success_mark_sits_at_the_solved_rate(
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     drawn = sorted({(float(x), float(y)) for mark in marks for x, y in mark.get_offsets()})
     assert drawn == pytest.approx(want)
-    plt.close(fig)
 
 
 def test_every_value_row_of_the_dot_row_carries_a_minor_grid(
@@ -1087,7 +1072,6 @@ def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: 
     size = ax.get_xticklabels()[0].get_fontsize()
     assert size < config.type_.tick_pt
     assert not plotstyle.crowded_ticks(ax, renderer, size / 3.0 * fig.dpi / 72.0)
-    plt.close(fig)
 
 
 def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_the_marks() -> None:
@@ -1108,7 +1092,6 @@ def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_
     assert frame.y0 <= box.y0
     assert box.y1 <= frame.y1
     assert not any(box.overlaps(mark) for mark in plotstyle.mark_boxes(ax))
-    plt.close(fig)
 
 
 @pytest.mark.parametrize(("success_row", "want"), [
@@ -1134,11 +1117,8 @@ def test_a_success_row_nobody_was_served_is_not_a_singular_axis() -> None:
     fig, ax = plt.subplots()
     unserved = setup(1.0, 2.0, solved=0, served=0)
     row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", unserved, unserved)
-    try:
-        efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "")
-        low, high = ax.get_ylim()
-    finally:
-        plt.close(fig)
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "")
+    low, high = ax.get_ylim()
     assert low < 0.0 < high
 
 
@@ -1152,7 +1132,6 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
     (label,) = [text for text in ax.texts if text.get_text().endswith("x")]
     assert label.xy == (0, 6.0), label.xy
     assert (label.get_ha(), label.get_va()) == ("center", "bottom")
-    plt.close(fig)
 
 
 def test_the_success_row_runs_to_100_percent_and_carries_no_x_ticks() -> None:
@@ -1171,7 +1150,6 @@ def test_the_success_row_runs_to_100_percent_and_carries_no_x_ticks() -> None:
     assert list(ceiling.get_ydata()) == [1.0, 1.0]
     assert not ax.texts
     assert all(tick.tick1line.get_markersize() == 0.0 for tick in ax.xaxis.get_major_ticks())
-    plt.close(fig)
 
 
 @pytest.mark.parametrize(("solved", "served", "want"), [(8, 8, 1.0), (0, 40, 0.0), (31, 40, 0.775), (0, 0, 0.0)])
@@ -1207,7 +1185,6 @@ def test_crowded_category_ticks_alternate_two_lines_and_sparse_ones_do_not(
     after = [tick.get_pad() for tick in ax.xaxis.get_major_ticks()]
     assert after[0::2] == before[0::2]
     assert (after[1::2] != before[1::2]) is staggered, (before, after)
-    plt.close(fig)
 
 
 @pytest.mark.parametrize(
@@ -1236,7 +1213,6 @@ def test_a_per_column_panel_never_asks_the_registry_for_its_pseudo_intervention(
                                                  pending=["qwen38"])  # fmt: skip
         efficacy_figures.figure_dot_row([stub], tmp_path / "dots.pdf", config=config, placeholders=[leg],
                                         pending=["qwen38"])  # fmt: skip
-    plt.close(kept[0])
     assert [record.getMessage() for record in caplog.records] == []
     assert column.shape == ""
     assert [(row.leg, row.shape) for row in column.rows] == [(leg, shape)]
@@ -1299,14 +1275,11 @@ def test_the_key_is_centred_on_the_canvas_and_never_wider(
 def test_a_single_value_axis_is_left_unsnapped() -> None:
     """A stub row's only value is its 1x line; snapping it would set equal limits (a singular axis)."""
     fig, ax = plt.subplots()
-    try:
-        ax.set_ylim(-1.0, 1.0)
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            efficacy_figures.snap_axis_to_ticks(ax, 0.0, 0.0)
-        assert ax.get_ylim() == (-1.0, 1.0)
-    finally:
-        plt.close(fig)
+    ax.set_ylim(-1.0, 1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        efficacy_figures.snap_axis_to_ticks(ax, 0.0, 0.0)
+    assert ax.get_ylim() == (-1.0, 1.0)
 
 
 @pytest.mark.parametrize(
@@ -1340,7 +1313,6 @@ def test_an_interval_past_the_reach_is_cut_at_it_with_an_arrowhead() -> None:
     assert low > -9.0, (low, high)
     heads = {line.get_marker() for line in ax.lines if line.get_marker() in ("^", "v")}
     assert heads == {"^", "v"}, heads
-    plt.close(fig)
 
 
 def few_kernel_setup(x: float, kernels: int) -> efficacy_figures.SetupPoint:
@@ -1361,7 +1333,6 @@ def test_a_mark_from_fewer_than_six_kernels_draws_no_interval_and_does_not_stret
         efficacy_figures.draw_measure_row(ax, [row], Measure.SPEEDUP, "^", {}, config=efficacy_figures.PAPER_CONFIG)
         lines[kernels] = len(ax.lines)
         limits[kernels] = ax.get_ylim()
-        plt.close(fig)
     assert lines[5] < lines[6], lines
     assert limits[5][1] - limits[5][0] < limits[6][1] - limits[6][0], limits
 
@@ -1476,7 +1447,6 @@ def test_the_solved_row_is_never_starred_because_the_solved_rate_is_not_tested()
         fig, ax = plt.subplots()
         efficacy_figures.draw_measure_row(ax, [row], measure, "D", significance)
         texts[measure] = [text.get_text() for text in ax.texts]
-        plt.close(fig)
     assert efficacy_figures.SCORE_SIG_MARK in texts[Measure.SPEEDUP]
     assert texts[Measure.SUCCESS] == [], texts[Measure.SUCCESS]
 

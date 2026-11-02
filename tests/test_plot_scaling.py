@@ -315,16 +315,13 @@ def test_a_print_size_scaling_figure_keeps_every_text_on_the_print_scale(builder
         assert style.print_type_violations(fig) == []
         assert float(fig.get_size_inches()[0]) == pytest.approx(style.ICLR_WRAP_WIDTH_IN)
     finally:
-        import matplotlib.pyplot as plt
-
-        plt.close(fig)
+        pass
 
 
 @pytest.mark.parametrize("geomean_panel", [True, False])
 def test_the_mode_grid_is_one_row_per_law_one_column_per_picked_kernel_and_the_geomean(geomean_panel: bool) -> None:
     """The paper's scaling figure: weak above strong, the picked kernels in the picked order, the
     geomean column last only when asked, one key under the figure and one shared Y label."""
-    import matplotlib.pyplot as plt
 
     from hpcagent_bench import study_tags
 
@@ -335,33 +332,26 @@ def test_the_mode_grid_is_one_row_per_law_one_column_per_picked_kernel_and_the_g
         scaling.curves(frame(rows)), ["dist_sdpa", "dist_softmax"], geomean_panel=geomean_panel
     )
     assert fig is not None
-    try:
-        columns = 2 + int(geomean_panel)
-        assert len(fig.axes) == 2 * columns
-        top, bottom = fig.axes[:columns], fig.axes[columns:]
-        assert [ax.get_ylabel() for ax in (top[0], bottom[0])] == ["Weak Scaling", "Strong Scaling"]
-        names = [study_tags.kernel_short_display_name(k) for k in ("dist_sdpa", "dist_softmax")]
-        assert [ax.get_title() for ax in top] == names + [scaling.GEOMEAN_LABEL] * geomean_panel
-        assert len(fig.legends) == 1
-        assert all(ax.get_legend() is None for ax in fig.axes)
-        assert [text.get_text() for text in fig.texts].count(scaling.SPEEDUP_LABEL) == 1
-    finally:
-        plt.close(fig)
+    columns = 2 + int(geomean_panel)
+    assert len(fig.axes) == 2 * columns
+    top, bottom = fig.axes[:columns], fig.axes[columns:]
+    assert [ax.get_ylabel() for ax in (top[0], bottom[0])] == ["Weak Scaling", "Strong Scaling"]
+    names = [study_tags.kernel_short_display_name(k) for k in ("dist_sdpa", "dist_softmax")]
+    assert [ax.get_title() for ax in top] == names + [scaling.GEOMEAN_LABEL] * geomean_panel
+    assert len(fig.legends) == 1
+    assert all(ax.get_legend() is None for ax in fig.axes)
+    assert [text.get_text() for text in fig.texts].count(scaling.SPEEDUP_LABEL) == 1
 
 
 def test_an_efficiency_mode_grid_names_eta_on_a_linear_axis_from_zero() -> None:
     """Quantity.EFFICIENCY is the command's default: the speedup label and the log-decade ruling would misname it."""
-    import matplotlib.pyplot as plt
 
     rows = perfect_strong("llr40-qwen38-c", "dist_sdpa") + perfect_weak("llr40-qwen38-c", "dist_sdpa")
     fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_sdpa"], scaling.Quantity.EFFICIENCY)
     assert fig is not None
-    try:
-        assert scaling.axis_label(scaling.Quantity.EFFICIENCY, "strong") in [text.get_text() for text in fig.texts]
-        assert all(ax.get_yscale() == "linear" and ax.get_ylim()[0] == 0.0 for ax in fig.axes)
-        assert all(1.0 in ax.get_yticks() and 0.1 not in ax.get_yticks() for ax in fig.axes)
-    finally:
-        plt.close(fig)
+    assert scaling.axis_label(scaling.Quantity.EFFICIENCY, "strong") in [text.get_text() for text in fig.texts]
+    assert all(ax.get_yscale() == "linear" and ax.get_ylim()[0] == 0.0 for ax in fig.axes)
+    assert all(1.0 in ax.get_yticks() and 0.1 not in ax.get_yticks() for ax in fig.axes)
 
 
 def test_the_band_at_a_rank_count_is_the_bootstrap_interval_of_the_kernels_geomean() -> None:
@@ -384,7 +374,6 @@ def test_the_band_at_a_rank_count_is_the_bootstrap_interval_of_the_kernels_geome
 def test_each_mode_grid_panel_scales_its_own_y_axis() -> None:
     """Operators sit orders of magnitude apart: a row-shared scale flattened every operator but the
     fastest into the bottom of its panel, so no two panels may share a Y axis."""
-    import matplotlib.pyplot as plt
 
     rows = perfect_strong("mlscale-strong-qwen38-hip", "dist_softmax")
     # dist_sdpa runs 1024 times slower than its baseline at every P.
@@ -394,37 +383,29 @@ def test_each_mode_grid_panel_scales_its_own_y_axis() -> None:
     ]
     fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_sdpa", "dist_softmax"], geomean_panel=False)
     assert fig is not None
-    try:
-        first, second = fig.axes[:2]
-        assert not first.get_shared_y_axes().joined(first, second)
-        assert first.get_ylim() != second.get_ylim(), (first.get_ylim(), second.get_ylim())
-    finally:
-        plt.close(fig)
+    first, second = fig.axes[:2]
+    assert not first.get_shared_y_axes().joined(first, second)
+    assert first.get_ylim() != second.get_ylim(), (first.get_ylim(), second.get_ylim())
 
 
 def test_a_panels_y_range_hugs_what_it_draws() -> None:
     """Autoscaling rounded a 1x-16x panel out to whole decades and left it mostly empty; the range
     must end exactly one pad factor beyond the extreme values drawn (curves and the ideal line)."""
-    import matplotlib.pyplot as plt
 
     fig = scaling.figure_mode_grid(
         scaling.curves(frame(perfect_strong("mlscale-strong-qwen38-hip", "dist_softmax"))), ["dist_softmax"],
         geomean_panel=False,
     )  # fmt: skip
     assert fig is not None
-    try:
-        ax = fig.axes[0]
-        drawn = [float(y) for line in ax.get_lines() for y in line.get_ydata() if float(y) > 0]
-        assert ax.get_ylim() == pytest.approx((min(drawn) / scaling.Y_FIT_PAD, max(drawn) * scaling.Y_FIT_PAD))
-        assert max(drawn) < 16.0 * 2  # no decade rounding: the top is the data, not 100x
-    finally:
-        plt.close(fig)
+    ax = fig.axes[0]
+    drawn = [float(y) for line in ax.get_lines() for y in line.get_ydata() if float(y) > 0]
+    assert ax.get_ylim() == pytest.approx((min(drawn) / scaling.Y_FIT_PAD, max(drawn) * scaling.Y_FIT_PAD))
+    assert max(drawn) < 16.0 * 2  # no decade rounding: the top is the data, not 100x
 
 
 def test_a_panel_spanning_four_decades_still_labels_its_ticks() -> None:
     """The default log locator returned no tick at all on a short panel over 0.001x-20x, leaving
     the SDPA panel without a scale."""
-    import matplotlib.pyplot as plt
 
     rows = [
         row("mlscale-strong-qwen38-hip", "dist_sdpa", "strong", p, 4096.0 * 1000 / p, single_rank_ns=4096.0)
@@ -436,13 +417,10 @@ def test_a_panel_spanning_four_decades_still_labels_its_ticks() -> None:
     ]
     fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_sdpa"], geomean_panel=False)
     assert fig is not None
-    try:
-        fig.canvas.draw()
-        low, high = fig.axes[0].get_ylim()
-        shown = [t for t in fig.axes[0].yaxis.get_majorticklocs() if low <= t <= high]
-        assert len(shown) >= 2, (low, high, shown)
-    finally:
-        plt.close(fig)
+    fig.canvas.draw()
+    low, high = fig.axes[0].get_ylim()
+    shown = [t for t in fig.axes[0].yaxis.get_majorticklocs() if low <= t <= high]
+    assert len(shown) >= 2, (low, high, shown)
 
 
 def test_the_baseline_is_named_without_a_packet_it_never_ran() -> None:
@@ -452,7 +430,6 @@ def test_the_baseline_is_named_without_a_packet_it_never_ran() -> None:
 def test_model_lines_are_thinner_than_the_baseline_and_the_geomean_column_is_wider() -> None:
     """Overlapping model curves hid each other at full width; the geomean column holds three
     banded series and needs more room than an operator column."""
-    import matplotlib.pyplot as plt
 
     rows = perfect_strong("mlscale-strong-qwen38-hip", "dist_softmax") + perfect_strong(
         scaling.TORCH_DIST_SETUP, "dist_softmax"
@@ -461,12 +438,9 @@ def test_model_lines_are_thinner_than_the_baseline_and_the_geomean_column_is_wid
         entry["episode_id"] = f"run-{index // len(RANKS)}"
     fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_softmax"], geomean_panel=True)
     assert fig is not None
-    try:
-        panel, geomean = fig.axes[0], fig.axes[1]
-        widths = {line.get_label(): line.get_linewidth() for line in panel.get_lines()}
-        model = next(w for label, w in widths.items() if label.startswith("Qwen"))
-        base = widths[scaling.TORCH_DIST_LABEL]
-        assert model == pytest.approx(base * scaling.AGENT_LINE_SCALE), widths
-        assert geomean.get_position().width > panel.get_position().width * 1.2
-    finally:
-        plt.close(fig)
+    panel, geomean = fig.axes[0], fig.axes[1]
+    widths = {line.get_label(): line.get_linewidth() for line in panel.get_lines()}
+    model = next(w for label, w in widths.items() if label.startswith("Qwen"))
+    base = widths[scaling.TORCH_DIST_LABEL]
+    assert model == pytest.approx(base * scaling.AGENT_LINE_SCALE), widths
+    assert geomean.get_position().width > panel.get_position().width * 1.2

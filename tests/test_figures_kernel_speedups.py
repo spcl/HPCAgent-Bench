@@ -15,7 +15,6 @@ holding still draws a plausible-looking figure, so it is asserted here rather th
 import math
 import pathlib
 
-import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 from PIL import Image
@@ -262,10 +261,7 @@ def test_the_summary_slot_leaves_out_a_compilers_1x_placeholders(llr40_canon: pd
     solved kernels are both 10x, so the printed geomean is 10x -- not 4.6x with the placeholder."""
     rows = kernel_rows(llr40_canon, None, TAG40)
     fig = kernel_speedups.kernel_figure(rows, TAG40)
-    try:
-        printed = [text.get_text() for text in fig.axes[0].texts if text.get_gid() == style.CLEAR_GID]
-    finally:
-        plt.close(fig)
+    printed = [text.get_text() for text in fig.axes[0].texts if text.get_gid() == style.CLEAR_GID]
     assert style.ratio_label(10.0) in printed, printed
     assert style.ratio_label(100.0 ** (1.0 / 3.0)) not in printed, printed
 
@@ -406,13 +402,10 @@ def test_the_speedup_panel_is_log2_geometry_read_back_in_ratios(llr40_canon: pd.
     from zero and swamped every other mark), and the ticks still read as speedups: the "2x" tick
     sits at the ratio 2 on a base-2 log axis."""
     fig = kernel_speedups.kernel_figure(kernel_rows(llr40_canon, None, TAG40), TAG40)
-    try:
-        ax = fig.axes[0]
-        labels = [tick.get_text() for tick in ax.get_yticklabels()]
-        positions = list(ax.get_yticks())
-        scale, base = ax.get_yscale(), ax.yaxis.get_transform().base
-    finally:
-        plt.close(fig)
+    ax = fig.axes[0]
+    labels = [tick.get_text() for tick in ax.get_yticklabels()]
+    positions = list(ax.get_yticks())
+    scale, base = ax.get_yscale(), ax.yaxis.get_transform().base
     assert (scale, base) == ("log", 2.0)
     assert "1x" in labels
     assert "2x" in labels
@@ -423,21 +416,15 @@ def test_the_speedup_panel_is_log2_geometry_read_back_in_ratios(llr40_canon: pd.
 def test_the_1x_line_wears_the_baselines_own_colour(llr40_canon: pd.DataFrame) -> None:
     """The 1x line IS the baseline (numba), so it is drawn in numba's colour, not a neutral rule."""
     fig = kernel_speedups.kernel_figure(kernel_rows(llr40_canon, None, TAG40), TAG40)
-    try:
-        colours = [line.get_color() for line in fig.axes[0].get_lines() if list(line.get_ydata()) == [1.0, 1.0]]
-    finally:
-        plt.close(fig)
+    colours = [line.get_color() for line in fig.axes[0].get_lines() if list(line.get_ydata()) == [1.0, 1.0]]
     assert colours == [palette.framework_color(kernel_speedups.BASELINE)], colours
 
 
 def test_figure_omits_the_tokens_panel_when_no_row_spends_tokens(llr40_canon: pd.DataFrame) -> None:
     rows = kernel_rows(llr40_canon, None, TAG40)
     fig = kernel_speedups.kernel_figure(rows, TAG40, "title")
-    try:
-        assert len(fig.axes) == 1
-        assert fig.axes[0].get_ylabel() == "Speedup over Numba"
-    finally:
-        plt.close(fig)
+    assert len(fig.axes) == 1
+    assert fig.axes[0].get_ylabel() == "Speedup over Numba"
 
 
 def test_figure_keeps_the_tokens_panel_when_a_row_spends_tokens(
@@ -445,11 +432,8 @@ def test_figure_keeps_the_tokens_panel_when_a_row_spends_tokens(
 ) -> None:
     rows = kernel_rows(llr40_canon, llr40_observations, TAG40)
     fig = kernel_speedups.kernel_figure(rows, TAG40, "title")
-    try:
-        assert len(fig.axes) == 2
-        assert fig.axes[1].get_ylabel() == "Billed Tokens"
-    finally:
-        plt.close(fig)
+    assert len(fig.axes) == 2
+    assert fig.axes[1].get_ylabel() == "Billed Tokens"
 
 
 def test_legend_names_each_optimizer_and_the_cross_only_when_one_is_drawn(llr40_canon: pd.DataFrame) -> None:
@@ -479,14 +463,11 @@ def test_figure_prints_at_text_width_and_names_its_summary_statistic(llr40_canon
     slots."""
     rows = kernel_rows(llr40_canon, None, TAG40)
     fig = kernel_speedups.kernel_figure(rows, TAG40)
-    try:
-        width, height = (float(v) for v in fig.get_size_inches())
-        labels = [label.get_text() for label in fig.axes[0].get_yticklabels()]
-        kernel_ticks = [label.get_text() for label in fig.axes[0].get_xticklabels()]
-        tick_length = fig.axes[0].xaxis.get_major_ticks()[0].tick1line.get_markersize()
-        annotations = [text.get_text() for text in fig.axes[0].texts]
-    finally:
-        plt.close(fig)
+    width, height = (float(v) for v in fig.get_size_inches())
+    labels = [label.get_text() for label in fig.axes[0].get_yticklabels()]
+    kernel_ticks = [label.get_text() for label in fig.axes[0].get_xticklabels()]
+    tick_length = fig.axes[0].xaxis.get_major_ticks()[0].tick1line.get_markersize()
+    annotations = [text.get_text() for text in fig.axes[0].texts]
     assert width == pytest.approx(style.DOUBLE_COLUMN_WIDTH)
     assert height < 2.6
     assert "1x" in labels
@@ -501,10 +482,7 @@ def test_figure_prints_at_text_width_and_names_its_summary_statistic(llr40_canon
 def test_summary_column_prints_each_geomean_value(llr40_canon: pd.DataFrame) -> None:
     rows = kernel_rows(llr40_canon, None, TAG40)
     fig = kernel_speedups.kernel_figure(rows, TAG40)
-    try:
-        texts = [text.get_text() for text in fig.axes[0].texts]
-    finally:
-        plt.close(fig)
+    texts = [text.get_text() for text in fig.axes[0].texts]
     # The spelling is the shared speller's, not restated here: the property is that every row's
     # geomean is printed.
     (speed,) = kernel_speedups.kernel_metrics(rows, TAG40)
@@ -601,10 +579,7 @@ def test_the_legend_keys_pending_apart_from_the_cross(pending_canon: pd.DataFram
 def test_the_figure_draws_one_pending_mark_per_pending_kernel(pending_canon: pd.DataFrame) -> None:
     row = kernel_speedups.canon_kernel_row(pending_canon, "dace_cpu_canon", TAG40, mark_pending=True)
     fig = kernel_speedups.kernel_figure([row], TAG40)
-    try:
-        assert sum(c.get_gid() == style.PENDING_GID for c in fig.axes[0].collections) == 1
-    finally:
-        plt.close(fig)
+    assert sum(c.get_gid() == style.PENDING_GID for c in fig.axes[0].collections) == 1
 
 
 def test_a_kernel_numba_did_not_verify_is_timed_against_the_fallback() -> None:
@@ -634,12 +609,8 @@ def test_a_shorter_panel_makes_a_shorter_figure_at_the_same_width(llr40_canon: p
         kernel_speedups.kernel_figure(rows, TAG40),
         kernel_speedups.kernel_figure(rows, TAG40, panel_height_in=1.0),
     )
-    try:
-        assert short.get_size_inches()[0] == pytest.approx(tall.get_size_inches()[0])
-        assert short.get_size_inches()[1] == pytest.approx(tall.get_size_inches()[1] - 0.5, abs=0.01)
-    finally:
-        plt.close(tall)
-        plt.close(short)
+    assert short.get_size_inches()[0] == pytest.approx(tall.get_size_inches()[0])
+    assert short.get_size_inches()[1] == pytest.approx(tall.get_size_inches()[1] - 0.5, abs=0.01)
 
 
 @pytest.mark.parametrize(
