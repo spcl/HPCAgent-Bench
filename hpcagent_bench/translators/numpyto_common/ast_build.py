@@ -102,6 +102,16 @@ def const_int(node: ast.expr | None) -> int | None:
     return None
 
 
+def refuse_negative_int_power(base: ast.expr, exponent: ast.expr) -> None:
+    """Refuse an integer base under a negated exponent, for a caller that has proven both operands integer.
+
+    Python answers a float and numpy raises, so no integer power helper can stand in for it."""
+    if isinstance(exponent, ast.UnaryOp) and isinstance(exponent.op, ast.USub) or (const_int(exponent) or 0) < 0:
+        raise NotImplementedError(
+            f"{ast.unparse(base)} ** {ast.unparse(exponent)}: an integer to a negative power; use a float base"
+        )
+
+
 class SubstituteLoads(ast.NodeTransformer):
     """Replace every LOAD of a name in ``values`` with a fresh copy of its expression."""
 

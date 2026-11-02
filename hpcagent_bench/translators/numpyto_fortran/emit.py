@@ -16,6 +16,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     line_of,
     map_blocks,
     name_,
+    refuse_negative_int_power,
     set_field,
     store_,
     walk_nodes,
@@ -1825,6 +1826,8 @@ class FortranBodyEmitter(BaseEmitter):
     def emit_binop(self, node: ast.BinOp) -> str:
         # Pow: Fortran has ** for both integer and real exponents.
         if isinstance(node.op, ast.Pow):
+            if self.expr_is_integer(node.left) and self.expr_is_integer(node.right):
+                refuse_negative_int_power(node.left, node.right)
             return f"({self.emit_expr(node.left)} ** {self.emit_expr(node.right)})"
         # FloorDiv: Fortran's FLOOR(a/b) gives numpy // semantics; FLOOR defaults
         # to int32, so pin it to the int64 ABI kind to avoid clashing with int64 operands.

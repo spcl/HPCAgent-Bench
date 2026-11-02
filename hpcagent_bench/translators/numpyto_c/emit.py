@@ -12,7 +12,13 @@ from functools import lru_cache
 from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.translators.numpyto_c.pluto_predicate import if_convert
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, line_of, name_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    const_int,
+    line_of,
+    name_,
+    refuse_negative_int_power,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers import fftw
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
     CONJ_ATTRS,
@@ -1620,6 +1626,7 @@ class CBodyEmitter(BaseEmitter):
         to int64 -- silently wrong for exactly the large-integer kernels that use it.
         Both spellings (``a ** b`` and a synthesized ``pow(a, b)`` call) come here."""
         if self.is_int_operand(left) and self.is_int_operand(right):
+            refuse_negative_int_power(left, right)
             return f"__npb_int_pow({self.emit_expr(left)}, {self.emit_expr(right)})"
         return f"{self.math_name('pow')}({self.emit_expr(left)}, {self.emit_expr(right)})"
 
