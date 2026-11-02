@@ -167,17 +167,20 @@ def compare(old: dict[str, np.ndarray], new: dict[str, np.ndarray], rtol: float,
             continue
         if a.dtype != b.dtype:
             bad.append(f"{name}: dtype {a.dtype} -> {b.dtype}")
-        if np.array_equal(a, b):
+        # equal_nan: a NaN in the same slot of both outputs is the SAME number for this gate's
+        # purposes (the allclose branch below already treats it so), so identical outputs that
+        # happen to hold non-finite values must still compare equal here.
+        if np.array_equal(a, b, equal_nan=True):
             continue
         if (rtol or atol) and np.allclose(a, b, rtol=rtol, atol=atol, equal_nan=True):
             continue
         finite = np.isfinite(a) & np.isfinite(b)
         if not bool(finite.all()):
-            same_nonfinite = np.array_equal(np.isfinite(a), np.isfinite(b))
-            bad.append(
-                f"{name}: {int((~finite).sum())}/{a.size} non-finite, "
-                f"pattern {'matches' if same_nonfinite else 'DIFFERS'}"
-            )
+            # Compare the non-finite VALUES, not just the finiteness pattern: NaN vs NaN matches,
+            # NaN vs a finite value and +inf vs -inf do not.
+            nonfinite = ~finite
+            if not np.array_equal(a[nonfinite], b[nonfinite], equal_nan=True):
+                bad.append(f"{name}: {int(nonfinite.sum())}/{a.size} non-finite values DIFFER")
         if not finite.any():
             continue
         diff = np.abs(a[finite].astype(np.float64) - b[finite].astype(np.float64))
