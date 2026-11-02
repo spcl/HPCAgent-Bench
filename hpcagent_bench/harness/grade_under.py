@@ -516,7 +516,7 @@ ORDER BY r.job, r.label, g.kernel, g.ts_ms
 
 def credited_rows(db: pathlib.Path) -> list[dict[str, Any]]:
     """:data:`CREDITED_SUBMISSIONS` of ``db``, one dict per row, ``db`` included."""
-    with results_db.reading(db) as conn:
+    with results_db.reading(db, finished=results_db.finished_db(db)) as conn:
         return [{**dict(row), "db": str(db)} for row in conn.execute(CREDITED_SUBMISSIONS)]
 
 
@@ -543,7 +543,7 @@ def stale_rows(db: pathlib.Path) -> list[dict[str, Any]]:
     cuts = grading_cuts().kernels
     if not cuts:
         return []
-    with results_db.reading(db) as conn:
+    with results_db.reading(db, finished=results_db.finished_db(db)) as conn:
         query = UNCREDITED_SUBMISSIONS.format(kernels=", ".join("?" * len(cuts)))
         rows = conn.execute(query, tuple(cuts)).fetchall()
     return [{**dict(row), "db": str(db)} for row in rows if int(row["ts_ms"]) < cuts[str(row["kernel"])]]
@@ -723,7 +723,7 @@ def final_graded(db: pathlib.Path, protocol: Protocol | None = None) -> frozense
     """The grades of ``db`` a non-faulted, non-stale final grade under ``protocol`` re-timed (solved or not); a
     final whose cells carry several stamps (``a+b``) counts under each."""
     stamp = (protocol or FINAL).stamp
-    with results_db.reading(db) as conn:
+    with results_db.reading(db, finished=results_db.finished_db(db)) as conn:
         return frozenset(
             int(row["of_grade_id"])
             for row in conn.execute(FINAL_GRADES)
@@ -750,7 +750,7 @@ def build_promotion_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib
     problems: list[str] = []
     envs: dict[str, dict[str, str] | None] = {}
     for db in dbs:
-        with results_db.reading(db) as conn:
+        with results_db.reading(db, finished=results_db.finished_db(db)) as conn:
             newest: dict[tuple[str, str, int], dict[str, Any]] = {}
             for row in conn.execute(UNPROMOTED_EPISODES):
                 newest[(str(row["setup"]), str(row["kernel"]), int(row["slot"]))] = {**dict(row), "db": str(db)}
@@ -810,7 +810,7 @@ def submission_of(item: Item) -> Submission:
 
     Raises LookupError when no source was stored, its hash is not ``source_hash`` (the id was reused), or the
     agent's ``lib``/``include`` changed since the grade (a regrade would link other code)."""
-    with results_db.reading(item.db) as conn:
+    with results_db.reading(item.db, finished=results_db.finished_db(item.db)) as conn:
         units = results_db.grade_sources(conn, item.grade_id)
     if "host" not in units:
         raise LookupError(f"{item.db}: grade {item.grade_id} stored no source")

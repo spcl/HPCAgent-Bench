@@ -19,7 +19,7 @@ from hpcagent_agent.coded import Coded
 from relayout.ops import Action
 from relayout.requests import expr_json, operation_json
 
-from hpcagent_bench import paths
+from hpcagent_bench import paths, run_layout
 from hpcagent_bench.cache_files import sha256_hex
 from hpcagent_bench.harness import db_json
 from hpcagent_bench.harness.requests_api import Requests
@@ -70,6 +70,7 @@ __all__ = [
     "ensure_episode",
     "ensure_setup",
     "final_row_groups",
+    "finished_db",
     "grade_sources",
     "insert",
     "lazy_table_sql",
@@ -310,32 +311,43 @@ def requests_from_rows(conn: sqlite3.Connection, grade_id: int) -> Requests:
     return Requests.validate({"startup": startup, "operations": operations})
 
 
-def ro_uri(path: str | pathlib.Path, live: bool) -> str:
-    """The URI that reads the SQLite file ``path`` and creates nothing beside it, where that is safe.
+def finished_db(path: str | pathlib.Path) -> bool:
+    """Whether ``path`` is a job's merged DB and its merge completed, which ``ro_uri``'s ``finished`` may state:
+    the job's end built the file whole, and :data:`~hpcagent_bench.run_layout.MERGE_FAILED_NAME` stands from the
+    job's start until then."""
+    target = pathlib.Path(path)
+    return target.name == run_layout.MERGED_DB_NAME and not (target.parent / run_layout.MERGE_FAILED_NAME).exists()
 
-    Without ``-wal`` content the file alone is the database, and ``immutable`` reads it with no lock and no ``-shm``;
-    SQLite's ``mode=ro`` would leave one. Rows in a ``-wal`` are only reachable by the locking protocol, through the
-    ``-shm`` its writer made. ``live`` is for a reader beside a running writer: its next close may checkpoint into the
-    file, which an immutable reader sees half done, so ``live`` always takes the protocol.
+
+def ro_uri(path: str | pathlib.Path, finished: bool = False) -> str:
+    """The URI that reads the SQLite file ``path``.
+
+    By default SQLite's ``mode=ro``: the locking protocol, safe beside any writer, even one that opens later. A short
+    writer's close checkpoints into the file and removes the ``-wal``, so a missing ``-wal`` says nothing about writers.
+    On a WAL file that protocol leaves a ``-shm`` and an empty ``-wal``, and needs a writable directory. ``finished`` is
+    the caller's statement that nothing writes ``path`` any more: without ``-wal`` content the file alone is the
+    database, and ``immutable`` reads it with no lock and nothing left beside it. Rows in a ``-wal`` a dead writer left
+    are only reachable by the protocol.
 
     The URI comes from :meth:`pathlib.Path.as_uri`, which escapes ``#`` and ``%`` in the path."""
     target = pathlib.Path(path).resolve()
-    protocol = live
     with contextlib.suppress(FileNotFoundError):
-        protocol = protocol or target.with_name(f"{target.name}-wal").stat().st_size > 0
-    return f"{target.as_uri()}?{'mode=ro' if protocol else 'immutable=1'}"
+        finished = finished and target.with_name(f"{target.name}-wal").stat().st_size == 0
+    return f"{target.as_uri()}?{'immutable=1' if finished else 'mode=ro'}"
 
 
-def connect_ro(path: str | pathlib.Path, *, timeout: float = BUSY_TIMEOUT_S, live: bool = False) -> sqlite3.Connection:
+def connect_ro(
+    path: str | pathlib.Path, *, timeout: float = BUSY_TIMEOUT_S, finished: bool = False
+) -> sqlite3.Connection:
     """A read-only connection to any SQLite file ``path`` (:func:`ro_uri`), with no schema check."""
-    return sqlite3.connect(ro_uri(path, live), uri=True, timeout=timeout)
+    return sqlite3.connect(ro_uri(path, finished), uri=True, timeout=timeout)
 
 
-def open_ro(path: str | pathlib.Path, live: bool = False) -> sqlite3.Connection:
+def open_ro(path: str | pathlib.Path, finished: bool = False) -> sqlite3.Connection:
     """A read-only connection to the results database ``path`` with :class:`sqlite3.Row` rows."""
     if not pathlib.Path(path).is_file():
         raise FileNotFoundError(path)
-    conn = connect_ro(path, live=live)
+    conn = connect_ro(path, finished=finished)
     conn.row_factory = sqlite3.Row
     try:
         if not check_schema(conn, str(path)):
@@ -347,9 +359,9 @@ def open_ro(path: str | pathlib.Path, live: bool = False) -> sqlite3.Connection:
 
 
 @contextlib.contextmanager
-def reading(path: str | pathlib.Path, live: bool = False) -> Iterator[sqlite3.Connection]:
+def reading(path: str | pathlib.Path, finished: bool = False) -> Iterator[sqlite3.Connection]:
     """:func:`open_ro`, closed on exit."""
-    conn = open_ro(path, live)
+    conn = open_ro(path, finished)
     with contextlib.closing(conn):
         yield conn
 
@@ -637,9 +649,9 @@ def merge_rows(conn: sqlite3.Connection, table: str, ids: IdMap) -> int:
     return copied
 
 
-def merge_one(conn: sqlite3.Connection, path: pathlib.Path) -> dict[str, int]:
-    """Fold the file ``path`` into the open destination; rows copied per table."""
-    conn.execute("ATTACH DATABASE ? AS src", (ro_uri(path, live=False),))
+def merge_one(conn: sqlite3.Connection, path: pathlib.Path, finished: bool = False) -> dict[str, int]:
+    """Fold the file ``path`` (read as :func:`ro_uri` says) into the open destination; rows copied per table."""
+    conn.execute("ATTACH DATABASE ? AS src", (ro_uri(path, finished),))
     try:
         names = table_names(conn, "src")
         version = int(conn.execute("PRAGMA src.user_version").fetchone()[0])
@@ -662,8 +674,9 @@ def merge_one(conn: sqlite3.Connection, path: pathlib.Path) -> dict[str, int]:
     return copied
 
 
-def merge(dest: str | pathlib.Path, sources: Sequence[str | pathlib.Path]) -> dict[str, int]:
-    """Fold every file of ``sources`` into ``dest`` by natural key; returns rows copied per table. Idempotent."""
+def merge(dest: str | pathlib.Path, sources: Sequence[str | pathlib.Path], finished: bool = False) -> dict[str, int]:
+    """Fold every file of ``sources`` (:func:`merge_one`) into ``dest`` by natural key; returns rows copied per table.
+    Idempotent."""
     target = pathlib.Path(dest).resolve()
     totals: dict[str, int] = {}
     with contextlib.closing(open_db(target)) as conn:
@@ -671,7 +684,7 @@ def merge(dest: str | pathlib.Path, sources: Sequence[str | pathlib.Path]) -> di
             path = pathlib.Path(source).resolve()
             if path == target:
                 continue
-            for table, count in merge_one(conn, path).items():
+            for table, count in merge_one(conn, path, finished).items():
                 totals[table] = totals.get(table, 0) + count
     return totals
 
@@ -704,7 +717,7 @@ def rebuilding(dest: str | pathlib.Path) -> Iterator[pathlib.Path]:
 def copy_grade(src: pathlib.Path, grade_id: int, dest: sqlite3.Connection) -> int:
     """Copy grade ``grade_id`` of ``src`` into ``dest`` with its setup, run, sources, requests and the grade it
     re-timed; returns its id in ``dest``."""
-    with reading(src) as conn:
+    with reading(src, finished=finished_db(src)) as conn:
         chain = [grade_id]
         of = conn.execute("SELECT of_grade_id FROM grades WHERE id = ?", (grade_id,)).fetchone()
         if of is None:

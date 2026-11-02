@@ -189,20 +189,26 @@ def test_the_run_root_scan_skips_the_extractions_own_output(tmp_path: pathlib.Pa
     assert [db.path for db in found] == [judge.resolve()]
 
 
-def test_the_run_root_scan_names_a_corrupt_shard_it_skips(
+def test_the_run_root_scan_refuses_a_corrupt_shard_and_passes_over_a_broken_agent_file(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
-    """A shard truncated by an OOM-killed rank was dropped from the scan without a word, so the extraction
-    read as if that rank had graded nothing."""
+    """A shard truncated by an OOM-killed rank must stop the extraction, or it reads as if that rank had graded
+    nothing. An agent's workspace holds its tools' own ``.db`` files, which are no record."""
     judge = make_db(tmp_path / "camp" / "123" / "judge" / "rank-0" / "hpcagent_bench0.db")
-    corrupt = tmp_path / "camp" / "123" / "judge" / "rank-1" / "hpcagent_bench1.db"
-    corrupt.parent.mkdir(parents=True)
-    corrupt.write_bytes(b"truncated by an OOM-killed rank")
+    stray = tmp_path / "camp" / "123" / "shared" / "agent-0" / "profile.db"
+    stray.parent.mkdir(parents=True)
+    stray.write_bytes(b"not a database")
 
     found = observations_extract.discover_databases([str(tmp_path / "camp")])
 
     assert [db.path for db in found] == [judge.resolve()]
-    assert f"unreadable results DB skipped: {corrupt.resolve()}" in capsys.readouterr().err
+    assert f"unreadable file skipped: {stray.resolve()}" in capsys.readouterr().err
+
+    corrupt = tmp_path / "camp" / "123" / "judge" / "rank-1" / "hpcagent_bench1.db"
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_bytes(b"truncated by an OOM-killed rank")
+    with pytest.raises(ValueError, match="hpcagent_bench1.db"):
+        observations_extract.discover_databases([str(tmp_path / "camp")])
 
 
 def test_merge_results_refuses_to_overwrite_a_shard(tmp_path: pathlib.Path) -> None:
