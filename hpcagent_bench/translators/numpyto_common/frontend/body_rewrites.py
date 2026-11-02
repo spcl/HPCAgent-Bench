@@ -885,11 +885,11 @@ class FoldTupleLocals(ast.NodeTransformer):
                 continue
             if any(n.id in loop_vars for n in walk_nodes(s.value) if isinstance(n, ast.Name)):
                 continue
-            # An element keeps its value only when it is bound ONCE here, or is a parameter nothing
-            # rebinds: otherwise the inline re-reads it at the use site with a value the tuple
+            # An element keeps its value only when it is bound at most ONCE here, a parameter counting
+            # as one binding: otherwise the inline re-reads it at the use site with a value the tuple
             # never held (``shp = (n, m)`` then ``n = n * 2``).
             if any(
-                binds.get(n.id, 0) + (n.id in self.params) != 1 for n in walk_nodes(s.value) if isinstance(n, ast.Name)
+                binds.get(n.id, 0) + (n.id in self.params) > 1 for n in walk_nodes(s.value) if isinstance(n, ast.Name)
             ):
                 continue
             self.subst[s.targets[0].id] = s.value

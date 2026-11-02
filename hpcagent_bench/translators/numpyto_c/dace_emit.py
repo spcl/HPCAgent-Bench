@@ -4702,7 +4702,7 @@ def render_program(
     # dace refuses a store through a reshape it had to materialize; spell the copy numpy makes.
     fn_ast = MaterializeWrittenReshape().visit(fn_ast)
     # dace has no np.outer and rejects negative-stride subscripts; rewrite both to forms dace accepts.
-    fn_ast = DesugarUnreplacedCalls(rank_table(fn_ast, {a.name: len(a.shape) for a in kir.arrays})).visit(fn_ast)
+    fn_ast = DesugarUnreplacedCalls({a.name: len(a.shape) for a in kir.arrays}).visit(fn_ast)
     # An einsum that contracts nothing is a broadcast product; dace's GEMM path mints a K=1 MatMul
     # whose views collapse to shapes its dispatch refuses. Say the product directly.
     fn_ast = DesugarContractionFreeEinsum().visit(fn_ast)
