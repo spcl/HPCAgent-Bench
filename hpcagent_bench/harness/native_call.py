@@ -1986,13 +1986,9 @@ def sync_loaded_device_frameworks() -> None:
     if "cupy" in sys.modules:
         with contextlib.suppress(Exception):
             sys.modules["cupy"].cuda.Stream.null.synchronize()
-    if "torch" in sys.modules:
-        try:
-            torch = sys.modules["torch"]
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-        except Exception:  # noqa: BLE001
-            pass
+    if "torch" in sys.modules and sys.modules["torch"].cuda.is_initialized():
+        # A device fault of the kernel surfaces here; False in a fork of an initialized parent, which cannot synchronize.
+        sys.modules["torch"].cuda.synchronize()
 
 
 def call_python(
