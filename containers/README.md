@@ -16,9 +16,8 @@ containers/
     install_edfs.sh          render ~/.edf/<edf>.toml for every row of a platform
     <image>/                 Dockerfile, image.sh (its own build inputs) and the EDF template(s):
                              edf.toml.in, or agent.edf.toml.in + judge.edf.toml.in for a pair
-  lib/                     build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
+    lib/                     build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
   inference/               serving jobs, weight fetch, serving smokes and gates, tuned MoE configs
-  judge/                   .env.example for the web-search tool (hpcagent_bench/harness/judge_web_search.py)
 ```
 
 The agent payload (prompt fragments, MCP tools, method packets, harness pins) is `agent/` at the
@@ -58,7 +57,7 @@ verifies it (promote it with `CE_IMAGE_FLAVOR=native`, as the job's last line sa
 to build the portable image instead. `containers/images/DOCKERHUB.md` is the repository's Docker Hub overview; an
 admin of the `spcleth` organization pastes it in (editing the overview needs admin rights, a push does not).
 
-Code an agent writes and every baseline the judge compiles (C, C++, Fortran, Pluto, PPCG, pythran,
+Code an agent writes and every baseline the judge compiles (C, C++, Fortran, Pluto, PPCG,
 DaCe) are built on the node with `-march=native` either way; the choice only changes the
 libraries and tools inside the image.
 
@@ -127,7 +126,8 @@ the judge reads them from the host checkout.
 Every build writes a candidate squashfs (the podman image's root filesystem through `mksquashfs`, in `build_common.sh`
 `ce_squash_image`; plus `.digest`, `.sha256` and an `.oci.tar` for publishing),
 verifies it inside itself, and leaves promotion to a separate, explicit step. A mounted squashfs is
-held by its inode, so promotion is safe while jobs run. There is no layer cache between build jobs.
+held by its inode, so promotion is safe while jobs run. Layers persist between build jobs in a registry on scratch
+(`CE_LAYER_CACHE`, default 1; `build_common.sh`).
 
 Run everything below from `containers/images/` of a checkout under `$SCRATCH` (the EDFs
 mount `$SCRATCH` and the iopsstor scratch, not `$HOME`).
@@ -198,7 +198,7 @@ sbatch build_and_verify.sbatch judge-agent-cuda   # up to 24 h cold
 `judge-agent-cuda` carries the CUDA counterparts of `judge-agent-amd`: nvcc, cuBLAS/cuFFT/cuSOLVER/
 cuSPARSE/cuRAND/cuTENSOR/NCCL, NVHPC (OpenACC), LLVM OpenMP offload to `sm_90`, CUDA-aware MPICH
 (netmod=ofi, host Slurm PMI), PETSc/MAGMA/SuperLU_DIST/STRUMPACK/SUNDIALS `+cuda`, PAPI cuda/nvml,
-Nsight, cupy, jax, Pluto, ppcg, dace and every agent harness. Its base is NGC PyTorch 26.09 (CUDA 13.4.1),
+Nsight, Pluto and ppcg. Its base is NGC PyTorch 26.09 (CUDA 13.4.1),
 so the CE's `aws_ofi_nccl` plugin variant is `cuda13`; `vllm-cuda` is CUDA 12.9 and keeps `cuda12`. The
 serving smoke checks the plugin loads. nvcc uses the image's own gcc 16 and LLVM 22 as its host compilers
 (CUDA 13.4 supports GCC 6-16 and Clang 7-22), with no compiler waiver.
@@ -223,7 +223,7 @@ endpoint is a service setup (`hpcagent_bench/cluster/inference_service.py`) with
 
 The light judge+agent pair: gcc 16, clang/flang 22 with Polly, OpenBLAS/BLIS/FFTW/ScaLAPACK/HDF5/
 SuiteSparse/SuperLU/METIS/Scotch/ARPACK/MUMPS-seq, a spack MPICH (no Open MPI from apt), tblis,
-HPTT, Pluto, numba, dace and the harnesses; no GPU stack, about an hour to build.
+HPTT and Pluto; no GPU stack, about an hour to build.
 
 ```bash
 export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=<partition of the target architecture>

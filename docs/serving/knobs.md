@@ -153,7 +153,7 @@ call returned as prose instead of `tool_calls`. Nothing in the log says "parser"
 | `SGLANG_WARMUP_TIMEOUT` | `1800` (`run_cluster.sh`) | the warmup request's read timeout, 600 s unset; a cold aiter cache compiles on that request |
 | `TRITON_CACHE_DIR` | persistent (`run_cluster.sh` derives it from `JIT_CACHE_ROOT`) | unset, every job re-JITs kernels during inference and generation stalls in bursts |
 | `HF_HOME` | on `iopsstor` (`$FAST_SCRATCH`, default from `helpers/scripts/cache_env.sh`) | 11x faster than general scratch at 16 concurrent readers; `run_cluster.sh` stripes `$HF_HOME/hub` wide |
-| `NCCL_NET_GDR_LEVEL` | `LOC` (`pp.env`, applied on the server command by `run_cluster.sh`) | multi-node only; GPU-direct RDMA off |
+| `NCCL_NET_GDR_LEVEL` | `LOC` (`[layer.pp]`, applied on the server command by `run_cluster.sh`) | multi-node only; GPU-direct RDMA off |
 | `TOKENIZERS_PARALLELISM` | `false` | silences a fork warning |
 
 ## Cheap flags worth setting everywhere (SGLang)
