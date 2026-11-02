@@ -27,13 +27,12 @@ ce_image_args() {
     ce_libfabric_commit
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
     SPACK_BUILD_JOBS="${SPACK_BUILD_JOBS:-64}"
-    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK HARNESS_LOCK SPACK_TARGET MARCH LIBFABRIC_REF LIBFABRIC_COMMIT SPACK_BUILD_JOBS CUDA_ARCHS
+    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK SPACK_TARGET MARCH LIBFABRIC_REF LIBFABRIC_COMMIT SPACK_BUILD_JOBS CUDA_ARCHS
 }
 
 # Base cache and spack buildcache per CPU family: the base is pinned by its multi-arch index digest, so one
 # cache directory on the shared scratch would hand one family's layers to the other.
 ce_image_inputs() {
-    ce_require_kernelbench
     ce_mirror_args
     ce_require_mirror_commit "spcl/dace.git" "${DACE_COMMIT}"
     ce_require_mirror_commit "ThrudPrimrose/relayout.git" "${RELAYOUT_COMMIT}"

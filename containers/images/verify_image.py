@@ -8,7 +8,6 @@ instead of the image, so this turns that into a build-time verdict.
   header   reachable from the compiler's own search path
   exe      on PATH and answers a version query
   py       imports, and reports a version where it has one
-  harness  the runtime at its ABSOLUTE path exists and imports its harness
   compile  a source file is compiled, and for codegen checks RUN
   blas-link
            a DaCe BLAS+LAPACK kernel is built, RUN, and its ``ldd -r`` closure checked
@@ -416,17 +415,6 @@ def pytest_file(target: str) -> tuple[bool, str]:
     return code == 0 and not skipped, tail
 
 
-#: Agent runtime -> the absolute interpreter the driver EXECs and one import proving the venv is
-#: whole. agent/hpcagent_agent/driver/harnesses.py names the same paths; this catches an image that was PULLED
-#: rather than built from this recipe, which the Dockerfile's own build gate cannot see.
-HARNESS_RUNTIMES = {
-    "miniswe": ("/opt/harness/miniswe/bin/python", "minisweagent.agents.default"),
-    "optimas": ("/opt/harness/optimas/bin/python", "optimas.optim.opro"),
-    "anthropic": ("/opt/harness/anthropic/bin/python", "anthropic.lib.tools.mcp"),
-    "openai": ("/opt/harness/openai/bin/python", "agents.mcp"),
-}
-
-
 def have_tilelang(executable: str) -> tuple[bool, str]:
     """TileLang's overlay venv (launch_venv.sh) imports tilelang, and its z3 is the 4.15 its libtvm links."""
     if shutil.which(executable) is None:
@@ -434,19 +422,6 @@ def have_tilelang(executable: str) -> tuple[bool, str]:
     probe = "import tilelang, z3; print(tilelang.__version__, z3.get_version_string())"
     code, out = run([executable, "-P", "-c", probe], timeout=300.0, cwd="/")
     return (code == 0, (out.splitlines()[-1][:70] if out else "no output"))
-
-
-def have_harness_runtime(name: str) -> tuple[bool, str]:
-    """The runner's venv interpreter exists at its absolute path AND imports its harness.
-
-    Asked of the path, never of PATH: the driver execs this interpreter absolutely."""
-    executable, module = HARNESS_RUNTIMES[name]
-    if not pathlib.Path(executable).is_file():
-        return False, f"no interpreter at {executable}"
-    code, out = run([executable, "-I", "-c", f"import {module}"], timeout=300.0, cwd="/")
-    if code == 0:
-        return True, f"{executable} imports {module}"
-    return False, (out.splitlines()[-1][:70] if out else f"{module} does not import")
 
 
 #: What ``hpcagent_bench/envs/libraries.yaml`` offers an agent on THIS image, per language.
@@ -816,9 +791,6 @@ def toolchain_checks(platform: str) -> list[Check]:
         Check("canonicalize", "isl gate (WavefrontSkew)", "dace-gate", "isl"),
         Check("canonicalize", "z3 gate (LoopToMap proof)", "dace-gate", "z3"),
         Check("python", "mpi4py", "py", "mpi4py"),
-        # An agent runtime missing here kills the whole setup, not one kernel.
-        Check("agent", "claude CLI", "exe", "claude"),
-        *(Check("agent", f"{name} interpreter", "harness", name) for name in sorted(HARNESS_RUNTIMES)),
     ]
     return found
 
@@ -930,7 +902,6 @@ DISPATCH = {
     "py": have_module,
     "papi-rocm": papi_has_component,
     "papi-component": papi_has_component,
-    "harness": have_harness_runtime,
     "tilelang": have_tilelang,
     "dace-gate": dace_solver_gate,
     "blas-link": blas_link_closure,

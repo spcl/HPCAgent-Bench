@@ -190,7 +190,7 @@ def test_only_a_package_the_image_installs_moves_its_fingerprint_with_the_lock(
 
     def agent_fingerprint() -> str:
         snippet = (
-            "BUILD_ARGS=(); ce_lock_keys >/dev/null && ce_build_args IMAGE_PYTHON_LOCK HARNESS_LOCK && "
+            "BUILD_ARGS=(); ce_lock_keys >/dev/null && ce_build_args IMAGE_PYTHON_LOCK && "
             f'ce_build_fingerprint {images / image / "Dockerfile"} agent "${{BUILD_ARGS[@]}}"'
         )
         done = bash(snippet, tmp_path, {"PATH": f"{uv}:{SHELL_PATH}", "BASE_IMAGE": "x@sha256:1"})
@@ -204,7 +204,16 @@ def test_only_a_package_the_image_installs_moves_its_fingerprint_with_the_lock(
     project.write_text(project.read_text(encoding="utf-8").replace('version = "', 'version = "9', 1), encoding="utf-8")
     git(tmp_path, "commit", "-qam", "a wheel and the release move")
     assert agent_fingerprint() == before
-    for package in ("numpy", "mpi4py", "meson-python", "litellm", "playwright"):
+    # A harness bump: what the launch hook installs, from uv.lock and the npm lock, and the playwright crawl4ai drives.
+    for package in ("litellm", "mini-swe-agent", "optimas-ai", "openai-agents", "anthropic", "playwright"):
+        move_locked(lock, package)
+    npm_lock = tmp_path / "agent" / "harness" / "node" / "package-lock.json"
+    npm_lock.parent.mkdir(parents=True)
+    npm_lock.write_text("{}", encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "the harnesses move")
+    assert agent_fingerprint() == before
+    for package in ("numpy", "mpi4py", "meson-python"):
         move_locked(lock, package)
         git(tmp_path, "commit", "-qam", package)
         moved = agent_fingerprint()

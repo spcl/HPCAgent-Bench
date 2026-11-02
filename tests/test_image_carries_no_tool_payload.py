@@ -33,16 +33,15 @@ GATE_STUB_CREATE = (
     "mkdir -p /opt/hpcagent-bench-agent/hpcagent_agent && touch /opt/hpcagent-bench-agent/hpcagent_agent/__init__.py"
 )
 GATE_STUB_REMOVE = "/opt/hpcagent-bench-agent/hpcagent_agent \\"
-#: The kinds of recipe line that may name a tool mount: the hook's pyproject, the workspace link to it, the
-#: hook call and the launch gate's stub.
+#: The kinds of recipe line that may name a tool mount: the hook's pyproject, the workspace link to it and the
+#: launch gate's stub.
 HOOK_LINE: re.Pattern[str] = re.compile(
-    r"COPY agent/pyproject\.toml /opt/hpcagent-bench-agent/pyproject\.toml"
+    r"(?:mkdir -p /opt/hpcagent-bench|cp /tmp/pins/agent/pyproject\.toml) /opt/hpcagent-bench-agent.*"
     r"|(?:RUN set -eux; \\\s*)?ln -s /opt/hpcagent-bench-agent /opt/hpcagent-bench/agent;.*"
-    r"|.*package_hook\.sh /opt/hpcagent-bench /opt/hpcagent-bench-agent/hpcagent_agent .*"
     rf"|{re.escape(GATE_STUB_CREATE)}.*|.*{re.escape(GATE_STUB_REMOVE)}.*"
 )
 HARNESS_BUILD_INPUT: re.Pattern[str] = re.compile(
-    r"agent/harness/(?:pins\.env|install_tools\.sh|node/package(?:-lock)?\.json)|agent/pyproject\.toml"
+    r"agent/harness/(?:pins\.env|install_tools\.sh)|agent/pyproject\.toml"
 )
 
 
@@ -114,7 +113,7 @@ def test_a_judge_agent_image_copies_only_harness_build_inputs_from_containers_ag
             "COPY agent/harness/pins.env \\\n     agent/hpcagent_agent/harness/run_miniswe.py /h/\n",
             ["agent/hpcagent_agent/harness/run_miniswe.py"],
         ),
-        ("COPY agent/harness/install_tools.sh agent/harness/node/package.json /h/\n", []),
+        ("COPY agent/harness/install_tools.sh agent/harness/pins.env /h/\n", []),
     ],
 )
 def test_the_copy_scan_flags_each_agent_tree_copy_that_is_not_a_build_input(text: str, flagged: list[str]) -> None:

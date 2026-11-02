@@ -9,7 +9,7 @@ route: [writing_an_agent.md](../writing_an_agent.md). Run commands from the repo
 | `agent/harness/run_<name>.py` | the runner |
 | `agent/harness/freeze.sh` | a `freeze <name> '<pkg>==<ver>'` line; running it writes `requirements-<name>.txt` |
 | `agent/hpcagent_agent/driver/harnesses.py` | the name in `HARNESSES`, a `<name>_command`, a `RUNNERS` entry |
-| `containers/images/judge-agent-{amd,cuda}/Dockerfile` | the requirements `COPY`, the `for venv in` install loop and an import gate for `/opt/harness/<name>` |
+| `containers/images/lib/launch_venv.sh` | a line in the harness table: the name and every module its runner imports |
 | `hpcagent_bench/cluster/record_identity.sh`, `hpcagent_bench/models.py` | the name in the `case`, and `HARNESSES.add("<name>", "<display name>")` after the existing harnesses ([registry.md](registry.md)) |
 | `tests/test_harness_pins.py` (`PYTHON_HARNESSES`), `tests/test_harness_dispatch.py` (`expected_runner_argv`) | the new harness |
 
@@ -104,8 +104,8 @@ HARNESSES = (CLAUDE, "miniswe", "optimas", "anthropic", "openai", "myagent")
 RUNNERS = {..., "myagent": runner("myagent", myagent_command, miniswe_env)}
 ```
 
-Write `myagent_command` like `miniswe_command` and add `/opt/harness/myagent/bin/python` to
-`HARNESS_INTERPRETER`. Pick the env function by tool access: `runner_env` or `miniswe_env`
+Write `myagent_command` like `miniswe_command`, whose `interpreter("myagent")` is the venv `launch_venv.sh` builds
+inside the launch venv. Pick the env function by tool access: `runner_env` or `miniswe_env`
 (`hpcagent-bench-tool` first on `PATH`). A name in
 `HARNESSES` but not `RUNNERS` raises `KeyError` in every worker.
 

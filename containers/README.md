@@ -112,8 +112,10 @@ EDF-only views of another row's image.
 
 CPU targets: [download or build natively](#getting-the-images-download-default-or-build-natively).
 
-The `agent` target is the whole toolchain without `hpcagent_bench`; `judge` is `agent` plus the
-KernelBench data. Neither carries the package, nor any Python but what it builds from source: torch, jax, triton,
+The `agent` target is the whole toolchain without `hpcagent_bench`; `judge` is `agent` with the judge's launch sync,
+and it reads `third_party/KernelBench` from the mounted checkout, so check the submodule out first
+(`git submodule update --init third_party/KernelBench`): a judge step refuses to start without it.
+Neither carries the package, nor any Python but what it builds from source: torch, jax, triton,
 dace and the rest of `uv.lock` are installed when a job starts, into a node-local venv shared by every step of the
 node and reused by later jobs with the same pins (`lib/launch_venv.sh`, the ENTRYPOINT; `images/IMAGE_REQUIREMENTS.md`,
 "The launch venv"). A judge job's venv also installs `hpcagent_bench` editable from the checkout its EDF mounts at
@@ -128,8 +130,7 @@ verifies it inside itself, and leaves promotion to a separate, explicit step. A 
 held by its inode, so promotion is safe while jobs run. There is no layer cache between build jobs.
 
 Run everything below from `containers/images/` of a checkout under `$SCRATCH` (the EDFs
-mount `$SCRATCH` and the iopsstor scratch, not `$HOME`). The judge stage COPYs `third_party/KernelBench`, so check
-the submodule out first (`git submodule update --init third_party/KernelBench`); a build says so before it starts.
+mount `$SCRATCH` and the iopsstor scratch, not `$HOME`).
 A build reads the checkout until its last stage (COPY steps run hours in), so start it from a worktree nothing
 edits while it runs, e.g. `git worktree add --detach $SCRATCH/hpcagent-bench-wt/frozen-<sha> <sha>`, and remove
 that worktree once the build and its verification are done.
@@ -400,10 +401,11 @@ Every package added to a Dockerfile gets a probe that uses it (compile, import, 
 
 ## Agent harness pins
 
-Both judge-agent images install the harnesses from `agent/harness/`: `node/package.json` +
-`package-lock.json` (claude-code 2.1.303), `pins.env` (uv, node and their per-architecture sha256),
-and the `harness-{miniswe,optimas,anthropic,openai}` groups of `agent/pyproject.toml` (one venv each under
-`/opt/harness/`).
-To bump one, edit the pin (for the npm lock, then run `agent/harness/freeze.sh`), run
-`tests/test_harness_pins.py`, rebuild.
-Each image's final gate checks every version against these files.
+The images bake only uv and node, from `agent/harness/pins.env`. Every agent step installs the rest at launch inside
+its launch venv (`lib/launch_venv.sh`), from the checkout: claude-code 2.1.303 from `node/package.json` +
+`package-lock.json`, and one venv each for the `harness-{miniswe,optimas,anthropic,openai}` groups of
+`agent/pyproject.toml`, at `harness/<name>` and `harness/node`.
+To bump a harness, edit the pin (for the npm lock, then run `agent/harness/freeze.sh`) and run
+`tests/test_harness_pins.py`: nothing rebuilds. A uv or node bump in `pins.env` needs a rebuild.
+The launch build checks uv and node against `pins.env`, the CLI against `package.json` and each harness's imports, and
+a mismatch stops the agent step before any agent starts.

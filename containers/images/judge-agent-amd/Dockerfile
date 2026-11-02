@@ -25,7 +25,7 @@
 #   7  OpenMPI, tblis, HPTT, PAPI, Pluto
 #   8  python frameworks            moves with pyproject.toml (the `amdgpu` extra)
 #   9  dace @ extended              moves whenever the branch moves
-#  10  node, claude-code, harness venvs, final gate (tool scripts are bound at launch)
+#  10  final gate (harnesses install and tool scripts are bound at launch)
 #
 # ROCm 7.2.0 is the GLOBAL pin: SGLang consumes a vendor prebuilt already tagged rocm720, so
 # everything else matches it. AMD tags the .0 release without a patch digit -- `rocm7.2_*` IS
@@ -159,7 +159,6 @@ ARG SPACK_TARGET=
 LABEL org.hpcagent-bench.cpu-target="${SPACK_TARGET:-native}"
 
 ENV LC_ALL=C \
-    PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
     ROCM_PATH=/opt/rocm \
     HIP_PATH=/opt/rocm \
     PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
@@ -1113,52 +1112,6 @@ RUN set -eux; \
     date +%s%N > /opt/launch/image.id; \
     chmod +x /opt/launch/launch_venv.sh
 
-# ---------------------------------------------------------------------------------------------
-# 13. The agent side: node, the claude CLI and uv.
-#
-# Every harness version is a checked-in pin shared with judge-agent-cuda, so nothing here floats:
-# uv and node come from agent/harness/pins.env (versioned URLs, sha256-checked by
-# install_tools.sh), and claude from `npm ci` over
-# agent/harness/node/package-lock.json. freeze.sh regenerates the lock files.
-#
-# claude-code is 2.1.303 (setups recorded before v0.2.1 ran 2.1.197). agent_driver.claude_context_env
-# names the served window and the compaction trigger through CLAUDE_CODE_MAX_CONTEXT_TOKENS /
-# CLAUDE_CODE_AUTO_COMPACT_WINDOW / CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, which 2.1.303 reads into the same
-# threshold, min(floor(E * pct / 100), E - 13000) with E = window - min(max output, 20000), as 2.1.197.
-COPY agent/harness/node/package.json agent/harness/node/package-lock.json /opt/harness/node/
-RUN set -eux; \
-    cd /opt/harness/node; \
-    npm_config_cache=/tmp/npm-cache npm ci --no-audit --no-fund; \
-    rm -rf /tmp/npm-cache; \
-    for cli in claude; do \
-      ln -sf "/opt/harness/node/node_modules/.bin/${cli}" "/usr/local/bin/${cli}"; \
-    done
-
-# ---------------------------------------------------------------------------------------------
-# 13a. The isolated venvs for the Python harnesses (mini-SWE-agent, Optimas, the anthropic and openai SDK
-# runners) on the base's python${HARNESS_PYTHON}, kept off the system python so their deps cannot displace system
-# the judge-proxy group's litellm. Each venv is `uv sync --package hpcagent-agent --group harness-<name>` from uv.lock: the
-# group's harness plus hpcagent-agent's own dependencies (mcp, pydantic), none of hpcagent-bench's, and the same
-# hook. An agent step binds the submitting checkout's agent/ at /opt/hpcagent-bench-agent, and that is the whole
-# setup (containers/images/lib/package_hook.sh). No agent code is in the image; prompts and tool scripts are bound at
-# launch, so the image carries their dependencies only.
-# HARNESS_LOCK moves with what these venvs and the launch gate's chromium install from the lock (ce_lock_keys), and
-# from here on the image takes the pins again.
-COPY containers/images/lib/package_hook.sh /tmp/package_hook.sh
-ARG HARNESS_LOCK
-RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pins/pyproject.toml \
-    --mount=type=bind,source=uv.lock,target=/tmp/pins/uv.lock \
-    --mount=type=bind,source=agent/pyproject.toml,target=/tmp/pins/agent/pyproject.toml \
-    set -eux; \
-    cp /tmp/pins/pyproject.toml /tmp/pins/uv.lock /opt/hpcagent-bench/; \
-    cp /tmp/pins/agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml; \
-    . /opt/harness/pins.env; \
-    for venv in miniswe optimas anthropic openai; do \
-      sh /tmp/package_hook.sh /opt/hpcagent-bench /opt/hpcagent-bench-agent/hpcagent_agent "/opt/harness/${venv}" \
-        --python "/usr/bin/python${HARNESS_PYTHON}" --package hpcagent-agent --group "harness-${venv}"; \
-    done; \
-    rm -f /tmp/package_hook.sh
-
 # Agent and judge tool scripts are bound from the submitting checkout at launch (run_cluster.sh);
 # the image carries only their dependencies.
 
@@ -1361,36 +1314,10 @@ RUN set -eux; \
     ln -sf "${mimalloc_so}" /usr/local/lib/libmimalloc.so; \
     ldconfig; \
     ls /usr/lib/x86_64-linux-gnu/libmvec.so.1; \
-    for tool in polycc ppcg hipify-perl claude rocprofv3 rocprof-sys-sample \
+    for tool in polycc ppcg hipify-perl rocprofv3 rocprof-sys-sample \
                 rocprof-compute perf hipcc amdclang mpicc mpicc.mpich mpicxx.mpich \
                 mpifort.mpich pkg-config cmake ninja nm objdump gcc clang flang; do \
       command -v "${tool}" >/dev/null || { echo "${tool} is missing from the image" >&2; exit 1; }; \
-    done; \
-    # Harness pins: tools against pins.env, each CLI against package.json, then the venvs. \
-    . /opt/harness/pins.env; \
-    node --version | grep -qxF "v${NODE_VERSION}" \
-      || { echo "node is $(node --version), pins.env says v${NODE_VERSION}" >&2; exit 1; }; \
-    uv --version | grep -qwF "${UV_VERSION}" \
-      || { echo "uv is $(uv --version), pins.env says ${UV_VERSION}" >&2; exit 1; }; \
-    cli_home="$(mktemp -d)"; \
-    for pin in claude=@anthropic-ai/claude-code; do \
-      cli="${pin%%=*}"; package="${pin#*=}"; \
-      want="$(node -p "require('/opt/harness/node/package.json').dependencies['${package}']")"; \
-      got="$(HOME="${cli_home}" "${cli}" --version)"; \
-      echo "${got}" | grep -qwF "${want}" \
-        || { echo "${cli} --version is '${got}', package.json pins ${package} ${want}" >&2; exit 1; }; \
-    done; \
-    rm -rf "${cli_home}"; \
-    [ "$(node -p "require('/opt/harness/node/package.json').dependencies['@anthropic-ai/claude-code']")" = 2.1.303 ] \
-      || { echo "claude-code is not 2.1.303, the version agent_driver's claude settings were checked against" >&2; exit 1; }; \
-    /opt/harness/miniswe/bin/python -c 'import yaml, minisweagent.agents.default, minisweagent.environments.local, minisweagent.models.litellm_model'; \
-    /opt/harness/anthropic/bin/python -c 'import anthropic, anthropic.lib.tools, anthropic.lib.tools.mcp, mcp, mcp.client.stdio'; \
-    /opt/harness/openai/bin/python -c 'import agents, agents.mcp, agents.models.openai_chatcompletions, agents.run_config, openai, openai.types.shared'; \
-    /opt/harness/optimas/bin/python -c 'import agents, agents.exceptions, agents.mcp, agents.models.openai_chatcompletions, agents.run_config, litellm, openai, openai.types.shared, optimas.arch.base, optimas.optim.opro, optimas.wrappers.example'; \
-    # Firewall: hpcagent_bench is judge-only, so no harness venv may import it. \
-    for venv in miniswe optimas anthropic openai; do \
-      "/opt/harness/${venv}/bin/python" -c "import importlib.util; assert importlib.util.find_spec('hpcagent_bench') is None, \
-        '/opt/harness/${venv} can import hpcagent_bench: this image is agent-facing and must not'"; \
     done; \
     sh /stdpar-gate.sh; \
     sh /parallelizer-gate.sh; \
@@ -1414,7 +1341,7 @@ RUN set -eux; \
 # own libamdhip64 or librccl puts a second HIP runtime into every grading rank that loads an agent's HIP library),
 # jax is the ROCm build, every framework adapter's module imports, islpy and z3 open dace's solver gates (both fail
 # closed and SILENT: without them WavefrontSkew and LoopToMap's proof are no-ops), the judge proxy is the pinned
-# stack, and playwright's chromium is installed for crawl4ai. Then one OpenMP runtime file (one_openmp.sh) and the
+# stack, and chromium's system libraries are installed for crawl4ai. Then one OpenMP runtime file (one_openmp.sh) and the
 # contexts (containers/images/lib/omp_contexts.sh): gnu, llvm, each gated in its own process and scanned so that no
 # library on disk maps another family's runtime. containers/images/verify_image.py runs the same in a job.
 COPY containers/images/lib/openmp_gate.py containers/images/lib/omp_contexts.sh \
@@ -1457,8 +1384,7 @@ RUN --mount=type=bind,source=hpcagent_bench,target=/hb-src/hpcagent_bench \
     python3 -W error -c "import httpx2, starlette.testclient as tc; assert tc.httpx is httpx2, tc.httpx"; \
     python3 -c "import crawl4ai, crawl4ai.content_filter_strategy, crawl4ai.markdown_generation_strategy, fastapi, httpx, pydantic, uvicorn"; \
     command -v litellm; \
-    playwright install --with-deps chromium; \
-    chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"; \
+    playwright install-deps chromium; \
     ONE_OPENMP_ROOTS="/usr /lib /lib64 /opt /root /home" sh /opt/launch/one_openmp.sh /opt/view; \
     sh /tmp/one-openmp/omp_contexts.sh /opt/view /opt/omp/llvm/view; \
     python3 /tmp/one-openmp/openmp_gate.py scan; \
@@ -1543,7 +1469,7 @@ ENTRYPOINT ["/opt/launch/launch_venv.sh"]
 
 
 # ============================== judge stage ==============================
-# Neither stage holds hpcagent_bench (the references); the judge adds only the KernelBench data.
+# Neither stage holds hpcagent_bench (the references).
 #
 # WHY A STAGE AND NOT A SECOND DOCKERFILE: the judge needs the whole toolchain the agent needs --
 # compilers, MPI, ROCm, dace, the solvers -- and duplicating that is a second 2 h build that can
@@ -1551,17 +1477,11 @@ ENTRYPOINT ["/opt/launch/launch_venv.sh"]
 # judge may have", and the difference is one layer.
 FROM agent AS judge
 
-# The judge is the agent image plus the data it grades against. hpcagent_bench is NOT baked: it ships the
+# hpcagent_bench is NOT baked: it ships the
 # references agents are graded against and changes with every commit, while this image is the toolchain. The judge
 # EDF mounts the checkout at /opt/hpcagent-bench, and a judge job's launch sync (step 12, without the agent's
 # --no-install-project) installs it editable from there. hidden_tests stays out too: .dockerignore keeps it from
 # the build context, and the judge reads it from the host mount.
-# The upstream KernelBench models the torch-autotune denominator is built from
-# (harness/kernelbench_adapter.py): data the judge reads, not a package it installs. A build context
-# without the submodule checked out fails here, which is where it should.
-COPY third_party/KernelBench/KernelBench /opt/kernelbench/KernelBench
-COPY third_party/KernelBench/LICENSE /opt/kernelbench/LICENSE
-ENV HPCAGENT_BENCH_ML_KERNELBENCH_DIR=/opt/kernelbench/KernelBench
 
 # Opens the launch sync to the mounted checkout and asserts the firewall (neither the package nor a held-out test is in
 # this image): containers/images/lib/judge_stage.py, shared by every judge-agent image.

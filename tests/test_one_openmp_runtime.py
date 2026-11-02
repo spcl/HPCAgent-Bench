@@ -156,7 +156,7 @@ def test_every_image_gates_one_runtime_over_the_launch_venv_after_its_last_insta
     agent = agent_stage(image)
     code = "\n".join(line for line in agent.splitlines() if not line.lstrip().startswith("#"))
     after = code[code.rindex("/opt/launch/launch_venv.sh sh -eux") :]
-    assert not re.search(r"uv sync |package_hook\.sh /opt", after), "an install runs after the one-runtime gate"
+    assert not re.search(r"uv sync ", after), "an install runs after the one-runtime gate"
     gate = launch_gate(image)
     assert "one_openmp.sh /opt/view" in gate
     assert "openmp_gate.py scan" in gate
