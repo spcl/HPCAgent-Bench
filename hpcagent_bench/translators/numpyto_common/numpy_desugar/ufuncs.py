@@ -343,7 +343,8 @@ class ElementalUfuncToPrimitive(RewritePass):
       * ``np.logaddexp(a, b)`` -> ``np.maximum(a, b) + np.log(1.0 + np.exp(-np.abs(a - b)))``
         -- ``log1p`` has no Fortran intrinsic; ``exp(-|a-b|)`` is in ``(0, 1]``
         so ``log(1 + .)`` is well-conditioned, agreeing with numpy to a few ulp.
-      * ``np.heaviside(a, b)`` -> ``np.where(a < 0, 0.0, np.where(a == 0, b, 1.0))``.
+      * ``np.heaviside(a, b)`` -> ``np.where(a < 0, 0.0, np.where(a == 0, b, 1.0))``, a NaN ``a``
+        staying NaN. ``logaddexp`` of equal infinities stays that infinity the same way.
 
     Reused operands are deep-copied so no AST node is shared between two positions."""
 
