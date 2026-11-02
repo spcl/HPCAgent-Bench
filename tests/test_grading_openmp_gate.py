@@ -96,8 +96,19 @@ def test_one_runtime_is_silent(monkeypatch: pytest.MonkeyPatch, capfd: pytest.Ca
     assert capfd.readouterr().err == ""
 
 
-def test_the_nvhpc_note_reaches_the_grades_detail() -> None:
-    """The child's note rides the call probes to ``score()``, which appends it to the grade's detail."""
-    probes = native_call.CallProbes(openmp_note="2 OpenMP runtimes mapped, libnvomp tolerated: a, b")
-    assert probes.openmp_note.startswith("2 OpenMP runtimes")
+def test_the_nvhpc_note_rides_the_call_probes_back_to_the_judge(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """The note survives the real route: with libnvomp the only extra runtime, the gate lets the
+    forked child through and the probes carry its note to the parent, whose ``score()`` appends it
+    to the grade's detail (``openmp: {call_probes.openmp_note}``)."""
+    monkeypatch.setattr(openmp_runtimes, "mapped_runtimes", lambda: ("/img/libgomp.so.1.0.0", "/nvhpc/libnvomp.so"))
+    config.set_override("grading.seal", False)
+    kernel = tmp_path / "kern.py"
+    kernel.write_text(textwrap.dedent("def kern(x):\n    return x\n"))
+    outputs, _samples, probes, _extras, _timed = native_call.call_isolated(
+        kernel, BINDING, {"x": np.zeros(1)}, Language.PYTHON, device=False, timeout=30, py_meta=PY_META
+    )
+    assert outputs  # the tolerated child still ran
+    assert "libnvomp tolerated" in probes.openmp_note
     assert native_call.CallProbes().openmp_note == ""
