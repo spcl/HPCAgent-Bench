@@ -298,7 +298,6 @@ def test_a_segfaulting_counted_run_costs_one_metric_not_the_process(monkeypatch:
     row = papi.count_metric("/nonexistent.so", None, {}, Language.C, "instructions", rep_timeout=5.0)
     assert row["count"] is None
     assert "SIGSEGV" in row["missing"]
-    assert os.getpid()  # the parent is still here to run metric k+1
 
 
 def test_a_papi_failure_inside_the_child_is_reported_as_that_metric_s_reason(monkeypatch: pytest.MonkeyPatch) -> None:

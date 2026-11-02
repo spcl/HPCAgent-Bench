@@ -480,3 +480,4 @@ def test_an_incorrect_replay_is_a_decided_final_unless_the_judge_faulted(
     scaling_grade.grade_into(item, path, scaling_grade.grade, None)
     assert len(final_rows_of(path)) == finals
     assert len(grade_under.final_graded(path)) == finals
+    assert scaling_grade.fully_graded(item, scaling_grade.graded_keys(tmp_path)) is not fault

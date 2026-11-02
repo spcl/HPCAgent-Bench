@@ -29,6 +29,7 @@ __all__ = [
     "shared_db",
     "source_dbs",
     "store",
+    "write_newest",
 ]
 
 #: The table, created on demand in any results DB (:data:`results_db.LAZY_TABLES`).
@@ -150,6 +151,19 @@ def load(key: RaceKey) -> Timing | None:
         return None
 
 
+def write_newest(conn: sqlite3.Connection, row: dict[str, object]) -> None:
+    """Insert one ``baseline_timings`` row; an older ``ts_ms`` never replaces a stored row of its key."""
+    columns = ", ".join(f'"{name}"' for name in row)
+    marks = ", ".join("?" * len(row))
+    key = ", ".join(f'"{name}"' for name in KEY_COLUMNS)
+    stored = ", ".join(f'"{name}" = excluded."{name}"' for name in STORED_COLUMNS)
+    conn.execute(
+        f"INSERT INTO {TABLE} ({columns}) VALUES ({marks}) ON CONFLICT ({key}) DO UPDATE SET {stored} "
+        f"WHERE excluded.ts_ms >= {TABLE}.ts_ms",
+        tuple(row.values()),
+    )
+
+
 def store(key: RaceKey, race: Race) -> None:
     """Record ``race`` under ``key`` in :func:`own_db` and :func:`shared_db` (the newest row of a key wins); a DB that
     is absent or cannot be written costs only the reuse."""
@@ -163,27 +177,22 @@ def store(key: RaceKey, race: Race) -> None:
         "winner": race.winner,
         "ts_ms": time.time_ns() // 1_000_000,
     }
-    columns = ", ".join(f'"{name}"' for name in row)
-    marks = ", ".join("?" * len(row))
-    insert = f"INSERT OR REPLACE INTO {TABLE} ({columns}) VALUES ({marks})"
     own = own_db()
     if own is not None:
         with contextlib.suppress(sqlite3.Error, OSError), contextlib.closing(results_db.open_db(own)) as conn, conn:
-            conn.execute(insert, tuple(row.values()))
+            write_newest(conn, row)
     shared = shared_db()
     if shared is not None and shared != own:
         with contextlib.suppress(sqlite3.Error, OSError), contextlib.closing(open_shared(shared)) as conn, conn:
-            conn.execute(insert, tuple(row.values()))
+            write_newest(conn, row)
 
 
 def publish(shared: pathlib.Path, key: RaceKey, race: StoredRace) -> None:
     """Copy one stored race, every column, into :func:`shared_db` at its own time; a store that cannot be written
     costs the reuse."""
     row = {**dataclasses.asdict(key), **dataclasses.asdict(race)}
-    columns = ", ".join(f'"{name}"' for name in row)
-    insert = f"INSERT OR REPLACE INTO {TABLE} ({columns}) VALUES ({', '.join('?' * len(row))})"
     with contextlib.suppress(sqlite3.Error, OSError), contextlib.closing(open_shared(shared)) as conn, conn:
-        conn.execute(insert, tuple(row.values()))
+        write_newest(conn, row)
 
 
 def open_shared(path: pathlib.Path) -> sqlite3.Connection:

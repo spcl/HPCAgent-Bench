@@ -174,3 +174,14 @@ def test_merging_keeps_the_latest_race_and_a_tie_is_no_conflict(tmp_path: pathli
     other = stored(tmp_path / "d.db", TIMING, 500, dataclasses.replace(KEY, threads=4))
     results_db.merge(tmp_path / "merged.db", [late, early, tie, other])
     assert merged_rows(tmp_path / "merged.db") == [(json.dumps(TIMING[1], sort_keys=True), 500), ('{"c": [1]}', 2_000)]
+
+
+def test_publishing_an_older_race_keeps_the_newer_shared_row(tmp_path: pathlib.Path) -> None:
+    newer = stored(tmp_path / "shared.db", ({"c": 900}, {"c": [900, 950]}), 2_000)
+    older = stored(tmp_path / "older.db", TIMING, 1_000)
+    latest, stale = baseline_db.row_in(newer, KEY), baseline_db.row_in(older, KEY)
+    assert latest is not None and stale is not None
+
+    baseline_db.publish(newer, KEY, stale)
+
+    assert baseline_db.row_in(newer, KEY) == latest
