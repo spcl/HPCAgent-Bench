@@ -508,9 +508,9 @@ def unit_integer_bins(lo: ast.expr | None, hi: ast.expr | None, bins: str) -> in
         low, high, count = (
             cast(sympy.Expr, sympy.sympify(ast.unparse(e) if isinstance(e, ast.expr) else e)) for e in (lo, hi, bins)
         )
+        if not low.is_number or float(low) != int(float(low)) or sympy.simplify(high - low - count) != 0:
+            return None
     except (sympy.SympifyError, SyntaxError, TypeError):
-        return None
-    if not low.is_number or float(low) != int(float(low)) or sympy.simplify(high - low - count) != 0:
         return None
     return int(float(low))
 
