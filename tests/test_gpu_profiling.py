@@ -1085,8 +1085,6 @@ def test_rocprofv3_traces_a_hip_submission_through_the_judge_on_a_real_amd_node(
 
 def completed(returncode: int, *, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
     """A CompletedProcess stand-in for the two subprocess calls this module makes."""
-    import subprocess
-
     return subprocess.CompletedProcess(["nsys"], returncode, stdout=stdout, stderr=stderr)
 
 
@@ -1206,9 +1204,6 @@ def test_a_child_sealed_around_its_tracer_enters_no_seal_of_its_own(
         argv = gpu_profiling.measured_argv(request, sealed_outside=sealed_outside)
         assert gpu_profiling.main(argv[argv.index(gpu_profiling.MODULE) + 1 :]) == 0
     finally:
-        for key in set(config.override_snapshot()) - set(before):
-            config.clear_override(key)
-        for key, value in before.items():
-            config.set_override(key, value)
+        config.restore_overrides(before)
     (plan,) = plans
     assert (plan is None) is sealed_outside, plan
