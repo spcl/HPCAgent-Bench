@@ -22,7 +22,7 @@ from hpcagent_agent.tools import http_json
 __all__ = [
     "AGENT_FOLDERS_LOG",
     "DETAIL_CHARS",
-    "DEVICE_EXT",
+    "DEVICE_LANGUAGES",
     "ENVELOPE_FIELDS",
     "HARVESTED_TAG",
     "HEALTH_TIMEOUT_S",
@@ -263,8 +263,8 @@ HARVESTED_TAG = "harvested-workspace"
 #: Extension -> the language the judge is asked to build it as.
 WORKSPACE_LANGUAGES: dict[str, str] = {".c": "c", ".f90": "fortran", ".cpp": "cpp", ".py": "python"}
 
-#: The DEVICE half of a two-unit GPU delivery, beside the host unit under the same stem.
-DEVICE_EXT = ".hip"
+#: The GPU languages' files: the whole of a one-unit delivery, or the device half beside a host unit of the same stem.
+DEVICE_LANGUAGES: dict[str, str] = {".hip": "hip", ".cu": "cuda"}
 
 
 #: The driver's record of each attempt's folder, one JSON line per attempt.
@@ -282,13 +282,13 @@ def workspace_dir(run_dir: pathlib.Path, episode_id: str) -> pathlib.Path | None
 
 
 def workspace_candidate(run_dir: pathlib.Path, episode_id: str, kernel: str) -> dict[str, str] | None:
-    """The kernel source the agent left in its write folder as a promotion item (hip with a ``.hip`` beside it), or
-    None. Blind submission mode only: there /score answers 403, so nothing was scored."""
+    """The kernel source the agent left in its write folder as a promotion item (a GPU language with its device file
+    beside it, or alone), or None. Blind submission mode only: there /score answers 403, so nothing was scored."""
     folder = workspace_dir(run_dir, episode_id)
     if folder is None or not folder.is_dir():
         return None
     stem = short_name(kernel)
-    for ext, language in WORKSPACE_LANGUAGES.items():
+    for ext, language in {**WORKSPACE_LANGUAGES, **DEVICE_LANGUAGES}.items():
         path = folder / f"{stem}{ext}"
         if not path.is_file():
             continue
@@ -299,11 +299,13 @@ def workspace_candidate(run_dir: pathlib.Path, episode_id: str, kernel: str) -> 
             "source": path.read_text(errors="ignore"),
             "optimizer": HARVESTED_TAG,
         }
-        device = folder / f"{stem}{DEVICE_EXT}"
-        if device.is_file():
-            # Same two-unit rule as candidates(): a host-only `source` fails a GPU build.
-            item["language"] = "hip"
-            item["device_source"] = device.read_text(errors="ignore")
+        for device_ext, device_language in DEVICE_LANGUAGES.items():
+            device = folder / f"{stem}{device_ext}"
+            if ext not in DEVICE_LANGUAGES and device.is_file():
+                # Same two-unit rule as candidates(): a host-only `source` fails a GPU build.
+                item["language"] = device_language
+                item["device_source"] = device.read_text(errors="ignore")
+                break
         return item
     return None
 
