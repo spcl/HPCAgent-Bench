@@ -126,7 +126,7 @@ def copy_db(src: pathlib.Path, dst: pathlib.Path) -> None:
     """A consistent snapshot of ``src`` at ``dst`` (read-only), else a copy with its -wal/-shm sidecars."""
     try:
         with (
-            contextlib.closing(results_db.connect_ro(src, timeout=60)) as source,
+            contextlib.closing(results_db.connect_ro(src, timeout=60, finished=results_db.finished_db(src))) as source,
             contextlib.closing(sqlite3.connect(dst)) as target,
         ):
             source.backup(target)
@@ -230,7 +230,8 @@ def verify(out: pathlib.Path, *, threads: int = 8) -> list[str]:
 
 def quick_check(db: pathlib.Path) -> list[str]:
     try:
-        with contextlib.closing(results_db.connect_ro(db)) as conn:
+        # A collected directory has no writer, and a sidecar in it would fail the next verify.
+        with contextlib.closing(results_db.connect_ro(db, finished=True)) as conn:
             result = [row[0] for row in conn.execute("PRAGMA quick_check")]
     except sqlite3.Error as exc:
         return [str(exc)]

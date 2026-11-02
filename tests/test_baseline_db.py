@@ -47,6 +47,14 @@ def test_a_stored_race_round_trips_including_a_lost_candidate() -> None:
     assert baseline_db.load(dataclasses.replace(KEY, node="elsewhere")) is None
 
 
+def test_only_the_shared_store_gives_up_soon_on_a_lock(tmp_path: pathlib.Path) -> None:
+    """A stalled writer of the store costs a grade the reuse; a recording waits, or its grade is lost."""
+    with contextlib.closing(baseline_db.open_shared(tmp_path / baseline_db.SHARED_DB)) as shared:
+        assert shared.execute("PRAGMA busy_timeout").fetchone()[0] <= 60_000
+    with contextlib.closing(results_db.open_db(tmp_path / "results.db")) as own:
+        assert own.execute("PRAGMA busy_timeout").fetchone()[0] == 1_800_000
+
+
 def test_a_later_measurement_of_a_race_replaces_its_row() -> None:
     baseline_db.store(KEY, race())
     later = ({"c": 900}, {"c": [900, 950]})
