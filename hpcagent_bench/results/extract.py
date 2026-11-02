@@ -95,6 +95,7 @@ __all__ = [
     "column_ddl",
     "copy_into",
     "credited_cells",
+    "direct_inputs",
     "discover_databases",
     "distinct",
     "episode_rows",
@@ -521,10 +522,17 @@ def write_db(path: pathlib.Path, fields: Iterable[str], rows: Iterable[dict[str,
     return len(values)
 
 
-def source_roots(args: argparse.Namespace) -> list[pathlib.Path]:
-    """Everything the extraction reads: the protected roots, the run roots, the regrade shards."""
-    globbed = [pathlib.Path(p) for pattern in (*args.runs, *args.regrades) for p in glob.glob(pattern)]  # noqa: PTH207 -- the caller's pattern
-    return [*data_guard.protected_roots(), *globbed]
+def source_roots(runs: Iterable[str]) -> list[pathlib.Path]:
+    """The trees the run scan reads, which skips ``--out``: the protected roots and what the globs ``runs`` match."""
+    return [*data_guard.protected_roots(), *(pathlib.Path(p) for pattern in runs for p in glob.glob(pattern))]  # noqa: PTH207 -- the caller's pattern
+
+
+def direct_inputs(
+    benchmarks: pathlib.Path, regrades: Iterable[str], platform_regrades: Iterable[tuple[str, str]]
+) -> list[pathlib.Path]:
+    """What the extraction reads with no skip of ``--out``: the corpus and every regrade shard."""
+    patterns = (*regrades, *(pattern for _, pattern in platform_regrades))
+    return [benchmarks, *(pathlib.Path(p) for pattern in patterns for p in glob.glob(pattern))]  # noqa: PTH207 -- the caller's pattern
 
 
 class DbResult(NamedTuple):
@@ -1473,11 +1481,14 @@ def extract(options: Options) -> Extracted:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
-        sources = source_roots(args)
-        # --out may lie inside a run root it reads: the scan skips it.
+        sources = source_roots(args.runs)
+        inputs = direct_inputs(args.benchmarks, args.regrades, args.platform_regrades)
+        inputs += [args.canon] if args.canon is not None else []
         for dest in (args.out, args.db):
             if dest is not None:
+                # --out may lie inside a run root it reads: the scan skips it.
                 data_guard.check_output(dest, sources, unscanned=[args.out])
+                data_guard.check_output(dest, inputs)
     except data_guard.ProtectedPathError as exc:
         print(exc, file=sys.stderr)
         return 1

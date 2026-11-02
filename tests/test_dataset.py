@@ -12,10 +12,9 @@ import pytest
 
 from hpcagent_bench import experiments
 from hpcagent_bench.export import dataset
+from hpcagent_bench.results import data_guard
 
 SETUP = "gitscicomp10-qwen38-c-repo"
-RETIRED = "llr40-qwen38-c-unionalpha"
-FOREIGN = "llr40-qwen38-c"
 
 
 def row(job: str, kernel: str, setup: str = SETUP, **extra: object) -> dict[str, object]:
@@ -35,15 +34,33 @@ def selection(tmp_path: pathlib.Path) -> experiments.Selection:
     return experiments.resolve("gitscicomp10", root=tmp_path)
 
 
-def test_a_retired_setup_is_dropped_and_counted_apart_from_a_foreign_one(
-    selection: experiments.Selection,
-) -> None:
+def test_a_retired_setup_is_dropped_and_counted_apart_from_a_foreign_one(tmp_path: pathlib.Path) -> None:
     """Retired means the user took a real setup out; foreign means another study shares the run
     root. Reporting them as one number hides which of the two shrank a population."""
-    live = pd.DataFrame([row("100", "dfa"), row("101", "dfa", setup=RETIRED), row("102", "dfa", setup=FOREIGN)])
-    frame, provenance = dataset.select(selection, live)
-    assert list(frame["setup"]) == [SETUP]
-    assert (provenance.dropped_retired, provenance.dropped_foreign) == (0, 2)
+    kernel = "argmax_with_index"
+    live = pd.DataFrame(
+        [
+            row("100", kernel, setup="llr40-qwen38-c"),
+            row("101", kernel, setup="llr40-qwen38-c-unionalpha"),
+            row("102", kernel, setup=SETUP),
+        ]
+    )
+    frame, provenance = dataset.select(experiments.resolve("llr40", root=tmp_path), live)
+    assert list(frame["setup"]) == ["llr40-qwen38-c"]
+    assert (provenance.dropped_retired, provenance.dropped_foreign) == (1, 1)
+
+
+def test_a_build_refuses_to_write_over_its_own_input_or_output(tmp_path: pathlib.Path) -> None:
+    """write_db unlinks its target first, and one --db is read in place: aliasing it destroys the only copy."""
+    source = tmp_path / "results.db"
+    source.write_bytes(b"recorded")
+    with pytest.raises(data_guard.ProtectedPathError):
+        dataset.build("gitscicomp10", source, root=tmp_path, dbs=(source,))
+    with pytest.raises(data_guard.ProtectedPathError):
+        dataset.build("gitscicomp10", tmp_path / "x.db", csv_out=tmp_path / "x.db", root=tmp_path, dbs=(source,))
+    with pytest.raises(SystemExit, match="overlaps source"):
+        dataset.main(["--study", "gitscicomp10", "--out", str(source), "--db", str(source)])
+    assert source.read_bytes() == b"recorded"
 
 
 def test_every_row_carries_the_time_it_was_extracted(selection: experiments.Selection) -> None:
