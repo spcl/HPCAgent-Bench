@@ -75,7 +75,7 @@ def test_the_probe_counts_the_servers_tokens_not_its_own_request(
     samples = driver.throughput_probe("http://vllm:8000/v1", {}, 1)
 
     assert len(samples) == 1
-    assert samples[0]["decode_tok_s"] == pytest.approx(50.0)  # 100 tokens / 2 s, not PROBE_MAX_TOKENS
+    assert samples[0]["completion_tok_s"] == pytest.approx(50.0)  # 100 tokens / 2 s, not PROBE_MAX_TOKENS
     body = seen[0]
     assert body["model"] == "hpcagent-bench-vllm"  # vLLM answers its served name and nothing else
     assert body["stream"] is False, "a streamed reply has no usage block to count from"
@@ -138,13 +138,13 @@ def test_the_report_takes_the_median_and_writes_the_raw_samples(
     monkeypatch.setenv("SLURM_PROCID", "0")
 
     samples = [
-        {"elapsed_s": 1.0, "completion_tokens": rate, "prompt_tokens": 40.0, "decode_tok_s": rate}
+        {"elapsed_s": 1.0, "completion_tokens": rate, "prompt_tokens": 40.0, "completion_tok_s": rate}
         for rate in (1.5, 40.0, 41.0, 42.0, 43.0)
     ]
     driver.report_throughput(samples)
 
     written = json.loads((tmp_path / "throughput-node0.json").read_text(encoding="utf-8"))
-    assert written["median_decode_tok_s"] == pytest.approx(41.0)  # not the mean, which the 1.5 drags to 33.5
+    assert written["median_completion_tok_s"] == pytest.approx(41.0)  # not the mean, which the 1.5 drags to 33.5
     assert len(written["samples"]) == 5
     assert "median=41.00 tok/s" in capsys.readouterr().out
 
@@ -158,7 +158,7 @@ def test_an_unwritable_run_dir_does_not_raise(
     """Reporting is the last thing between readiness and the agents; a bad path must not stop them."""
     monkeypatch.setenv("RUN_DIR", str(tmp_path / "does" / "not" / "exist"))
     driver.report_throughput(
-        [{"elapsed_s": 1.0, "completion_tokens": 10.0, "prompt_tokens": 5.0, "decode_tok_s": 10.0}]
+        [{"elapsed_s": 1.0, "completion_tokens": 10.0, "prompt_tokens": 5.0, "completion_tok_s": 10.0}]
     )
     assert "could not write" in capsys.readouterr().out
 
