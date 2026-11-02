@@ -31,8 +31,6 @@ writable = true
 entrypoint = true
 
 [env]
-# uv's wheel cache for the launch venv, on a filesystem every node mounts.
-UV_CACHE_DIR = "${SCRATCH}/.cache/uv"
 LC_ALL = "C"
 # Image's dace must win over a same-named directory in the workdir.
 PYTHONSAFEPATH = "1"
