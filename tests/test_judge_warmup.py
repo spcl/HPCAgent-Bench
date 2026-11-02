@@ -6,6 +6,7 @@
 import json
 import pathlib
 import threading
+import time
 
 import pytest
 
@@ -54,7 +55,9 @@ def test_a_waiting_request_takes_the_slot_before_the_warm_up(monkeypatch: pytest
 
     warmer = Warmer([Cell(ML_KERNEL, Baseline.TORCH_AUTOTUNE_CPU, None)], acquire, pool.release, Preset.S, "float64")
     (thread,) = warmer.start(1)
+    deadline = time.monotonic() + WAIT_S
     while not pool.waiters:
+        assert time.monotonic() < deadline, "the warmer never queued a slot request (see WAIT_S)"
         threading.Event().wait(0.01)
 
     def submit() -> None:
@@ -65,7 +68,9 @@ def test_a_waiting_request_takes_the_slot_before_the_warm_up(monkeypatch: pytest
 
     request = threading.Thread(target=submit)
     request.start()
+    deadline = time.monotonic() + WAIT_S
     while len(pool.waiters) < 2:
+        assert time.monotonic() < deadline, "the submit request never queued a slot request (see WAIT_S)"
         threading.Event().wait(0.01)
     pool.release(held)
     request.join(WAIT_S)
