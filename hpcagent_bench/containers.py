@@ -254,24 +254,39 @@ def harbor_env_for(backend: ContainerRuntime | None = None) -> str:
     return name
 
 
+#: Cap (s) of the installer-script fetch, then of one installer run: a stalled mirror is a failed attempt.
+FETCH_TIMEOUT_S = 300
+INSTALLER_TIMEOUT_S = 1800
+
+
 def install_apptainer(prefix: str = "~/.local", attempts: int = 4) -> int:
     """Install Apptainer unprivileged into ``prefix`` via its official installer; returns its return code.
 
     ``prefix`` is an argv element, never interpolated. Each retry runs a FRESH process (only that reaches a different
-    mirror) after :func:`clean_partial_install`."""
+    mirror) after :func:`clean_partial_install`. A killed child answers 124 and a missing ``curl`` or ``bash`` 127."""
     prefix = str(pathlib.Path(prefix).expanduser())
     preexisting = {entry.name for entry in pathlib.Path(prefix).iterdir()} if pathlib.Path(prefix).is_dir() else set()
     returncode = 1
     for attempt in range(1, attempts + 1):
         try:
             script = subprocess.run(
-                ["curl", "-fsSL", APPTAINER_INSTALLER], check=True, capture_output=True, text=True
+                ["curl", "-fsSL", APPTAINER_INSTALLER],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=FETCH_TIMEOUT_S,
             ).stdout
-            returncode = subprocess.run(["bash", "-s", "-", prefix], input=script, text=True, check=False).returncode
+            returncode = subprocess.run(
+                ["bash", "-s", "-", prefix], input=script, text=True, check=False, timeout=INSTALLER_TIMEOUT_S
+            ).returncode
             if returncode == 0:
                 return 0
         except subprocess.CalledProcessError as exc:
             returncode = exc.returncode
+        except subprocess.TimeoutExpired:
+            returncode = 124
+        except OSError:
+            returncode = 127
         if attempt < attempts:
             clean_partial_install(prefix, preexisting)
             delay = 5 * attempt

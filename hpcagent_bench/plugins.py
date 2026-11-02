@@ -113,7 +113,7 @@ def register_flavors() -> None:
     found = agent_plugins.find(roots())
     # Every block validates before any column is added, so a refused plugin adds nothing.
     blocks = [
-        (plugin, key, FlavorBlock.model_validate(raw))
+        (plugin, key, flavor_block(plugin, key, raw))
         for plugin in found
         for key, raw in sorted(plugin.manifest.flavors.items())
     ]
@@ -124,6 +124,14 @@ def register_flavors() -> None:
     for _plugin, key, block in blocks:
         for base in block.extends:
             add_flavor(base, key, block.name, block.full_name, block.optimizer)
+
+
+def flavor_block(plugin: Plugin, key: str, raw: Mapping[str, object]) -> FlavorBlock:
+    """``plugin``'s ``[flavors.<key>]``, validated; the error names the plugin and the key."""
+    try:
+        return FlavorBlock.model_validate(raw)
+    except pydantic.ValidationError as exc:
+        raise ValueError(f"plugin {plugin.name!r}: flavor {key!r}: {exc}") from exc
 
 
 def plugin_phases(plugin: Plugin) -> dict[str, PhaseBlock]:
@@ -298,7 +306,7 @@ def flavor_plugin(optimizer: str) -> str:
     """The plugin whose flavor the optimizer ``<column>_<flavor>`` runs; ``""`` for one no plugin declares."""
     for plugin in agent_plugins.find(roots()):
         for key, raw in plugin.manifest.flavors.items():
-            if optimizer in {f"{base}_{key}" for base in FlavorBlock.model_validate(raw).extends}:
+            if optimizer in {f"{base}_{key}" for base in flavor_block(plugin, key, raw).extends}:
                 return plugin.name
     return ""
 

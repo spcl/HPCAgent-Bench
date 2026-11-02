@@ -192,7 +192,13 @@ def test_rendered_edf_arch_variables_equal_the_table_arch_of_their_partition(tmp
     ce.mkdir()
     for row in rows:
         (ce / row[7]).write_bytes(b"sqsh")
-    env = {"HOME": str(tmp_path), "SCRATCH": str(tmp_path), "CE_IMAGES": str(ce), "EDF_DIR": str(edf_dir)}
+    env = {
+        "HOME": str(tmp_path),
+        "SCRATCH": str(tmp_path),
+        "CE_IMAGES": str(ce),
+        "EDF_DIR": str(edf_dir),
+        "CE_PLATFORM": "amd",
+    }
     done = run(["bash", str(CE / "install_edfs.sh")], env)
     assert done.returncode == 0, done.stderr
     archs = table()

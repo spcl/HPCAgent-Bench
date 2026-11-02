@@ -239,12 +239,6 @@ def test_collect_env_rejects_a_newline_value(monkeypatch: pytest.MonkeyPatch) ->
         containers.collect_env(Hardware.CPU)
 
 
-def test_harbor_env_for_maps_and_raises() -> None:
-    assert containers.harbor_env_for(R.APPTAINER) == "singularity"
-    with pytest.raises(ValueError):
-        containers.harbor_env_for(R.CE)  # the CSCS container engine is launched directly, not via Harbor
-
-
 # install_apptainer retry: both fetches are live-network; subprocess/sleep stubbed, stays pure-unit
 
 

@@ -195,7 +195,7 @@ def submounts(path: str) -> list[str]:
     found = set()
     with pathlib.Path("/proc/self/mountinfo").open(encoding="ascii") as handle:
         for line in handle:
-            mount_point = line.split(" ", 5)[4]
+            mount_point = seal_worker.unescape(line.split(" ", 5)[4])
             if mount_point == prefix or mount_point.startswith(f"{prefix}/"):
                 found.add(mount_point)
     return sorted(found, key=len, reverse=True)

@@ -320,8 +320,8 @@ def packet_name(packet: str) -> str:
 
 def packet_parts(packet: str) -> tuple[str, ...]:
     """The packets in a ``packet`` value, aliases resolved, empties dropped (``()`` for the control); splits on ``+``
-    and ``;``. Shared by the palette and the labels."""
-    found = [canonical("packets", p) for p in re.split(r"[+;]+", str(packet))]
+    and ``;``, strips. Shared by the palette, the labels and the packet resolver."""
+    found = [canonical("packets", p.strip()) for p in re.split(r"[+;]+", str(packet))]
     return tuple(dict.fromkeys(p for p in found if p))
 
 

@@ -295,7 +295,7 @@ if __name__ == "__main__":
     test_the_binding_document_round_trips_and_writes_shape_for_pointers_only()
     test_a_render_childs_lines_are_its_plan_and_its_verdict_and_a_foreign_line_is_skipped()
     test_an_opt_report_manifest_and_a_pr_status_dump_their_fields()
-    test_the_agent_folder_log_names_the_latest_folder_and_refuses_a_malformed_line(pathlib.Path(tempfile.mkdtemp()))
+    test_the_agent_folder_log_names_the_latest_folder_and_skips_a_malformed_line(pathlib.Path(tempfile.mkdtemp()))
     test_a_json_column_reads_back_what_it_wrote_and_refuses_another_shape()
     test_a_profiled_childs_result_line_needs_its_time_and_its_reps()
     test_the_formats_read_but_not_owned_ignore_what_they_do_not_use_and_need_what_they_do()
