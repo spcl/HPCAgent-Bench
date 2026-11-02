@@ -105,6 +105,9 @@ class ProfileInput(http_json.SubmissionInput):
     )
     min_percent: float | None = pydantic.Field(
         None,
+        ge=0.0,
+        le=100.0,
+        allow_inf_nan=False,
         description="Drop call-graph branches, or device-trace kernels, below this share (0-100, default 1.0). A "
         "device trace's totals then sum the kept kernels only: send 0 for complete totals.",
     )
