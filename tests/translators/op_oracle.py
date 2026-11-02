@@ -5,7 +5,6 @@ compiles and runs every backend against numpy, returning ``{backend: "ok"|"skip:
 
 import importlib.util
 import json
-import os
 import pathlib
 import shutil
 import signal
@@ -23,6 +22,7 @@ from hpcagent_bench import modules
 from hpcagent_bench import numerical_oracle as no
 from hpcagent_bench.frameworks.forked import RunResult, run_forked
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
+from tests.fresh_module import module_at
 from tests.translators.source_module import run_source
 
 HERE = pathlib.Path(__file__).resolve()
@@ -385,12 +385,7 @@ def numba_leg_child(
     mod = npy.parent / f"{func}_numba.py"
     mod.write_text(nb_src)
     try:
-        spec = importlib.util.spec_from_file_location(func + "_numba", mod)
-        m = importlib.util.module_from_spec(spec)
-        # Registered BEFORE exec: dataclasses resolves a string annotation through
-        # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-        sys.modules[spec.name] = m
-        spec.loader.exec_module(m)
+        m = module_at(mod, func + "_numba")
         fn = modules.member(m, func)  # already @nb.njit-decorated by emit_numba
         ins = {n: (v.copy() if isinstance(v, np.ndarray) else v) for n, v in inputs.items()}
         if capture_return:

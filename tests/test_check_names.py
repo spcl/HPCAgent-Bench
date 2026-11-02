@@ -5,7 +5,6 @@ leave read-only uses and dunders alone, and -- in its default diff mode -- never
 `_private` code for a commit that never touched it.
 """
 
-import importlib.util
 import pathlib
 import subprocess
 import sys
@@ -13,13 +12,9 @@ import sys
 import pytest
 
 from hpcagent_bench import paths
+from tests.fresh_module import module_at
 
-SPEC = importlib.util.spec_from_file_location(
-    "check_names", paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py"
-)
-check_names = importlib.util.module_from_spec(SPEC)
-sys.modules["check_names"] = check_names
-SPEC.loader.exec_module(check_names)
+check_names = module_at(paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py", "check_names")
 
 
 def codes_for(source: str, allow_bare_underscore: bool = False) -> set:

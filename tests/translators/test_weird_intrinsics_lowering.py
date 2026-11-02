@@ -13,26 +13,11 @@ rather than silently failing CI; drop the skip once the mapping is fixed and the
 The non-edge cases carry NO skips, so they are real all-backend coverage.
 """
 
-import sys
-
 import numpy as np
 import pytest
 
 # Reuse the standalone numerical oracle harness (build + run + numpy compare).
-try:
-    from tests.translators import op_oracle as oo
-except ImportError:
-    import importlib.util
-    import pathlib
-
-    spec_ = importlib.util.spec_from_file_location(
-        "op_oracle", pathlib.Path(__file__).resolve().parent / "op_oracle.py"
-    )
-    oo = importlib.util.module_from_spec(spec_)
-    # Registered BEFORE exec: dataclasses resolves a string annotation through
-    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-    sys.modules[spec_.name] = oo
-    spec_.loader.exec_module(oo)
+from tests.translators import op_oracle as oo
 
 ALL = ("c", "cpp", "fortran", "numba")
 
@@ -44,8 +29,7 @@ NAN_SUPPRESS: dict[str, str] = {}
 
 
 def skip_(status: dict[str, str], label: str) -> None:
-    fails = {b: s for b, s in status.items() if s.startswith("FAIL")}
-    assert not fails, f"{label}: {fails}"
+    oo.assert_all_ok(status, label)
 
 
 #: (label, source, inputs, out_shape, syms, shapes, skip_backends)
