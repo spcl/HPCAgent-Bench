@@ -239,8 +239,8 @@ derived_edf() {
     # and one agent command that copies up a large image tree (`rm -rf /root`, `chmod -R /opt`) blocks every
     # lookup in the container: temperature3 671243 sat 7 h and 675636 an hour with no new process able to
     # start while running streams kept writing to their bind mounts. Read-only, such a command fails at once
-    # with EROFS. What an agent writes lives in bind mounts (RUN_DIR, /shared), the seal's per-worker tmpfs
-    # and the node's /tmp, bound in for the launch venv the entrypoint builds before the seal.
+    # with EROFS. What an agent writes lives in bind mounts (RUN_DIR, /shared, the node's /dev/shm for the launch
+    # venv the entrypoint builds before the seal), the seal's per-worker tmpfs and the node's /tmp.
     local name="$1" role="${2:-role}" dir src="" tmp hooks_off=0 read_only=0
     if [[ "${role}" == agent-node || ( "${role}" == vllm-node && ( "${INFERENCE_NODES:-1}" -eq 1 || "${INFERENCE_MODE:-pp}" == replicas ) ) ]]; then
         hooks_off=1
@@ -289,6 +289,8 @@ derived_edf() {
                     printf '    "%s:ro",\n' "${plugin_bind}"
                 done
                 printf '    "%s:ro",\n' "$(launch_hook_bind "${HPCAGENT_BENCH_REPO}")"
+                # The node's /dev/shm with exec: the hook's one launch venv per node (launch_venv.sh).
+                printf '    "/dev/shm:/opt/node-shm",\n'
                 ;;
         esac
         case "${role}" in

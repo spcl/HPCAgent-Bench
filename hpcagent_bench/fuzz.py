@@ -417,7 +417,7 @@ def eval_node(node: ast.expr, names: Mapping[str, FuzzValue], expr: str) -> Fuzz
     if isinstance(node, ast.UnaryOp) and type(node.op) in UNARYOPS:
         return unaryop(node.op, eval_node(node.operand, names, expr), expr)
     if isinstance(node, ast.BoolOp):
-        vals = [eval_node(v, names, expr) for v in node.values]
+        vals = (eval_node(v, names, expr) for v in node.values)  # lazy: a guard skips what it guards
         return all(vals) if isinstance(node.op, ast.And) else any(vals)
     if isinstance(node, ast.Compare):
         return eval_compare(node, names, expr)
