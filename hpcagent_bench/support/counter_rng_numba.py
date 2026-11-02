@@ -134,6 +134,8 @@ def blocks(count: int, block: int, threads: int) -> list[tuple[int, int]]:
     """``(start, stop)`` ranges of equal size, one per thread, none shorter than ``block`` elements (fewer ranges for
     a small array): every range is one call, because each call re-takes the GIL and many small ones cost more
     than they balance."""
+    if not count:
+        return []
     units = max(1, min(-(-count // block), threads))
     step = -(-count // units)
     return [(start, min(start + step, count)) for start in range(0, count, step)]
