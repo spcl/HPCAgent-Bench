@@ -25,6 +25,10 @@ import pytest
 
 RESUME = "The connection dropped; continue."
 DROP = "drop"
+#: A script entry the stub answers with a 401, the provider's refusal of a credential.
+REFUSE = "refuse"
+#: The only credential any test here hands a runner.
+KEY = "test-credential-0123456789"
 MCP_STUB = """
 import anyio
 from mcp import types
@@ -118,13 +122,26 @@ class StubModel(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     script: ClassVar[list[Any]] = []
     requests: ClassVar[list[dict[str, Any]]] = []
+    #: Each request's credential: the Messages API's header, or the bearer token of chat completions.
+    credentials: ClassVar[list[str]] = []
 
     def do_POST(self) -> None:
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         type(self).requests.append(body)
+        type(self).credentials.append(
+            self.headers.get("x-api-key") or self.headers.get("Authorization", "").removeprefix("Bearer ")
+        )
         reply = self.script[0]
         if reply != DROP:
             self.script.pop(0)
+        if reply == REFUSE:
+            payload = json.dumps({"type": "error", "error": {"type": "authentication_error", "message": "no"}}).encode()
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         self.send_response(200)
         if self.path.endswith("/messages"):
             self.send_header("Content-Type", "text/event-stream")
@@ -194,20 +211,25 @@ RUNNERS = {
 @pytest.fixture(name="stub")
 def stub_fixture() -> Iterator[str]:
     StubModel.requests = []
+    StubModel.credentials = []
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), StubModel)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_address[1]}"
     server.shutdown()
+    server.server_close()
 
 
-def run_leg(runner: Runner, workdir: pathlib.Path, base_url: str, script: list[Any], *extra: str) -> int:
+def run_leg(
+    runner: Runner, workdir: pathlib.Path, base_url: str, script: list[Any], *extra: str, **environ: str
+) -> int:
     StubModel.script = list(script)
     # mini-swe-agent retries a failed call 10 times with backoff (minutes); two attempts show the same ending.
     env = {
         **os.environ,
-        "ANTHROPIC_API_KEY": "stub",
-        "OPENAI_API_KEY": "stub",
+        "ANTHROPIC_API_KEY": KEY,
+        "OPENAI_API_KEY": KEY,
         "MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "2",
+        **environ,
     }
     mcp = ("--mcp-config", str(workdir / "mcp.json")) if runner.mcp else ()
     argv = [
@@ -222,18 +244,24 @@ def run_leg(runner: Runner, workdir: pathlib.Path, base_url: str, script: list[A
     return done.returncode
 
 
-@pytest.mark.parametrize("name", list(RUNNERS))
-def test_a_dropped_call_resumes_with_the_cut_off_request_and_counts_each_call_once(
-    name: str, stub: str, tmp_path: pathlib.Path
-) -> None:
+def prepared(name: str, workdir: pathlib.Path) -> Runner:
+    """The runner ``name`` with its prompt and stub MCP server in ``workdir``; skipped where its SDK is missing."""
     runner = RUNNERS[name]
     # CI names the runner its venv was built for, where a missing SDK is a broken venv, not a skip.
     if importlib.util.find_spec(runner.package) is None and os.environ.get("HPCAGENT_BENCH_RUNNER_SMOKE") != name:
         pytest.skip(f"{runner.package} is installed only in the {name} runner's venv")
-    (tmp_path / "prompt.txt").write_text("the task", encoding="utf-8")
-    (tmp_path / "mcp_stub.py").write_text(MCP_STUB, encoding="utf-8")
-    servers = {"stub": {"command": sys.executable, "args": [str(tmp_path / "mcp_stub.py")]}}
-    (tmp_path / "mcp.json").write_text(json.dumps({"mcpServers": servers}), encoding="utf-8")
+    (workdir / "prompt.txt").write_text("the task", encoding="utf-8")
+    (workdir / "mcp_stub.py").write_text(MCP_STUB, encoding="utf-8")
+    servers = {"stub": {"command": sys.executable, "args": [str(workdir / "mcp_stub.py")]}}
+    (workdir / "mcp.json").write_text(json.dumps({"mcpServers": servers}), encoding="utf-8")
+    return runner
+
+
+@pytest.mark.parametrize("name", list(RUNNERS))
+def test_a_dropped_call_resumes_with_the_cut_off_request_and_counts_each_call_once(
+    name: str, stub: str, tmp_path: pathlib.Path
+) -> None:
+    runner = prepared(name, tmp_path)
 
     assert run_leg(runner, tmp_path, stub, runner.first) == 1
     end = json.loads((tmp_path / "harness-end.json").read_text(encoding="utf-8"))
@@ -249,3 +277,35 @@ def test_a_dropped_call_resumes_with_the_cut_off_request_and_counts_each_call_on
     usage = [json.loads(line) for line in (tmp_path / "usage.jsonl").read_text(encoding="utf-8").splitlines()]
     fields = ("input", "cached_input", "output", "reasoning")
     assert [tuple(line[field] for field in fields) for line in usage] == runner.usage
+
+
+@pytest.mark.parametrize("name", ["anthropic", "openai"])
+def test_a_refused_credential_ends_the_leg_and_no_record_or_output_holds_the_key(
+    name: str, stub: str, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runner = prepared(name, tmp_path)
+    assert run_leg(runner, tmp_path, stub, [REFUSE]) == 1
+    (request,) = StubModel.requests
+    assert request["model"] == "stub"
+    assert {tool.get("name") or tool["function"]["name"] for tool in request["tools"]} == {"bash"}
+    assert StubModel.credentials == [KEY]
+    end = json.loads((tmp_path / "harness-end.json").read_text(encoding="utf-8"))
+    assert end["reason"] == "error", end
+    leaks = [path.name for path in tmp_path.iterdir() if path.is_file() and KEY in path.read_text(encoding="utf-8")]
+    assert leaks == []
+    assert KEY not in "".join(capsys.readouterr())
+
+
+def test_an_unusable_task_call_is_answered_to_the_openai_model(stub: str, tmp_path: pathlib.Path) -> None:
+    runner = prepared("openai", tmp_path)
+    agents = tmp_path / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "helper.md").write_text("---\nname: helper\ndescription: helps\n---\nHelp.\n", encoding="utf-8")
+    function = {"name": "task", "arguments": '{"subagent_type": '}
+    call = {"id": "call_1", "type": "function", "function": function}
+    script = [completion({"tool_calls": [call]}, "tool_calls", (1, 0, 1, 0)), chat_text("done", (1, 0, 1, 0))]
+    environ = {"HOME": str(tmp_path), "HPCAGENT_BENCH_PACKET_AGENTS": "helper"}
+    assert run_leg(runner, tmp_path, stub, script, **environ) == 0
+    answer = StubModel.requests[-1]["messages"][-1]
+    assert (answer["role"], answer["tool_call_id"]) == ("tool", "call_1"), answer
+    assert "unusable task call" in answer["content"]

@@ -8,7 +8,9 @@ recorded on :data:`http_json.TOKENS_READ_OK`, so a caller IN THIS PROCESS (a dia
 can tell the two apart.
 """
 
+import http.server
 import pathlib
+import threading
 from types import ModuleType
 
 import pytest
@@ -133,3 +135,25 @@ def test_without_a_token_path_there_is_no_agent_and_a_silent_zero(
     assert tools.transcript_tokens() == 0
     assert tools.TOKENS_READ_OK is True
     assert capsys.readouterr().err == ""
+
+
+class DropsTheCall(http.server.BaseHTTPRequestHandler):
+    """Reads the request, then closes the connection without an answer."""
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.close_connection = True
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+def test_a_connection_dropped_after_the_request_is_classified_and_spends_no_submission() -> None:
+    tools = load_http_json()
+    submit = module_at(REPO / "agent" / "hpcagent_agent" / "tools" / "submit.py", "submit_dropped_call")
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), DropsTheCall) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        result = tools.call_json(f"http://127.0.0.1:{server.server_address[1]}/submit", b"{}", 10.0)
+        server.shutdown()
+    assert (result["ok"], result["dropped"]) == (False, True), result
+    assert submit.spends_submission(result) is False

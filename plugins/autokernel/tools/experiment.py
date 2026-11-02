@@ -343,5 +343,5 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         if action is Action.RESTORE:
             return action_restore(payload, root)
         return action_list(payload, root)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}

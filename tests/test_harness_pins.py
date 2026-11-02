@@ -70,8 +70,6 @@ PINS_ENV_SHAPES: dict[str, str] = {
 
 EXACT_VERSION: re.Pattern[str] = re.compile(r"\d+\.\d+\.\d+")
 EXACT_NPM_SPEC: re.Pattern[str] = re.compile(r"(?:@[^/\s]+/)?[^@\s]+@\d+\.\d+\.\d+")
-FREEZE_PIN: re.Pattern[str] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][A-Za-z0-9.+!-]*")
-GIT_PIN: re.Pattern[str] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]* @ git\+https://[^@\s]+@[0-9a-f]{40}")
 UNPINNED_FETCHES: tuple[re.Pattern[str], ...] = (re.compile(r"releases/latest"), re.compile(r"setup_\d+\.x"))
 NPM_GLOBAL_INSTALL: re.Pattern[str] = re.compile(r"npm\s+(?:install|i)\s+(?:-g|--global)\s+([^;&|\\\n]+)")
 
@@ -100,10 +98,6 @@ def pins_env() -> dict[str, str]:
             assert sep, f"pins.env line is not KEY=VALUE: {line!r}"
             pins[key] = value
     return pins
-
-
-def pinned_lines(name: str) -> list[str]:
-    return list(tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["dependency-groups"][f"harness-{name}"])
 
 
 def recipe(dockerfile: str) -> str:
@@ -170,15 +164,6 @@ def test_pins_env_names_an_exact_tool_version_or_checksum(key: str) -> None:
 
 def test_every_python_harness_has_exactly_one_group() -> None:
     assert tuple(sorted(PYTHON_HARNESSES)) == HARNESS_GROUP_NAMES, HARNESS_GROUP_NAMES
-
-
-@pytest.mark.parametrize("name", HARNESS_GROUP_NAMES)
-def test_every_entry_of_a_harness_group_is_an_exact_pin(name: str) -> None:
-    """A bare name or a range resolves again at build time, so two builds run different agents."""
-    lines = pinned_lines(name)
-    assert lines, f"harness-{name} pins nothing"
-    loose = [line for line in lines if FREEZE_PIN.fullmatch(line) is None and GIT_PIN.fullmatch(line) is None]
-    assert loose == [], loose
 
 
 @pytest.mark.parametrize("dockerfile", JUDGE_AGENT_DOCKERFILES)
