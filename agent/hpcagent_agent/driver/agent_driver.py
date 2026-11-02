@@ -1653,19 +1653,21 @@ def agent_cpus(worker_index: int, agents: int) -> list[int]:
     return cpus[worker_index::agents]
 
 
-#: Share of the node's memory the agents together may hold privately; the rest is the CLIs', the page cache's and
-#: the serving stack's.
+#: Share of the node's memory the agents together may hold; the rest is the CLIs', the page cache's, the GPU
+#: allocations' and the serving stack's.
 AGENT_MEMORY_SHARE = 0.8
 
-#: Environment variable overriding one agent process's private-memory cap, in GiB (0: no cap).
+#: Environment variable overriding one agent's memory cap, in GiB (0: no cap).
 AGENT_MEMORY_CAP_ENV = "AGENT_MEMORY_CAP_GB"
 
 
 def agent_memory_cap(agents: int) -> int:
-    """Bytes of private writable memory one process of an agent may map: ``AGENT_MEMORY_CAP_GB`` when set, else
-    :data:`AGENT_MEMORY_SHARE` of the node's RAM over ``agents``; 0 (no cap) when the RAM is unreadable.
+    """Bytes one agent may hold, both per process (:func:`pin`) and in each of its tmpfs (:func:`seal_argv`):
+    ``AGENT_MEMORY_CAP_GB`` when set, else :data:`AGENT_MEMORY_SHARE` of the node's RAM over ``agents``; 0 (no cap)
+    when the RAM is unreadable.
 
-    Without it one agent's runaway test program exhausts the node and stalls every agent on it."""
+    Without it one agent's runaway test program, or its files in /tmp and /dev/shm, exhausts the node and stalls
+    every agent on it."""
     named = os.environ.get(AGENT_MEMORY_CAP_ENV, "")
     if named:
         return int(float(named) * 2**30)
@@ -1738,7 +1740,7 @@ def kept_interpreter() -> list[str]:
     return [prefix] if any(prefix.startswith(f"{private}/") for private in seal_worker.PRIVATE_DIRS) else []
 
 
-def seal_argv(workdir: pathlib.Path, agent_dir: pathlib.Path, cpus: list[int]) -> list[str]:
+def seal_argv(workdir: pathlib.Path, agent_dir: pathlib.Path, cpus: list[int], memory_bytes: int = 0) -> list[str]:
     """The stage-1 argv that puts one worker in its own view (the default for every harness); empty without a run."""
     run_dir = os.environ.get("RUN_DIR", "").strip()
     if not run_dir or not workdir.is_absolute():
@@ -1768,6 +1770,7 @@ def seal_argv(workdir: pathlib.Path, agent_dir: pathlib.Path, cpus: list[int]) -
         str(os.getgid()),
         # The driver's mask never reaches the worker (unshare forks first), so seal_worker sets it.
         *(["--cpus", ",".join(str(cpu) for cpu in cpus)] if cpus else []),
+        *(["--tmpfs-bytes", str(memory_bytes)] if memory_bytes > 0 else []),
         "--",
     ]
 
@@ -2707,7 +2710,7 @@ def run_agent(
     attempts_path = workdir / ATTEMPTS_NAME
     attempt_start_ms = 0
     # The worker's view of the filesystem: its own workdir, shared folder and kernel material, none of the run dir.
-    seal = seal_argv(workdir, agent_dir, cpus)
+    seal = seal_argv(workdir, agent_dir, cpus, memory_bytes)
     wants_agents = bool(environment.get(plugins.PACKET_AGENTS_ENV, "").strip())
     if wants_agents and harness.name not in harnesses.SUBAGENT_HARNESSES:
         raise SystemExit(f"the packet offers subagents, which harness {harness.name!r} cannot run")
@@ -2721,7 +2724,7 @@ def run_agent(
         # Epoch ms, the judge's unit, so a row can be told to belong to this attempt.
         attempt_start_ms = int(time.time() * 1000)
         # Per attempt: only an argv built now names the previous crash's transcript to the seal.
-        seal = seal_argv(workdir, agent_dir, cpus)
+        seal = seal_argv(workdir, agent_dir, cpus, memory_bytes)
         # Per attempt: a relaunch wipes the workdir, HOME included.
         if seal or wants_agents:
             worker_home(workdir).mkdir(exist_ok=True)

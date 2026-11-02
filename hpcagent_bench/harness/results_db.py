@@ -84,6 +84,7 @@ __all__ = [
     "request_rows",
     "requests_from_rows",
     "requests_of_row",
+    "ro_uri",
     "schema_version",
     "source_hash",
     "source_rows",
@@ -114,8 +115,10 @@ ADDITIVE_UPGRADES: dict[int, tuple[str, ...]] = {
 }
 #: ``episodes.job`` of a run outside Slurm.
 LOCAL_JOB = 0
-#: A judge is threaded and a job's final-grade children write beside it: wait, never fail, on a lock.
-BUSY_TIMEOUT_S = 30.0
+#: A judge is threaded and a job's final-grade children write beside it, and each writer's last close holds the file
+#: exclusively through a checkpoint, as long as the filesystem stalls it: wait, never fail, on a lock. A recording
+#: that gives up loses its grade, so this is the judge's own limit on one call.
+BUSY_TIMEOUT_S = 1800.0
 #: The harness of a setup that names none: Claude Code.
 DEFAULT_HARNESS = "claude"
 #: The tables, parents before children (the order :func:`merge` copies them in).
@@ -291,18 +294,32 @@ def requests_from_rows(conn: sqlite3.Connection, grade_id: int) -> Requests:
     return Requests.validate({"startup": startup, "operations": operations})
 
 
-def connect_ro(path: str | pathlib.Path, *, timeout: float = BUSY_TIMEOUT_S) -> sqlite3.Connection:
-    """A read-only connection to any SQLite file ``path``, with no schema check.
+def ro_uri(path: str | pathlib.Path, live: bool) -> str:
+    """The URI that reads the SQLite file ``path`` and creates nothing beside it, where that is safe.
+
+    Without ``-wal`` content the file alone is the database, and ``immutable`` reads it with no lock and no ``-shm``;
+    SQLite's ``mode=ro`` would leave one. Rows in a ``-wal`` are only reachable by the locking protocol, through the
+    ``-shm`` its writer made. ``live`` is for a reader beside a running writer: its next close may checkpoint into the
+    file, which an immutable reader sees half done, so ``live`` always takes the protocol.
 
     The URI comes from :meth:`pathlib.Path.as_uri`, which escapes ``#`` and ``%`` in the path."""
-    return sqlite3.connect(f"{pathlib.Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=timeout)
+    target = pathlib.Path(path).resolve()
+    protocol = live
+    with contextlib.suppress(FileNotFoundError):
+        protocol = protocol or target.with_name(f"{target.name}-wal").stat().st_size > 0
+    return f"{target.as_uri()}?{'mode=ro' if protocol else 'immutable=1'}"
 
 
-def open_ro(path: str | pathlib.Path) -> sqlite3.Connection:
+def connect_ro(path: str | pathlib.Path, *, timeout: float = BUSY_TIMEOUT_S, live: bool = False) -> sqlite3.Connection:
+    """A read-only connection to any SQLite file ``path`` (:func:`ro_uri`), with no schema check."""
+    return sqlite3.connect(ro_uri(path, live), uri=True, timeout=timeout)
+
+
+def open_ro(path: str | pathlib.Path, live: bool = False) -> sqlite3.Connection:
     """A read-only connection to the results database ``path`` with :class:`sqlite3.Row` rows."""
     if not pathlib.Path(path).is_file():
         raise FileNotFoundError(path)
-    conn = connect_ro(path)
+    conn = connect_ro(path, live=live)
     conn.row_factory = sqlite3.Row
     try:
         if not check_schema(conn, str(path)):
@@ -314,9 +331,9 @@ def open_ro(path: str | pathlib.Path) -> sqlite3.Connection:
 
 
 @contextlib.contextmanager
-def reading(path: str | pathlib.Path) -> Iterator[sqlite3.Connection]:
+def reading(path: str | pathlib.Path, live: bool = False) -> Iterator[sqlite3.Connection]:
     """:func:`open_ro`, closed on exit."""
-    conn = open_ro(path)
+    conn = open_ro(path, live)
     with contextlib.closing(conn):
         yield conn
 
@@ -606,7 +623,7 @@ def merge_rows(conn: sqlite3.Connection, table: str, ids: IdMap) -> int:
 
 def merge_one(conn: sqlite3.Connection, path: pathlib.Path) -> dict[str, int]:
     """Fold the file ``path`` into the open destination; rows copied per table."""
-    conn.execute("ATTACH DATABASE ? AS src", (f"{path.as_uri()}?mode=ro",))
+    conn.execute("ATTACH DATABASE ? AS src", (ro_uri(path, live=False),))
     try:
         names = table_names(conn, "src")
         version = int(conn.execute("PRAGMA src.user_version").fetchone()[0])

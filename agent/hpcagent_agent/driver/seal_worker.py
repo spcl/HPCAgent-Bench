@@ -101,7 +101,8 @@ MOUNTINFO = "/proc/self/mountinfo"
 #: Where the view is assembled: under /tmp, a private tmpfs by then.
 PRIVATE_TMP = "/tmp"
 #: Node-wide scratch each worker gets a fresh tmpfs over: the node's shared memory holds other containers' venvs
-#: and overlays.
+#: and overlays. A tmpfs lives in the node's memory, outside the worker's RLIMIT_DATA, until the worker ends, so
+#: ``--tmpfs-bytes`` sizes each one (the kernel's default is half the node, per mount).
 PRIVATE_DIRS = (PRIVATE_TMP, "/dev/shm", "/opt/node-shm")
 SEAL_ROOT = "/tmp/hpcagent-bench-seal"
 VIEW_DIR = f"{SEAL_ROOT}/shared"
@@ -171,7 +172,7 @@ class Layout(NamedTuple):
     skills: str = ""
 
 
-MountCall = Callable[[str | None, str, str | None, int], None]
+MountCall = Callable[[str | None, str, str | None, int, str | None], None]
 UmountCall = Callable[[str], None]
 LockedCall = Callable[[str], int]
 HoldCall = Callable[[str], int]
@@ -193,7 +194,7 @@ class Syscalls(NamedTuple):
 
 def libc() -> ctypes.CDLL:
     handle = ctypes.CDLL(None, use_errno=True)
-    handle.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
+    handle.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p]
     handle.mount.restype = ctypes.c_int
     handle.umount2.argtypes = [ctypes.c_char_p, ctypes.c_int]
     handle.umount2.restype = ctypes.c_int
@@ -204,9 +205,9 @@ def as_bytes(value: str | None) -> bytes | None:
     return None if value is None else value.encode("utf-8")
 
 
-def mount(source: str | None, target: str, fstype: str | None, flags: int) -> None:
+def mount(source: str | None, target: str, fstype: str | None, flags: int, data: str | None = None) -> None:
     """mount(2), or :class:`SealError` naming the refused mount and why."""
-    if libc().mount(as_bytes(source), as_bytes(target), as_bytes(fstype), flags, None) != 0:
+    if libc().mount(as_bytes(source), as_bytes(target), as_bytes(fstype), flags, as_bytes(data)) != 0:
         errno = ctypes.get_errno()
         raise SealError(f"mount({source!r}, {target!r}, {fstype!r}, {flags:#x}): {os.strerror(errno)}")
 
@@ -341,25 +342,27 @@ def make_target(source: str, target: str) -> None:
     pathlib.Path(target).mkdir(parents=True, exist_ok=True)
 
 
-def apply_plan(ops: Sequence[MountOp], calls: Syscalls = REAL) -> None:
-    """Run the plan, failing on the first operation the kernel refuses."""
+def apply_plan(ops: Sequence[MountOp], calls: Syscalls = REAL, tmpfs_bytes: int = 0) -> None:
+    """Run the plan, failing on the first operation the kernel refuses. ``tmpfs_bytes`` sizes every tmpfs (0: the
+    kernel's default)."""
+    tmpfs_options = f"size={tmpfs_bytes}" if tmpfs_bytes > 0 else None
     held: dict[str, int] = {}
     for op in ops:
         if op.kind is MountKind.TMPFS:
             make_target("", op.target)
-            calls.mount("tmpfs", op.target, "tmpfs", 0)
+            calls.mount("tmpfs", op.target, "tmpfs", 0, tmpfs_options)
         elif op.kind is MountKind.BIND:
             make_target(op.source, op.target)
-            calls.mount(op.source, op.target, None, MS_BIND | MS_REC)
+            calls.mount(op.source, op.target, None, MS_BIND | MS_REC, None)
         elif op.kind is MountKind.RO:
-            calls.mount(None, op.target, None, MS_REMOUNT | MS_BIND | MS_RDONLY | calls.locked(op.target))
+            calls.mount(None, op.target, None, MS_REMOUNT | MS_BIND | MS_RDONLY | calls.locked(op.target), None)
         elif op.kind is MountKind.DETACH:
             calls.umount(op.target)
         elif op.kind is MountKind.HOLD:
             held[op.target] = calls.hold(op.target)
         elif op.kind is MountKind.RESTORE:
             make_target("", op.target)
-            calls.mount(f"/proc/self/fd/{held[op.target]}", op.target, None, MS_BIND | MS_REC)
+            calls.mount(f"/proc/self/fd/{held[op.target]}", op.target, None, MS_BIND | MS_REC, None)
         else:
             raise SystemExit(f"seal_worker: unknown mount operation {op.kind!r}")
 
@@ -379,6 +382,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--uid", type=int, required=True, help="the uid the worker itself runs as")
     parser.add_argument("--gid", type=int, required=True)
     parser.add_argument("--cpus", default="", help="comma-separated CPU list for the worker's affinity")
+    parser.add_argument("--tmpfs-bytes", type=int, default=0, help="size of each tmpfs (0: the kernel's default)")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by the worker's argv")
     return parser.parse_args(list(argv))
 
@@ -429,7 +433,8 @@ def main(argv: Sequence[str]) -> int:
     )
     command = worker_argv(list(args.command))
     try:
-        apply_plan(seal_plan(layout, shared_root_entries(pathlib.Path(layout.material or layout.shared))))
+        plan = seal_plan(layout, shared_root_entries(pathlib.Path(layout.material or layout.shared)))
+        apply_plan(plan, REAL, int(args.tmpfs_bytes))
     except SealError as exc:
         raise SystemExit(f"seal_worker: {exc}") from exc
     set_affinity(str(args.cpus))
