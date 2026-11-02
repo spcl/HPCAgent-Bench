@@ -23,13 +23,14 @@
 #                               one N-task step: node r / tasks-per-node, GPU slot l = r % tasks-per-node, on the
 #                               first thread of the l-th block of SLURM_CPUS_PER_TASK cores (socket-major, the
 #                               --hint=nomultithread block an N-task step gives it). Returns the last failing
-#                               shard's status, 0 when every shard succeeded.
+#                               shard's status, 0 when every shard succeeded; JOB_SHARDS_OK counts those that did.
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 JOB_STEP_EDF=""
 JOB_STEP_ENV=()
+JOB_SHARDS_OK=0
 
 #: What every step task runs: the launch environment the OpenMP runtimes read once, then the verb.
 JOB_STEP_SCRIPT='ulimit -s "$(ulimit -H -s)"
@@ -122,6 +123,6 @@ run_job_shards() {
         ) &
         pids+=("$!")
     done
-    for pid in "${pids[@]}"; do wait "${pid}" || status=$?; done
+    for pid in "${pids[@]}"; do wait "${pid}" && JOB_SHARDS_OK=$(( JOB_SHARDS_OK + 1 )) || status=$?; done
     return "${status}"
 }
