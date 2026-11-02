@@ -51,7 +51,11 @@ def section_templates() -> Mapping[str, str]:
     names = [name for name in names if name not in TOP_LEVEL]
     names += [f"tools/{path.name}" for path in sorted((paths.PACKAGE / "tools").glob("*.md"))]
     names += [f"tools/{path.name}" for root in agent_plugins.roots() for path in sorted(root.glob("tools/*.md"))]
-    return MappingProxyType({key_of(name): name for name in dict.fromkeys(names)})
+    blocks: dict[str, str] = {}
+    for name in dict.fromkeys(names):
+        if blocks.setdefault(key_of(name), name) != name:
+            raise ValueError(f"prompt sections {blocks[key_of(name)]!r} and {name!r} share the key {key_of(name)!r}")
+    return MappingProxyType(blocks)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
