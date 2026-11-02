@@ -687,7 +687,7 @@ def run_forked[ResultT](
                     p.join(DRAIN_S)
                     if p.is_alive():
                         stop_child(p)
-                        return RunResult(ok=True, exit_code=p.exitcode, result=result_item[1])
+                        return finished_result(None, q, err_r, tag, result_item, last_progress)
                     break
                 stop_child(p)
                 if progress_q is not None:
