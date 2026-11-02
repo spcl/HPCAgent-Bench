@@ -76,14 +76,9 @@ STREAM_JSON_LOG_NO_SYNTAX_CHECK = stream_json_log(tuple(e for e in STREAM_JSON_E
 TEXT_MODE_LOG = "The kernel has been optimized and submitted.\n\n**Implementation**\n```c\nvoid f(void);\n```\n"
 
 
-def load_example_module(name: str) -> ModuleType:
-    """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    return module_at(script_path(name), name)
-
-
 @pytest.fixture(name="iteration_counts")
 def iteration_counts_fixture() -> ModuleType:
-    return load_example_module("iteration_counts")
+    return module_at(script_path("iteration_counts"))
 
 
 def read_csv(path: pathlib.Path) -> list[dict[str, str]]:
