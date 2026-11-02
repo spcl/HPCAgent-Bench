@@ -55,6 +55,8 @@ CONTEXT_FAMILY = {context: family for family, context in omp_context.FAMILY_CONT
 FLAT = IndexMap.identity(["n"])
 #: Device launch shape: grid-stride loops, so the grid only bounds the parallelism.
 DEVICE_BLOCK, DEVICE_GRID_LIMIT = 256, 4096
+#: Wall-clock cap on one host-cast compiler invocation.
+BUILD_TIMEOUT_S = 900
 
 
 class DeviceArray(Protocol):
@@ -173,7 +175,10 @@ def built_library(context: str, layouts: tuple[Conversion, ...] = (), groups: tu
         out = pathlib.Path(work, cached.name)
         env = {**os.environ, **omp_context.context_build_env(context)}
         for argv in languages.build_shared_lib_commands(Language.C, src, out, mode=Mode.MULTI_CORE, compiler=compiler):
-            subprocess.run(argv, check=True, capture_output=True, env=env, cwd=work)
+            done = subprocess.run(argv, capture_output=True, env=env, cwd=work, timeout=BUILD_TIMEOUT_S, check=False)
+            if done.returncode != 0:
+                tail = done.stderr.decode("utf-8", "replace")[-2000:]
+                raise RuntimeError(f"building {out.name} failed ({done.returncode}): {' '.join(argv)}\n{tail}")
         publish(out, cached)
     return cached
 

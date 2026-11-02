@@ -55,3 +55,25 @@ def test_the_chat_client_closes_the_refusal_it_reports(refusing_url: str) -> Non
     cause = raised.value.__cause__
     assert isinstance(cause, urllib.error.HTTPError)
     assert cause.closed
+
+
+def test_a_reply_that_is_not_json_is_the_documented_runtime_error() -> None:
+    class Html(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            body = b"<html>Bad Gateway</html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Html)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(RuntimeError, match="not JSON"):
+            http_chat_json(f"http://127.0.0.1:{server.server_address[1]}/v1", {}, {}, 5.0, "service unreachable")
+    finally:
+        server.shutdown()
+        server.server_close()
