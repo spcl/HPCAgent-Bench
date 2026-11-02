@@ -19,7 +19,7 @@ reduction is exact in any order and runs as the library's own.
 """
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from types import ModuleType
 from typing import Any
 
@@ -203,7 +203,7 @@ def as_f64(x: ArrayLike, xp: ModuleType) -> Array:
     return value.astype(xp.float64, copy=False)
 
 
-def horner(r: Array, coefficients: list[float], xp: ModuleType) -> Array:
+def horner(r: Array, coefficients: Sequence[float], xp: ModuleType) -> Array:
     """``sum(c_i r**i)`` by Horner's rule, one exact multiply and one exact add per term."""
     total = xp.full(r.shape, coefficients[-1], dtype=xp.float64)
     for coefficient in reversed(coefficients[:-1]):
@@ -227,7 +227,7 @@ def exp(x: ArrayLike, xp: ModuleType | None = None) -> Array:
     k = xp.rint(value * INV_LN2)
     r = value - k * LN2_HI
     r = r - k * LN2_LO
-    series = horner(r, [1.0 / math.factorial(n) for n in range(EXP_TERMS)], xp)
+    series = horner(r, EXP_COEFFICIENTS, xp)
     return xp.ldexp(series, k.astype(xp.int32))
 
 
@@ -297,7 +297,7 @@ def log(x: ArrayLike, xp: ModuleType | None = None) -> Array:
     exponent = xp.where(low, exponent - 1, exponent).astype(xp.float64)
     s = (mantissa - 1.0) / (mantissa + 1.0)
     s2 = s * s
-    series = horner(s2, [1.0 / (2 * n + 1) for n in range(ATANH_TERMS)], xp)
+    series = horner(s2, ATANH_COEFFICIENTS, xp)
     result = 2.0 * s * series
     result = result + exponent * LN2_LO
     result = result + exponent * LN2_HI
@@ -318,9 +318,7 @@ def reduce_half_pi(x: ArrayLike, xp: ModuleType) -> tuple[Array, Array]:
 def sin_cos_series(r: Array, xp: ModuleType) -> tuple[Array, Array]:
     """``sin r`` and ``cos r`` for ``|r| <= pi/4`` by their Taylor series in ``r**2``."""
     r2 = r * r
-    sin_terms = [(-1.0) ** n / math.factorial(2 * n + 1) for n in range(TRIG_TERMS)]
-    cos_terms = [(-1.0) ** n / math.factorial(2 * n) for n in range(TRIG_TERMS)]
-    return r * horner(r2, sin_terms, xp), horner(r2, cos_terms, xp)
+    return r * horner(r2, SIN_COEFFICIENTS, xp), horner(r2, COS_COEFFICIENTS, xp)
 
 
 def sin(x: ArrayLike, xp: ModuleType | None = None) -> Array:
@@ -344,11 +342,12 @@ def cos(x: ArrayLike, xp: ModuleType | None = None) -> Array:
 
 
 def tanh(x: ArrayLike, xp: ModuleType | None = None) -> Array:
-    """``tanh x = (e**2x - 1) / (e**2x + 1)``, with the sign folded so the exponential never overflows."""
+    """``tanh x = (1 - e**-2x) / (1 + e**-2x)``, with the sign folded so the exponential never overflows and the
+    numerator from :func:`expm1`, which does not cancel near 0."""
     xp = array_module(x, xp=xp)
     value = as_f64(x, xp)
-    e = exp(-2.0 * xp.abs(value), xp)
-    magnitude = (1.0 - e) / (1.0 + e)
+    doubled = -2.0 * xp.abs(value)
+    magnitude = -expm1(doubled, xp) / (1.0 + exp(doubled, xp))
     return xp.where(value < 0.0, -magnitude, magnitude)
 
 

@@ -388,10 +388,9 @@ def timed_compile(sdfg: dace.SDFG) -> CompiledSDFG:
 @dataclass(frozen=True, slots=True)
 class PipelineContext:
     """The DaCe handles one :attr:`SdfgPipeline.transform` runs against, built once per
-    :meth:`DaceFramework.optimize`. ``symbols`` is the shape binding ``auto_optimize`` specialises against."""
+    :meth:`DaceFramework.optimize`."""
 
     device: dace_dtypes.DeviceType
-    symbols: dict[str, int] = field(default_factory=dict[str, int])
     #: The size symbols the manifest declares small (``public.scales``), declared before ``canonicalize``.
     small: frozenset[str] = frozenset()
     #: The symbols ``canonicalize`` may treat as non-negative (:func:`cpf_canonical.nonnegative_symbols`).
@@ -452,7 +451,7 @@ def pipeline_parallel(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
 
 def pipeline_auto_opt(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
     """Upstream DaCe's ``auto_optimize`` (LICM, MapFusion, tiling, vectorize, plus GPU offload); runs on any DaCe."""
-    dace_auto_opt.auto_optimize(sdfg, ctx.device, symbols=ctx.symbols, use_gpu_storage=True)
+    dace_auto_opt.auto_optimize(sdfg, ctx.device, use_gpu_storage=True)
 
 
 #: Rounds of (FuseMaps, MapCollapse) in the parallel pipeline (they feed each other).
@@ -680,7 +679,7 @@ class DaceFramework(Framework):
     __slots__ = ("_pipeline_errors", "datatype")
 
     def __init__(self, fname: str) -> None:
-        warnings.filterwarnings("ignore")
+        warnings.filterwarnings("ignore", module=r"dace(\.|$)")  # the passes' chatter, never the harness's own
         super().__init__(fname)
         # Datatype selected via set_datatype; read by verify() for the tolerance band.
         self.datatype: str | None = None

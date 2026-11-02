@@ -68,12 +68,13 @@ def resolve(variant: Variant, declared_dist: str, declared_domain: domain_mod.Do
 
     * a structural distribution (conditioning, definiteness) keeps its own generator -- a rotated
       base would not be an SPD matrix at all. Positive rescaling preserves conditioning, so the
-      scale still applies;
+      scale still applies, except to ``stable``/``unstable``, which |x| < 1 and |x| > 1 define;
     * an interval domain pins the magnitudes, so rescaling out of the interval would contradict it.
       The base still rotates; only the scale is dropped.
     """
     distribution = declared_dist if declared_dist in domain_mod.STRUCTURAL else variant.base
-    scale = 1.0 if isinstance(declared_domain, tuple) else variant.scale
+    regime = isinstance(declared_domain, tuple) or declared_dist in ("stable", "unstable")
+    scale = 1.0 if regime else variant.scale
     return distribution, scale
 
 

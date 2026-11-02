@@ -15,10 +15,10 @@ from typing import Any
 
 import numpy as np
 
-from hpcagent_bench.precision import Precision, numpy_dtype, safe_max
+from hpcagent_bench.precision import Precision
 from hpcagent_bench.support.counter_generator import CounterGenerator
 from hpcagent_bench.support.distributions import DistributionFn, register_distribution
-from hpcagent_bench.support.distributions.streams import clip_to_precision
+from hpcagent_bench.support.distributions.conditioning import spec_rng, to_precision
 
 __all__ = ["SAMPLERS", "beta", "exponential", "gamma", "laplace", "lognormal", "normal", "register"]
 
@@ -63,9 +63,9 @@ def register(sampler: Sampler) -> DistributionFn:
     @register_distribution(sampler.__name__)
     def gen(shape: tuple[int, ...], precision: Precision, spec: dict[str, Any] | None) -> np.ndarray:
         spec = spec or {}
-        rng = spec.get("rng") or CounterGenerator.fresh()
+        rng = spec_rng(spec)
         raw = rng.xp.asarray(sampler(rng, spec, shape), dtype=rng.xp.float64)
-        return clip_to_precision(raw, safe_max(precision)).astype(numpy_dtype(precision))
+        return to_precision(raw, precision)
 
     return gen
 
