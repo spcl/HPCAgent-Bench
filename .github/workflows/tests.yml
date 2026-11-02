@@ -338,7 +338,8 @@ jobs:
       - name: Stub episodes and every packet's prompts
         timeout-minutes: 35
         run: |
-          python -m pytest -p no:cacheprovider -rfEs -v --timeout=1800 --durations=0 -m user_plugins \
+          python -m pytest -p no:cacheprovider -p tests.no_silent_skips -rfEs -v --timeout=1800 --durations=0 \
+            -m user_plugins \
             tests/test_user_plugin_episodes.py
 
   # The @pytest.mark.integration tests under tests/ (build and run real artifacts). The translator

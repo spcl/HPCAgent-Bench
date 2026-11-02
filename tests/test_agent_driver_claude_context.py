@@ -12,7 +12,6 @@ import pytest
 from tests.env_render import BASES, rendered
 from tests.fresh_module import fresh
 
-
 #: The window each model is served with (the engine's argument, or the provider's published one).
 SERVED = {
     "qwen38": 262144,
@@ -50,13 +49,9 @@ TRIGGERS = {
 }
 
 
-def load(name: str) -> ModuleType:
-    return fresh(name)
-
-
 @pytest.fixture(name="driver")
 def driver_fixture() -> ModuleType:
-    return load("agent_driver")
+    return fresh("agent_driver")
 
 
 def env_values(path: str) -> dict[str, str]:

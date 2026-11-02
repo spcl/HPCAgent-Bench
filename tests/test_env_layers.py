@@ -222,8 +222,8 @@ def test_a_snapshot_is_read_only_and_owns_its_problems_copy(tmp_path: pathlib.Pa
     assert env.name.startswith("a-")
     assert problems.read_text() == '{"kernel": "k1"}\n'
     assert values["SETUP"] == "a"
-    assert not os.access(env, os.W_OK)
-    assert not os.access(problems, os.W_OK)
+    assert not env.stat().st_mode & 0o222
+    assert not problems.stat().st_mode & 0o222
 
 
 def test_a_second_submission_never_touches_the_first_snapshot(tmp_path: pathlib.Path) -> None:

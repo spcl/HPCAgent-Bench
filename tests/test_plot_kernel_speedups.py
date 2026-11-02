@@ -3,7 +3,6 @@
 """``hpcagent_bench/stats/commands/kernel_speedups.py``: speedup per kernel, compilers and setups over one baseline."""
 
 import pathlib
-import sqlite3
 import tempfile
 
 import pandas as pd
@@ -12,6 +11,7 @@ import pytest
 from hpcagent_bench import paths
 from hpcagent_bench.stats import cost
 from hpcagent_bench.stats.commands import kernel_speedups as kernel_speedups_command
+from tests.sqlite_closing import connect
 
 REPO = paths.ROOT
 
@@ -29,7 +29,7 @@ def test_a_canon_db_alone_draws_its_columns_over_the_baseline(tmp_path: pathlib.
         ("dace_cpu", "k1", 10.0),
     ]
     frame = pd.DataFrame([{"run": "r", "column": c, "kernel": k, "median_ms": ms, "validated": 1} for c, k, ms in rows])
-    with sqlite3.connect(canon_db) as conn:
+    with connect(canon_db) as conn:
         frame.to_sql("canon", conn, index=False)
     out = tmp_path / "figures" / "compilers.pdf"
     args = plot.build_parser().parse_args(

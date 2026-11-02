@@ -58,9 +58,10 @@ def fake_smi(tmp_path: Path, name: str, body: str) -> Path:
     return bash_stub(tmp_path / f"fake_{name}", name, body).parent
 
 
-def run_monitor(tmp_path: Path, path_dirs: list[Path], interval: str = "0.2", role: str = "judge") -> str:
-    """Runs node_monitor.sh for a bit over one sample interval, stops it, and returns
-    the one CSV file it wrote."""
+def run_monitor(
+    tmp_path: Path, path_dirs: list[Path], interval: str = "0.2", role: str = "judge", rows: int = 1
+) -> str:
+    """Runs node_monitor.sh until it wrote ``rows`` samples, stops it, and returns the one CSV file it wrote."""
     out_dir = tmp_path / "monitor"
     env = dict(os.environ)
     env["PATH"] = ":".join(str(d) for d in path_dirs)
@@ -69,10 +70,10 @@ def run_monitor(tmp_path: Path, path_dirs: list[Path], interval: str = "0.2", ro
     env["INTERVAL"] = interval
     proc = subprocess.Popen([BASH, str(SCRIPT)], env=env)
     try:
-        # Wait for the first sample row, not a fixed time: a loaded node can take seconds to start.
+        # Wait for the sample rows, not a fixed time: a loaded node can take seconds to start.
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline and not any(
-            len(f.read_text().splitlines()) >= 2 for f in out_dir.glob("*.csv")
+            len(f.read_text().splitlines()) > rows for f in out_dir.glob("*.csv")
         ):
             time.sleep(float(interval))
         proc.send_signal(signal.SIGTERM)
@@ -130,6 +131,20 @@ def test_amd_smi_fallback_also_appends_per_gpu_columns(tmp_path: Path) -> None:
     row = lines[1].split(",")
     assert row[8:11] == ["15", "55", "35"]
     assert row[6:8] == ["", ""]  # amd-smi metric -u carries no vram fields, same as before
+
+
+def test_a_wedged_smi_tool_costs_blank_samples_and_never_stalls_the_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first call answers (the probe), every later one hangs like a wedged driver."""
+    marker = tmp_path / "wedged"
+    body = f"[ -e {marker} ] && sleep 30\n: > {marker}\necho '{ROCM_JSON}'"
+    rocm_bin = fake_smi(tmp_path, "rocm-smi", body)
+    monkeypatch.setenv("SMI_TIMEOUT", "1")
+    lines = run_monitor(tmp_path, [rocm_bin, restricted_bin(tmp_path)], rows=3).strip().splitlines()
+    assert lines[0] == f"{OLD_HEADER},gpu0_pct,gpu1_pct"
+    assert len(lines) >= 4, lines
+    assert all(row.split(",")[5:] == [""] * 5 for row in lines[1:]), lines
 
 
 @pytest.mark.parametrize(

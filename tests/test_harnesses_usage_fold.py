@@ -17,14 +17,9 @@ import pytest
 from tests.fresh_module import fresh
 
 
-def load_example_module(name: str) -> ModuleType:
-    """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    return fresh(name)
-
-
 @pytest.fixture(name="harnesses")
 def harnesses_fixture() -> ModuleType:
-    return load_example_module("harnesses")
+    return fresh("harnesses")
 
 
 # call_tokens: one usage.jsonl line's own count
