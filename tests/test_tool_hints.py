@@ -2,12 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A tool's hints reach ``tools/list`` as MCP annotations; a tool that says nothing carries none."""
 
-import pydantic
 from hpcagent_agent.tools import mcp_server, registry
-
-
-class NoInput(pydantic.BaseModel):
-    pass
 
 
 def served(hints: registry.Hints) -> registry.Served:

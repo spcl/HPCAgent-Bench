@@ -191,22 +191,22 @@ def test_skipping_lines_that_cannot_carry_usage_changes_no_total(
     log.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     cost = token_cost.episode_cost(log)
-    fresh, cached = 1000 + (1500 - 1000), 1000
-    assert (cost["fresh_input"], cost["cached_input"], cost["output"]) == (fresh, cached, 70)
+    uncached, cached = 1000 + (1500 - 1000), 1000
+    assert (cost["fresh_input"], cost["cached_input"], cost["output"]) == (uncached, cached, 70)
     # The thinking delta is READ and reported, and is not part of any total: the result record's 70
     # output tokens already count it (module docstring, 3).
     assert cost["thinking_estimate"] == 40
-    assert cost["effective"] == fresh + token_cost.CACHE_DISCOUNT * cached + 70
+    assert cost["effective"] == uncached + token_cost.CACHE_DISCOUNT * cached + 70
     # The three readings of ONE fold: free (cache reads at 0), provider (cache reads
     # at a tenth, what a hosted service meters) and billed (every prompt in full). 1500 + 0.1 * 1000 + 70.
-    assert cost["effective_provider"] == fresh + 0.1 * cached + 70 == 1670
+    assert cost["effective_provider"] == uncached + 0.1 * cached + 70 == 1670
     assert cost["effective"] < cost["effective_provider"] < cost["naive_total"]
     assert token_cost.accumulate_total_tokens(lines, {}) == 1000 + 1500
     totals = token_cost.episode_totals(tmp_path)
     assert (totals.tokens_effective, totals.tokens_billed) == (int(cost["effective"]), 1000 + 1500)
     # The components a cost card weights ride on the task, and they are NOT recoverable from billed:
     # billed (2500) carries no output here, so billed - effective is not the cached count.
-    assert (totals.tokens_fresh_input, totals.tokens_cached_input, totals.tokens_output) == (fresh, cached, 70)
+    assert (totals.tokens_fresh_input, totals.tokens_cached_input, totals.tokens_output) == (uncached, cached, 70)
     assert totals.tokens_billed - totals.tokens_effective != cached
 
 
@@ -523,6 +523,14 @@ def compact_boundary_line() -> str:
     return json.dumps({"type": "system", "subtype": "compact_boundary"})
 
 
+def tmp_path_log(tmp_path: pathlib.Path, lines: list[str]) -> pathlib.Path:
+    """A throwaway ``claude.log`` under ``tmp_path`` holding ``lines``, for a test that needs both
+    folds over the same transcript without redeclaring the write-and-join boilerplate."""
+    log = tmp_path / "compare.log"
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return log
+
+
 def result_line_with_model_usage(output_tokens: int, model_usage: dict[str, dict[str, int]]) -> str:
     """The claude ``result`` event, carrying claude-code's own session-cumulative ``modelUsage``
     beside the ``usage`` block :func:`result_line` writes."""
@@ -727,14 +735,6 @@ def test_without_a_resume_the_cut_off_request_still_counts(token_cost: ModuleTyp
     lines = resumed_transcript(token_cost, resumed=False)
     assert token_cost.accumulate_total_tokens(lines, {}) == 1000 + 1200 + 1300 + 30
     assert token_cost.accumulate_output_tokens(lines, {}) == 100 + 50 + 30
-
-
-def tmp_path_log(tmp_path: pathlib.Path, lines: list[str]) -> pathlib.Path:
-    """A throwaway ``claude.log`` under ``tmp_path`` holding ``lines``, for a test that needs both
-    folds over the same transcript without redeclaring the write-and-join boilerplate."""
-    log = tmp_path / "compare.log"
-    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return log
 
 
 #: The third-party packages the agent runtime may import at module level: its declared dependencies
