@@ -557,7 +557,7 @@ def stop_child(p: multiprocessing.process.BaseProcess) -> None:
         p.join(COREDUMP_GRACE_S)
     if p.is_alive():
         p.kill()
-        p.join()
+        p.join(TERM_GRACE_S)  # a child stuck in uninterruptible IO dies only when the IO ends: no unbounded wait
 
 
 def finished_result[ResultT](
@@ -676,13 +676,19 @@ def run_forked[ResultT](
         while p.is_alive():
             if abandoned is not None and abandoned.is_set():
                 p.kill()
-                p.join()
+                p.join(TERM_GRACE_S)
                 return RunResult(ok=False, signal="ABANDONED", error=f"{tag}abandoned: nobody reads its result")
             if progress_q is not None:
                 last_progress = drain_progress(progress_q, last_progress)
             if limit is not None and time.monotonic() >= limit + (held_s() if held_s is not None else 0.0):
                 if result_item is not None:
-                    break  # child actually finished (payload already drained) -- not a timeout
+                    # The payload is safe and only teardown is left: a child that ends in the grace keeps its
+                    # own exit code, one that lingers is stopped, and the stop relabels nothing.
+                    p.join(DRAIN_S)
+                    if p.is_alive():
+                        stop_child(p)
+                        return RunResult(ok=True, exit_code=p.exitcode, result=result_item[1])
+                    break
                 stop_child(p)
                 if progress_q is not None:
                     last_progress = drain_progress(progress_q, last_progress)
