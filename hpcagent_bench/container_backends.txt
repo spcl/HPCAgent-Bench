@@ -95,7 +95,7 @@ docker.harbor_env=docker
 # Rootless, daemonless OCI: runs unprivileged on both a laptop and an HPC login node.
 podman.family=oci
 podman.kind=exec
-podman.verb=run --rm --network host
+podman.verb=run --rm --network host --security-opt unmask=ALL
 podman.bind=--volume
 podman.workdir=-w
 podman.env=--env
