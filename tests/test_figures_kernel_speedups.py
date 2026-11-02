@@ -206,6 +206,16 @@ def test_a_best_of_denominator_races_gcc_and_numba_per_kernel() -> None:
     assert row.numerator_ms == pytest.approx({"k1": 0.50, "k2": 10.0})
 
 
+def test_a_canon_table_with_two_validated_sweeps_of_a_column_is_refused(llr40_canon: pd.DataFrame) -> None:
+    """One canon.db accumulates sweeps, read_times keeps one time per (column, kernel): the row refuses to pick by
+    row order. A stale unvalidated row of the other sweep is no mix."""
+    both = pd.concat([llr40_canon, llr40_canon.assign(run="r2")], ignore_index=True)
+    with pytest.raises(ValueError, match="more than once"):
+        kernel_speedups.canon_kernel_row(both, "dace_cpu_canon", TAG40)
+    resync = pd.concat([llr40_canon, llr40_canon.assign(run="r2", validated=0)], ignore_index=True)
+    assert kernel_speedups.canon_kernel_row(resync, "dace_cpu_canon", TAG40).ratios["k1"] == pytest.approx(10.0)
+
+
 def test_two_setups_of_one_model_share_colour_and_differ_in_shape(llr40_observations: pd.DataFrame) -> None:
     """Channel rule of every model x packet figure: COLOUR is the model, SHAPE is the packet."""
     cpf_tool = kernel_speedups.agent_kernel_row(

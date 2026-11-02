@@ -38,6 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--canon-db", type=pathlib.Path, default=None, help="the canon table a baseline sweep records")
     parser.add_argument(
+        "--canon-run",
+        action="append",
+        default=[],
+        metavar="RUN",
+        help="keep only this run's canon rows; repeatable, for columns swept in different runs",
+    )
+    parser.add_argument(
         "--canon-columns", default="", help="comma-separated canon columns drawn as rows, e.g. pluto,dace_cpu"
     )
     parser.add_argument(
@@ -85,6 +92,8 @@ def draw(args: argparse.Namespace, card: cost.CostModel) -> None:
     if args.observations and not args.experiment:
         raise SystemExit("observations need --experiment (the setup prefix)")
     canon_frame = studies.read_table(args.canon_db, "canon") if args.canon_db is not None else pd.DataFrame()
+    if args.canon_run:
+        canon_frame = canon_frame.loc[canon_frame["run"].isin(args.canon_run)]
     tag_kernels = (
         [line.strip() for line in args.tag_file.read_text().splitlines() if line.strip() and not line.startswith("#")]
         if args.tag_file is not None
