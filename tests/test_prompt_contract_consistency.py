@@ -63,9 +63,9 @@ TOOL_BULLET_RE = re.compile(r"^- `([a-z0-9_]+)`", re.MULTILINE)
 #: unlike ``search``, whose bullet is real and simply absent whenever the tool itself is not offered.
 UNLISTED_TOOLS = {"canonical_parallel_form"}
 
-#: What ``--tools`` publishes. Under ``--bare`` the built-in set is exactly these three -- naming
+#: What ``--tools`` publishes by default. Under ``--bare`` the built-in set is exactly these three -- naming
 #: any other (Write, MultiEdit, Glob, Grep) publishes nothing and is silently dropped.
-DRIVER_TOOLS_RE = re.compile(r'"--tools",\n\s+"([A-Za-z,]+)"')
+DRIVER_TOOLS_RE = re.compile(r'native_tools = .* or \("([A-Za-z,]+)" if bare else')
 
 DRIVER = paths.ROOT / "agent/hpcagent_agent/driver/agent_driver.py"
 

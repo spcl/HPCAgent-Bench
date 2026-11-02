@@ -172,7 +172,13 @@ def install_edfs(tmp_path: pathlib.Path, images: list[str]) -> tuple[subprocess.
     ce.mkdir()
     for image in images:
         (ce / image).write_bytes(b"sqsh")
-    env = {"HOME": str(tmp_path), "SCRATCH": str(tmp_path), "CE_IMAGES": str(ce), "EDF_DIR": str(edf_dir)}
+    env = {
+        "HOME": str(tmp_path),
+        "SCRATCH": str(tmp_path),
+        "CE_IMAGES": str(ce),
+        "EDF_DIR": str(edf_dir),
+        "CE_PLATFORM": "amd",
+    }
     return run(["bash", str(CE / "install_edfs.sh")], env), edf_dir
 
 
