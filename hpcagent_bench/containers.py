@@ -1,150 +1,88 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Container launch factory (:func:`local_run_command`) and the unprivileged Apptainer installer. One OCI image, four
-backends (podman default: rootless, daemonless; docker; apptainer via SIF; ``ce`` selected by ``srun
---environment``); flag spellings live in ``container_backends.txt``, shared byte-for-byte with the bash launcher."""
+"""The container backends and the unprivileged Apptainer installer. One OCI image, four runtimes (docker; podman;
+apptainer via SIF; ``ce`` selected by ``srun --environment``) plus ``native``. ``container_backends.txt`` is the table:
+shell reads it for the launch argv, this module for each row's family, kind and Harbor provider."""
 
 import contextlib
-import os
 import pathlib
 import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from typing import NamedTuple
 
-from hpcagent_bench import config, paths
-from hpcagent_bench.config import ContainerRuntime, Hardware
+from hpcagent_bench import config
+from hpcagent_bench.config import ContainerRuntime
 
 __all__ = [
     "APPTAINER_INSTALLER",
     "BACKENDS_PATH",
-    "EXEC_BACKENDS",
     "FAMILIES",
-    "GPU_HARDWARE",
     "KNOWN_BACKENDS",
-    "SELECTABLE",
-    "Backends",
     "WrapperSpelling",
     "clean_partial_install",
-    "collect_env",
-    "default_image",
     "detect_backend",
     "family_members",
     "harbor_env_for",
     "install_apptainer",
     "install_apptainer_main",
     "load_backends",
-    "local_run_command",
     "resolve_backend",
 ]
 
 #: Apptainer's official unprivileged (no-root) installer.
 APPTAINER_INSTALLER = "https://raw.githubusercontent.com/apptainer/apptainer/main/tools/install-unprivileged.sh"
 
-#: The single-source spelling file, read by BOTH this module and the bash launcher.
+#: The backend table, also read by ``cluster/container_runtime.sh``.
 BACKENDS_PATH = pathlib.Path(__file__).parent / "container_backends.txt"
-
-#: The FAMILIES the benchmark supports, in preference order (an image form plus a launch contract). ``ce`` stays
-#: separate from ``oci`` so ``oci`` never resolves to the one runtime with no local launch form.
-FAMILIES: tuple[ContainerRuntime, ...] = (
-    ContainerRuntime.OCI,
-    ContainerRuntime.SIF,
-    ContainerRuntime.CE,
-    ContainerRuntime.NATIVE,
-)
-#: The concrete implementations in preference order; ``oci`` resolves to the first installed.
-KNOWN_BACKENDS: tuple[ContainerRuntime, ...] = (
-    ContainerRuntime.DOCKER,
-    ContainerRuntime.PODMAN,
-    ContainerRuntime.APPTAINER,
-    ContainerRuntime.CE,
-    ContainerRuntime.NATIVE,
-)
-#: Names accepted from a user: an implementation, or a FAMILY resolving to whichever member is installed.
-SELECTABLE: tuple[ContainerRuntime, ...] = tuple(ContainerRuntime)
-#: The hardware whose GPU a launch passes through: the spelling file's ``<backend>.gpu.<hardware>`` rows.
-GPU_HARDWARE: tuple[Hardware, ...] = (Hardware.NVIDIA, Hardware.AMD)
-#: Backends launched by WRAPPING the command; others contribute no wrapper prefix.
-EXEC_BACKENDS: tuple[ContainerRuntime, ...] = (
-    ContainerRuntime.DOCKER,
-    ContainerRuntime.PODMAN,
-    ContainerRuntime.APPTAINER,
-)
-
-
-def family_members(family: ContainerRuntime) -> tuple[ContainerRuntime, ...]:
-    """The runtimes implementing ``family``, in :data:`KNOWN_BACKENDS` preference order."""
-    return tuple(name for name in KNOWN_BACKENDS if SPELLINGS[name].family == family)
 
 
 @dataclass(frozen=True, slots=True)
 class WrapperSpelling:
-    """How one backend spells its launch flags (one row of the file); an ``srun_env`` backend has no wrapper argv,
-    so its flag fields are empty."""
+    """What this module reads of one row of the table."""
 
     name: ContainerRuntime
     family: ContainerRuntime  # OCI (the shipped image, unconverted) | SIF | CE (conversions of it) | NATIVE
-    rootless: bool  # invocable unprivileged, with no daemon and no root-equivalent group
-    kind: str  # "exec" (wraps the command) | "srun_env" (selected by an srun flag)
-    verb: tuple[str, ...]  # ("exec",) | ("run", "--rm", "--network", "host") | ()
-    bind_flag: str  # "--bind" | "-v" | "" for srun_env (the EDF declares its own mounts)
-    workdir_flag: str  # "--pwd" | "-w" | "" for srun_env (the EDF declares its own workdir)
-    env_flag: str  # "--env" | "-e" | "" for srun_env (the EDF declares its own [env])
-    gpu: Mapping[Hardware, tuple[str, ...]]  # {NVIDIA: (...), AMD: (...)}; a cpu run adds nothing
-    image_form: str  # "sif" | "tag" | "edf"
-    image_default: str  # "hpcagent_bench-{hw}.sif" | "hpcagent_bench:{hw}" | "" (EDF is supplied)
-    harbor_env: str  # "singularity" | "docker" | "" (empty = not a Harbor backend)
-    srun_flag: str  # "--environment" for srun_env; "" for an exec wrapper
+    kind: str  # "exec" (wraps the command) | "srun_env" (selected by an srun flag) | "none"
+    harbor_env: str  # "singularity" | "docker" | "podman" | "" (empty = not a Harbor backend)
 
 
-class Backends(NamedTuple):
-    """The parsed spelling file: each backend's wrapper spelling and the env names every launch passes through."""
-
-    spellings: dict[ContainerRuntime, WrapperSpelling]
-    passthrough: tuple[str, ...]
-
-
-def load_backends(path: pathlib.Path = BACKENDS_PATH) -> Backends:
-    """Parse the spelling file (also read by the bash launcher, so argv is byte-identical)."""
-    rows: dict = {}
-    passthrough: tuple[str, ...] = ()
+def load_backends(path: pathlib.Path = BACKENDS_PATH) -> dict[ContainerRuntime, WrapperSpelling]:
+    """The table's rows in file order, which is preference order."""
+    rows: dict[str, dict[str, str]] = {}
     for raw in path.read_text().splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         key, _, value = line.partition("=")
         head, _, field = key.strip().partition(".")
-        if head == "global":
-            if field == "passthrough":
-                passthrough = tuple(value.split())
-            continue
-        rows.setdefault(head, {})[field] = value
-    spellings = {
+        if head != "global":
+            rows.setdefault(head, {})[field] = value.strip()
+    return {
         ContainerRuntime.parse(name): WrapperSpelling(
             name=ContainerRuntime.parse(name),
-            family=ContainerRuntime.parse(f["family"].strip()),
-            rootless=f.get("rootless", "0").strip() == "1",
-            kind=f.get("kind", "exec").strip(),
-            verb=tuple(f.get("verb", "").split()),
-            bind_flag=f.get("bind", "").strip(),
-            workdir_flag=f.get("workdir", "").strip(),
-            env_flag=f.get("env", "").strip(),
-            gpu={hardware: tuple(f.get(f"gpu.{hardware.text}", "").split()) for hardware in GPU_HARDWARE},
-            image_form=f["image_form"].strip(),
-            image_default=f.get("image_default", "").strip(),
-            harbor_env=f.get("harbor_env", "").strip(),
-            srun_flag=f.get("srun_flag", "").strip(),
+            family=ContainerRuntime.parse(fields["family"]),
+            kind=fields["kind"],
+            harbor_env=fields.get("harbor_env", ""),
         )
-        for name, f in rows.items()
+        for name, fields in rows.items()
     }
-    return Backends(spellings, passthrough)
 
 
-SPELLINGS, PASSTHROUGH_ENV = load_backends()
+SPELLINGS = load_backends()
+#: The concrete implementations in preference order; ``oci`` resolves to the first installed.
+KNOWN_BACKENDS: tuple[ContainerRuntime, ...] = tuple(SPELLINGS)
+#: The families in preference order (an image form plus a launch contract). ``ce`` stays separate from ``oci`` so
+#: ``oci`` never resolves to the one runtime with no local launch form.
+FAMILIES: tuple[ContainerRuntime, ...] = tuple(dict.fromkeys(row.family for row in SPELLINGS.values()))
+
+
+def family_members(family: ContainerRuntime) -> tuple[ContainerRuntime, ...]:
+    """The runtimes implementing ``family``, in :data:`KNOWN_BACKENDS` preference order."""
+    return tuple(name for name in KNOWN_BACKENDS if SPELLINGS[name].family == family)
 
 
 def resolve_backend(explicit: ContainerRuntime | None = None) -> ContainerRuntime:
@@ -168,79 +106,6 @@ def detect_backend(candidates: Sequence[ContainerRuntime] = KNOWN_BACKENDS) -> C
     return None
 
 
-def default_image(backend: ContainerRuntime, hardware: Hardware = Hardware.CPU, repo_root: str | None = None) -> str:
-    """The image reference for ``backend`` on ``hardware`` -- an ``$HPCAGENT_BENCH_SIF`` /
-    ``$HPCAGENT_BENCH_DOCKER_IMAGE`` override, else the file's default (a sif path under
-    ``repo_root``, or an ``hpcagent_bench:<hw>`` tag)."""
-    spelling = SPELLINGS[backend]
-    if spelling.image_form == "edf":
-        raise ValueError(
-            f"{backend.text!r} has no image reference of its own: its EDF names the image (srun --environment)"
-        )
-    if not spelling.image_form:
-        raise ValueError(
-            f"{backend.text!r} runs on the host and consumes no image; asking it for one is a "
-            "category error, not a missing default"
-        )
-    if spelling.image_form == "sif":
-        override = os.environ.get("HPCAGENT_BENCH_SIF")
-        if override:
-            return override
-        name = spelling.image_default.format(hw=hardware.text)
-        return str(pathlib.Path(repo_root, name)) if repo_root else name
-    return os.environ.get("HPCAGENT_BENCH_DOCKER_IMAGE") or spelling.image_default.format(hw=hardware.text)
-
-
-def collect_env(hardware: Hardware) -> list[tuple[str, str]]:
-    """The env pairs forwarded into the image, in the PINNED order the bash fold matches byte-for-byte:
-    ``HPCAGENT_BENCH_IMAGE`` first, :data:`PASSTHROUGH_ENV`, then other ``HPCAGENT_BENCH_*`` sorted. Environment
-    only (the bash fold has no extra channel)."""
-    pairs: list[tuple[str, str]] = [("HPCAGENT_BENCH_IMAGE", hardware.text)]
-    seen = {"HPCAGENT_BENCH_IMAGE"}
-    for key in PASSTHROUGH_ENV:
-        value = os.environ.get(key)
-        if value and key not in seen:
-            pairs.append((key, value))
-            seen.add(key)
-    for key in sorted(k for k in os.environ if k.startswith("HPCAGENT_BENCH_") and k not in seen):
-        value = os.environ.get(key)
-        if value:
-            pairs.append((key, value))
-            seen.add(key)
-    # The bash fold is newline-delimited: a value with a newline would split there; fail loud.
-    for key, value in pairs:
-        if "\n" in value:
-            raise ValueError(
-                f"env {key!r} contains a newline; the launch fold is newline-delimited "
-                f"and cannot forward it (container_backends.txt token-list invariant)"
-            )
-    return pairs
-
-
-def local_run_command(
-    inner: Sequence[str],
-    *,
-    backend: ContainerRuntime | None = None,
-    hardware: Hardware = Hardware.CPU,
-    image: str | None = None,
-    repo_root: str | None = None,
-) -> list[str]:
-    """THE factory: the launch argv ``prefix + [image] + inner`` for an exec-wrapper backend (default
-    :func:`resolve_backend`); ``inner`` UNCHANGED for an ``srun_env`` or ``native`` backend (no wrapper exists)."""
-    chosen = resolve_backend(backend)
-    spelling = SPELLINGS[chosen]
-    if spelling.kind in ("srun_env", "none"):
-        return list(inner)
-    repo = repo_root or str(paths.repo_root())
-    argv: list[str] = [chosen.text, *spelling.verb, *spelling.gpu.get(hardware, ())]
-    for key, value in collect_env(hardware):
-        argv += [spelling.env_flag, f"{key}={value}"]
-    argv += [spelling.bind_flag, f"{repo}:{repo}", spelling.workdir_flag, repo]
-    argv.append(image or default_image(chosen, hardware, repo))
-    argv += list(inner)
-    return argv
-
-
 def harbor_env_for(backend: ContainerRuntime | None = None) -> str:
     """Harbor's ``--env`` provider name for the resolved backend (``docker``, ``podman``,
     ``apptainer -> singularity``). Raises for ``ce`` and ``native``, which Harbor cannot drive."""
@@ -249,7 +114,7 @@ def harbor_env_for(backend: ContainerRuntime | None = None) -> str:
     if not name:
         raise ValueError(
             f"{chosen.text!r} is not a Harbor backend (Harbor provides docker, podman, singularity); "
-            "run it directly via local_run_command / helpers/scripts/run_agent_in_container.sh"
+            "run it directly via helpers/scripts/run_agent_in_container.sh"
         )
     return name
 
