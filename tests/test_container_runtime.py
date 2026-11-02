@@ -10,6 +10,7 @@ error that says so. MPI gangs are Container Engine only (``container_gang_suppor
 """
 
 import pathlib
+import re
 import shlex
 import subprocess
 import tempfile
@@ -50,8 +51,6 @@ def wrap(
     edf_dir.mkdir(exist_ok=True)
     (edf_dir / "bench-ce-env.toml").write_text(EDF)
     run_dir = tmp_path / "run"
-    job_env = tmp_path / "job.env"
-    job_env.write_text("")
     environment = {
         "CONTAINER_RUNTIME": runtime,
         "CONTAINER_GPU_FLAGS": gpu_flags,
@@ -66,7 +65,6 @@ def wrap(
         "GENERATED_CACHE_HOST": run_dir / "generated",
         "GENERATED_CACHE_MOUNT": "/opt/generated",
         "EDF_PATH": edf_dir,
-        "JOB_ENV_FILE": job_env,
         "SCRATCH": tmp_path,
     }
     script = "\n".join(
@@ -126,7 +124,9 @@ def test_podman_and_docker_run_the_image_on_the_host_network_with_the_job_env(
     assert done.returncode == 0, done.stderr
     assert done.srun == []
     assert done.wrap[:5] == [runtime, "run", "--rm", "--network", "host"]
-    assert done.wrap[done.wrap.index("--env-file") + 1] == str(tmp_path / "job.env")
+    forwarded = [done.wrap[i + 1] for i, word in enumerate(done.wrap) if word == "--env"]
+    assert {"RUN_DIR", "SCRATCH", "SLURM_PROCID", "CLUSTER_ENV_FILE"} <= set(forwarded)
+    assert not any("=" in name for name in forwarded), "a value in argv is readable by every user of the node"
     assert done.wrap[done.wrap.index("--device") + 1] == "/dev/kfd"
     volumes = [done.wrap[i + 1] for i, word in enumerate(done.wrap) if word == "--volume"]
     assert volumes[0] == f"{tmp_path}/run/shared:/shared"
@@ -178,6 +178,27 @@ def test_an_unknown_runtime_is_refused_with_the_known_ones_named(tmp_path: pathl
     done = wrap(tmp_path, "lxc")
     assert done.returncode == 2
     assert "unknown CONTAINER_RUNTIME 'lxc' (ce|apptainer|podman|docker)" in done.stderr
+
+
+def test_a_job_variable_passes_and_no_judge_image_env_is_replaced_by_the_host() -> None:
+    """A host module's ROCM_PATH or CC would silently change what the judge compiles under podman or docker, so every
+    name a judge image sets with ENV stays out. The job's own HPCAGENT_BENCH_ keys and LANGUAGE pass."""
+    image_env: set[str] = set()
+    for dockerfile in (REPO / "containers" / "images").glob("judge-agent-*/Dockerfile*"):
+        for line in dockerfile.read_text(encoding="utf-8").replace("\\\n", " ").splitlines():
+            if line.lstrip().startswith("ENV "):
+                image_env |= set(re.findall(r"(?:^|\s)([A-Za-z_]\w*)=", line.lstrip()[4:]))
+    assert "ROCM_PATH" in image_env, "the Dockerfile scan found nothing"
+    job = {"LANGUAGE", "RUN_DIR"} | {name for name in image_env if name.startswith("HPCAGENT_BENCH_")}
+    done = subprocess.run(
+        ["bash", "-c", f". {shlex.quote(str(SEAM))}; job_env_names"],
+        env={name: "x" for name in image_env | job} | {"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert (set(done.stdout.split()) & image_env) | job == job
+    assert job <= set(done.stdout.split())
 
 
 def gang_supported(runtime: str) -> subprocess.CompletedProcess[str]:

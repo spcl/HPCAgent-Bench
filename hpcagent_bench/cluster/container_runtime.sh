@@ -11,7 +11,7 @@
 #
 #   ce         `srun --environment=<per-role EDF>`: the Container Engine (pyxis), whose EDF carries the fabric hooks.
 #   apptainer  `apptainer exec [GPU flags] --bind ... <image.sif>`
-#   podman     `podman run --rm --network host --env-file ... [GPU flags] --volume ... <image>`
+#   podman     `podman run --rm --network host --env NAME ... [GPU flags] --volume ... <image>`
 #   docker     the same command line as podman.
 #
 # MPI gangs (JUDGE_GANG_NODES) are CE-only (container_gang_supported): a gang's ranks are fresh containers started
@@ -36,6 +36,16 @@ BENCH_IMAGE="${BENCH_IMAGE:-}"
 # Site GPU flags, passed verbatim: apptainer "--rocm" or "--nv", podman on AMD
 # "--device /dev/kfd --device /dev/dri", docker on NVIDIA "--gpus all".
 CONTAINER_GPU_FLAGS="${CONTAINER_GPU_FLAGS:-}"
+# The names job_env_names keeps out of a podman/docker step: host identity, then everything a judge image sets with ENV
+# but the HPCAGENT_BENCH_ keys (tests/test_container_runtime.py compares the Dockerfiles). LANGUAGE is a job key.
+JOB_ENV_EXCLUDED='PATH|HOME|USER|LOGNAME|SHELL|HOSTNAME|PWD|OLDPWD|SHLVL|TERM|_|TMPDIR|XDG_.*|LANG|LC_.*'
+JOB_ENV_EXCLUDED+='|LD_LIBRARY_PATH|LD_PRELOAD|PYTHONPATH|PYTHONHOME|PYTHONSAFEPATH|VIRTUAL_ENV|CONDA_.*|SPACK_.*'
+JOB_ENV_EXCLUDED+='|CC|CXX|FC|F77|CFLAGS|CXXFLAGS|FFLAGS|LDFLAGS|CPATH|C_INCLUDE_PATH|CPLUS_INCLUDE_PATH|LIBRARY_PATH'
+JOB_ENV_EXCLUDED+='|PKG_CONFIG_PATH|CMAKE_PREFIX_PATH|DACE_compiler_cpu_executable|NUMBA_THREADING_LAYER'
+JOB_ENV_EXCLUDED+='|OPENBLAS_DIR|OPENBLAS_ROOT|OPENMPI_ROOT|HPTT_ROOT|LIBXSMM_ROOT|TBLIS_ROOT|OMP_LLVM_ENV_DIR'
+JOB_ENV_EXCLUDED+='|CUDA_HOME|HIP_PATH|ROCM_PATH|HCC_AMDGPU_TARGET|GPU_ARCHS|GPU_ARCH_LIST|PYTORCH_ROCM_ARCH'
+JOB_ENV_EXCLUDED+='|NVIDIA_DRIVER_CAPABILITIES|NVIDIA_VISIBLE_DEVICES|PAPI_CUDA_ROOT|PAPI_ROCM_ROOT|PAPI_ROCMSMI_ROOT'
+JOB_ENV_EXCLUDED+='|PLAYWRIGHT_BROWSERS_PATH'
 # Paths every runtime must present at the same location inside the container. The shared folder is
 # not one of them: it is mounted at ${SHARED_MOUNT} instead, so both containers spell it alike.
 # Set to override role_mounts entirely; empty means "use the per-role policy", which is the default.
@@ -369,9 +379,9 @@ container_gang_supported() {
 # folder, the role's mounts, its read-only binds and any extra bind source (same path inside). Returns 2 naming what
 # is missing: an unknown runtime, an unnamed EDF or image.
 container_wrap() {
-    local role="$1" ce_env="$2" image="$3" mount bind=""
+    local role="$1" ce_env="$2" image="$3" mount bind="" name
     shift 3
-    local -a gpu_flags=() sources=() volumes=()
+    local -a gpu_flags=() sources=() volumes=() env_names=()
     CONTAINER_SRUN_ARGS=()
     CONTAINER_WRAP=()
     case "${CONTAINER_RUNTIME}" in
@@ -412,15 +422,24 @@ container_wrap() {
     for mount in "${volumes[@]}"; do
         sources+=(--volume "${mount}")
     done
-    [[ -n "${JOB_ENV_FILE:-}" ]] || { echo "container_wrap: ${CONTAINER_RUNTIME} needs JOB_ENV_FILE (job_env_slice)" >&2; return 2; }
-    CONTAINER_WRAP=("${CONTAINER_RUNTIME}" run --rm --network host --env-file "${JOB_ENV_FILE}"
+    for name in $(job_env_names); do
+        env_names+=(--env "${name}")
+    done
+    CONTAINER_WRAP=("${CONTAINER_RUNTIME}" run --rm --network host "${env_names[@]}"
         "${gpu_flags[@]}" "${sources[@]}" "${image}")
 }
 
-# job_env_slice -- the job environment a podman/docker container gets, its only one (they do not inherit the step's):
-# the job's namespaces, the cache roots a role derives its paths from and the interpreter seed.
-job_env_slice() {
-    env | grep -E '^(AGENT|ANTHROPIC|API_FORCE_IDLE_TIMEOUT=|API_TIMEOUT_MS=|CPF_TARGET=|FAST_SCRATCH=|SCRATCH=|SETUP=|CLAUDE|CONTEXT_LENGTH=|EFFORT_LADDER=|GPUS_|HARNESS=|HF_HOME=|HPCAGENT|INFERENCE|JIT_CACHE_ROOT=|JUDGE|KERNELS=|LANGUAGE=|LITELLM|PROBLEMS|PYTHONHASHSEED=|RUN_DIR=|RUN_ROOT=|SCRIPT_DIR=|SERPAPI|SLURM_|VLLM|WEBSEARCH)'
+# job_env_names -- the names a podman/docker step forwards (they do not inherit the step's environment). `--env NAME`
+# takes the value from the srun task that runs the command, so a value set after the job started and a per-task
+# SLURM_PROCID both arrive, no value reaches argv or disk, and an unset name is dropped. The literal names exist in the
+# step but not always in the batch shell, where this runs. Host identity and what the judge images set with ENV stay
+# out: a host module's CC or ROCM_PATH must not replace the image's, because that moves what the judge compiles.
+job_env_names() {
+    {
+        compgen -e
+        printf '%s\n' CLUSTER_ENV_FILE SLURM_CPUS_PER_TASK SLURM_LOCALID SLURM_NODEID SLURM_NTASKS SLURM_PROCID \
+            ROCR_VISIBLE_DEVICES HIP_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES
+    } | grep -Ev "^(${JOB_ENV_EXCLUDED})\$" | sort -u
 }
 
 # judge_store -- prints the judge's store (disk_cache.root(): HPCAGENT_BENCH_CACHE_DISK_RESULTS_DIR, else
@@ -446,16 +465,17 @@ judge_store() {
 # mount yet are added, so the step reads and writes the judge store a run's judge uses. Refuses an EDF with no such
 # mount.
 edf_with_checkout() {
-    local edf="$1" checkout="$2" out="$3" extra="" bind fs
+    local edf="$1" checkout="$2" out="$3" extra="" binds bind fs
     grep -qE "\"[^\"]*:${JUDGE_PACKAGE_MOUNT}\"" "${edf}" || {
         echo "edf_with_checkout: ${edf} mounts nothing at ${JUDGE_PACKAGE_MOUNT} (install_edfs.sh renders one that does)" >&2
         return 2
     }
     # The plugins too (a step importing hpcagent_bench loads them from HPCAGENT_BENCH_PLUGIN_DIRS), and the launch hook
     # that installs their packages.
+    binds="$(plugin_binds && launch_hook_bind "${checkout}")" || return 2
     while IFS= read -r bind; do
         extra+="\\n\\1\"${bind}:ro\","
-    done < <(plugin_binds; launch_hook_bind "${checkout}")
+    done <<<"${binds}"
     for fs in ${HPCAGENT_BENCH_DATA_ROOTS:-}; do
         grep -qF "\"${fs}/:${fs}/\"" "${edf}" || extra+="\\n\\1\"${fs}/:${fs}/\","
     done
