@@ -71,6 +71,7 @@ _ID_PREFIX = {"bug": "POLYCC-", "caveat": "C-"}
 
 def test_registry_ids_are_unique_and_sequential() -> None:
     ids = list(KNOWN_POLYCC_ISSUES)
+    assert ids, "the registry tests below would all pass on an empty registry"
     assert len(ids) == len(set(ids))
     assert ids == [e.id for e in KNOWN_POLYCC_ISSUES.values()], "key must equal the entry's own id"
     seen = dict.fromkeys(_KINDS, 0)
