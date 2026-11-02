@@ -13,6 +13,7 @@ import hashlib
 import importlib
 import pathlib
 import sys
+import threading
 from collections.abc import Iterator, Mapping
 from typing import Annotated, Any, Literal
 
@@ -28,6 +29,7 @@ from hpcagent_bench.vocabulary import FRAMEWORKS, PACKETS, PacketDef, PacketPhas
 __all__ = [
     "ENTRY_POINT_GROUP",
     "NEXT_PHASE",
+    "REGISTER_LOCK",
     "FlavorBlock",
     "PhaseBlock",
     "PhaseCall",
@@ -48,12 +50,15 @@ __all__ = [
     "recorded",
     "register",
     "register_flavors",
+    "register_once",
     "register_packets",
     "roots",
 ]
 
 #: The tool every packet with an agent phase carries: it ends the agent's phase and runs the default ones after it.
 NEXT_PHASE = "next_phase"
+#: Serializes the process's first registration: the judge's handler threads can all reach it at once.
+REGISTER_LOCK = threading.Lock()
 #: Who runs a phase: the agent with the phase's tools, or the plugin's default heuristic.
 Mode = Literal["agent", "default"]
 #: A block id of either prompt (``@@section`` ids of ``agent/prompt.md``, section keys of the task prompt).
@@ -274,12 +279,19 @@ def refuse_composition_loop(key: str, composes: Mapping[str, tuple[str, ...]], c
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def register() -> tuple[Plugin, ...]:
-    """Find every plugin and register its packets, once per process (:func:`hpcagent_bench.study_tags.registry`),
-    after the shipped ones (:mod:`hpcagent_bench.skill_packets`)."""
+def register_once() -> tuple[Plugin, ...]:
+    """Find every plugin and register its packets. Run only under :data:`REGISTER_LOCK`: a cache miss does not
+    serialize its callers, and :data:`PACKETS` refuses a second registration."""
     found = agent_plugins.find(roots())
     register_packets(found)
     return found
+
+
+def register() -> tuple[Plugin, ...]:
+    """Find every plugin and register its packets, once per process whichever thread comes first
+    (:func:`hpcagent_bench.study_tags.registry`), after the shipped ones (:mod:`hpcagent_bench.skill_packets`)."""
+    with REGISTER_LOCK:
+        return register_once()
 
 
 @functools.lru_cache(maxsize=1, typed=True)

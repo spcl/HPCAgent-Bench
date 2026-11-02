@@ -63,6 +63,7 @@ __all__ = [
     "column_defaults",
     "conflicts",
     "connect_ro",
+    "create_schema",
     "copy_grade",
     "copy_one_grade",
     "default_values",
@@ -219,6 +220,21 @@ def lazy_table_sql(table: str) -> str:
     return str(sql).replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
 
 
+def create_schema(conn: sqlite3.Connection, where: str) -> None:
+    """Run ``schema.sql`` as one transaction, so of the judge's handler threads opening a new file together one
+    creates it and the others wait, then find it whole. One statement at a time: ``executescript`` would commit first."""
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if check_schema(conn, where):
+            return
+        statement = ""
+        for line in SCHEMA_PATH.read_text(encoding="utf-8").splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                conn.execute(statement)
+                statement = ""
+
+
 def open_db(path: str | pathlib.Path) -> sqlite3.Connection:
     """Open ``path`` for writing (WAL, busy timeout, foreign keys), creating the schema in a new file and any
     :data:`LAZY_TABLES` an older file lacks."""
@@ -229,7 +245,7 @@ def open_db(path: str | pathlib.Path) -> sqlite3.Connection:
     try:
         conn.execute("PRAGMA journal_mode = WAL")
         if not check_schema(conn, str(target), upgrade=True):
-            conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            create_schema(conn, str(target))
         elif missing := [table for table in LAZY_TABLES if table not in table_names(conn)]:
             with conn:
                 for table in missing:

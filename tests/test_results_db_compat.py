@@ -4,10 +4,12 @@
 holds the 0.2.1 schema plus the tables created on demand (results_db.LAZY_TABLES), which a 0.2.1 merge refuses as
 foreign, and the columns later versions added (results_db.ADDED)."""
 
+import concurrent.futures
 import contextlib
 import pathlib
 import shutil
 import sqlite3
+import threading
 import time
 
 from hpcagent_bench import paths
@@ -91,3 +93,16 @@ if __name__ == "__main__":
         test_a_0_2_1_file_opens_merges_and_extracts(pathlib.Path(scratch))
     with tempfile.TemporaryDirectory() as scratch:
         test_a_file_written_here_takes_the_rows_of_a_0_2_1_file(pathlib.Path(scratch))
+
+
+def test_threads_opening_a_new_file_together_all_find_the_whole_schema(tmp_path: pathlib.Path) -> None:
+    """A judge has no DB until its first requests: each handler that opens it gets a usable connection."""
+    barrier = threading.Barrier(8)
+
+    def first_open(_index: int) -> int:
+        barrier.wait()
+        with contextlib.closing(results_db.open_db(tmp_path / "shard.db")) as conn:
+            return results_db.schema_version(conn)
+
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        assert set(pool.map(first_open, range(8))) == {results_db.SCHEMA_VERSION}
