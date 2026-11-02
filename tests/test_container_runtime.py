@@ -183,25 +183,34 @@ def test_an_unknown_runtime_is_refused_with_the_known_ones_named(tmp_path: pathl
     assert "unknown CONTAINER_RUNTIME 'lxc' (ce|docker|podman|apptainer)" in done.stderr
 
 
-def test_a_job_variable_passes_and_no_judge_image_env_is_replaced_by_the_host() -> None:
-    """A host module's ROCM_PATH or CC would silently change what the judge compiles under podman or docker, so every
-    name a judge image sets with ENV stays out. The job's own HPCAGENT_BENCH_ keys and LANGUAGE pass."""
+#: Host names no role reads, and the one name each role alone reads.
+HOST_ONLY = {"CPPFLAGS", "LDLIBS", "MPICC", "UV_PROJECT_ENVIRONMENT", "PYTHONUSERBASE", "HF_TOKEN"}
+ROLE_ONLY = {"vllm-node": "SGLANG_EXTRA_ARGS", "judge-node": "SERPAPI_API_KEY", "agent-node": "ANTHROPIC_API_KEY"}
+
+
+@pytest.mark.parametrize("role", [*ROLE_ONLY, "prepare"])
+def test_a_step_forwards_what_its_role_reads_and_nothing_of_the_host(role: str) -> None:
+    """A host module's ROCM_PATH or CC would silently change what the judge compiles under podman or docker, so no
+    name a judge image sets with ENV passes, and neither does a host variable or a token no role reads. The job's own
+    HPCAGENT_BENCH_ keys and LANGUAGE pass, and a key one role reads reaches that role alone."""
     image_env: set[str] = set()
     for dockerfile in (REPO / "containers" / "images").glob("judge-agent-*/Dockerfile*"):
         for line in dockerfile.read_text(encoding="utf-8").replace("\\\n", " ").splitlines():
             if line.lstrip().startswith("ENV "):
                 image_env |= set(re.findall(r"(?:^|\s)([A-Za-z_]\w*)=", line.lstrip()[4:]))
     assert "ROCM_PATH" in image_env, "the Dockerfile scan found nothing"
-    job = {"LANGUAGE", "RUN_DIR"} | {name for name in image_env if name.startswith("HPCAGENT_BENCH_")}
+    job = {"LANGUAGE", "RUN_DIR", "SGLANG_EXTRA_ARGS", "SERPAPI_API_KEY", "ANTHROPIC_API_KEY"}
+    job |= {name for name in image_env if name.startswith("HPCAGENT_BENCH_")}
     done = subprocess.run(
-        ["bash", "-c", f". {shlex.quote(str(SEAM))}; job_env_names"],
-        env={name: "x" for name in image_env | job} | {"PATH": "/usr/bin:/bin"},
+        ["bash", "-c", f". {shlex.quote(str(SEAM))}; job_env_names {role}"],
+        env={name: "x" for name in image_env | job | HOST_ONLY} | {"PATH": "/usr/bin:/bin"},
         capture_output=True,
         text=True,
         check=True,
     )
-    assert (set(done.stdout.split()) & image_env) | job == job
-    assert job <= set(done.stdout.split())
+    forwarded = set(done.stdout.split())
+    assert forwarded & (image_env | HOST_ONLY) <= job
+    assert job - set(ROLE_ONLY.values()) | ({ROLE_ONLY[role]} if role in ROLE_ONLY else set()) == forwarded & job
 
 
 TOY_ROW = """

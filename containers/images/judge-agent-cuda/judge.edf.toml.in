@@ -30,8 +30,6 @@ writable = true
 entrypoint = true
 
 [env]
-# uv's wheel cache for the launch venv, on a filesystem every node mounts.
-UV_CACHE_DIR = "${SCRATCH}/.cache/uv"
 LC_ALL = "C"
 PYTHONSAFEPATH = "1"
 LD_LIBRARY_PATH = "/usr/local/cuda/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/${MULTIARCH}"

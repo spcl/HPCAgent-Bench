@@ -35,8 +35,6 @@ writable = true
 entrypoint = true
 
 [env]
-# uv's wheel cache for the launch venv, on a filesystem every node mounts.
-UV_CACHE_DIR = "${SCRATCH}/.cache/uv"
 FI_CXI_RX_MATCH_MODE = "software"
 FI_MR_CACHE_MONITOR = "disabled"
 # FI_PROVIDER is deliberately NOT set: this image also runs MPI, and MPICH inherits it and
