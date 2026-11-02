@@ -170,7 +170,7 @@ each an environment knob:
   that read them bind them from the context. The build args `IMAGE_PYTHON_LOCK` (the source-built groups and their
   build tools) and `HARNESS_LOCK` (the harness venvs and the playwright version) stand for them in the fingerprint and
   the layer cache (`ce_lock_keys`, which needs `uv` on the build host), so a moved wheel that only the launch venv
-  installs rebuilds nothing. A job gates such a pin with `VERIFY_ONLY=1`, not with a rebuild.
+  installs rebuilds nothing; re-verify such a pin with `VERIFY_ONLY=1`.
 
 ## Verification
 
