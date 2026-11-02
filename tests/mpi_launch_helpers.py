@@ -11,7 +11,6 @@ launcher bootstraps -- like the gcc-gated native tests. Every probe is timeout-w
 hanging launcher never wedges the suite.
 """
 
-from hpcagent_bench.categories import Language
 import functools
 import json
 import os
@@ -25,23 +24,7 @@ from typing import Any
 
 import pytest
 
-#: CI sets this to "1" on the job that installs a real MPI, so a launcher that fails to bootstrap
-#: there is a FAILURE (the install broke) rather than a silent SKIP (the environment lacks MPI,
-#: true only on a bare login/dev venv). :func:`skip_or_fail` is the one place this is read.
-REQUIRE_MPI = os.environ.get("HPCAGENT_BENCH_REQUIRE_MPI") == "1"
-
-
-def skip_or_fail(reason: str) -> None:
-    """``pytest.skip(reason)`` normally; ``pytest.fail(reason)`` under HPCAGENT_BENCH_REQUIRE_MPI=1.
-
-    Every gated MPI e2e test calls this instead of ``pytest.skip`` directly, so the CI job that
-    installs OpenMPI/mpi4py cannot regress to "green because everything quietly skipped" -- a
-    missing launcher there fails loudly instead.
-    """
-    if REQUIRE_MPI:
-        pytest.fail(reason)
-    pytest.skip(reason)
-
+from hpcagent_bench.categories import Language
 
 # In some sandboxes/containers hwloc's GPU device plugins (opencl/levelzero/gl) hang during
 # topology discovery, so MPICH's hydra proxy never answers the ranks' PMI hwloc-xml request and
@@ -208,7 +191,7 @@ def run_rank_driver(tmp_path: pathlib.Path, ranks: int, plans: Sequence[Mapping[
     launcher, so ``env=`` reaches every rank without a launcher-specific export flag."""
     launch = mpi4py_launcher()
     if launch is None:
-        skip_or_fail(f"mpi4py has no working launcher in this environment: {mpi4py_launcher_diagnosis()}")
+        pytest.skip(f"mpi4py has no working launcher in this environment: {mpi4py_launcher_diagnosis()}")
     assert launch is not None
     plan_path, out_path = tmp_path / "plan.json", tmp_path / "out.json"
     plan_path.write_text(json.dumps({"draws": list(plans)}))

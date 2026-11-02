@@ -29,7 +29,7 @@ SESSION = "5f1c2e9a-0b7d-4c1e-9a2f-3d6b8e4c7a10"
 #: num_turns of success.jsonl's result event.
 LEG_TURNS = 3
 
-capture = module_at(FIXTURES / "regen.py", "nudge_capture")
+capture = module_at(FIXTURES / "capture.py", "nudge_capture")
 SUCCESS_LOG = (capture.LOGS / "success.jsonl").read_text(encoding="utf-8")
 
 

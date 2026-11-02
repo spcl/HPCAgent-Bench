@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The paper-figure placement check: a figure placed at its drawn width passes, a rescaled one fails."""
 
-import importlib.util
 import pathlib
-import sys
 
 import matplotlib as mpl
 import pytest
@@ -14,13 +12,9 @@ import matplotlib.pyplot as plt
 from matplotlib.transforms import Bbox
 
 from hpcagent_bench import paths
+from tests.fresh_module import module_at
 
-SPEC = importlib.util.spec_from_file_location(
-    "check_paper_figures", paths.ROOT / "statistics" / "check_paper_figures.py"
-)
-check = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = check
-SPEC.loader.exec_module(check)
+check = module_at(paths.ROOT / "statistics" / "check_paper_figures.py", "check_paper_figures")
 
 #: The fake paper's \textwidth and the one figure's drawn width: 0.5\textwidth places it exactly.
 TEXT_WIDTH_IN: float = 6.0
