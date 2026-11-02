@@ -13,7 +13,7 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, name_, range_for, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import constant_difference
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import binop
 from hpcagent_bench.translators.numpyto_common.parallelism import index_exprs
@@ -118,14 +118,7 @@ def outside_walked_range(read: ast.expr, write: ast.expr, loops: Sequence[tuple[
 
 def substituted(expr: ast.expr, var: str, value: ast.expr) -> ast.expr:
     """``expr`` with every read of ``var`` replaced by ``value``."""
-
-    class Substitute(ast.NodeTransformer):
-        __slots__ = ()
-
-        def visit_Name(self, node: ast.Name) -> ast.expr:
-            return copy.deepcopy(value) if node.id == var else node
-
-    return Substitute().visit(copy.deepcopy(expr))
+    return SubstituteLoads({var: value}).visit(copy.deepcopy(expr))
 
 
 def staged_through_temp(

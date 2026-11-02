@@ -13,7 +13,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
     parse_einsum_subscripts,
     tensordot_axes,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import inner_spec, iter_extent_of, tensordot_spec
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     attr_call,
@@ -496,19 +496,8 @@ def expand_tensordot(
         raise NotImplementedError("tensordot: operand shapes unknown")
     axes_node = args[2] if len(args) > 2 else axes_kwarg(kwargs)
     a_ax, b_ax = tensordot_axes(axes_node, ra, rb)
-    letters = "abcdefghijklmnopqrstuvwxyz"
-    a_spec = list(letters[:ra])
-    b_spec = [""] * rb
-    # Shared contraction letters: pair a_ax[i] <-> b_ax[i].
-    nxt = ra
-    for ca, cb in zip(a_ax, b_ax, strict=False):
-        b_spec[cb] = a_spec[ca]
-    for i in range(rb):
-        if not b_spec[i]:
-            b_spec[i] = letters[nxt]
-            nxt += 1
-    out_spec = [c for i, c in enumerate(a_spec) if i not in a_ax] + [c for i, c in enumerate(b_spec) if i not in b_ax]
-    spec = f"{''.join(a_spec)},{''.join(b_spec)}->{''.join(out_spec)}"
+    a_spec, b_spec, out_spec = tensordot_spec(a_ax, b_ax, ra, rb)
+    spec = f"{a_spec},{b_spec}->{out_spec}"
     return prelude + expand_einsum(
         target,
         [const_(spec), a, b],
@@ -533,12 +522,8 @@ def expand_inner(target: ast.Name, args: Sequence[ast.expr], shape_table: dict[s
     rb = len(shape_table.get(b.id, ()))
     if ra == 1 and rb == 1:
         return expand_dot(target, args, shape_table)
-    letters = "abcdefghijklmnopqrstuvwxyz"
-    a_spec = list(letters[:ra])
-    b_spec = list(letters[ra : ra + rb])
-    b_spec[-1] = a_spec[-1]  # contract the last axis of each
-    out_spec = a_spec[:-1] + b_spec[:-1]
-    spec = f"{''.join(a_spec)},{''.join(b_spec)}->{''.join(out_spec)}"
+    a_spec, b_spec, out_spec = inner_spec(ra, rb)
+    spec = f"{a_spec},{b_spec}->{out_spec}"
     return expand_einsum(target, [const_(spec), a, b], shape_table)
 
 

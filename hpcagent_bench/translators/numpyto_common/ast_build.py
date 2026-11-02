@@ -51,6 +51,12 @@ def walk_nodes(node: ast.AST) -> Iterator[ast.AST]:
         yield node
 
 
+def positional_defaults(args: ast.arguments) -> dict[str, ast.expr]:
+    """Each defaulted positional parameter with its default; ``ast.arguments`` aligns defaults to the last params."""
+    names = [a.arg for a in args.args]
+    return dict(zip(names[len(names) - len(args.defaults) :], args.defaults, strict=True))
+
+
 def name_(name: str) -> ast.Name:
     """Build a load of ``name``."""
     return ast.Name(id=name, ctx=ast.Load())

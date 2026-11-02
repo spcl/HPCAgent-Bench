@@ -94,7 +94,11 @@ __all__ = [
     "provably_integer",
     "reduction_extent",
     "reshape_call_extent",
+    "reduced_shape",
+    "inner_spec",
     "reshape_target",
+    "tensordot_spec",
+    "reshape_tokens",
     "resolve_negative",
     "scan_extent",
     "second_operand_extent",
@@ -181,12 +185,8 @@ def contraction_result_extent(expr: ast.Call, shape_table: ShapeTable) -> tuple[
         if not shape_a or not shape_b:
             return None
         ra, rb = len(shape_a), len(shape_b)
-        letters = "abcdefghijklmnopqrstuvwxyz"
         if attr == "inner":
-            a_spec, b_spec = list(letters[:ra]), list(letters[ra : ra + rb])
-            b_spec[-1] = a_spec[-1]
-            inputs = ["".join(a_spec), "".join(b_spec)]
-            output = "".join(a_spec[:-1] + b_spec[:-1])
+            spec_a, spec_b, output = inner_spec(ra, rb)
         else:  # tensordot default axes=2
             kwargs = expr.keywords
             axes_node = expr.args[2] if len(expr.args) > 2 else axes_kwarg(kwargs)
@@ -194,19 +194,8 @@ def contraction_result_extent(expr: ast.Call, shape_table: ShapeTable) -> tuple[
                 a_ax, b_ax = tensordot_axes(axes_node, ra, rb)
             except NotImplementedError:
                 return None  # sizer contract: an unresolved extent is None, never an exception
-            a_spec = list(letters[:ra])
-            b_spec = [""] * rb
-            nxt = ra
-            for ca, cb in zip(a_ax, b_ax, strict=False):
-                b_spec[cb] = a_spec[ca]
-            for i in range(rb):
-                if not b_spec[i]:
-                    b_spec[i] = letters[nxt]
-                    nxt += 1
-            inputs = ["".join(a_spec), "".join(b_spec)]
-            output = "".join(
-                [c for i, c in enumerate(a_spec) if i not in a_ax] + [c for i, c in enumerate(b_spec) if i not in b_ax]
-            )
+            spec_a, spec_b, output = tensordot_spec(a_ax, b_ax, ra, rb)
+        inputs = [spec_a, spec_b]
         operand_nodes = [a, b]
     letter_extent: dict[str, str] = {}
     for spec, node in zip(inputs, operand_nodes, strict=False):
@@ -440,6 +429,12 @@ def reshape_target(elts: list[ast.expr], source: ast.expr, shape_table: ShapeTab
     return tuple(elts)
 
 
+def reshape_tokens(elts: Sequence[ast.expr], source: ast.expr, shape_table: ShapeTable) -> tuple[str, ...]:
+    """:func:`reshape_target` as shape tokens. A ``-1`` it cannot resolve stays as written."""
+    resolved = reshape_target(list(elts), source, shape_table)
+    return tuple(ast.unparse(e) for e in (elts if resolved is None else resolved))
+
+
 def method_reshape_extent(expr: ast.Call, shape_table: ShapeTable) -> Extent | None:
     """Method-form ``<expr>.reshape(...)``: the receiver is the operand, not ``np``. Left unsized, a
     reshape target like ``X = (Yf @ C).reshape(shp)`` poisons every derived shape."""
@@ -451,6 +446,38 @@ def method_reshape_extent(expr: ast.Call, shape_table: ShapeTable) -> Extent | N
     else:
         elts = list(expr.args)  # varargs ``.reshape(a, b, c)``
     return reshape_target(elts, callee_attribute(expr).value, shape_table)
+
+
+def reduced_shape[T](shape: Sequence[T], axes: Sequence[int], keepdims: bool, unit: T) -> tuple[T, ...]:
+    """``shape`` after reducing over ``axes``: removed, or ``unit`` under keepdims. Axes count from the end when
+    negative; refusing an impossible axis is the expander's business."""
+    reduced = {a + len(shape) if a < 0 else a for a in axes}
+    if keepdims:
+        return tuple(unit if i in reduced else dim for i, dim in enumerate(shape))
+    return tuple(dim for i, dim in enumerate(shape) if i not in reduced)
+
+
+#: The einsum subscript alphabet the tensordot and inner spellings draw from.
+EINSUM_LETTERS = "abcdefghijklmnopqrstuvwxyz"
+
+
+def inner_spec(rank_a: int, rank_b: int) -> tuple[str, str, str]:
+    """``(a, b, output)`` einsum subscripts of ``np.inner``: the last axis of each operand contracts."""
+    a_spec = EINSUM_LETTERS[:rank_a]
+    b_spec = EINSUM_LETTERS[rank_a : rank_a + rank_b - 1] + a_spec[-1]
+    return a_spec, b_spec, a_spec[:-1] + b_spec[:-1]
+
+
+def tensordot_spec(a_axes: Sequence[int], b_axes: Sequence[int], rank_a: int, rank_b: int) -> tuple[str, str, str]:
+    """``(a, b, output)`` einsum subscripts of ``np.tensordot``: ``a_axes[i]`` contracts with ``b_axes[i]``."""
+    a_spec = list(EINSUM_LETTERS[:rank_a])
+    b_spec = [""] * rank_b
+    for ca, cb in zip(a_axes, b_axes, strict=False):
+        b_spec[cb] = a_spec[ca]
+    free = iter(EINSUM_LETTERS[rank_a:])
+    b_spec = [letter or next(free) for letter in b_spec]
+    kept_a = [c for i, c in enumerate(a_spec) if i not in a_axes]
+    return "".join(a_spec), "".join(b_spec), "".join(kept_a + [c for i, c in enumerate(b_spec) if i not in b_axes])
 
 
 def reduction_extent(expr: ast.Call, shape_table: ShapeTable, *, method_form: bool) -> Extent | None:
@@ -469,11 +496,7 @@ def reduction_extent(expr: ast.Call, shape_table: ShapeTable, *, method_form: bo
     base = iter_extent_of(red_args[0], shape_table)
     if base is None:
         return None
-    n = len(base)
-    norm = {a % n for a in axes}
-    if keepdims:
-        return tuple(const_(1) if i in norm else base[i] for i in range(n))
-    return tuple(base[i] for i in range(n) if i not in norm) or None
+    return reduced_shape(base, axes, keepdims, const_(1)) or None
 
 
 def method_extent(method: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:

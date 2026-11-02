@@ -4,7 +4,11 @@ import ast
 import copy
 from collections.abc import Callable
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, map_statement_lists, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    const_int,
+    map_statement_lists,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import FoldTupleLocals
@@ -504,10 +508,7 @@ def fold_dtype_aliases(fn: ast.FunctionDef) -> None:
     bound exactly once, to a bare ``.dtype`` read, is folded; a rebound one keeps its binding and
     the refusal that comes with it.
     """
-    stores: dict[str, int] = {}
-    for node in walk_nodes(fn):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            stores[node.id] = stores.get(node.id, 0) + 1
+    stores = binding_counts(fn)
 
     def bind_of(stmt: ast.stmt) -> tuple[str, ast.Attribute] | None:
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
@@ -534,6 +535,15 @@ def fold_dtype_aliases(fn: ast.FunctionDef) -> None:
     ast.fix_missing_locations(fn)
 
 
+def binding_counts(fn: ast.FunctionDef) -> dict[str, int]:
+    """How many times each name is stored or deleted in ``fn``, whatever the binding form."""
+    counts: dict[str, int] = {}
+    for node in walk_nodes(fn):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            counts[node.id] = counts.get(node.id, 0) + 1
+    return counts
+
+
 def resolve_shape_reads(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> list[str]:
     """Rewrite every ``x.shape[k]`` in ``fn`` to the extent the manifest already declares for it.
 
@@ -557,11 +567,7 @@ def resolve_shape_reads(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> li
     # Store context, not "an Assign whose target is a Name": the CheFSI swap
     # ``X, Y, sigma = Y, Ynew, sigma_new`` rebinds all three through a TUPLE target, and counting
     # only Name targets reported every one of them as bound exactly once.
-    binds: dict[str, int] = {}
-    for stmt in walk_nodes(fn):
-        if isinstance(stmt, ast.Name) and isinstance(stmt.ctx, (ast.Store, ast.Del)):
-            binds[stmt.id] = binds.get(stmt.id, 0) + 1
-    rebound = frozenset(n for n, c in binds.items() if c > 1)
+    rebound = frozenset(n for n, c in binding_counts(fn).items() if c > 1)
     tuple_locals = frozenset(n for n, v in name_value_pairs(fn) if isinstance(v, (ast.Tuple, ast.List)))
 
     class Rewriter(ast.NodeTransformer):
@@ -720,10 +726,7 @@ def fold_extent_locals(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> Non
         return
     # Store context, not "a name somewhere in a target": ``row[i % nb0] += w`` writes ``row`` and
     # only READS ``nb0``, so counting the whole target subtree makes an index look rebound.
-    bound: dict[str, int] = {}
-    for node in walk_nodes(fn):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            bound[node.id] = bound.get(node.id, 0) + 1
+    bound = binding_counts(fn)
     params = {a.arg for a in fn.args.args}
     defs: dict[str, ast.expr] = {}
     for node in walk_nodes(fn):

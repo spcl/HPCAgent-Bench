@@ -263,11 +263,14 @@ def is_special_axis(elt: ast.expr) -> bool:
 
 
 def is_scalar_axis(elt: ast.expr) -> bool:
-    """A subscript entry that consumes ONE source axis as a scalar index -- an
-    int Constant or a bare Name (loop iter / symbol), never a Slice, Ellipsis or
-    newaxis."""
+    """A subscript entry that consumes ONE source axis as a scalar index -- an int Constant, a bare Name (loop iter
+    / symbol) or integer ARITHMETIC over those (``hn[2 * l][:]``), never a Slice, Ellipsis or newaxis."""
     if isinstance(elt, ast.Constant):
         return elt.value is not Ellipsis and elt.value is not None
+    if isinstance(elt, ast.BinOp):
+        return is_scalar_axis(elt.left) and is_scalar_axis(elt.right)
+    if isinstance(elt, ast.UnaryOp):
+        return is_scalar_axis(elt.operand)
     return isinstance(elt, ast.Name)
 
 

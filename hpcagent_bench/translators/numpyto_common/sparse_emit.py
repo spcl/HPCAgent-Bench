@@ -65,7 +65,6 @@ __all__ = [
     "sub_",
     "subscript_",
     "zero_fill",
-    "zero_init_loop",
 ]
 
 
@@ -93,13 +92,13 @@ def mul(a: ast.expr, b: ast.expr) -> ast.BinOp:
     return ast.BinOp(left=a, op=ast.Mult(), right=b)
 
 
-def zero_init_loop(target_id: str, iter_var: str, n_sym: str) -> ast.For:
-    return ast.For(
-        target=store_(iter_var),
-        iter=range_call(None, name_(n_sym)),
-        body=[ast.Assign(targets=[subscript_(target_id, name_(iter_var), ctx=ast.Store())], value=const_(0.0))],
-        orelse=[],
-    )
+def zero_fill(target_id: str, rows: str, cols: str | None = None, *, row: str = "__zi", col: str = "__zc") -> ast.For:
+    """``target[...] = 0`` over a 1-D (``cols`` None) or 2-D extent, walking ``row`` and ``col``."""
+    if cols is None:
+        cell = ast.Assign(targets=[subscript_(target_id, name_(row), ctx=ast.Store())], value=const_(0.0))
+        return range_for(row, [expr_of(rows)], [cell])
+    cell = ast.Assign(targets=[subscript_(target_id, name_(row), name_(col), ctx=ast.Store())], value=const_(0.0))
+    return range_for(row, [expr_of(rows)], [range_for(col, [expr_of(cols)], [cell])])
 
 
 def expand_matmul_csr_csr_dense(
@@ -136,18 +135,7 @@ def expand_matmul_csr_csr_dense(
     b_indices = rhs_buffers["indices"]
     b_data = rhs_buffers["data"]
 
-    # Zero-init the dense temp: for i: for k: M[i, k] = 0.0
-    zero_inner = ast.For(
-        target=store_("__zk"),
-        iter=range_call(None, name_(n_cols_sym)),
-        body=[
-            ast.Assign(
-                targets=[subscript_(target_id, name_("__zi"), name_("__zk"), ctx=ast.Store())], value=const_(0.0)
-            )
-        ],
-        orelse=[],
-    )
-    zero_loop = ast.For(target=store_("__zi"), iter=range_call(None, name_(n_rows_sym)), body=[zero_inner], orelse=[])
+    zero_loop = zero_fill(target_id, n_rows_sym, n_cols_sym, col="__zk")
 
     # M[i, k] += v * B_data[kk]
     accum = ast.AugAssign(
@@ -203,18 +191,7 @@ def expand_matmul_csr_dense_mat(
     a_indptr = lhs_buffers["indptr"]
     a_indices = lhs_buffers["indices"]
     a_data = lhs_buffers["data"]
-    # zero-init
-    zero_inner = ast.For(
-        target=store_("__zc"),
-        iter=range_call(None, name_(n_cols_sym)),
-        body=[
-            ast.Assign(
-                targets=[subscript_(target_id, name_("__zi"), name_("__zc"), ctx=ast.Store())], value=const_(0.0)
-            )
-        ],
-        orelse=[],
-    )
-    zero_loop = ast.For(target=store_("__zi"), iter=range_call(None, name_(n_rows_sym)), body=[zero_inner], orelse=[])
+    zero_loop = zero_fill(target_id, n_rows_sym, n_cols_sym)
     accum = ast.AugAssign(
         target=subscript_(target_id, name_("__i"), name_("__c"), ctx=ast.Store()),
         op=ast.Add(),
@@ -313,13 +290,7 @@ def expand_matmul_jds_dense_vec(
     # fresh local via the lowering's zeros_locals machinery (lowering/shape_reads.py).
     y_perm = "__jds_y_perm"
 
-    # y_perm[i] = 0 for all i.
-    init_loop = ast.For(
-        target=store_("__i"),
-        iter=range_call(None, name_(n_rows_sym)),
-        body=[ast.Assign(targets=[subscript_(y_perm, name_("__i"), ctx=ast.Store())], value=const_(0.0))],
-        orelse=[],
-    )
+    init_loop = zero_fill(y_perm, n_rows_sym, row="__i")
 
     # jd_len = A_jd_ptr[jd + 1] - A_jd_ptr[jd]
     jd_next = subscript_(jd_ptr, ast.BinOp(left=name_("__jd"), op=ast.Add(), right=const_(1)))
@@ -470,7 +441,7 @@ def expand_matmul_csc_dense_vec(
     indptr = lhs_buffers["indptr"]
     indices = lhs_buffers["indices"]
     data = lhs_buffers["data"]
-    init_loop = zero_init_loop(target.id, "__i", n_rows_sym)
+    init_loop = zero_fill(target.id, n_rows_sym, row="__i")
     scatter_target = subscript_(target.id, subscript_(indices, name_("__k")), ctx=ast.Store())
     inner_body: list[ast.stmt] = [
         ast.AugAssign(
@@ -512,7 +483,7 @@ def expand_matmul_coo_dense_vec(
     row = lhs_buffers["row"]
     col = lhs_buffers["col"]
     data = lhs_buffers["data"]
-    init_loop = zero_init_loop(target.id, "__i", n_rows_sym)
+    init_loop = zero_fill(target.id, n_rows_sym, row="__i")
     scatter_target = subscript_(target.id, subscript_(row, name_("__k")), ctx=ast.Store())
     nnz_body: list[ast.stmt] = [
         ast.AugAssign(
@@ -598,7 +569,7 @@ def dia_spmv(
     data = lhs_buffers["data"]
     offsets = lhs_buffers["offsets"]
     out_index, x_index = ("__j", "__i") if transposed else ("__i", "__j")
-    init_loop = zero_init_loop(target.id, out_index, n_cols_sym if transposed else n_rows_sym)
+    init_loop = zero_fill(target.id, n_cols_sym if transposed else n_rows_sym, row=out_index)
     accum = ast.AugAssign(
         target=subscript_(target.id, name_(out_index), ctx=ast.Store()),
         op=ast.Add(),
@@ -706,7 +677,7 @@ def bcsr_spmv(
     indptr = lhs_buffers["indptr"]
     indices = lhs_buffers["indices"]
     data = lhs_buffers["data"]
-    init_loop = zero_init_loop(target.id, "__i", n_out_sym)
+    init_loop = zero_fill(target.id, n_out_sym, row="__i")
     block_row = add(mul(name_("__bi"), name_(block_r_sym)), name_("__r"))
     block_col = add(mul(name_("__bj"), name_(block_c_sym)), name_("__c"))
     out_index, x_index = (block_col, block_row) if transposed else (block_row, block_col)
@@ -766,7 +737,7 @@ def expand_matmul_bcoo_dense_vec(
     row = lhs_buffers["row"]
     col = lhs_buffers["col"]
     data = lhs_buffers["data"]
-    init_loop = zero_init_loop(target.id, "__i", n_rows_sym)
+    init_loop = zero_fill(target.id, n_rows_sym, row="__i")
     out_row = add(mul(name_("__bi"), name_(block_r_sym)), name_("__r"))
     x_col = add(mul(name_("__bj"), name_(block_c_sym)), name_("__c"))
     accum = ast.AugAssign(
@@ -1160,18 +1131,6 @@ def entry_loops(fmt: str, bufs: dict[str, str], ext: EntryExtents, inner: list[a
     if fmt not in ENTRY_WALKERS:
         raise NotImplementedError(f"no stored-entry walk for sparse format {fmt!r}")
     return ENTRY_WALKERS[fmt](bufs, ext, inner)
-
-
-def zero_fill(target_id: str, rows: str, cols: str | None = None) -> ast.For:
-    """``target[...] = 0`` over a 1-D (``cols`` None) or 2-D extent."""
-    if cols is None:
-        return range_for(
-            "__zi",
-            [expr_of(rows)],
-            [ast.Assign(targets=[subscript_(target_id, name_("__zi"), ctx=ast.Store())], value=const_(0.0))],
-        )
-    cell = ast.Assign(targets=[subscript_(target_id, name_("__zi"), name_("__zc"), ctx=ast.Store())], value=const_(0.0))
-    return range_for("__zi", [expr_of(rows)], [range_for("__zc", [expr_of(cols)], [cell])])
 
 
 def entry_matvec(target_id: str, fmt: str, bufs: dict[str, str], ext: EntryExtents, rhs_name: str) -> list[ast.stmt]:

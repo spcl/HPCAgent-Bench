@@ -20,6 +20,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
+    slice_axes,
     slice_step_any,
     wrap_for_loops,
 )
@@ -29,7 +30,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.complex import (
     dtype_carrying_operands,
     scalar_expr_complex,
 )
-from hpcagent_bench.translators.numpyto_common.lowering.indexing import slice_dims
 from hpcagent_bench.translators.numpyto_common.lowering.overlap import (
     OVERLAP_TEMP_PREFIX,
     reads_a_stored_cell,
@@ -1147,7 +1147,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         True when there is one and every one matches the target."""
         has_array = False
         for sub in walk_nodes(expr):
-            if not (isinstance(sub, ast.Subscript) and any(isinstance(e, ast.Slice) for e in slice_dims(sub))):
+            if not (isinstance(sub, ast.Subscript) and any(isinstance(e, ast.Slice) for e in slice_axes(sub))):
                 continue
             extent = iter_extent_of(sub, self.shape_table)
             if extent is None:

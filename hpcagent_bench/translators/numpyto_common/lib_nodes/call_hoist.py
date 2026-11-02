@@ -19,12 +19,14 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import ara
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     INT_PRESERVING_ELEMENTWISE,
     all_integer_operands,
-    broadcast_extents,
+    broadcast_children,
     concat_operands_axis,
     iter_extent_of,
+    reduced_shape,
+    reshape_tokens,
     sum_width_tokens,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import attr_call, reads_complex
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import attr_call, mul_exts, reads_complex
 from hpcagent_bench.translators.numpyto_common.lib_nodes.matmul_hoist import MatmulHoister
 from hpcagent_bench.translators.numpyto_common.lib_nodes.registry import ELEMENTWISE_SHAPE_OPS, NP_CALL_EXPANDERS
 from hpcagent_bench.translators.numpyto_common.lib_nodes.repeat import diff_operand
@@ -180,22 +182,13 @@ def reshape_name_shape(
     / prod(other dims) -- lets ``a.ravel() @ a.ravel()`` (lowered to reshape) hoist out of the matmul."""
     if len(args) < 2 or not isinstance(args[0], ast.Name):
         return UNHANDLED
-    src = hoister.shape_table.get(args[0].id)
+    if args[0].id not in hoister.shape_table:
+        return UNHANDLED
     sh = args[1]
     elts = sh.elts if isinstance(sh, (ast.Tuple, ast.List)) else [sh]
-    toks = [ast.unparse(e) for e in elts]
-    if src is None:
-        return UNHANDLED
-    prod_src = "(" + ") * (".join(str(s) for s in src) + ")"
-    if any(str(t).strip() == "-1" for t in toks):
-        others = [t for t in toks if str(t).strip() != "-1"]
-        if others:
-            denom = "(" + ") * (".join(str(t) for t in others) + ")"
-            neg = f"({prod_src}) / ({denom})"
-        else:
-            neg = f"({prod_src})"
-        toks = [neg if str(t).strip() == "-1" else str(t) for t in toks]
-    return tuple(str(t) for t in toks)
+    if len(elts) == 1 and const_int(elts[0]) == -1:  # a ravel: the element count, with nothing to divide by
+        return (ast.unparse(mul_exts(iter_extent_of(args[0], hoister.shape_table) or ())),)
+    return reshape_tokens(elts, args[0], hoister.shape_table)
 
 
 def concatenate_shape(
@@ -220,12 +213,7 @@ def elementwise_shape(
 ) -> RuleResult:
     """Elementwise ops: the broadcast of ALL operand extents, not the first operand's -- the temp for
     ``np.maximum(a(M,), B(N, M))`` is ``(N, M)``, matching the expander's own broadcast iteration."""
-    acc: tuple[ast.expr, ...] | None = None
-    for arg in args:
-        ext = iter_extent_of(arg, hoister.shape_table)
-        if ext is None:
-            continue
-        acc = ext if acc is None else broadcast_extents(acc, ext)
+    acc = broadcast_children(args, hoister.shape_table)
     return UNHANDLED if acc is None else tuple(ast.unparse(e) for e in acc)
 
 
@@ -309,17 +297,7 @@ def reduction_shape(
     kw_axes, kw_keep = hoister._cur_axis, hoister._cur_keepdims
     if kw_axes is None:
         return None  # scalar -- not array-shape
-    if isinstance(kw_axes, int):
-        kw_axes = [kw_axes]
-    resolved = []
-    for a in kw_axes:
-        na = a + len(src_shape) if a < 0 else a
-        if 0 <= na < len(src_shape):
-            resolved.append(na)
-    axes_set = set(resolved)
-    if kw_keep:
-        return tuple("1" if i in axes_set else s for i, s in enumerate(src_shape))
-    return tuple(s for i, s in enumerate(src_shape) if i not in axes_set)
+    return reduced_shape(src_shape, [kw_axes] if isinstance(kw_axes, int) else kw_axes, kw_keep, "1")
 
 
 def reshape_tuple_shape(
@@ -330,23 +308,7 @@ def reshape_tuple_shape(
     division in C/Fortran)."""
     if len(args) < 2 or not isinstance(args[1], ast.Tuple):
         return UNHANDLED
-    parts = []
-    for e in args[1].elts:
-        if const_int(e) is not None:
-            parts.append(str(const_int(e)))
-        elif isinstance(e, ast.Name):
-            parts.append(e.id)
-        else:
-            parts.append(ast.unparse(e))
-    neg1 = [i for i, p in enumerate(parts) if p.strip() == "-1"]
-    src = args[0]
-    src_shape = hoister.shape_table.get(src.id) if isinstance(src, ast.Name) else None
-    if len(neg1) == 1 and src_shape:
-        total = " * ".join(f"({t})" for t in src_shape)
-        others = [p for j, p in enumerate(parts) if j != neg1[0]]
-        denom = " * ".join(f"({p})" for p in others) if others else "1"
-        parts[neg1[0]] = f"({total}) / ({denom})"
-    return tuple(parts)
+    return reshape_tokens(args[1].elts, args[0], hoister.shape_table)
 
 
 def outer_shape(

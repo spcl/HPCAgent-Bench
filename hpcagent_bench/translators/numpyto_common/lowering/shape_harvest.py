@@ -4,7 +4,7 @@ import ast
 from collections.abc import Sequence
 from types import NotImplementedType
 
-from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.frontend import collect_inlined_scalar_defs, dtype_from_constructor
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import (
@@ -71,15 +71,8 @@ def branch_pin_(stmt: ast.stmt) -> tuple[dict[str, int], bool]:
 def substitute_ints(token: str, values: dict[str, int]) -> str:
     """``token`` with each named scalar replaced by its assumed integer value."""
 
-    class Substitute(ast.NodeTransformer):
-        __slots__ = ()
-
-        def visit_Name(self, node: ast.Name) -> ast.AST:
-            if node.id not in values:
-                return node
-            return ast.copy_location(ast.Constant(value=values[node.id]), node)
-
-    return ast.unparse(ast.fix_missing_locations(Substitute().visit(ast.parse(token, mode="eval").body)))
+    constants = {name: ast.Constant(value=value) for name, value in values.items()}
+    return ast.unparse(ast.fix_missing_locations(SubstituteLoads(constants).visit(ast.parse(token, mode="eval").body)))
 
 
 def shapes_agree_under(

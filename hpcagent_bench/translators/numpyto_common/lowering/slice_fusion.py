@@ -10,6 +10,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_ext
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
+    slice_axes,
     slice_step_any,
     step_is_negative,
     step_node,
@@ -20,7 +21,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     has_any_slice,
     iter_var_name,
     name_of_subscript,
-    slice_dims,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.overlap import (
     OVERLAP_TEMP_PREFIX,
@@ -170,7 +170,7 @@ class SliceFusion(ast.NodeTransformer):
         lhs_name = name_of_subscript(target)
         if lhs_name is None:
             return None
-        lhs_dims = slice_dims(target)
+        lhs_dims = slice_axes(target)
         # Compute the per-axis iteration range = LHS slice bounds.
         # Negative-index slice bounds ``A[1:-1]`` (or any int < 0) are
         # numpy-style ``axis_length + K``; resolve here so downstream
@@ -247,7 +247,8 @@ class SliceFusion(ast.NodeTransformer):
     def resolve_bound(
         self, bound: ast.expr | None, array_name: str, axis: int, default: ast.expr | Callable[[], ast.expr]
     ) -> ast.expr:
-        """Resolve a slice bound, expanding numpy's negative-index form.
+        """Resolve a slice bound or scalar index, expanding numpy's negative-index form: C has no
+        wrap-around, so a literal ``y[:, -1]`` would index out of bounds.
 
         A bound of ``None`` -> ``default`` (typically 0 for start,
         axis length for stop). A bound of ``-K`` (integer constant or
@@ -294,21 +295,10 @@ class SliceFusion(ast.NodeTransformer):
                     else binop(slice_start, ast.Add(), scaled)
                 )
             else:
-                idx_nodes.append(self.resolve_scalar_index(d, name, axis))
+                idx_nodes.append(self.resolve_bound(d, name, axis, default=d))
         if len(idx_nodes) == 1:
             return idx_nodes[0]
         return ast.Tuple(elts=idx_nodes, ctx=ast.Load())
-
-    def resolve_scalar_index(self, idx: ast.expr, name: str, axis: int) -> ast.expr:
-        """A negative constant scalar index ``-K`` (e.g. ``y[:, -1]``)
-        wraps to ``axis_length - K`` -- numpy semantics. C has no
-        wrap-around, so leaving it literal indexes ``arr[... + (-1)]``
-        out of bounds (the deriche heap corruption). Other indices pass
-        through unchanged so ``N - 1`` etc. survive."""
-        k = negative_literal_offset(idx)
-        if k is not None:
-            return binop(self.axis_length(name, axis), ast.Sub(), const_(k))
-        return idx
 
 
 #: Prefix of the temps :class:`HoistInvariantSelfReads` stages ahead of a fused loop nest.

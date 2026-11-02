@@ -7,11 +7,10 @@ from collections.abc import Mapping, Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import set_field, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import is_scalar_axis, slice_axes
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     compose_kept_axis,
-    is_scalar_index,
     rebases_onto_view_axis,
-    slice_dims,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, negative_literal_offset
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
@@ -88,7 +87,7 @@ def index_rank(elt: ast.expr, shape_table: Mapping[str, Sequence[str]]) -> int |
     if extent:
         return len(extent)
     if isinstance(elt, ast.Subscript) and isinstance(elt.value, ast.Name):
-        dims = slice_dims(elt)
+        dims = slice_axes(elt)
         if len(dims) == len(shape_table.get(elt.value.id) or ()) and all(
             not isinstance(d, ast.Slice)
             and not is_newaxis(d)
@@ -120,7 +119,7 @@ def compose_onto_view(view: ast.Slice, use: ast.expr, use_is_array: bool) -> ast
     from_end = (isinstance(use, ast.UnaryOp) and isinstance(use.op, ast.USub)) or (
         isinstance(use, ast.Constant) and isinstance(use.value, int) and use.value < 0
     )
-    if view.step is not None or from_end or not (use_is_array or is_scalar_index(use)):
+    if view.step is not None or from_end or not (use_is_array or is_scalar_axis(use)):
         return None  # a stride, or a position counted from the view's END, is not ``lower + use``
     return use if view.lower is None else ast.BinOp(left=copy.deepcopy(view.lower), op=ast.Add(), right=use)
 
@@ -244,7 +243,7 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         inner_elts = self.inner_entries(inner, rank)
         if inner_elts is None:
             return None
-        outer_elts = slice_dims(node)
+        outer_elts = slice_axes(node)
         inner_ranks = self.entry_ranks(inner_elts)
         outer_ranks = self.entry_ranks(outer_elts)
         if inner_ranks is None or outer_ranks is None:
@@ -332,7 +331,7 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         """The inner subscript's entries with a single Ellipsis expanded to full slices (and, under
         ``explicit_trailing_axes``, the base's trailing axes spelled out); None when an Ellipsis or
         newaxis leaves the axis count unknowable or the entries exceed the base rank."""
-        inner_elts = slice_dims(inner)
+        inner_elts = slice_axes(inner)
         ellipses = [pos for pos, elt in enumerate(inner_elts) if is_ellipsis(elt)]
         if ellipses:
             if len(ellipses) > 1 or rank is None or rank < len(inner_elts) - 1:
