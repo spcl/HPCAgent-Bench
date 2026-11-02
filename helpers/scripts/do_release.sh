@@ -62,7 +62,7 @@ esac
   exit 1
 }
 
-VERSION=$("${PY}" -c "import tomllib; print(tomllib.load(open('${REPO_ROOT}/pyproject.toml', 'rb'))['project']['version'])")
+VERSION=$("${PY}" -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' "${REPO_ROOT}/pyproject.toml")
 echo "=== hpcagent-bench ${VERSION} (HEAD $(git -C "${REPO_ROOT}" rev-parse --short HEAD)) ==="
 
 if [ -n "${UPLOAD}" ] && [ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=no)" ]; then
@@ -81,6 +81,8 @@ git -C "${REPO_ROOT}" archive --format=tar HEAD | tar -x -C "${WORK}/src"
 
 echo "=== build sdists + wheels -> ${OUTDIR} ==="
 mkdir -p "${OUTDIR}"
+OUTDIR="$(CDPATH= cd -- "${OUTDIR}" && pwd -P)"
+# Keep every later wheel reference valid inside the temporary smoke project and after `cd`.
 rm -f "${OUTDIR}"/hpcagent_bench-* "${OUTDIR}"/hpcagent_agent-*
 for project in "${WORK}/src" "${WORK}/src/agent"; do
   uv build --python "${PY}" --out-dir "${OUTDIR}" "${project}" > "${WORK}/build.log" 2>&1 || {
