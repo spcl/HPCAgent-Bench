@@ -83,7 +83,7 @@ def indices(values: npt.ArrayLike) -> npt.NDArray[np.int64]:
     return np.ascontiguousarray(values, dtype=np.dtype(INDEX_DTYPE))
 
 
-def canonical_csr(matrix: object) -> sp.csr_matrix:
+def canonical_csr(matrix: sp.spmatrix | sp.sparray) -> sp.csr_matrix:
     """``matrix`` as the canonical CSR every layout is converted from: duplicates summed, column
     indices ascending within each row, int64 index arrays. A matrix already in that form is returned
     as is, so its pattern arrays keep their identity (:func:`converted` keys on it)."""
@@ -187,7 +187,7 @@ def record(
 def source_matrix(logical: str, data: Mapping[str, object]) -> sp.csr_matrix | None:
     """The matrix the initializer produced for ``logical``, canonical; ``None`` when absent."""
     matrix = data.get(logical)
-    return canonical_csr(matrix) if sp.issparse(matrix) else None
+    return canonical_csr(matrix) if isinstance(matrix, (sp.spmatrix, sp.sparray)) else None
 
 
 def expand_default(layouts: Mapping[str, "SparseLayout"], data: dict[str, object]) -> list[str]:
