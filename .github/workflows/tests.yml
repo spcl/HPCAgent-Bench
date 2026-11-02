@@ -20,7 +20,7 @@ name: CI
 # c/cpp/fortran fp32 on `native`, c/cpp/fortran fp64 on integration[1]. Its runs use --dist loadgroup because a stem's backends share one
 # per-process build.
 #
-# --timeout-method=thread on sweeps that fork: SIGALRM never lands in a process blocked on a child.
+# --timeout-method=thread on sweeps that fork: the signal method cannot leave a with-block whose child is wedged, or a C call.
 #
 # Runners are pinned to ubuntu-24.04, not ubuntu-latest: the setup steps rely on 24.04 specifics (the
 # AppArmor userns restriction seal.py works around, apt package names, mmap_rnd_bits). Move the pin
