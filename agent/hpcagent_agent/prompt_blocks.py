@@ -179,12 +179,13 @@ def apply(prompt: Prompt, overlay: Overlay, *, check_slots: bool = True) -> Prom
         edit = edits.get(block.id)
         if edit is not None:
             text = block.text if edit.text is None else normalized(edit.text)
+            merged = tuple(sorted({**dict(block.vars), **dict(edit.vars)}.items()))
             if check_slots:
-                refuse_unknown_slots(where, block.id, text, edit.vars)
+                refuse_unknown_slots(where, block.id, text, merged)
             block = Block(
                 id=block.id,
                 text=text,
-                vars=tuple(sorted({**dict(block.vars), **dict(edit.vars)}.items())),
+                vars=merged,
                 enabled=block.enabled if edit.enabled is None else edit.enabled,
             )
         blocks.append(block)
