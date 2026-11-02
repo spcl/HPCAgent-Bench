@@ -22,6 +22,7 @@ from hpcagent_agent.driver.promote_unsubmitted import AGENT_FOLDERS_LOG
 from hpcagent_bench.harness import results_db
 from tests import results_seed
 from tests.fresh_module import fresh
+from tests.sqlite_closing import connect
 
 
 def load_example_module(name: str) -> ModuleType:
@@ -446,11 +447,9 @@ def test_a_shard_with_a_wrong_schema_still_fails_loudly(promoter: ModuleType, tm
     """Only a missing schema is skipped: a shard whose table lacks a column is a real fault."""
     rank = tmp_path / "judge" / "rank-0"
     rank.mkdir(parents=True)
-    con = sqlite3.connect(rank / "hpcagent_bench0.db")
-    con.execute("create table grades (kernel text)")
-    con.execute("create table episodes (label text)")
-    con.commit()
-    con.close()
+    with connect(rank / "hpcagent_bench0.db") as con:
+        con.execute("create table grades (kernel text)")
+        con.execute("create table episodes (label text)")
     with pytest.raises(sqlite3.OperationalError, match="no such column"):
         promoter.submitted_pairs(tmp_path)
 
@@ -491,10 +490,8 @@ def test_a_correct_but_slower_score_is_promoted(promoter: ModuleType, tmp_path: 
     """Speedup is taken over solved kernels, so a correct 0.5x answer is a solved task at 0.5x;
     leaving it unpromoted scored the task as a failure."""
     run_dir = make_relaunched_run_dir(tmp_path)
-    con = sqlite3.connect(run_dir / SHARD)
-    con.execute("update grades set speedup = 0.5")
-    con.commit()
-    con.close()
+    with connect(run_dir / SHARD) as con:
+        con.execute("update grades set speedup = 0.5")
 
     assert promoter.best_speedups(run_dir, "setup.n0.p1.w1", 2000) == {("setup.n0.p1.w1", "gemm"): 0.5}
     (item,) = promoter.candidates(run_dir, only_episode_id="setup.n0.p1.w1", since_ms=2000)
