@@ -141,6 +141,22 @@ def test_an_uncommitted_edit_to_a_copied_file_makes_the_inputs_unknown(repo: pat
     assert "no pull" in done.stderr
 
 
+def test_a_source_on_a_copy_continuation_line_is_a_build_input(repo: pathlib.Path) -> None:
+    """Every line of a COPY names sources, so an edit to any of them moves the fingerprint or blocks the pull."""
+    dockerfile = repo / "containers" / "images" / "Dockerfile"
+    dockerfile.write_text(
+        "FROM ${BASE_IMAGE} AS agent\nCOPY containers/images/lib/agent.sh \\\n     pkg/mod.py /opt/\n", encoding="utf-8"
+    )
+    git(repo, "commit", "-qam", "continuation")
+    before = fingerprint(repo, "agent")
+    (repo / "pkg" / "mod.py").write_text("X = 2\n", encoding="utf-8")
+    done = bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" agent', repo)
+    assert done.returncode == 1, done.stdout
+    assert "pkg/mod.py" in done.stderr
+    git(repo, "commit", "-qam", "edit")
+    assert fingerprint(repo, "agent") != before
+
+
 def move_locked(lock: pathlib.Path, package: str) -> None:
     """Change one hash of the package's lock entry, which is what any new release of it does."""
     text, moved = re.subn(
