@@ -42,6 +42,7 @@ def test_parse_preset_seed() -> None:
         "bogus",
         "S:9",
         "fuzzed:x",
+        "fuzzed:-1",  # a negative seed is refused: numpy's Generator would reject it at the first draw
         "M:1",
         "fuzzed:",
         "XL+bogus",  # the only modifier is +fuzz
