@@ -5,41 +5,43 @@ import copy
 from collections.abc import Callable
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
+from hpcagent_bench.translators.numpyto_common.lib_nodes.fft import supplied
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
 __all__ = ["NATIVE_FFT_BACKENDS", "FftInline", "SubstituteFftCalls", "fft_axes", "fft_inline_stmts", "fft_real_dtype"]
 
 
 def fft_axes(fattr: str, call: ast.Call, rank: int) -> tuple[list[int] | None, bool]:
-    """``(transform_axes, inverse)`` for an ``np.fft.<fattr>`` call; axes are ``None`` when non-constant.
+    """``(transform_axes, inverse)`` for an ``np.fft.<fattr>`` call; axes are ``None`` for a form the DFT loops
+    do not reproduce: a transform length, a ``norm``, or non-constant axes.
 
     ``fft``: one ``axis`` (default last); ``fftn``: ``axes`` (default all); ``fft2``: last two.
     Negative axes wrap modulo ``rank``."""
-    kwargs = {k.arg: k.value for k in call.keywords}
     inverse = fattr.startswith("i")
     base = fattr[1:] if inverse else fattr
-    if base == "fft":
-        ax = kwargs.get("axis") or (call.args[1] if len(call.args) > 1 else None)
-        if ax is None:
-            return [rank - 1], inverse
-        if isinstance(ax, ast.Constant) and isinstance(ax.value, int):
-            return [ax.value % rank], inverse
+    kwargs = {k.arg: k.value for k in call.keywords}
+    slots = dict(zip(("a", "length", "axes", "norm"), call.args, strict=False))
+    length = supplied(kwargs.get("n") or kwargs.get("s") or slots.get("length"))
+    norm = supplied(kwargs.get("norm") or slots.get("norm"))
+    if length is not None or norm is not None:
         return None, inverse
+    axes = supplied(kwargs.get("axis") or kwargs.get("axes") or slots.get("axes"))
+    if base == "fft":
+        if axes is None:
+            return [rank - 1], inverse
+        axis = const_int(axes)
+        return (None if axis is None else [axis % rank]), inverse
     if base == "fft2":
-        return ([rank - 2, rank - 1] if rank >= 2 else None), inverse
+        return ([rank - 2, rank - 1] if rank >= 2 and axes is None else None), inverse
     if base == "fftn":
-        axes = kwargs.get("axes") or (call.args[1] if len(call.args) > 1 else None)
         if axes is None:
             return list(range(rank)), inverse
-        if isinstance(axes, (ast.Tuple, ast.List)) and all(
-            isinstance(e, ast.Constant) and isinstance(e.value, int) for e in axes.elts
-        ):
-            return [
-                e.value % rank for e in axes.elts if isinstance(e, ast.Constant) and isinstance(e.value, int)
-            ], inverse
-        return None, inverse
+        if isinstance(axes, (ast.Tuple, ast.List)):
+            literals = [const_int(e) for e in axes.elts]
+            if None not in literals:
+                return [axis % rank for axis in literals if axis is not None], inverse
     return None, inverse
 
 
