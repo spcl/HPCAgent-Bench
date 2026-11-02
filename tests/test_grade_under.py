@@ -896,6 +896,38 @@ def test_a_worklist_skips_a_grade_that_stored_no_source(tmp_path: pathlib.Path) 
     assert all("no stored source" in line for line in problems), problems
 
 
+def library_grade(tmp_path: pathlib.Path, kind: str, **verdict: Any) -> tuple[pathlib.Path, pathlib.Path]:  # noqa: ANN401
+    """A shard holding one ``kind`` grade of a library in its run's shared folder, as the judge's mount named it."""
+    db = judge_shard(tmp_path)
+    kept = db.parents[2] / "shared" / "agent-0" / "lib.so"
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"graded")
+    digest = hashlib.sha256(b"graded").hexdigest()
+    library = {"library": "/shared/agent-0/lib.so", "library_hash": digest, "source_mode": "any"}
+    add_grade(db, "k1", 10, kind, units=(), **verdict, **library)
+    return db, kept
+
+
+def test_a_library_grade_is_graded_again_from_its_runs_shared_folder(tmp_path: pathlib.Path) -> None:
+    """A library stores no source: its bytes stay in the run's folder, checked against the hash of the live grade."""
+    db, kept = library_grade(tmp_path, "submit", **credited(2.0))
+    (item,), problems = grade_under.build_worklist([db], [])
+    assert (problems, item.final, item.language) == ([], True, "hip")
+    submission = grade_under.submission_of(item)
+    assert (submission.library, submission.source) == (str(kept), None)
+    kept.write_bytes(b"another program")
+    with pytest.raises(LookupError, match="gone or was changed"):
+        grade_under.submission_of(item)
+
+
+def test_a_library_score_of_a_slot_without_a_submission_is_owed_a_promotion(tmp_path: pathlib.Path) -> None:
+    db, _kept = library_grade(tmp_path, "score", correct=1, speedup=2.0, status="ok")
+    (item,), _ = grade_under.build_promotion_worklist([db], [])
+    assert (item.library, item.promoted) == ("/shared/agent-0/lib.so", True)
+    add_grade(db, "k1", 20, units=(), library=item.library, **credited(2.0))
+    assert grade_under.build_promotion_worklist([db], [])[0] == []
+
+
 def test_host_only_splits_cpu_from_gpu_episodes() -> None:
     """The recorded device decides; with none, a host language on a non-offload, non-Triton setup is a CPU one."""
 

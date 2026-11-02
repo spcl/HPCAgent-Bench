@@ -159,6 +159,20 @@ def test_a_host_only_setup_promotes_without_a_device_unit(promoter: ModuleType, 
     assert "device_source" not in item
 
 
+def test_a_library_score_is_promoted_by_its_path(
+    promoter: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A library keeps no source; a judge taking only libraries refuses ``source`` and ``language`` alike."""
+    results_seed.score(tmp_path / SHARD, "setup.n0.p1.w1", "gemm", 1, 4.0, library="/shared/agent-0/gemm.so")
+    captured: list[Request] = []
+    monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen(captured))
+    (item,) = promoter.candidates(tmp_path)
+    promoter.promote("http://judge:8800", item, dry_run=False, rank=1)
+    sent = json.loads(captured[-1].data)
+    assert sent["library"] == "/shared/agent-0/gemm.so"
+    assert not {"source", "language"} & set(sent)
+
+
 def make_run_dir_many(tmp_path: pathlib.Path, kernels: list[tuple[str, float]]) -> pathlib.Path:
     """A run dir holding several verified-but-unsubmitted kernels of differing worth."""
     for name, speedup in kernels:

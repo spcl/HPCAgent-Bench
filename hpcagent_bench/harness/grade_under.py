@@ -54,6 +54,7 @@ from hpcagent_bench.harness.recording import (
     grade_denominator,
     graded_detail,
     layout_values,
+    library_hash,
     now_ms,
     record_scaling,
     snapshot_commit,
@@ -90,6 +91,7 @@ __all__ = [
     "REASON_CAP",
     "REPEAT_ENV",
     "REPEAT_FLOOR_ENV",
+    "RUN_SHARED_DIRNAME",
     "SCORE",
     "SUBMIT_SH",
     "TIMING_BACKEND_ENV",
@@ -143,6 +145,7 @@ __all__ = [
     "input_fault",
     "item_of",
     "launch_of",
+    "library_file",
     "main",
     "on_track",
     "protocol_cells",
@@ -271,6 +274,9 @@ class Item:
     agent_root: str = ""
     # sandbox.library_digest of that folder at the live grade; "" = none recorded.
     agent_libs: str = ""
+    # The prebuilt library the live grade ran, as the judge read it, and its sha256; "" = built from source.
+    library: str = ""
+    library_hash: str = ""
 
     def as_json(self) -> str:
         """One worklist line."""
@@ -285,6 +291,9 @@ class Item:
 #: Validator and serializer of a worklist line.
 ITEM_ADAPTER: pydantic.TypeAdapter[Item] = pydantic.TypeAdapter(Item)
 
+
+#: A run's shared folder under its directory (run_cluster.sh ``LAYOUT_SHARED_DIRNAME``).
+RUN_SHARED_DIRNAME = "shared"
 
 #: The scratch handed to a submission whose ``workspace_bytes`` was not recorded: more than asked changes nothing,
 #: less (NULL) crashes kernels that write partials into ``workspace``.
@@ -500,7 +509,7 @@ SELECT g.id AS grade_id, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel
        coalesce(nullif(g.credited_speedup, 0), p.credited_speedup) AS speedup,
        coalesce(p.timing_reduction, g.timing_reduction) AS timing_reduction,
        g.workspace_bytes, g.requests, g.requested_build, g.task_hash, g.agent_root, g.agent_libs, p.id IS NOT NULL AS promoted,
-       gs.language, gs.hash, a.study
+       g.library, g.library_hash, coalesce(gs.language, a.language) AS language, gs.hash, a.study
 FROM grades g
 JOIN episodes r ON r.id = g.episode_id
 JOIN setups a ON a.setup = r.setup
@@ -524,13 +533,14 @@ def credited_rows(db: pathlib.Path) -> list[dict[str, Any]]:
 UNCREDITED_SUBMISSIONS = f"""
 SELECT g.id AS grade_id, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel, g.ts_ms, g.source_mode,
        g.credited_speedup AS speedup, g.timing_reduction, g.workspace_bytes, g.requests, g.requested_build, g.task_hash,
-       g.agent_root, g.agent_libs,
-       0 AS promoted, gs.language, gs.hash, a.study
+       g.agent_root, g.agent_libs, g.library, g.library_hash,
+       0 AS promoted, coalesce(gs.language, a.language) AS language, gs.hash, a.study
 FROM grades g
 JOIN episodes r ON r.id = g.episode_id
 JOIN setups a ON a.setup = r.setup
-JOIN grade_sources gs ON gs.grade_id = g.id AND gs.part = 'host'
+LEFT JOIN grade_sources gs ON gs.grade_id = g.id AND gs.part = 'host'
 WHERE NOT EXISTS (SELECT 1 FROM disqualifications d WHERE d.grade_id = g.id) AND {NOT_VOIDED}
+  AND (gs.hash IS NOT NULL OR g.library != '')
   AND g.kind IN {results_db.SUBMIT_KINDS} AND coalesce(g.credited_speedup, 0) <= 0
   AND g.kernel IN ({{kernels}})
 GROUP BY g.id
@@ -539,7 +549,7 @@ GROUP BY g.id
 
 def stale_rows(db: pathlib.Path) -> list[dict[str, Any]]:
     """The submissions of ``db`` whose live verdict came from a grading since fixed (graded before their kernel's
-    cut, with a stored source): graded again under the current manifest."""
+    cut, with a stored source or library): graded again under the current manifest."""
     cuts = grading_cuts().kernels
     if not cuts:
         return []
@@ -573,6 +583,8 @@ def item_of(row: Mapping[str, Any], env: dict[str, str], final: bool) -> Item:
         task_hash=str(row.get("task_hash") or ""),
         agent_root=str(row.get("agent_root") or ""),
         agent_libs=str(row.get("agent_libs") or ""),
+        library=str(row.get("library") or ""),
+        library_hash=str(row.get("library_hash") or ""),
     )
 
 
@@ -588,7 +600,7 @@ def build_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) ->
         rows = sorted(unique.values(), key=lambda r: (str(r["setup"]), r["kernel"], int(r["slot"]), int(r["ts_ms"])))
         last: dict[tuple[Any, ...], int] = {}
         for r in rows:
-            if r["hash"]:
+            if r["hash"] or r["library"]:
                 key = (r["setup"], r["kernel"], r["slot"])
                 last[key] = max(last.get(key, 0), int(r["ts_ms"]))
         for row in rows:
@@ -597,7 +609,7 @@ def build_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) ->
             if row["episode_id"] == ADHOC_EPISODE_ID:
                 problems.append(f"credited to nothing (adhoc): {where}")
                 continue
-            if not row["hash"]:
+            if not row["hash"] and not row["library"]:
                 problems.append(f"no stored source: {where}")
                 continue
             setup = str(row["setup"])
@@ -611,22 +623,25 @@ def build_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) ->
 
 
 #: Per episode of a results DB whose slot has no correct submission: its passing /score grades with a stored source
-#: since the final attempt's start, their best speedup, and whether the final attempt spent its answer.
+#: or library since the final attempt's start, their best speedup, and whether the final attempt spent its answer.
 UNPROMOTED_EPISODES = f"""
 SELECT g.id AS grade_id, r.id AS run, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel, g.ts_ms, g.source_mode,
        coalesce(r.final_attempt_start_ms, 0) AS cut, g.workspace_bytes, g.requests, g.requested_build, g.task_hash,
-       g.agent_root, g.agent_libs, gs.language, gs.hash,
+       g.agent_root, g.agent_libs, g.library, g.library_hash, coalesce(gs.language, a.language) AS language, gs.hash,
        (SELECT max(c.speedup) FROM grades c WHERE c.episode_id = g.episode_id AND c.kernel = g.kernel
             AND c.kind = 'score' AND c.correct = 1 AND c.ts_ms >= coalesce(r.final_attempt_start_ms, 0)) AS speedup
 FROM grades g
 JOIN episodes r ON r.id = g.episode_id
-JOIN grade_sources gs ON gs.grade_id = g.id AND gs.part = 'host'
+JOIN setups a ON a.setup = r.setup
+LEFT JOIN grade_sources gs ON gs.grade_id = g.id AND gs.part = 'host'
 WHERE g.kind = 'score' AND g.correct = 1 AND r.label != '{ADHOC_EPISODE_ID}' AND {NOT_VOIDED}
+  AND (gs.hash IS NOT NULL OR g.library != '')
   AND g.ts_ms >= coalesce(r.final_attempt_start_ms, 0)
   AND NOT EXISTS (SELECT 1 FROM grades s JOIN episodes o ON o.id = s.episode_id
                   WHERE o.setup = r.setup AND o.slot = r.slot AND s.kernel = g.kernel
                     AND s.kind IN {results_db.SUBMIT_KINDS} AND s.correct = 1
-                    AND EXISTS (SELECT 1 FROM grade_sources ss WHERE ss.grade_id = s.id AND ss.part = 'host'))
+                    AND (s.library != ''
+                         OR EXISTS (SELECT 1 FROM grade_sources ss WHERE ss.grade_id = s.id AND ss.part = 'host')))
 ORDER BY g.ts_ms
 """
 
@@ -805,36 +820,52 @@ def delivered_language(language: str) -> Language:
     return delivery_language(language, InputMode.PY_BINDING)
 
 
+def library_file(item: Item) -> pathlib.Path:
+    """The file of ``item``'s library. Outside its job the judge's shared mount is the run's folder above the DB."""
+    recorded = pathlib.Path(item.library)
+    if recorded.is_file() or not recorded.is_relative_to(sandbox.DEFAULT_SHARED_DIR):
+        return recorded
+    relative = recorded.relative_to(sandbox.DEFAULT_SHARED_DIR)
+    kept = (parent / RUN_SHARED_DIRNAME / relative for parent in pathlib.Path(item.db).resolve().parents)
+    return next((file for file in kept if file.is_file()), recorded)
+
+
 def submission_of(item: Item) -> Submission:
     """The envelope ``item`` recorded, rebuilt for a re-grade (:data:`UNKNOWN_WORKSPACE` when none was recorded).
 
-    Raises LookupError when no source was stored, its hash is not ``source_hash`` (the id was reused), or the
-    agent's ``lib``/``include`` changed since the grade (a regrade would link other code)."""
+    Raises LookupError when no source was stored, its hash is not ``source_hash`` (the id was reused), a library is
+    gone or is not the bytes graded, or the agent's ``lib``/``include`` changed since the grade (a regrade would link
+    other code)."""
     with results_db.reading(item.db, finished=results_db.finished_db(item.db)) as conn:
         units = results_db.grade_sources(conn, item.grade_id)
-    if "host" not in units:
+    host = units.get("host")
+    if host is None and not item.library:
         raise LookupError(f"{item.db}: grade {item.grade_id} stored no source")
-    if item.source_hash and units["host"][2] != item.source_hash:
+    if host is not None and item.source_hash and host[2] != item.source_hash:
         raise LookupError(f"{item.db}: grade {item.grade_id} is no longer the source the worklist listed")
     if item.agent_libs and sandbox.library_digest(pathlib.Path(item.agent_root)) != item.agent_libs:
         raise LookupError(f"{item.db}: grade {item.grade_id}'s agent libraries changed since it was graded")
     device = units.get("device")
     language = delivered_language(item.language)
-    if device is None and language in languages.GPU_HOST_LANG:
+    if host is not None and device is None and language in languages.GPU_HOST_LANG:
         # A GPU grade stores both units (a single-unit delivery its stub host too): no device unit is a lost half.
         raise ValueError(
             f"{item.db}: grade {item.grade_id} stored no 'device_source' unit of its {language.text} delivery"
         )
-    return Submission(
+    submission = Submission(
         language=language,
-        source=units["host"][1],
+        source=host[1] if host is not None else None,
         device_source=device[1] if device is not None else None,
+        library=str(library_file(item)) if item.library else None,
         build=list(item.build),
         workspace_bytes=item.workspace_bytes or UNKNOWN_WORKSPACE,
         requests=item.requests,
         # The folder the live grade linked from: the libraries the episode installed.
         agent_root=item.agent_root or None,
     )
+    if item.library and library_hash(submission) != item.library_hash:
+        raise LookupError(f"{item.db}: grade {item.grade_id}'s library {item.library} is gone or was changed")
+    return submission
 
 
 def grade(item: Item, scorer: Scorer = score, verifier: Verifier | None = None) -> dict[str, Any]:

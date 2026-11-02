@@ -17,6 +17,7 @@ from hpcagent_bench.results import extract as ox
 from hpcagent_bench.harness import results_db
 from hpcagent_bench.stats import palette
 from hpcagent_bench.support.collect import canon_db
+from tests import results_seed
 
 #: Written by HPCAgent-Bench 0.2.1 (``tests/data/make_results_v021.py``): three graded requests and canon rows naming
 #: a kept column, removed ones (``jax_cpu``, ``pythran``) and one a plugin now registers.
@@ -37,6 +38,18 @@ def altered_since(version: int) -> set[str]:
         if added > version
         for statement in statements
     }
+
+
+def test_a_file_older_than_the_library_column_reads_as_no_library(tmp_path: pathlib.Path) -> None:
+    """The regrade worklists select ``g.library`` read-only, and a finished campaign's file is never upgraded."""
+    path = tmp_path / "results.db"
+    results_seed.score(path, "setup.n0.p1.w1", "gemm", 1, 4.0, source="int x;")
+    with contextlib.closing(results_db.open_db(path)) as conn:
+        conn.execute("ALTER TABLE grades DROP COLUMN library")
+        conn.execute("PRAGMA user_version = 19")
+        conn.commit()
+    with results_db.reading(path, finished=True) as conn:
+        assert [row["library"] for row in conn.execute("SELECT g.library FROM grades g")] == [""]
 
 
 def test_the_schema_is_the_one_0_2_1_froze_plus_the_lazy_tables_and_added_columns() -> None:
