@@ -3024,6 +3024,8 @@ def main() -> int:
         ready_replicas = wait_for_ready_replicas(replicas, vllm_timeout, vllm_headers)
     if len(ready_replicas) < len(replicas):
         print(f"proceeding with {len(ready_replicas)}/{len(replicas)} vLLM replicas", flush=True)
+        # run_agent and every fused child read the list from here: a replica that failed readiness gets no worker.
+        os.environ["VLLM_REPLICA_URLS"] = ",".join(ready_replicas)
     # Single-stream throughput, measured BEFORE the agents saturate the endpoint; node 0 only. 0/unset = off.
     probe_requests = int(os.environ.get("THROUGHPUT_PROBE_REQUESTS", "0") or 0)
     if probe_requests > 0 and node_rank() == 0 and ready_replicas:

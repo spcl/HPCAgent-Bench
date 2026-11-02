@@ -38,6 +38,19 @@ def driver_fixture() -> ModuleType:
 REPLICAS = ["http://a:8000", "http://b:8000", "http://c:8000"]
 
 
+def test_a_replica_that_failed_readiness_is_dropped_from_the_list_workers_read(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run_agent and a fused child read the replicas from the environment after readiness has passed."""
+    monkeypatch.setenv("VLLM_REPLICA_URLS", ",".join(REPLICAS))
+    monkeypatch.setenv("JUDGE_BASE_URL", "http://judge:8080")
+    monkeypatch.setattr(driver, "wait_for_ready_replicas", lambda replicas, _timeout, _headers: replicas[1:])
+    monkeypatch.setattr(driver, "wait_for_json", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(driver, "load_problems", list)
+    assert driver.main() == 2  # no problems: everything up to dispatch has run
+    assert driver.vllm_urls() == REPLICAS[1:]
+
+
 def test_a_late_replica_does_not_abort_the_run(driver: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
 
     def probe(name: str, replica: str, timeout: float, headers: dict[str, str] | None = None) -> None:
