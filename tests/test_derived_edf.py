@@ -283,18 +283,34 @@ def test_a_plugin_with_an_install_root_binds_that_root_and_names_itself_inside_i
     )
     plain.mkdir()
     (plain / "plugin.toml").write_text('name = "plain"\n')
+    tooled = tmp_path / "tooled" / "plugin" / "tooled"
+    tooled.mkdir(parents=True)
+    (tooled / "plugin.toml").write_text(
+        'name = "tooled"\n[install]\nroot = "../.."\ncommand = ["{python}", "-V"]\nroles = ["agent"]\n'
+    )
     script = (
         f". {shlex.quote(str(SCRIPT))}; HPCAGENT_BENCH_REPO={tmp_path / 'bench'} "
-        f"HPCAGENT_BENCH_USER_PLUGIN_DIRS={repo / 'plugin' / 'forge'}:{plain} "
-        f"HPCAGENT_BENCH_HOST_PYTHON={shlex.quote(sys.executable)}; plugin_binds; echo ---; plugin_dirs"
+        f"HPCAGENT_BENCH_USER_PLUGIN_DIRS={repo / 'plugin' / 'forge'}:{plain}:{tooled} "
+        f"HPCAGENT_BENCH_HOST_PYTHON={shlex.quote(sys.executable)}; "
+        "plugin_binds; echo ---; plugin_dirs; echo ---; plugin_agent_binds"
     )
 
     done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
 
     assert done.returncode == 0, done.stderr
-    binds, dirs = done.stdout.split("---\n")
+    binds, dirs, agent_binds = done.stdout.split("---\n")
     assert binds.split() == [
         f"{repo.resolve()}:/opt/hpcagent-bench-plugins/forge",
         f"{plain.resolve()}:/opt/hpcagent-bench-plugins/plain",
+        f"{tooled.parents[1].resolve()}:/opt/hpcagent-bench-plugins/tooled",
     ]
-    assert dirs.strip() == "/opt/hpcagent-bench-plugins/forge/plugin/forge:/opt/hpcagent-bench-plugins/plain"
+    assert dirs.strip() == (
+        "/opt/hpcagent-bench-plugins/forge/plugin/forge:/opt/hpcagent-bench-plugins/plain"
+        ":/opt/hpcagent-bench-plugins/tooled/plugin/tooled"
+    )
+    # An agent gets a judge-only plugin's folder alone, at the path the plugin list names: never the repository.
+    assert agent_binds.split() == [
+        f"{(repo / 'plugin' / 'forge').resolve()}:/opt/hpcagent-bench-plugins/forge/plugin/forge",
+        f"{plain.resolve()}:/opt/hpcagent-bench-plugins/plain",
+        f"{tooled.parents[1].resolve()}:/opt/hpcagent-bench-plugins/tooled",
+    ]

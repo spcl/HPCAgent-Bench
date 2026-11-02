@@ -471,7 +471,8 @@ def main(argv: list[str]) -> int:
     ``... install [--role judge|agent] [--python PATH]``: run the install command of every plugin installing into that
     role (default judge) for this (or that) interpreter;
     ``... fingerprint``: a digest of those plugins' sources (a launch venv's cache key);
-    ``... install-root FOLDER``: the resolved ``[install] root`` of the plugin in FOLDER, empty without one;
+    ``... install-root FOLDER [--role judge|agent]``: the resolved ``[install] root`` of the plugin in FOLDER, empty
+    without one or, with a role, when it does not install into that role;
     ``... check``: load every plugin and report what would fail in a run (:func:`check`)."""
     parser = argparse.ArgumentParser(prog="python -m hpcagent_bench.plugins", description=main.__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -482,6 +483,7 @@ def main(argv: list[str]) -> int:
     commands.add_parser("fingerprint", help="print a digest of the installed plugins' sources")
     rooted = commands.add_parser("install-root", help="print the [install] root of the plugin in FOLDER")
     rooted.add_argument("folder", type=pathlib.Path)
+    rooted.add_argument("--role", choices=("judge", "agent"), help="only a plugin installing into this role")
     commands.add_parser("check", help="load every plugin and report what would fail in a run")
     args = parser.parse_args(argv)
     if args.command == "check":
@@ -490,7 +492,9 @@ def main(argv: list[str]) -> int:
 
         return imported.check()
     if args.command == "install-root":
-        print(install_root(agent_plugins.read(args.folder)) or "")
+        plugin = agent_plugins.read(args.folder)
+        block = plugin.manifest.install
+        print((install_root(plugin) if args.role is None or (block and args.role in block.roles) else None) or "")
         return 0
     if args.command == "roots":
         print("\n".join(str(root) for root in roots()))

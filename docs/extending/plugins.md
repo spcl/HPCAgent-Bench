@@ -289,8 +289,9 @@ roles = ["judge", "agent"]                  # default: ["judge"]
 interpreter (default: the running one). `--no-deps`: the benchmark's environment already holds what a plugin needs at
 the pins the benchmark owns, and a plugin's own pin of `hpcagent_bench` must not replace the judge's.
 
-On the cluster the launcher binds a plugin's `root` (not only its folder), and each image's launch venv runs the
-install per role (`python -m hpcagent_agent.plugins install --role <role>`, from
+On the cluster the launcher binds a plugin's `root` (not only its folder) for each role that runs its install; an agent
+of a judge-only plugin gets the folder alone, so the rest of the repository stays out of its reach. Each image's launch
+venv runs the install per role (`python -m hpcagent_agent.plugins install --role <role>`, from
 `containers/images/lib/launch_venv.sh`) right after its `uv sync`. The plugins' sources are part of that venv's cache
 key (`python -m hpcagent_bench.plugins fingerprint`), so a changed plugin gets a fresh venv.
 
