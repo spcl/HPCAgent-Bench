@@ -34,6 +34,26 @@ def problems_file(tmp_path: pathlib.Path, kernels: list[str]) -> pathlib.Path:
     return path
 
 
+def test_a_plugin_routes_terminal_work_queues_as_a_submission() -> None:
+    """A plugin's route is exploration, unless it serves a /submit: NestForge builds what it submits on its own route."""
+    asked: list[int] = []
+
+    class Pool:
+        def acquire(self, priority: int, gone: threading.Event) -> DeviceSlot:
+            asked.append(priority)
+            return DeviceSlot("cpu", 0)
+
+        def release(self, slot: DeviceSlot) -> None:
+            pass
+
+    handler = service.JudgeHandler.__new__(service.JudgeHandler)
+    handler.device_pool, handler.route, handler.gone = Pool(), "nestforge", threading.Event()
+    for terminal in (False, True):
+        with handler.device_slot(terminal):
+            pass
+    assert asked == [service.EXPLORATION_PRIORITY, service.SLOT_PRIORITY["submit"]]
+
+
 def test_the_warm_up_waits_behind_every_request() -> None:
     assert judge_warmup.PRIORITY > service.EXPLORATION_PRIORITY
     assert max(service.SLOT_PRIORITY.values()) < judge_warmup.PRIORITY

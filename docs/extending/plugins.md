@@ -211,6 +211,9 @@ def my_tool(judge: Judge, request: RouteRequest) -> None:
         judge.reply(HTTPStatus.OK, answer)
 ```
 
+`judge.device_slot(terminal=True)` queues ahead of exploration as `/submit` does: for work a submission waits on, and
+nothing else.
+
 The router relays every request it does not answer itself. A `POST` reaches the handler only from an episode the
 run started, carrying that episode's token, as on `/score`; the judge has already checked the rank.
 
