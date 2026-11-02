@@ -6,7 +6,6 @@ import matplotlib as mpl
 
 mpl.use("Agg")
 
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pytest
 

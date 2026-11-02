@@ -9,7 +9,6 @@ import itertools
 import math
 import pathlib
 import sys
-import tempfile
 import warnings
 
 import matplotlib.colors
@@ -796,8 +795,8 @@ def one_setup_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
     return path
 
 
-def test_build_multi_comparison_reads_treatments_as_a_comma_list() -> None:
-    obs = one_setup_observations_csv(pathlib.Path(tempfile.mkdtemp()))
+def test_build_multi_comparison_reads_treatments_as_a_comma_list(tmp_path: pathlib.Path) -> None:
+    obs = one_setup_observations_csv(tmp_path)
     built = plot.build_multi_comparison(
         {"treatments": "skills,cpf-tool", "title": "CPU"}, [obs], "exp", False, plot.cost.resolve()
     )
