@@ -21,6 +21,8 @@ Each entry is a list of REQUIRED CONCEPTS. A concept is a tuple of accepted spel
 one spelling of every concept must appear in the trigger, case-insensitively.
 """
 
+import re
+
 import pytest
 import yaml
 
@@ -102,8 +104,11 @@ def test_the_table_covers_every_shipped_page() -> None:
 def test_a_pages_trigger_names_the_situation_it_is_for(page: str) -> None:
     trigger = _trigger(page).lower()
     assert trigger, f"{page} has no when: trigger, so it has no way into any prompt"
+    words = set(re.findall(r"\w+", trigger))  # one letter ("C") is a word, or any "c" would satisfy it
     missing = [
-        concept for concept in REQUIRED_CONCEPTS[page] if not any(spelling.lower() in trigger for spelling in concept)
+        concept
+        for concept in REQUIRED_CONCEPTS[page]
+        if not any(s.lower() in words if len(s) == 1 else s.lower() in trigger for s in concept)
     ]
     assert not missing, (
         f"{page}: trigger names none of {missing} -- an agent in that situation has nothing to "

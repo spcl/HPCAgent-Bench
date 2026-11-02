@@ -34,6 +34,11 @@ FLOOR_DEFECTS = (
         floor.eager_annotation_faults,
         False,
     ),
+    (
+        "try:\n    import numpy as q\nexcept ImportError:\n    raise\nelse:\n    x: q.ndarray | None = None\n",
+        floor.eager_annotation_faults,
+        False,
+    ),
     ("class Box[T]:\n    def get(self) -> T | None:\n        return None\n", floor.eager_annotation_faults, False),
     ("def first[T](items: list[T]) -> T | None:\n    return None\n", floor.eager_annotation_faults, False),
     (
@@ -80,6 +85,7 @@ def test_the_too_new_lists_name_only_what_the_floor_cannot_run() -> None:
         "forward-name",
         "string-union",
         "pep695-alias-union",
+        "try-else-sees-the-body",
         "pep695-generic-class",
         "pep695-generic-def",
         "type-checking-only",

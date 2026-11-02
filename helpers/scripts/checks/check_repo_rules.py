@@ -36,6 +36,7 @@ import ast
 import enum
 import functools
 import getpass
+import itertools
 import pathlib
 import re
 import subprocess
@@ -106,7 +107,7 @@ def stale(allow: Iterable[str], rule: str) -> list[str]:
 
 # hash-seed
 
-HASH_SEED = re.compile(r"PYTHONHASHSEED\s*[=:]\s*['\"]?0|[\"']PYTHONHASHSEED[\"']\s*:")
+HASH_SEED = re.compile(r"PYTHONHASHSEED\s*[=:]\s*['\"]?0|[\"']PYTHONHASHSEED[\"']\s*(:|\]\s*=(?!=))")
 HASH_SEED_HOMES = {
     "hpcagent_bench/cluster/env.sh",
     ".github/workflows/tests.yml",
@@ -132,7 +133,7 @@ def hash_seed(files: list[str]) -> list[str]:
 #: ``site.addsitedir``, or ``PYTHONPATH`` set in a shell, an env dict or a keyword. Reading it is not an edit.
 IMPORT_PATH_EDIT = re.compile(
     r"""sys\.path\.(insert|append|extend)\("""
-    r"""|sys\.path(\[[^\]]*\])?\s*=(?!=)"""
+    r"""|sys\.path(\[[^\]]*\])?\s*\+?=(?!=)"""
     r"""|syspath_prepend\("""
     r"""|addsitedir\("""
     r"""|\bPYTHONPATH\s*=(?!=)"""
@@ -163,8 +164,14 @@ def import_path(files: list[str]) -> list[str]:
 
 REQUEUE_GUARD = "#SBATCH --no-requeue"
 #: A real directive line (a flag right after the keyword), not prose about one.
-SBATCH_DIRECTIVE = re.compile(r"^\s*#SBATCH\s+--", re.MULTILINE)
+SBATCH_DIRECTIVE = re.compile(r"^#SBATCH[ \t]+--")
 SHELL_SHEBANG = re.compile(r"^#!.*\b(?:ba|da|k|z|a)?sh\b")
+
+
+def sbatch_header(text: str) -> list[str]:
+    """The directives Slurm reads: sbatch stops at the first line that is neither blank nor a comment."""
+    header = itertools.takewhile(lambda line: not line.strip() or line.startswith("#"), text.splitlines())
+    return [line for line in header if SBATCH_DIRECTIVE.match(line)]
 
 
 def no_requeue(files: list[str]) -> list[str]:
@@ -173,8 +180,9 @@ def no_requeue(files: list[str]) -> list[str]:
         text = text_of(rel)
         if text is None:
             continue
-        entry = rel.endswith(".sbatch") or (SHELL_SHEBANG.match(text) and SBATCH_DIRECTIVE.search(text))
-        if entry and REQUEUE_GUARD not in text:
+        directives = sbatch_header(text)
+        entry = rel.endswith(".sbatch") or (SHELL_SHEBANG.match(text) and directives)
+        if entry and not any(line.split()[:2] == REQUEUE_GUARD.split() for line in directives):
             out.append(f"{rel}: batch script without `{REQUEUE_GUARD}`")
     return out
 
