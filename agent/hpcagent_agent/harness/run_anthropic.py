@@ -98,14 +98,15 @@ async def open_tools(
     stack: contextlib.AsyncExitStack, servers: Mapping[str, Mapping[str, Any]], cwd: pathlib.Path
 ) -> dict[str, Any]:
     """Every tool the model is offered (each stdio server's tools, then the shell): an MCP call waited
-    :func:`runner_common.mcp_call_timeout` seconds, a shell command :func:`runner_common.shell_call_timeout`."""
+    :func:`runner_common.mcp_call_timeout` seconds, a shell command :func:`runner_common.shell_call_timeout`. A tool
+    name offered twice is refused."""
     from anthropic.lib.tools import beta_async_tool
     from anthropic.lib.tools.mcp import async_mcp_tool
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
-    tools: dict[str, Any] = {}
-    for server in servers.values():
+    tools: dict[str, Any] = {runner_common.SHELL_TOOL: None}
+    for name, server in servers.items():
         read, write = await stack.enter_async_context(stdio_client(StdioServerParameters(**server)))
         session = await stack.enter_async_context(
             ClientSession(read, write, read_timeout_seconds=runner_common.mcp_call_timeout(os.environ))
@@ -113,6 +114,8 @@ async def open_tools(
         await session.initialize()
         for tool in (await session.list_tools()).tools:
             runnable = async_mcp_tool(tool, session)
+            if runnable.name in tools:
+                raise ValueError(f"MCP server {name!r} offers {runnable.name!r}, which is already a tool")
             tools[runnable.name] = runnable
 
     async def shell(command: str) -> str:
