@@ -27,8 +27,12 @@ def test_budget_scales() -> None:
     assert custom.scale == "custom"
     assert custom.trials == 48
     assert custom.configs == 48
-    # garbage falls back to the default scale.
-    assert OptimizeBudget.from_env("nonsense").scale == "small"
+
+
+@pytest.mark.parametrize("raw", ["nonsense", "0", "-3"])
+def test_a_budget_that_is_no_scale_and_no_positive_integer_is_refused(raw: str) -> None:
+    with pytest.raises(ValueError, match="optimize budget"):
+        OptimizeBudget.from_env(raw)
 
 
 def test_env_default(monkeypatch: pytest.MonkeyPatch) -> None:
