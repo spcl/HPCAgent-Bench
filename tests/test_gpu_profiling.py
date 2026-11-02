@@ -339,6 +339,17 @@ def test_nsys_stats_names_the_upgrade_when_no_known_report_came_back(
     assert "2022.1" in str(ei.value)
 
 
+def test_nsys_stats_failing_without_the_kernel_report_is_a_tool_failure_not_an_empty_trace(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other_section = f" ** Memory ({gpu_profiling.MEM_TIME_REPORT}):\nOperation,Total Time (ns)\n"
+    monkeypatch.setattr(gpu_profiling, "nsys_check", lambda _lang: "/usr/bin/nsys")
+    monkeypatch.setattr(gpu_profiling.subprocess, "run", lambda *a, **k: completed(1, stdout=other_section))
+    with pytest.raises(gpu_profiling.GpuProfilerUnavailable) as ei:
+        gpu_profiling.nsys_stats(tmp_path / "gpu-profile.nsys-rep", language=Language.CUDA, timeout=5.0)
+    assert ei.value.cause == "nsys_report_missing"
+
+
 def test_nsys_stats_asks_for_the_documented_reports(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The report names ARE the contract this module and the service doc both quote."""
     seen = {}
