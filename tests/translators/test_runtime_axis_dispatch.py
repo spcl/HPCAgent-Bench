@@ -296,6 +296,39 @@ def test_an_axis_only_use_dispatches_when_the_manifest_does_not_pin_it() -> None
     assert tests == ["dim == 0 or dim == -2", "dim == 1 or dim == -1"], tests
 
 
+#: ``np.stack``'s list literal already counts the axis it inserts (``list_rank`` is the elements'
+#: rank plus one), so the dispatch must not add another on top: the axis space is the RESULT's rank
+#: (2 here), and ``dim = -1`` is its last axis, not a third one past it.
+STACK_AXIS = """import numpy as np
+
+
+def stack_scan(x, y, dim, out):
+    out[:] = np.sum(np.stack([x, y], axis=dim), axis=0)
+"""
+
+
+def test_a_stacked_list_dispatches_over_the_result_rank() -> None:
+    """A sequence operand's axis space is its ELEMENTS' rank plus the axis ``stack`` inserts.
+
+    Adding the insert on top of the list's own axis emitted three branches for a rank-2 result:
+    ``dim = -1`` (numpy: the last axis) landed on a branch spelling ``axis=2``, which numpy itself
+    refuses, and ``dim = -2`` landed on the ``axis=1`` body where numpy builds the ``axis=0`` one.
+    """
+    presets = {"S": {"n": 4, "dim": 0}, "M": {"n": 8, "dim": 1}}
+    with tempfile.TemporaryDirectory() as td:
+        kir = parse_(
+            pathlib.Path(td),
+            STACK_AXIS,
+            "stack_scan",
+            presets,
+            {"x": "(n,)", "y": "(n,)", "out": "(n,)"},
+            ["x", "y", "dim"],
+            ["out"],
+        )
+    tests = [ast.unparse(node.test) for node in ast.walk(kir.tree) if isinstance(node, ast.If)]
+    assert tests == ["dim == 0 or dim == -2", "dim == 1 or dim == -1"], tests
+
+
 def test_a_returned_output_keeps_the_refusal() -> None:
     """A kernel whose output is RETURNED is promoted from the body's trailing statement. A
     dispatch would move that statement inside a branch, leaving a kernel that writes nothing --

@@ -807,11 +807,15 @@ class CBodyEmitter(BaseEmitter):
         for a once-only guard is inside the ``if`` branch -- so the ``else`` branch, and everything
         after the ``if``, referenced a name out of scope and the C would not build. Moving it to the
         enclosing block keeps every loop variable its extent names in scope, since the ``if`` sits
-        inside those loops already.
+        inside those loops already -- UNLESS the extent names a variable the ``if`` itself binds (an
+        inner ``for`` target, or an assignment inside a branch): hoisted above the ``if`` that name
+        is out of scope and the C does not build, so such a local stays with its marker, which sits
+        inside the scope that binds it.
         """
         inline_locals = self.inline_local_decls
         if not inline_locals:
             return ""
+        bound_by_if = set(names_bound_by(node))
         decls = []
         for stmt in walk_nodes(node):
             if not (
@@ -822,10 +826,21 @@ class CBodyEmitter(BaseEmitter):
             ):
                 continue
             name = stmt.targets[0].id
-            shape = inline_locals.pop(name)
+            shape = inline_locals[name]
+            if {tok for dim in shape for tok in IDENT_RE.findall(dim)} & bound_by_if:
+                continue  # the ``if`` binds a shape variable: the marker declares it in scope
+            inline_locals.pop(name)
             local_dtypes = self.local_dtypes_for_inline
             c_type = c_type_(local_dtypes.get(name, default_float_dtype(self.kir)))
-            decls.append(f"{indent}{c_type} {name}[{flat_size(shape)}];")
+            size = flat_size(shape)
+            lines = [f"{indent}{c_type} {name}[{size}];"]
+            fill = explicit_fill(self.kir.zeros_fills.get(name))
+            if fill is not None:
+                # The constructor fill travels with the hoisted declaration, and a later marker is
+                # a reset, not a second declaration -- the rule the fn-top and marker paths follow.
+                lines.append(self.body_fill_stmt(name, size, c_type, fill, indent))
+                self.zeros_refill[name] = (size, c_type, fill)
+            decls.append("\n".join(lines))
         return "\n".join(decls)
 
     def branch_block(self, stmts: Sequence[ast.stmt], indent: str) -> str:
@@ -911,7 +926,18 @@ class CBodyEmitter(BaseEmitter):
         if t in inline_locals:
             shape = inline_locals.pop(t)  # only emit decl once
             dtype_tag = self.local_dtypes_for_inline.get(t, default_float_dtype(self.kir))
-            return f"{indent}{c_type_(dtype_tag)} {t}[{flat_size(shape)}];"
+            c_ty = c_type_(dtype_tag)
+            size = flat_size(shape)
+            lines = [f"{indent}{c_ty} {t}[{size}];"]
+            fill = explicit_fill(self.kir.zeros_fills.get(t))
+            if fill is not None:
+                # The constructor fill travels with the declaration: the VLA is scoped to this
+                # block, so np.zeros/np.ones semantics hold only if the fill runs here too.
+                lines.append(self.body_fill_stmt(t, size, c_ty, fill, indent))
+                # A later marker in the same block is a RESET, not a second declaration -- same
+                # rule the function-top and branch-scoped locals follow.
+                self.zeros_refill[t] = (size, c_ty, fill)
+            return "\n".join(lines)
         # A fn-top zeros/ones local reset in a loop must be re-filled; skip the refill for a __reassign__ self-update.
         refill = self.zeros_refill
         if t in refill and not is_reassign:
