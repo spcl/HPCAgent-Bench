@@ -77,11 +77,16 @@ def requested(environ: Mapping[str, str]) -> tuple[str, ...]:
 
 def load(home: pathlib.Path, environ: Mapping[str, str]) -> tuple[Subagent, ...]:
     """The packet's subagents (:func:`requested`) as staged under ``home``, by name; none when it names none, so a
-    file the user keeps in their own ``~/.claude/agents`` is never offered."""
-    return tuple(
+    file the user keeps in their own ``~/.claude/agents`` is never offered. Harnesses key them by frontmatter name, so
+    two files sharing one are refused."""
+    staged = tuple(
         parse((home / AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8"), name)
         for name in sorted(requested(environ))
     )
+    names = [subagent.name for subagent in staged]
+    if len(set(names)) != len(names):
+        raise ValueError(f"subagent files share a frontmatter name: {sorted(names)}")
+    return staged
 
 
 def tool_names(subagent: Subagent, available: Iterable[str]) -> list[str]:
