@@ -12,6 +12,7 @@ import pathlib
 import subprocess
 import sys
 import threading
+import tracemalloc
 import types
 from collections.abc import Iterator
 from typing import ClassVar
@@ -1013,6 +1014,18 @@ def test_a_long_shell_output_is_returned_as_its_head_and_tail(
     assert answer["output_head"] == "a" * half
     assert answer["output_tail"] == "b" * half
     assert answer["elided_chars"] == 12000 - harness.common.OBSERVATION_LIMIT
+
+
+def test_a_huge_shell_output_is_held_in_bounded_memory(harness: types.SimpleNamespace, tmp_path: pathlib.Path) -> None:
+    """A command printing a large file must not spend the worker's memory on what the observation throws away; the
+    character count survives a multi-byte character split across reads."""
+    tracemalloc.start()
+    answer = json.loads(harness.common.run_shell({"command": "yes é | head -c 99999999"}, tmp_path, 60))
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    assert peak < 16 * harness.common.SHELL_READ_BYTES
+    assert answer["output_head"].startswith("é\né\n")
+    assert answer["elided_chars"] == 66666666 - harness.common.OBSERVATION_LIMIT
 
 
 def test_a_shell_call_that_outlives_its_wait_is_killed_and_says_so(
