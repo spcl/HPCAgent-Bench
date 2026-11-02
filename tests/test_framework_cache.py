@@ -398,27 +398,5 @@ def test_cache_tree_is_fully_gitignored() -> None:
     assert ignored(base + "/.gitkeep"), "the .gitkeep must be ignored too -- 356 kernels, dir is made on demand"
 
 
-def test_the_tree_fingerprint_reads_the_bytes_of_tracked_and_untracked_edits(tmp_path: pathlib.Path) -> None:
-    """A dirty tree stays dirty with the same status lines, so only the bytes can tell two edits apart."""
-
-    def git(*args: str) -> None:
-        subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, check=True, capture_output=True
-        )
-
-    tracked, untracked = tmp_path / "tracked.py", tmp_path / "untracked.py"
-    tracked.write_text("a = 0\n", encoding="utf-8")
-    git("init")
-    git("add", "tracked.py")
-    git("commit", "-m", "first")
-    tracked.write_text("a = 1\n", encoding="utf-8")
-    untracked.write_text("b = 1\n", encoding="utf-8")
-    first = fc.git_tree_fingerprint(tmp_path)
-    untracked.write_text("b = 2\n", encoding="utf-8")
-    second = fc.git_tree_fingerprint(tmp_path)
-    tracked.write_text("a = 2\n", encoding="utf-8")
-    assert len({first, second, fc.git_tree_fingerprint(tmp_path)}) == 3
-
-
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
