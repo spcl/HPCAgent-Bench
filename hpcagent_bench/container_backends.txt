@@ -108,7 +108,7 @@ podman.harbor_env=podman
 # SIF conversion of the same OCI image (`apptainer build ... docker-archive:...`).
 apptainer.family=sif
 apptainer.kind=exec
-apptainer.verb=exec
+apptainer.verb=run
 apptainer.bind=--bind
 apptainer.workdir=--pwd
 apptainer.inherits_env=1

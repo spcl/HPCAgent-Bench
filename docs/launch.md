@@ -70,7 +70,7 @@ runs the agent and an in-process judge on one machine, no containers.
 ### Alps (aarch64 GH200)
 
 The Container Engine (`ce`) is the native backend; the image is chosen by `srun --environment=<edf>`.
-Apptainer (`apptainer exec --nv <sif>`) is the alternative; never both on one command. Images must be
+Apptainer (`apptainer run --nv <sif>`; `exec` skips the image's launch hook) is the alternative; never both on one command. Images must be
 `linux/arm64`. For the role deployment, prefix each **Manual launch** command with
 `srun ... --environment=$EDF`. The fabric hook (`com.hooks.cxi.enabled = "true"` in the EDF) matters
 only for multi-node MPI and inference.
