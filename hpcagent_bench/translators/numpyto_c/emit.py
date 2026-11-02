@@ -48,7 +48,12 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     FFTN_LIBRARY_MARKER,
 )
 from hpcagent_bench.translators.numpyto_common.limits import FIXPOINT_ROUNDS
-from hpcagent_bench.translators.numpyto_common.lowering import helper_returns_int, integer_valued_locals, walk_complex
+from hpcagent_bench.translators.numpyto_common.lowering import (
+    helper_returns_int,
+    integer_valued_locals,
+    kernel_float_dtype,
+    walk_complex,
+)
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import negative_literal_offset
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.statement_desugar import binding_names
@@ -364,22 +369,8 @@ C_FP8_NAMES = fp8_function_names("__npb_")
 
 
 def default_float_dtype(kir: KernelIR) -> str:
-    """The floating dtype for an untyped temp: kir.float_precision if set; else the compute dtype of the
-    storage-only format the arrays cross the ABI in (bf16 -> float32: reads promote, and the numpy
-    oracle computes on the promoted arrays); else inferred from the signature (float32 iff every
-    floating array/scalar is float32)."""
-    if kir.float_precision:
-        return dtypes.compute_dtype(kir.float_precision)
-    storage = {dtypes.compute_dtype(a.dtype) for a in kir.arrays if a.dtype and dtypes.is_storage_only(a.dtype)}
-    if len(storage) == 1:
-        return storage.pop()
-    cts: set[str] = set()
-    for desc in descs(kir.arrays, kir.scalars):
-        if desc.dtype:
-            cts.add(c_type_(dtypes.compute_dtype(desc.dtype)))
-    if cts & {"float", "double"} == {"float"}:
-        return "float32"
-    return "float64"
+    """The floating dtype for an untyped temp, in its compute width: :func:`kernel_float_dtype`."""
+    return dtypes.compute_dtype(kernel_float_dtype(kir))
 
 
 def array_signature(arr: ArrayDesc) -> str:

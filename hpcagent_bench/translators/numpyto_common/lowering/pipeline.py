@@ -115,6 +115,7 @@ __all__ = [
     "elementwise_store",
     "fix_real_scalar_dtypes",
     "fold_local_shape_attr_tokens",
+    "kernel_float_dtype",
     "lower",
     "lp_forward_substitute_invariant_scalars",
     "lp_libnode_expand",
@@ -239,14 +240,18 @@ def required[T](value: T | None, what: str) -> T:
 def signature_float_dtype(kir: KernelIR) -> str:
     """The float the C emitter computes this kernel in, before any run precision is applied: the
     compute dtype of a storage-only ABI format, float32 when every real float in the signature is,
-    else float64 -- the rule ``numpyto_c.emit.default_float_dtype`` applies at emit, and the width
-    its gemm call is chosen for."""
+    else float64 -- the width its gemm call is chosen for."""
     storage = {dtypes.compute_dtype(a.dtype) for a in kir.arrays if a.dtype and dtypes.is_storage_only(a.dtype)}
     if len(storage) == 1:
         return storage.pop()
     reals = {dtypes.c_type(dtypes.compute_dtype(d.dtype)) for d in descs(kir.arrays, kir.scalars) if d.dtype}
     reals &= {"float", "double"}
     return "float32" if reals == {"float"} else "float64"
+
+
+def kernel_float_dtype(kir: KernelIR) -> str:
+    """The float a kernel computes and types an untyped literal or temp in: the run precision, else its signature's."""
+    return kir.float_precision or signature_float_dtype(kir)
 
 
 def user_functions(ctx: LoweringContext) -> set[str]:

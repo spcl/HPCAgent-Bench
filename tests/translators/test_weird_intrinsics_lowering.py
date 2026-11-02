@@ -13,8 +13,16 @@ rather than silently failing CI; drop the skip once the mapping is fixed and the
 The non-edge cases carry NO skips, so they are real all-backend coverage.
 """
 
+import json
+import pathlib
+
 import numpy as np
 import pytest
+
+from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
+from hpcagent_bench.translators.numpyto_common.lowering import lower
+from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
+from hpcagent_bench.translators.numpyto_fortran.intrinsics import renders_natively
 
 # Reuse the standalone numerical oracle harness (build + run + numpy compare).
 from tests.translators import op_oracle as oo
@@ -254,12 +262,22 @@ def test_float32_transcendental_precision() -> None:
         shapes={"a": "(N,)", "out": "(N,)"},
         backends=ALL,
         dtypes={"a": "float32", "out": "float32"},
-        skip_backends={
-            "fortran": "the `* 0.1` literal is float64, promoting the float32 multiply to double",
-            "numba": "numba types the `0.1` literal float64, promoting the float32 multiply to double",
-        },
+        skip_backends={"numba": "numba types the `0.1` literal float64, promoting the float32 multiply to double"},
     )
     skip_(status, "float32_transcendental_precision")
+
+
+def test_storage_only_kernel_types_fortran_literals_in_its_compute_float(tmp_path: pathlib.Path) -> None:
+    """A bf16 ABI computes in float32: a double literal would not even compile against the elemental demote helper."""
+    src = tmp_path / "f_numpy.py"
+    src.write_text("import numpy as np\ndef f(a, out):\n    out[:] = np.tanh(a) * 0.1\n")
+    bench_info = tmp_path / "bi.json"
+    shapes = {"a": "(N,)", "out": "(N,)"}
+    bench_info.write_text(
+        json.dumps(oo.bench_info_("f", ["a"], ["out"], shapes, {"N": 4}, dict.fromkeys(shapes, "bf16")))
+    )
+    emitted = emit_fortran(lower(parse_kernel(src, bench_info), native_call=renders_natively), fn_name="f")
+    assert "0.1_c_float" in emitted
 
 
 @pytest.mark.parametrize(
