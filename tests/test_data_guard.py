@@ -129,7 +129,7 @@ def test_extract_refuses_an_unscanned_output_that_is_a_source_or_holds_a_judge_d
 def test_extract_refuses_a_db_written_over_a_file_it_reads(
     scratch: pathlib.Path, capsys: pytest.CaptureFixture, db: str
 ) -> None:
-    """write_db unlinks its target first: the corpus and the regrade shards are read, so a --db naming one is
+    """write_db replaces its target: the corpus and the regrade shards are read, so a --db naming one is
     refused, and the file survives."""
     corpus = scratch / "corpus" / "gemm" / "gemm.yaml"
     corpus.parent.mkdir(parents=True)

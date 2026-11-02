@@ -51,7 +51,7 @@ def test_a_retired_setup_is_dropped_and_counted_apart_from_a_foreign_one(tmp_pat
 
 
 def test_a_build_refuses_to_write_over_its_own_input_or_output(tmp_path: pathlib.Path) -> None:
-    """write_db unlinks its target first, and one --db is read in place: aliasing it destroys the only copy."""
+    """write_db replaces its target, and one --db is read in place: aliasing it destroys the only copy."""
     source = tmp_path / "results.db"
     source.write_bytes(b"recorded")
     with pytest.raises(data_guard.ProtectedPathError):
