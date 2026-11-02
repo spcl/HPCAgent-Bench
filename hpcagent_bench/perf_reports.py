@@ -25,6 +25,7 @@ __all__ = [
     "PERF_CALL_GRAPH",
     "PERF_EVENT",
     "PERF_FREQUENCY",
+    "PERF_SCRIPT_TIMEOUT_S",
     "UNKNOWN",
     "CallGraphJSON",
     "CallNode",
@@ -85,6 +86,9 @@ UNKNOWN: str = "[unknown]"
 #: /profile answer the agent keeps in context, and ``min_percent`` 0 on a deep profile would
 #: otherwise carry every call path perf saw.
 CALL_GRAPH_NODE_LIMIT: int = 200
+
+#: Seconds one ``perf script`` replay may take: a wedged replay must not hold a /profile request open forever.
+PERF_SCRIPT_TIMEOUT_S: float = 600.0
 
 
 class ProfilerUnavailable(RuntimeError):
@@ -252,12 +256,18 @@ def stacks(data: pathlib.Path) -> list[list[tuple[str, str]]]:
     could not unwind at all becomes a single :data:`UNKNOWN` frame rather than vanishing --
     unattributed time stays visible in the percentages.
     """
-    proc = subprocess.run(
-        [perf_check(), "script", "-i", str(data), "-F", "comm,ip,sym,dso", "--no-inline"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [perf_check(), "script", "-i", str(data), "-F", "comm,ip,sym,dso", "--no-inline"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=PERF_SCRIPT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as wedged:
+        raise PerfUnavailable(
+            "timed_out", f"perf script on {data.name} ran past {PERF_SCRIPT_TIMEOUT_S:g}s"
+        ) from wedged
     if proc.returncode != 0:
         raise PerfUnavailable("perf_record_failed", f"perf script failed on {data.name}: {proc.stderr.strip()[-400:]}")
     out: list[list[tuple[str, str]]] = []
