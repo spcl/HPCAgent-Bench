@@ -190,6 +190,19 @@ def test_temperatures_order_by_value_with_the_default_among_them() -> None:
     assert kernel_runs.parse_conditions("t0,default") == ("t0", "")
 
 
+def test_a_repeated_condition_draws_one_group() -> None:
+    """A condition spelled twice in ``--conditions`` (a stray repeat) is one group, not an empty twin."""
+    fig = kernel_runs.kernel_runs_figure(
+        costed_runs(stub_observations()), list(stub.KERNELS), allow_owed=True,
+        conditions=kernel_runs.parse_conditions("t0,default,t0"),
+    )  # fmt: skip
+    try:
+        assert len(fig.axes[-1].get_xticks()) == 2 * len(stub.KERNELS)
+        assert [text.get_text() for text in fig.axes[0].texts] == ["T = 0", "T = 1 (Default)"]
+    finally:
+        plt.close(fig)
+
+
 def test_one_condition_draws_one_unruled_untitled_group() -> None:
     frame = kernel_runs.select_conditions(stub_observations(), ("",))
     fig = kernel_runs.kernel_runs_figure(costed_runs(frame), list(stub.KERNELS), allow_owed=True)

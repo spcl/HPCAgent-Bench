@@ -163,10 +163,12 @@ def order_conditions(conditions: Sequence[str]) -> list[str]:
     temperatures = any(is_temperature(condition) for condition in conditions)
     packet_rank = {key: rank for rank, key in enumerate(study_tags.order("packets"))}
 
-    def key(condition: str) -> tuple[int, float]:
+    def key(condition: str) -> tuple[int, float, str]:
+        # The condition itself breaks ties -- the default against an explicit t1 at the same value,
+        # two unregistered packets -- else their order is left to the hash-seeded set iteration.
         if is_temperature(condition) or (condition == "" and temperatures):
-            return 0, condition_temperature(condition)
-        return 1, float(packet_rank.get(condition, len(packet_rank)))
+            return 0, condition_temperature(condition), condition
+        return 1, float(packet_rank.get(condition, len(packet_rank))), condition
 
     return sorted(set(conditions), key=key)
 
@@ -419,7 +421,7 @@ def kernel_runs_figure(
     (:class:`reliability.OwedRunsError`) unless ``allow_owed``, which draws them as "?"."""
     if not allow_owed:
         reliability.cell_runs(runs)
-    groups = list(conditions) or order_conditions([condition_of(str(setup)) for setup in runs["setup"]])
+    groups = list(dict.fromkeys(conditions)) or order_conditions([condition_of(str(setup)) for setup in runs["setup"]])
     columns = [column_key(condition, kernel) for condition in groups for kernel in kernels]
     score_series, cost_series = model_series(runs, kernels, groups)
     score = pk.speedup_series_metric(score_series, efficacy.MEASURE_LABELS[efficacy.Measure.SPEEDUP])

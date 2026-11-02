@@ -396,10 +396,7 @@ def valid_submission_rows(frame: "pd.DataFrame") -> "pd.Series":
     def column(name: str) -> "pd.Series":
         if name not in frame.columns:
             return pd.Series("", index=frame.index)
-        found = frame.loc[:, name]
-        if not isinstance(found, pd.Series):
-            raise MixedPopulationError(f"column {name!r} is not unique")
-        return found.astype(str)
+        return series_of(frame, name).astype(str)
 
     record, status = column("row_kind"), column("grade_final_status")
     stamped = (record == RowKind.SUBMISSION.text) & credited(frame) & (status != "error")
