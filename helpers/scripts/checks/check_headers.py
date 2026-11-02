@@ -12,7 +12,7 @@ Every tracked ``.py`` file in scope must begin with the copyright + SPDX header:
 header is then required immediately after.) A file that already carries this block
 block under a different copyright year -- or the pre-rename ``HPCAgent-Bench authors``
 wording -- is accepted as-is and never rewritten, so ``--fix`` never stacks a
-second notice on top of an existing one. ``--fix`` inserts the canonical 2021
+second notice on top of an existing one. ``--fix`` inserts the canonical 2026
 header only into files that have no such block at all.
 
 Scope -- the CORE package only: ``hpcagent_bench/`` (EXCLUDING ``benchmarks/`` and
