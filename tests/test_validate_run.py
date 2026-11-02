@@ -4,10 +4,12 @@
 missing a log and a submission reports exactly those FAILs, without a traceback."""
 
 import contextlib
+import os
 import pathlib
 import sqlite3
 import subprocess
 import sys
+import time
 import types
 from types import ModuleType
 
@@ -62,7 +64,7 @@ def seed_shard(path: pathlib.Path, *, episode_id: str, kernel: str = "gemm", ts:
         conn.commit()
 
 
-def add_call(path: pathlib.Path, episode_id: str, **values: object) -> None:
+def add_call(path: pathlib.Path, episode_id: str, *, ts: int = 1, **values: object) -> None:
     """One /score call of ``episode_id`` on gemm into the shard at ``path`` (its setup already there)."""
     with contextlib.closing(results_db.open_db(path)) as conn:
         results_db.ensure_setup(conn, results_db.Setup(episode_id, "c", "cpu", study="validate", model="stub-model"))
@@ -74,7 +76,7 @@ def add_call(path: pathlib.Path, episode_id: str, **values: object) -> None:
             "task_hash": "test-task",
             "call_index": 1,
         }
-        results_db.add_grade(conn, run, "gemm", "score", ts_ms=1, values=stamp | values)
+        results_db.add_grade(conn, run, "gemm", "score", ts_ms=ts, values=stamp | values)
         conn.commit()
 
 
@@ -87,7 +89,7 @@ def build_run_dir(
     for rank in range(ranks):
         rank_dir = run_dir / "judge" / f"rank-{rank}"
         rank_dir.mkdir(parents=True)
-        seed_shard(rank_dir / "hpcagent_bench.db", episode_id=f"r{rank}", ts=rank + 1)
+        seed_shard(rank_dir / "hpcagent_bench.db", episode_id=f"r{rank}", ts=int(time.time() * 1000) + rank)
 
     for index in range(agents):
         agent_dir = run_dir / "shared" / f"agent-{index}"
@@ -186,6 +188,48 @@ def test_a_run_dir_that_does_not_exist_at_all_still_reports_cleanly(
     results = validate_run.run_checks(run_dir)
     assert all(not r.ok for r in results)
     assert validate_run.main([str(run_dir)]) == 1
+
+
+def test_a_judge_that_stopped_before_its_agents_fails_judge_tail(
+    tmp_path: pathlib.Path, validate_run: types.ModuleType
+) -> None:
+    run_dir = build_run_dir(tmp_path, agents=1)
+    for log in run_dir.glob("agents/node-0/*/claude.log"):
+        os.utime(log, (time.time() + 2 * validate_run.JUDGE_SILENCE_S,) * 2)
+    result = validate_run.check_judge_tail(run_dir)
+    assert not result.ok
+    assert "rank-0: silent" in result.summary
+
+
+def test_a_full_window_of_wrong_grades_fails_judge_tail(tmp_path: pathlib.Path, validate_run: types.ModuleType) -> None:
+    run_dir = build_run_dir(tmp_path, ranks=1, agents=1)
+    shard = run_dir / "judge" / "rank-0" / "hpcagent_bench.db"
+    for index in range(validate_run.TAIL_GRADES):
+        add_call(shard, "wrong", ts=int(time.time() * 1000) + index + 10, correct=0, call_index=index + 1)
+    result = validate_run.check_judge_tail(run_dir)
+    assert not result.ok
+    assert f"none of its last {validate_run.TAIL_GRADES}" in result.summary
+
+
+def test_a_language_whose_sanitizer_leg_never_ran_fails_legs(
+    tmp_path: pathlib.Path, validate_run: types.ModuleType
+) -> None:
+    run_dir = build_run_dir(tmp_path, ranks=1, agents=1)
+    shard = run_dir / "judge" / "rank-0" / "hpcagent_bench.db"
+    with contextlib.closing(results_db.open_db(shard)) as conn:
+        conn.execute("UPDATE grades SET detail = 'sanitizers: not applied: no libasan'")
+        conn.commit()
+    result = validate_run.check_legs(run_dir)
+    assert not result.ok
+    assert "c: 1/1 not applied" in result.summary
+
+
+def test_the_merge_failed_marker_fails_only_merge(tmp_path: pathlib.Path, validate_run: types.ModuleType) -> None:
+    run_dir = build_run_dir(tmp_path)
+    assert validate_run.check_merge(run_dir).ok
+    (run_dir / "MERGE_FAILED").write_text("merge_results exited 1\n")
+    failed = [result.name for result in validate_run.run_checks(run_dir) if not result.ok]
+    assert failed == ["merge"]
 
 
 def test_monitor_csv_with_no_data_rows_is_flagged(tmp_path: pathlib.Path, validate_run: types.ModuleType) -> None:
