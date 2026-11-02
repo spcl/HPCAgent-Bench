@@ -35,7 +35,7 @@ __all__ = [
 #: else ``np.abs(z)`` / ``np.real(z)`` / ``z.real`` read as complex and mis-drive
 #: both the lifted-temp dtype (declaring a real magnitude ``complex128``) and the
 #: intrinsic router (``csqrt`` on a real, wrong for a negative operand).
-REAL_FROM_COMPLEX: frozenset[str] = frozenset({"real", "imag", "abs", "absolute", "angle", "hypot", "sign"})
+REAL_FROM_COMPLEX: frozenset[str] = frozenset({"real", "imag", "abs", "absolute", "angle", "hypot"})
 
 #: Array METHODS that carry their operand's element type through: the value being typed is the
 #: RECEIVER, which is nowhere in ``node.args``. ``ARRAY_METHOD_SHAPE_OPS`` is the shared list of

@@ -367,10 +367,17 @@ class ElementalUfuncToPrimitive(RewritePass):
             onep = ast.BinOp(left=ast.Constant(value=1.0), op=ast.Add(), right=expterm)
             tail = numpy_call("log", [onep])
             head = numpy_call("maximum", [copy.deepcopy(a), copy.deepcopy(b)])
-            return ast.copy_location(ast.BinOp(left=head, op=ast.Add(), right=tail), node)
+            # Equal infinities difference to NaN; numpy answers that infinity.
+            equal = ast.Compare(left=copy.deepcopy(a), ops=[ast.Eq()], comparators=[copy.deepcopy(b)])
+            gap = ast.BinOp(left=copy.deepcopy(a), op=ast.Sub(), right=copy.deepcopy(b))
+            undefined = ast.Compare(left=gap, ops=[ast.NotEq()], comparators=[ast.Constant(value=0.0)])
+            same_inf = ast.BinOp(left=equal, op=ast.BitAnd(), right=undefined)
+            blended = ast.BinOp(left=head, op=ast.Add(), right=tail)
+            return ast.copy_location(numpy_call("where", [same_inf, copy.deepcopy(a), blended]), node)
         if f.attr == "heaviside":
             self.changed = True
+            nan = ast.Compare(left=copy.deepcopy(a), ops=[ast.NotEq()], comparators=[copy.deepcopy(a)])
             inner = numpy_call("where", [cmp_zero(copy.deepcopy(a), ast.Eq()), b, ast.Constant(value=1.0)])
             outer = numpy_call("where", [cmp_zero(a, ast.Lt()), ast.Constant(value=0.0), inner])
-            return ast.copy_location(outer, node)
+            return ast.copy_location(numpy_call("where", [nan, ast.Constant(value=float("nan")), outer]), node)
         return node

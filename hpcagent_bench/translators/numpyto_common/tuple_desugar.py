@@ -170,6 +170,14 @@ class Env:
             self.tuples.pop(name, None)
             self.kinds.pop(name, None)
             self.bound.discard(name)
+        # A recorded element reading a rebound name no longer means what it meant.
+        stale = [key for key, elts in self.tuples.items() if reads_any(elts, names)]
+        for key in stale:
+            del self.tuples[key]
+
+
+def reads_any(elements: list[ast.expr], names: OrderedSet | list[str]) -> bool:
+    return any(isinstance(n, ast.Name) and n.id in names for e in elements for n in walk_nodes(e))
 
 
 def is_index_element(node: ast.expr) -> bool:
@@ -583,7 +591,12 @@ class TupleDesugar:
         if elements is None or len(elements) != len(targets):
             return None
         # Positional self-copies never race: they write back what they read.
-        changed = [i for i, e in enumerate(elements) if not (isinstance(e, ast.Name) and e.id == targets[i].id)]
+        names = [target.id for target in targets]
+        changed = [
+            i
+            for i, e in enumerate(elements)
+            if not (isinstance(e, ast.Name) and e.id == names[i]) or names.count(names[i]) > 1
+        ]
         read = {n.id for i in changed for n in walk_nodes(elements[i]) if isinstance(n, ast.Name)}
         if {targets[i].id for i in changed} & read:
             return None

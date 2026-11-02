@@ -368,7 +368,11 @@ def take_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
         return np_fallthrough_rank(value, attr, ranks)
     base = expr_rank(value.args[0], ranks)
     idx = expr_rank(value.args[1], ranks)
-    return None if base is None or idx is None else base - 1 + idx
+    if base is None or idx is None:
+        return None
+    if len(value.args) < 3 and not any(k.arg == "axis" for k in value.keywords):
+        return idx  # an axis-less take flattens the base first: the result rank is the index's
+    return base - 1 + idx
 
 
 def expand_dims_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:

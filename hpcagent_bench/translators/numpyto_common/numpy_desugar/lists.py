@@ -309,7 +309,14 @@ def plan_list_build(
 def list_build_statements(name: str, segments: list[ListSegment], length: str, pinned: bool) -> list[ast.stmt]:
     """The planned build as an allocation plus stores; a cut length guards every store it may drop."""
     integral = all(integer_expression(e, frozenset({s.counter})) for s in segments for e in s.elements)
-    lines = [f"{name} = np.zeros({length}, dtype=np.{'int64' if integral else 'float64'})"]
+    complex_valued = any(
+        isinstance(n, ast.Constant) and isinstance(n.value, complex)
+        for s in segments
+        for e in s.elements
+        for n in walk_nodes(e)
+    )
+    dtype = "complex128" if complex_valued else "int64" if integral else "float64"
+    lines = [f"{name} = np.zeros({length}, dtype=np.{dtype})"]
     fill = segments[-1]
     prefix = [e for s in segments[:-1] for e in s.elements]
     if (

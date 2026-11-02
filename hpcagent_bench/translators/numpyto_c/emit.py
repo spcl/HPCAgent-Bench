@@ -1349,6 +1349,8 @@ class CBodyEmitter(BaseEmitter):
             return f"(({c_type_(fn)})({self.emit_expr(node.args[0])}))"
         # np.sign: numpy sign(nan) == nan (the naive form gives 0 and double-evaluates) -> the __npb_sign helper.
         if fn == "__npb_sign" and len(node.args) == 1:
+            if self.is_complex_operand(node.args[0]):
+                raise NotImplementedError("np.sign of a complex operand is z / |z|, not __npb_sign")
             return f"__npb_sign({self.emit_expr(node.args[0])})"
         return None
 
@@ -1426,6 +1428,8 @@ class CBodyEmitter(BaseEmitter):
             return f"({x})" if attr == "real" else "0.0"
         # np.sign(x) in scalar context: same NaN-aware __npb_sign helper as the array marker.
         if attr == "sign" and len(node.args) == 1:
+            if self.is_complex_operand(node.args[0]):
+                raise NotImplementedError("np.sign of a complex operand is z / |z|, not __npb_sign")
             return f"__npb_sign({self.emit_expr(node.args[0])})"
         # np.abs(x) in scalar context: complex -> cabs, float -> fabs, integer -> llabs (mirrors builtin abs).
         if attr in ("abs", "absolute", "fabs") and len(node.args) == 1:
