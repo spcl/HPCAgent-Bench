@@ -25,13 +25,9 @@ from tests.fresh_module import fresh
 from tests.sqlite_closing import connect
 
 
-def load_example_module(name: str) -> ModuleType:
-    return fresh(name)
-
-
 @pytest.fixture(name="promoter")
 def promoter_fixture() -> ModuleType:
-    return load_example_module("promote_unsubmitted")
+    return fresh("promote_unsubmitted")
 
 
 def fake_urlopen(captured: list, health: dict | None = None, body: dict | None = None) -> Callable[..., io.BytesIO]:
@@ -408,7 +404,7 @@ def test_outside_slurm_a_promotion_waits_as_long_as_the_router_does(
     promotion that gave up sooner abandoned a grade the router was still waiting for."""
     monkeypatch.delenv("SLURM_JOB_END_TIME", raising=False)
     monkeypatch.setenv("JUDGE_UPSTREAM_TIMEOUT_SECONDS", "4321")
-    promoter = load_example_module("promote_unsubmitted")
+    promoter = fresh("promote_unsubmitted")
     assert submit_timeouts(promoter, tmp_path, monkeypatch) == [4321.0]
 
 

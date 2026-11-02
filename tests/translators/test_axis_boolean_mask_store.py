@@ -96,7 +96,7 @@ def test_an_array_rhs_over_a_masked_axis_is_declined() -> None:
         "    out[:, valid] = a[:, valid]\n"
     )
     kir = parse_source(src, "am", ["a", "idx"], ["out"], SHAPES, SYMS, DTYPES)
-    with pytest.raises((NotImplementedError, ValueError, KeyError)):
+    with pytest.raises(NotImplementedError, match="MASK"):
         emit_c(lower(kir), fn_name="am")
 
 
