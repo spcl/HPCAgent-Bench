@@ -6,8 +6,8 @@
 #   BUILD_TARGETS=judge containers/images/build.sh judge-agent-amd    one target (OUTPUT_SQSH overrides its path)
 #   CE_IMAGE_FLAVOR=native containers/images/build.sh judge-agent-cpu this machine's CPU; never pushed
 #   containers/images/build.sh <image> --roles                        print the images.env roles it writes
-#   containers/images/build.sh <image> --drift                        compare this checkout with the published labels
-#                                                                     (exit 1 when a target would rebuild); builds nothing
+#   containers/images/build.sh <image> --drift                        compare this checkout with the published
+#                                                                     labels (exit 1: a target would rebuild); no build
 #
 # <image>/image.sh holds what differs per image: TARGET_ROLE (Dockerfile target -> images.env role,
 # "-" for a one-stage Dockerfile) with TARGET_ORDER, BASE_IMAGE pinned by digest, ce_image_args (the
@@ -49,8 +49,8 @@ if [[ "${2:-}" == --drift ]]; then
     for kv in ${EXTRA_BUILD_ARGS:-}; do BUILD_ARGS+=(--build-arg "${kv}"); done
     drifted=0
     for target in "${targets[@]}"; do
-        fingerprint="$(ce_build_fingerprint "${IMAGE_DIR}/Dockerfile" "$(dockerfile_target "${target}")" "${BUILD_ARGS[@]}")" \
-            || fingerprint=""
+        stage="$(dockerfile_target "${target}")"
+        fingerprint="$(ce_build_fingerprint "${IMAGE_DIR}/Dockerfile" "${stage}" "${BUILD_ARGS[@]}")" || fingerprint=""
         ce_pull_wanted "${TARGET_ROLE[${target}]}" "${fingerprint}" || drifted=1
     done
     exit "${drifted}"

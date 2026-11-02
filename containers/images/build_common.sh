@@ -365,7 +365,8 @@ ce_registry_label() {
     if [[ "${host}" == docker.io ]]; then
         host=registry-1.docker.io
         [[ -z "${REGISTRY_USER:-}" || -z "${REGISTRY_TOKEN:-}" ]] || login=(-u "${REGISTRY_USER}:${REGISTRY_TOKEN}")
-        token="$(curl -fsS "${login[@]}" "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${path}:pull" \
+        token="$(curl -fsS "${login[@]}" \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${path}:pull" \
             | jq -r .token)" || return 1
         auth=(-H "Authorization: Bearer ${token}")
     fi
@@ -607,8 +608,9 @@ ce_lock_digest() {
 
 # Exports IMAGE_PYTHON_LOCK and HARNESS_LOCK, the build args that stand for the pins in the fingerprint and the layer
 # cache: the Dockerfiles bind uv.lock and pyproject.toml for the steps that read them, so a moved wheel the image does
-# not carry rebuilds nothing. IMAGE_PYTHON_LOCK covers the source builds ($@ names an image's extra groups), HARNESS_LOCK
-# the harness venvs and the playwright version the launch gate fetches chromium for. CE_PULL=only compares nothing.
+# not carry rebuilds nothing. IMAGE_PYTHON_LOCK covers the source builds ($@ names an image's extra groups),
+# HARNESS_LOCK the harness venvs and the playwright version the launch gate fetches chromium for. CE_PULL=only compares
+# nothing.
 #   ce_lock_keys [uv export flags]
 ce_lock_keys() {
     local group harness=""
