@@ -500,7 +500,7 @@ def test_a_run_directory_inside_the_shared_material_is_refused(
         hide=(),
         material=str(tmp_path / material) if material else "",
     )
-    with pytest.raises(SystemExit, match="keep the run directory outside"):
+    with pytest.raises(SystemExit, match="the view shows"):
         seal.seal_plan(layout, ("run",))
 
 
