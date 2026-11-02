@@ -452,6 +452,17 @@ def test_a_live_claim_of_another_running_job_is_not_graded_twice(tmp_path: pathl
     assert graded == len(items) - 1
 
 
+def test_an_item_a_job_gave_up_on_is_free_for_the_next_job_at_once(tmp_path: pathlib.Path) -> None:
+    """The first job's claim on a faulted item has no holder left: the next job never waits for it to go stale."""
+    items = grade_under.build_worklist([shard_db(tmp_path)], [])[0][:1]
+
+    def broken(item: grade_under.Item) -> dict[str, Any]:
+        raise RuntimeError("judge fault")
+
+    assert grade_under.run_shard(items, 0, tmp_path / "out", broken, job="j1", wait=False) == 0
+    assert grade_under.run_shard(items, 0, tmp_path / "out", fake_row, job="j2", wait=False) == 1
+
+
 def listed_item(tmp_path: pathlib.Path) -> grade_under.Item:
     items = grade_under.build_worklist([shard_db(tmp_path)], [])[0]
     return next(item for item in items if item.ts_ms == 10)
