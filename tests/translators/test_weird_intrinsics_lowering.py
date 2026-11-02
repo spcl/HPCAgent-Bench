@@ -262,6 +262,47 @@ def test_float32_transcendental_precision() -> None:
     skip_(status, "float32_transcendental_precision")
 
 
+@pytest.mark.parametrize(
+    ("left", "right", "result", "a", "b"),
+    [
+        ("int32", "int64", "int64", [[2, 3], [5, 7]], [[3_000_000_000, 1], [1, 4_000_000_000]]),
+        ("uint8", "int8", "int16", [[200, 100], [1, 2]], [[100, -100], [3, 4]]),
+    ],
+    ids=["left-narrower", "neither-operand-holds-the-result"],
+)
+def test_mixed_width_integer_matmul(left: str, right: str, result: str, a: list, b: list) -> None:
+    """``a @ b`` accumulates in numpy's result dtype: at the left operand's, the wide products wrap."""
+    oo.native()
+    status = oo.run_op(
+        "import numpy as np\ndef f(a, b, out):\n    out[:] = a @ b\n",
+        "f",
+        {"a": np.array(a, dtype=left), "b": np.array(b, dtype=right)},
+        {"out": (2, 2)},
+        {"N": 2},
+        shapes={"a": "(N, N)", "b": "(N, N)", "out": "(N, N)"},
+        backends=ALL,
+        dtypes={"a": left, "b": right, "out": result},
+    )
+    skip_(status, "mixed_width_integer_matmul")
+
+
+def test_batched_mixed_width_integer_matmul() -> None:
+    """A batched ``t = a @ b`` allocates ``t`` in numpy's result dtype, not the left operand's."""
+    oo.native()
+    wide = np.array([[3_000_000_000, 1], [1, 4_000_000_000]], dtype=np.int64)
+    status = oo.run_op(
+        "import numpy as np\ndef f(a, b, out):\n    t = a @ b\n    out[:] = t\n",
+        "f",
+        {"a": np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2), "b": np.stack([wide, wide])},
+        {"out": (2, 2, 2)},
+        {"N": 2},
+        shapes={"a": "(N, N, N)", "b": "(N, N, N)", "out": "(N, N, N)"},
+        backends=("numba",),
+        dtypes={"a": "int32", "b": "int64", "out": "int64"},
+    )
+    skip_(status, "batched_mixed_width_integer_matmul")
+
+
 def test_complex_dot_no_conjugation() -> None:
     """A rank-1 ``a @ b`` on COMPLEX operands is ``sum(a*b)`` -- numpy dot / matmul do NOT
     conjugate. Fortran's DOT_PRODUCT conjugates its first arg, so the emitter must emit the

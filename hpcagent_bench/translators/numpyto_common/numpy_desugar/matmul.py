@@ -3,6 +3,7 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.limits import CALL_GRAPH_ROUNDS
@@ -15,6 +16,7 @@ __all__ = [
     "INT_MATMUL_HOIST",
     "BatchedMatmulToLoop",
     "IndexLeadingAxis",
+    "MatmulLoopPass",
     "ReshapeContiguousInline",
     "ReshapeMatmulInline",
     "as_matmul",
@@ -26,7 +28,9 @@ __all__ = [
     "is_transpose_expr",
     "matmul_operands",
     "matmul_pairs",
+    "matmul_result_dtype",
     "noncontig_names",
+    "operand_dtype",
 ]
 
 
@@ -73,7 +77,30 @@ class IndexLeadingAxis(ast.NodeTransformer):
         return node
 
 
-class BatchedMatmulToLoop(RankedRewritePass):
+def matmul_result_dtype(aid: str, bid: str, wa: str | None, wb: str | None) -> str:
+    """Source text of numpy's ``result_type(a, b)``, so a wide product neither wraps in the result nor needs a narrowing
+    store (DaCe cannot emit one). ``np.result_type`` does not survive the DaCe frontend, so integers resolve here from
+    the operands' exact dtypes ``wa`` / ``wb``, known for the kernel's own arrays; any other pair reads as ``aid``'s."""
+    if wa is None or wb is None or not (dtypes.is_integer(wa) and dtypes.is_integer(wb)):
+        return f"{aid}.dtype"
+    result = dtypes.promote_integers(wa, wb)
+    return {dtypes.canonical(wb): f"{bid}.dtype", dtypes.canonical(wa): f"{aid}.dtype"}.get(result, f"np.{result}")
+
+
+class MatmulLoopPass(RankedRewritePass):
+    """A pass that allocates a matmul's result, so it reads the scope's exact dtypes too."""
+
+    __slots__ = ("widths",)
+
+    def __init__(self, ranks: dict[str, int], widths: dict[str, str]) -> None:
+        super().__init__(ranks)
+        self.widths = widths
+
+    def result_dtype(self, aid: str, bid: str) -> str:
+        return matmul_result_dtype(aid, bid, self.widths.get(aid), self.widths.get(bid))
+
+
+class BatchedMatmulToLoop(MatmulLoopPass):
     """``Q[:] = Q + I @ S`` (I rank-3) -> a loop over the batch axis doing a 2-D GEMM per
     element. numba / pythran / Fortran have 2-D matmul but no stacked (>=3-D) form."""
 
@@ -133,7 +160,7 @@ class BatchedMatmulToLoop(RankedRewritePass):
         if rank is None or rank < 3:
             return None
         dims = [f"{a.id}.shape[{k}]" for k in range(rank - 1)] + [f"{b.id}.shape[{rank - 1}]"]
-        return ast.parse(f"{name} = np.empty(({', '.join(dims)}), {a.id}.dtype)").body[0]
+        return ast.parse(f"{name} = np.empty(({', '.join(dims)}), {self.result_dtype(a.id, b.id)})").body[0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
@@ -165,13 +192,10 @@ class BatchedMatmulToLoop(RankedRewritePass):
         return [ast.copy_location(alloc, node), loop] if alloc is not None else loop
 
 
-def int_matmul_acc_dtype(aid: str, bid: str, ka: str, kb: str) -> str:
-    """Accumulator dtype source for an integer ``a @ b``: an operand's ``.dtype``.
-
-    Matches numpy's ``result_type(a, b)`` so the store is not a narrowing copy (DaCe cannot
-    emit one). ``np.result_type`` does not survive the DaCe frontend and only operand kinds
-    are known here, not widths. A bool operand never decides it (``bool @ int32`` is int32)."""
-    return f"{bid}.dtype" if (ka == "bool" and kb != "bool") else f"{aid}.dtype"
+def int_matmul_acc_dtype(aid: str, bid: str, ka: str, kb: str, wa: str | None, wb: str | None) -> str:
+    """Accumulator dtype source for an integer ``a @ b``: :func:`matmul_result_dtype`, except that a bool operand never
+    decides it (``bool @ int32`` is int32)."""
+    return f"{bid}.dtype" if ka == "bool" and kb != "bool" else matmul_result_dtype(aid, bid, wa, wb)
 
 
 def int_matmul_stmts(temp: str, a: str, b: str, ra: int, rb: int, ctr: int, acc: str) -> list[str]:
@@ -207,10 +231,17 @@ def int_matmul_stmts(temp: str, a: str, b: str, ra: int, rb: int, ctr: int, acc:
     )
 
 
+def operand_dtype(operand: ast.expr, widths: dict[str, str]) -> str | None:
+    """The exact dtype of a name, a subscript of it or its transpose, when ``widths`` holds it."""
+    while isinstance(operand, ast.Subscript) or (isinstance(operand, ast.Attribute) and operand.attr == "T"):
+        operand = operand.value
+    return widths.get(operand.id) if isinstance(operand, ast.Name) else None
+
+
 def int_matmul_temp(a: ast.expr, b: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """The temp an INTEGER ``a @ b`` loop fills, or None when an operand is not (definitely) integer/bool."""
-    dtypes, ranks = hoist.tables.dtypes, hoist.tables.ranks
-    ka, kb = dtype_kind(a, dtypes), dtype_kind(b, dtypes)
+    kinds, ranks, widths = hoist.tables.dtypes, hoist.tables.ranks, hoist.tables.widths
+    ka, kb = dtype_kind(a, kinds), dtype_kind(b, kinds)
     if ka not in ("int", "bool") or kb not in ("int", "bool"):
         return None  # not (definitely) an integer matmul -> leave for numba's float @
     ra, rb = expr_rank(a, ranks), expr_rank(b, ranks)
@@ -225,7 +256,7 @@ def int_matmul_temp(a: ast.expr, b: ast.expr, hoist: ValueHoist) -> ast.expr | N
     if not isinstance(b, ast.Name):
         pre.append(f"{bid} = {ast.unparse(b)}")
     temp = f"{p}_o"
-    acc = int_matmul_acc_dtype(aid, bid, ka, kb)
+    acc = int_matmul_acc_dtype(aid, bid, ka, kb, operand_dtype(a, widths), operand_dtype(b, widths))
     hoist.queue(pre + int_matmul_stmts(temp, aid, bid, ra, rb, hoist.ctr, acc))
     hoist.ctr += 1
     return name_(temp)
@@ -321,7 +352,7 @@ def as_reshape(node: ast.expr) -> tuple[ast.expr, ast.expr] | None:
     return None
 
 
-class ReshapeMatmulInline(RankedRewritePass):
+class ReshapeMatmulInline(MatmulLoopPass):
     """``T[:] = np.reshape(np.reshape(X, (*batch, 1, K)) @ Y, (*batch, N))`` -> a contraction
     loop ``r[*b, n] = sum_k X[*b, k] * Y[k, n]`` into a fresh temp, so ``A = f(A)`` is WAR-safe.
 
@@ -372,7 +403,7 @@ class ReshapeMatmulInline(RankedRewritePass):
         bidx = ", ".join(bi)
         oshape = "".join(f"{X.id}.shape[{i}], " for i in batch) + f"{Y.id}.shape[1]"
         temp = f"{p}_o"
-        lines = [f"{temp} = np.zeros(({oshape},), {X.id}.dtype)"]
+        lines = [f"{temp} = np.zeros(({oshape},), {self.result_dtype(X.id, Y.id)})"]
         deep = ""
         for i in batch:
             lines.append(f"{deep}for {bi[i]} in range({X.id}.shape[{i}]):")
