@@ -66,6 +66,22 @@ def test_the_prepared_grade_is_the_one_the_judge_store_serves(
         assert conn.execute("SELECT count(*) FROM baseline_timings").fetchone()[0], "no baseline race stored"
 
 
+@pytest.mark.parametrize(("broken", "status"), [({"k1"}, 0), ({"k1", "k2"}, 1)])
+def test_a_task_fails_only_when_its_whole_share_failed(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, broken: set[str], status: int
+) -> None:
+    def sources(kernel: str, plan: Plan) -> None:
+        del plan
+        if kernel in broken:
+            raise OSError(kernel)
+
+    monkeypatch.setitem(prepare.STEP_FUNCTIONS, "sources", sources)
+    kernels = tmp_path / "kernels.txt"
+    kernels.write_text("k1\nk2\n", encoding="utf-8")
+    argv = ["--kernels-file", str(kernels), "--steps", "sources", "--baseline", "c", "--rank", "0", "--ranks", "1"]
+    assert prepare.main(argv) == status
+
+
 def test_the_dace_step_caches_the_parsed_base_sdfg() -> None:
     """``frameworks``: DaCe's prepare leaves the base SDFG its optimize would otherwise parse."""
     from hpcagent_bench import framework_cache, paths
@@ -139,7 +155,7 @@ def test_renders_render_each_kernel_and_each_cpf_target_and_grade_nothing(
 
     def render_kernel(kernel: str, render: str, datatype: str) -> None:
         del datatype  # the render's inputs are not this stand-in's business
-        if render == "fortran":
+        if (kernel, render) == ("k1", "fortran"):
             raise RuntimeError("no gfortran")
         rendered.append((kernel, render))
 
@@ -150,8 +166,8 @@ def test_renders_render_each_kernel_and_each_cpf_target_and_grade_nothing(
     kernels = tmp_path / "kernels.txt"
     kernels.write_text("k1\nk2\nk3\n", encoding="utf-8")
     argv = ["--kernels-file", str(kernels), "--renders", "numba,c,fortran,cpf-cpu,cpf-gpu", "--cpf-cache", "C"]
-    assert prepare.main([*argv, "--rank", "0", "--ranks", "2"]) == 1
-    assert rendered == [("k1", "numba"), ("k1", "c"), ("k3", "numba"), ("k3", "c")]
+    assert prepare.main([*argv, "--rank", "0", "--ranks", "2"]) == 0
+    assert rendered == [("k1", "numba"), ("k1", "c"), ("k3", "numba"), ("k3", "c"), ("k3", "fortran")]
     assert targets == ["cpu", "gpu"]
 
 
