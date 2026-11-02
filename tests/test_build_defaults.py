@@ -234,12 +234,33 @@ def test_the_layer_store_survives_only_with_the_cache_on(
     done = bash(
         'ce_podman_env >/dev/null; printf "%s" "${CE_BUILD_FLAGS[*]}"',
         repo,
-        {"CE_BUILD_CACHE": knob, "CE_TMPFS": str(tmpfs), "PATH": f"{stubs}:{SHELL_PATH}"},
+        {"CE_BUILD_CACHE": knob, "CE_LAYER_CACHE": "0", "CE_TMPFS": str(tmpfs), "PATH": f"{stubs}:{SHELL_PATH}"},
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout == want_flags
     assert (tmpfs / "root" / "layers").is_dir() == store_kept
     assert not (tmpfs / "runroot").exists(), "runtime state must never outlive its job"
+
+
+def test_a_layer_registry_that_cannot_start_costs_the_resume_not_the_build(
+    repo: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """On by default, so a machine without its download must still build."""
+    tmpfs = tmp_path / "tmpfs"
+    tmpfs.mkdir()
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    for name, body in (("podman", '[ "$1" = unshare ] && { shift; exec "$@"; }\nexit 0'), ("curl", "exit 22")):
+        (stubs / name).write_text(f"#!/bin/sh\n{body}\n", encoding="ascii")
+        (stubs / name).chmod(0o755)
+    done = bash(
+        'ce_podman_env; printf "repo=[%s] flags=%s" "${CE_LAYER_REPO}" "${CE_BUILD_FLAGS[*]}"',
+        repo,
+        {"JIT_CACHE_ROOT": str(tmp_path / "jit"), "CE_TMPFS": str(tmpfs), "PATH": f"{stubs}:{SHELL_PATH}"},
+    )
+    assert done.returncode == 0, done.stderr
+    assert "repo=[] flags=--layers=true" in done.stdout
+    assert "only on this node" in done.stdout
 
 
 def test_the_cache_knob_off_mounts_no_build_cache(repo: pathlib.Path) -> None:
