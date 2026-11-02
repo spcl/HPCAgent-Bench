@@ -206,6 +206,7 @@ def entry_name(entry: ModelEntry | PacketDef | Column | str) -> str:
 
 def registered(kind: str) -> Names:
     """``{key: display name}`` of a vocabulary kind, in slot order (the no-packet control first)."""
+    plugins.register()
     block = KINDS[kind]
     return {key: entry_name(block.entries[key]) for key in block}
 
