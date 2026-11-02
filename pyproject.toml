@@ -312,6 +312,7 @@ hpcagent_bench = [
 # Third-party warnings only (zero-warning policy for our own code).
 [tool.pytest.ini_options]
 timeout = 3600
+addopts = ["--continue-on-collection-errors"]
 markers = [
     "smoke: the release smoke suite (`pytest -m smoke`): an end-to-end path on a CPU host without a GPU or SLURM; the whole selection runs in under 5 minutes.",
 ]
