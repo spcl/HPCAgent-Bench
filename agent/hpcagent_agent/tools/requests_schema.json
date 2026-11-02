@@ -530,7 +530,7 @@
    "type": "array"
   },
   "startup": {
-   "description": "What a request settles before any array is touched: the libraries to ``load`` and the processor\n``grid``'s extents over the rank count ``P`` (None = not a distributed run).",
+   "description": "What a request settles before any array is touched: the libraries to ``load`` and the processor ``grid``'s extents over the rank count ``P`` (None = not a distributed run).",
    "properties": {
     "grid": {
      "anyOf": [
