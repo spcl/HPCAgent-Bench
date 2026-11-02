@@ -28,6 +28,7 @@ import tempfile
 from collections.abc import Sequence
 
 from hpcagent_bench import config, core_dumps
+from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.polyhedral.pluto_affine import has_scop, scop_nonaffine_reason
 from hpcagent_bench.polyhedral.pluto_normalize import normalize_scop_input, restore_output
@@ -230,20 +231,11 @@ def publish_text(dst: pathlib.Path, text: str) -> bool:
     """Atomically place ``text`` at ``dst``; no-op when it is already there. True if written.
 
     Unchanged content is not rewritten: :func:`transformed_sources` re-runs polycc when the input's
-    mtime is newer than its transform. A unique temporary in the destination's directory plus one
-    :func:`os.replace` means a reader never sees a half-written scop.
+    mtime is newer than its transform.
     """
     if dst.is_file() and dst.read_text() == text:
         return False
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=dst.parent, prefix=f".{dst.name}.", suffix=".tmp")
-    tmp = pathlib.Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w") as handle:
-            handle.write(text)
-        pathlib.Path(tmp).replace(dst)
-    finally:
-        tmp.unlink(missing_ok=True)
+    write_atomic(dst, text.encode())
     return True
 
 
