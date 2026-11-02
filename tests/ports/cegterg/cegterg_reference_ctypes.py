@@ -45,7 +45,10 @@ _CD = ctypes.c_double
 #: Probes that the compiler AND all three libraries (headers + link) are usable.
 _PROBE = (
     '#include <fftw3.h>\nextern "C" void zgemm_();\nextern "C" void zhegvd_();\n'
-    "int main() { fftw_cleanup(); return 0; }\n"
+    "int main() { fftw_cleanup(); "
+    "void (* volatile blas_symbol)() = &zgemm_; "
+    "void (* volatile lapack_symbol)() = &zhegvd_; "
+    "return blas_symbol == nullptr || lapack_symbol == nullptr; }\n"
 )
 
 

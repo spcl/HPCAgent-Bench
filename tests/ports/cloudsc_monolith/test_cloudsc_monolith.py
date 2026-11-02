@@ -43,10 +43,21 @@ Outputs = dict[str, np.ndarray]
 
 
 def ulp_distance(got: np.ndarray, want: np.ndarray) -> np.ndarray:
-    """Elementwise count of float64 values between ``got`` and ``want`` (0 for +0 against -0)."""
-    lowest = np.iinfo(np.int64).min
-    ordered = [np.where(bits < 0, lowest - bits, bits) for bits in (got.view(np.int64), want.view(np.int64))]
-    return np.abs(ordered[0] - ordered[1])
+    """Elementwise float64 ULP distance, including sign changes and signed zero."""
+    sign_bit = np.uint64(1 << 63)
+
+    def ordered(values: np.ndarray) -> np.ndarray:
+        values = np.asarray(values, dtype=np.float64)
+        bits = values.view(np.uint64)
+        # Reverse the bit order for negatives; flip the sign bit for non-negatives.
+        # Work unsigned so distances across the sign boundary cannot overflow int64.
+        negative = (bits & sign_bit) != 0
+        # Adding one on the negative side collapses -0.0 and +0.0 to the
+        # same key without introducing an extra step around zero.
+        return np.where(negative, (~bits) + np.uint64(1), bits ^ sign_bit).astype(np.uint64)
+
+    a, b = ordered(got), ordered(want)
+    return np.maximum(a, b) - np.minimum(a, b)
 
 
 def numpy_outputs() -> list[Outputs]:
@@ -118,6 +129,11 @@ def test_the_ulp_distance_counts_representable_steps_across_zero() -> None:
     values = np.array([1.0, -0.0, 5e-324, -5e-324])
     stepped = np.array([np.nextafter(1.0, 2.0), 0.0, 0.0, 5e-324])
     assert ulp_distance(values, stepped).tolist() == [1, 0, 1, 2]
+
+    # Opposite signs at this magnitude exceed INT64_MAX ULPs. The old signed
+    # subtraction overflowed to INT64_MIN, which .max() could mistake for zero.
+    crossed = ulp_distance(np.array([2.0, -2.0]), np.array([-2.0, 2.0]))
+    assert crossed.tolist() == [9_223_372_036_854_775_808, 9_223_372_036_854_775_808]
 
 
 def main() -> None:
