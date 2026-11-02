@@ -130,12 +130,17 @@ setup_file_suffix() {
 # Refuses when a PENDING or RUNNING job of this user reads <env-path> as its CLUSTER_ENV_FILE (sacct's
 # SubmitLine), or <problems-path> as that job's PROBLEMS_FILE (resolved against the env's own
 # directory). Both files are written before sbatch, even on a dry run, so without this a later
-# submission could rewrite what a queued job has not read yet. Both paths must be absolute.
+# submission could rewrite what a queued job has not read yet. Both paths must be absolute. A failing squeue or sacct
+# leaves the check undone, which it says: a site without accounting has no sacct to refuse on.
 refuse_if_queue_references() {
-    local env_path="$1" problems_path="${2:-}" jids jid cef pf
+    local env_path="$1" problems_path="${2:-}" jids jid cef pf lines="" unchecked
+    unchecked="NOT checking whether a queued job reads ${env_path}"
     command -v squeue >/dev/null 2>&1 || return 0
-    jids=$(squeue -u "${USER:-$(id -un)}" -h -t PENDING,RUNNING -o '%i' 2>/dev/null | paste -sd, -)
+    jids=$(squeue -u "${USER:-$(id -un)}" -h -t PENDING,RUNNING -o '%i' 2>/dev/null) \
+        || echo "refuse_if_queue_references: squeue failed; ${unchecked}" >&2
     [[ -n "${jids}" ]] || return 0
+    lines=$(sacct -j "$(paste -sd, - <<<"${jids}")" -X -P -o JobID,SubmitLine --noheader 2>/dev/null) \
+        || echo "refuse_if_queue_references: sacct failed; ${unchecked}" >&2
     while IFS='|' read -r jid cef; do
         [[ -n "${jid}" && -n "${cef}" ]] || continue
         if [[ "${cef}" == "${env_path}" ]]; then
@@ -149,8 +154,7 @@ refuse_if_queue_references() {
             echo "refusing to write ${problems_path}: job ${jid} is PENDING/RUNNING and reads it via ${cef}" >&2
             return 2
         fi
-    done < <(sacct -j "${jids}" -X -P -o JobID,SubmitLine --noheader 2>/dev/null \
-        | sed -n 's/^\([0-9]\+\)|.*CLUSTER_ENV_FILE=\([^[:space:]]*\).*/\1|\2/p')
+    done < <(sed -n 's/^\([0-9]\+\)|.*CLUSTER_ENV_FILE=\([^[:space:]]*\).*/\1|\2/p' <<<"${lines}")
 }
 
 # deadline_setup <deadline> <margin-seconds> -- a wave that must END before <deadline>: sets
@@ -163,6 +167,8 @@ deadline_setup() {
     deadline_epoch=$(date -d "${deadline}" +%s) \
         || { echo "DEADLINE=${deadline} is not a time date(1) understands" >&2; return 2; }
     DEADLINE_LIMIT_SECONDS=$(( deadline_epoch - $(date +%s) - margin ))
+    (( DEADLINE_LIMIT_SECONDS > 0 )) \
+        || { echo "DEADLINE=${deadline} has passed or leaves no time after the ${margin} s margin" >&2; return 2; }
     DEADLINE_WALLTIME=$(hms "${DEADLINE_LIMIT_SECONDS}")
     echo "deadline ${deadline}: --time ${DEADLINE_WALLTIME}"
 }
@@ -276,19 +282,49 @@ finalize_staged_env() {
     mv -- "${staged}" "${env}"
 }
 
-# submit_setup_job <env> <setup> <walltime> [dep-ids] [begin] [detail]
+#: What sbatch prints for a submission that cannot have reached the queue and may pass on a second try: the site's
+#: cli_filter failing intermittently, a controller that is not answering. Not "Socket timed out": the controller may
+#: have queued that job, and a second one would run in the same run directory.
+SBATCH_TRANSIENT='cli_filter plugin terminated with error|Unable to contact slurm controller|temporarily unavailable'
+
+# sbatch_retry <sbatch args...> -- sbatch, tried again after 10, 30 and 90 s on a SBATCH_TRANSIENT failure. Anything
+# else (an invalid account or partition) fails at once. Its stdout is the job id of the attempt that succeeded.
+sbatch_retry() {
+    local delay errors status
+    for delay in 10 30 90 ""; do
+        status=0
+        { errors=$(sbatch "$@" 2>&1 >&3 3>&-) || status=$?; } 3>&1
+        [[ -z "${errors}" ]] || printf '%s\n' "${errors}" >&2
+        [[ "${status}" != 0 && -n "${delay}" ]] && grep -qE "${SBATCH_TRANSIENT}" <<<"${errors}" || return "${status}"
+        echo "sbatch_retry: transient failure, trying again in ${delay} s" >&2
+        sleep "${delay}"
+    done
+}
+
+# job_dependency <any-ids> <ok-ids> -> the --dependency of a job waiting on both colon-separated id lists, a comma
+# meaning all of it: afterany on <any-ids>, afterok on <ok-ids>. Slurm's afterok takes one id list, never a second
+# `afterok:` inside it.
+job_dependency() {
+    local any="${1:+afterany:$1}"
+    printf '%s\n' "${any}${2:+${any:+,}afterok:$2}"
+}
+
+# submit_setup_job <env> <setup> <walltime> [dependency] [begin] [detail]
 # SUBMIT=1 submits a read-only snapshot of <env> and its problems file (snapshot_env) as
-# services.sbatch's CLUSTER_ENV_FILE, chained afterany on <dep-ids> (colon-separated job ids), held until <begin>,
+# services.sbatch's CLUSTER_ENV_FILE, with --dependency=<dependency> (job_dependency), held until <begin>,
 # at --nice=NICE (default the site layer's HPCAGENT_BENCH_NICE), held with HOLD=1, and sets SUBMITTED_JOB_ID to the
-# job id; anything else only reports and sets SUBMITTED_JOB_ID empty.
+# job id; anything else only reports and sets SUBMITTED_JOB_ID to <setup>, what a later wave's dry run names.
+# An afterok that fails cancels the job (--kill-on-invalid-dep): pending forever, it would block a resubmit of its
+# setup (refuse_if_queue_references).
 # --no-requeue: a NODE_FAIL requeue reruns the job in the SAME run directory, stacking two runs' rows.
 submit_setup_job() {
-    local env="$1" setup="$2" walltime="$3" dep_ids="${4:-}" begin="${5:-}" detail="${6:-}" nodes snapshot jid resolved
+    local env="$1" setup="$2" walltime="$3" dependency="${4:-}" begin="${5:-}" detail="${6:-}" nodes snapshot jid resolved
     local -a options
     SUBMITTED_JOB_ID=""
     nodes=$(setup_nodes "${env}")
     if [[ "${SUBMIT:-0}" != 1 ]]; then
-        echo "prepared ${setup} (${nodes} nodes${detail})${begin:+ begin ${begin}}${dep_ids:+ after ${dep_ids}} -- not submitted"
+        echo "prepared ${setup} (${nodes} nodes${detail})${begin:+ begin ${begin}}${dependency:+ after ${dependency}} -- not submitted"
+        SUBMITTED_JOB_ID="${setup}"
         return 0
     fi
     resolved=$(job_options) || return 2
@@ -301,14 +337,15 @@ submit_setup_job() {
     local -a args=(--parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${setup}"
         --output="${logs}/services-%j.out" --error="${logs}/services-%j.err"
         --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" "${options[@]}")
-    [[ -z "${dep_ids}" ]] || args+=(--dependency="afterany:${dep_ids}")
+    [[ -z "${dependency}" ]] || args+=(--dependency="${dependency}")
+    [[ "${dependency}" != *afterok:* ]] || args+=(--kill-on-invalid-dep=yes)
     [[ -z "${begin}" ]] || args+=(--begin="${begin}")
     [[ "${HOLD:-0}" != 1 ]] || args+=(--hold)
     # The env file pins any CPF view a setup's packet asks for; the caller's own must not leak into others.
     # CLUSTER_SCRIPT_DIR: under sbatch BASH_SOURCE is a spooled copy, so the job finds run_cluster.sh through this.
-    jid=$(env -u CPF_DROPIN_DIR -u HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR -u HPCAGENT_BENCH_CPF_HINTS \
-        CLUSTER_SCRIPT_DIR="${CLUSTER_DIR}" \
-        sbatch "${args[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" "${CLUSTER_DIR}/services.sbatch") || return 2
+    jid=$(unset CPF_DROPIN_DIR HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR HPCAGENT_BENCH_CPF_HINTS
+        export CLUSTER_SCRIPT_DIR="${CLUSTER_DIR}"
+        sbatch_retry "${args[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" "${CLUSTER_DIR}/services.sbatch") || return 2
     # --parsable prints <id> or <id>;<cluster>; a dependency names the id alone.
     SUBMITTED_JOB_ID="${jid%%;*}"
     echo "submitted ${setup} -> ${jid} (${nodes} nodes${detail}) env ${snapshot}"
@@ -333,13 +370,15 @@ plan_waves() {
     done
 }
 
-# submit_waves <max-nodes> <dep-ids> <begin> -- submit_setup_job for every staged setup (the arrays WAVE_ENVS,
-# WAVE_SETUPS, WAVE_WALLTIMES, one entry per setup), split into waves by plan_waves over their setup_nodes counts.
-# Prints one line per wave (its number, summed nodes, dependency) before its setups. Wave 1 depends on <dep-ids>;
-# every later wave on all job ids of the previous wave (afterany), so at most <max-nodes> nodes of this call run or
-# wait at once. Under a dry run a later wave's dependency is named, not submitted.
+# submit_waves <max-nodes> <dep-ids> <begin> [prep-ids] -- submit_setup_job for every staged setup (the arrays
+# WAVE_ENVS, WAVE_SETUPS, WAVE_WALLTIMES, one entry per setup), split into waves by plan_waves over their setup_nodes
+# counts. Prints one line per wave (its number, summed nodes, dependency) before its setups. Wave 1 depends on
+# <dep-ids>; every later wave on all job ids of the previous wave (afterany: a failed wave does not stop the next),
+# so at most <max-nodes> nodes of this call run or wait at once. EVERY wave also depends afterok on <prep-ids>, the
+# prepare and golden jobs: afterany does not carry their failure across a wave, and a wave cancelled by it would
+# release the next. Under a dry run the ids are names and the dependencies those of the jobs it does not submit.
 submit_waves() {
-    local max="$1" dep_ids="$2" begin="$3" index wave last total after nodes
+    local max="$1" dep_ids="$2" begin="$3" prep_ids="${4:-}" index wave last total after nodes
     local -a counts=() previous=()
     for index in "${!WAVE_ENVS[@]}"; do
         nodes=$(setup_nodes "${WAVE_ENVS[index]}") || return 2
@@ -358,12 +397,12 @@ submit_waves() {
         else
             after="${dep_ids}"
         fi
-        echo "wave ${wave}/${last}: ${total} nodes${max:+ (MAX_NODES=${max})}${after:+, after ${after}}"
+        echo "wave ${wave}/${last}: ${total} nodes${max:+ (MAX_NODES=${max})}${after:+, after ${after}}${prep_ids:+, afterok ${prep_ids}}"
         previous=()
         for index in "${!counts[@]}"; do
             (( WAVE_NUMBERS[index] == wave )) || continue
-            submit_setup_job "${WAVE_ENVS[index]}" "${WAVE_SETUPS[index]}" "${WAVE_WALLTIMES[index]}" "${dep_ids}" \
-                "${begin}" ", ${WAVE_WALLTIMES[index]}" || return 2
+            submit_setup_job "${WAVE_ENVS[index]}" "${WAVE_SETUPS[index]}" "${WAVE_WALLTIMES[index]}" \
+                "$(job_dependency "${dep_ids}" "${prep_ids}")" "${begin}" ", ${WAVE_WALLTIMES[index]}" || return 2
             [[ -z "${SUBMITTED_JOB_ID}" ]] || previous+=("${SUBMITTED_JOB_ID}")
         done
     done

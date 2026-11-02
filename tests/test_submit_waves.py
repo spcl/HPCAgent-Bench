@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """MAX_NODES in hpcagent_bench/cluster/submit_common.sh: plan_waves splits the setups of one submit call into waves
 whose summed node count is at most MAX_NODES, and submit_waves chains every wave afterany on all jobs of the previous
-one. A stub ``sbatch`` numbers its jobs and records each agent job's name and dependency; nothing reaches Slurm."""
+one and afterok on the prepare and golden jobs. A stub ``sbatch`` numbers its jobs and records each agent job's name
+and dependency; nothing reaches Slurm."""
 
 import pathlib
 import re
@@ -28,7 +29,12 @@ FIRST_JOB_ID = 101
 #: A stub sbatch: prints job ids FIRST_JOB_ID, FIRST_JOB_ID + 1, ... as ``<id>;cluster`` (sbatch --parsable on a
 #: federation), records every call's arguments in ``${STUB_MARKERS}/sbatch.calls`` and appends
 #: ``<id> <job-name> <dependency or ->`` per agent job to ``${STUB_MARKERS}/sbatch.chain``.
-CHAIN_SBATCH = f"""last=$(cat "${{STUB_MARKERS}}/sbatch.last" 2>/dev/null || echo {FIRST_JOB_ID - 1})
+CHAIN_SBATCH = f"""if [[ -n "${{FAIL_FIRST:-}}" && ! -e "${{STUB_MARKERS}}/failed" ]]; then
+    touch "${{STUB_MARKERS}}/failed"
+    echo "sbatch: error: cli_filter plugin terminated with error" >&2
+    exit 1
+fi
+last=$(cat "${{STUB_MARKERS}}/sbatch.last" 2>/dev/null || echo {FIRST_JOB_ID - 1})
 id=$(( last + 1 ))
 echo "${{id}}" > "${{STUB_MARKERS}}/sbatch.last"
 printf '%s\\n' "$*" >> "${{STUB_MARKERS}}/sbatch.calls"
@@ -121,14 +127,17 @@ def test_a_dry_run_prints_the_waves_and_submits_nothing(tmp_path: pathlib.Path) 
     done = submit_three_setups(tmp_path)
     assert done.returncode == 0, done.stderr
     headers = [line for line in done.stdout.splitlines() if line.startswith("wave ")]
-    assert headers == ["wave 1/2: 8 nodes (MAX_NODES=8), after 77", "wave 2/2: 4 nodes (MAX_NODES=8), after wave 1"]
+    assert headers == [
+        "wave 1/2: 8 nodes (MAX_NODES=8), after 77",
+        "wave 2/2: 4 nodes (MAX_NODES=8), after wave 1 (s1:s2)",
+    ]
     assert not (tmp_path / "sbatch.chain").exists()
 
 
 def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_path: pathlib.Path) -> None:
     """One prepare job renders numba and each setup's reference language (C for hip, which has no CPU reference of
     its own) in the judge image the setups name; one golden job per language grades the references after it; the
-    first wave waits on all of them beside DEPEND_ON."""
+    wave waits on all of them beside DEPEND_ON, and a job a failure cancels says so."""
     root = tree(tmp_path)
     bash_stub(root / "bin", "sbatch", CHAIN_SBATCH)
     edf = root / "edf"
@@ -143,7 +152,9 @@ def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_pa
     goldens = [line for line in done.stdout.splitlines() if line.startswith("submitted goldens-")]
     assert goldens == ["submitted goldens-wave-c -> 102;cluster", "submitted goldens-wave-hip -> 103;cluster"]
     chain = [line.split() for line in (root / "sbatch.chain").read_text().splitlines()]
-    assert [dependency for _, _, dependency in chain] == ["afterany:77:101:102:103", "afterany:77:101:102:103"]
+    assert [dependency for _, _, dependency in chain] == ["afterany:77,afterok:101:102:103"] * 2
+    assert all("--kill-on-invalid-dep=yes" in line for line in calls if "--dependency=afterok:" in line), calls
+    assert "--dependency=afterok:101" in calls[1], calls
     prep_exports = [line for line in calls if "prepare.sbatch" in line]
     assert len(prep_exports) == 3, calls
     assert all(re.search(r"HPCAGENT_BENCH_USER_PLUGIN_DIRS=(\s|$)", line) for line in prep_exports), prep_exports
@@ -174,7 +185,139 @@ def test_a_second_submit_waits_on_the_prep_jobs_the_first_queued(tmp_path: pathl
         "submitted goldens-wave-hip -> 101;cluster"
     ]
     chain = [line.split() for line in (root / "sbatch.chain").read_text().splitlines()]
-    assert {dependency for _, _, dependency in chain} == {"afterany:77:55:56:101"}
+    assert {dependency for _, _, dependency in chain} == {"afterany:77,afterok:55:56:101"}
+
+
+def slurm_outcome(dependency: str, states: dict[str, str]) -> str:
+    """What Slurm does with a job of ``--dependency=<dependency>`` once the jobs it names ended as ``states``: ``type:id
+    [:id...]`` clauses joined by a comma all hold, and an afterok on a job that did not complete cancels the job."""
+    verdict = "RUN"
+    for clause in dependency.split(","):
+        kind, *ids = clause.split(":")
+        assert kind in ("afterany", "afterok") and ids, dependency
+        assert not {"afterany", "afterok"} & set(ids), f"not Slurm's grammar: {dependency}"
+        if kind == "afterok" and any(states[job] != "COMPLETED" for job in ids):
+            verdict = "CANCELLED"
+    return verdict
+
+
+#: One line of a dry run per job it does not submit, with its dependency.
+DRY_JOB = re.compile(
+    r"^(?:prepared (?P<setup>\S+)|goldens: (?P<lang>\S+)) .* after (?P<dependency>\S+) -- not submitted$"
+)
+
+
+@pytest.mark.parametrize(
+    ("failed", "survivors"),
+    [("prepare-wave", 0), ("goldens-wave-c", 0), ("goldens-wave-hip", 0), ("wave-qwen38-c", 2)],
+    ids=["prepare", "first-golden", "last-golden", "wave-job"],
+)
+def test_the_dependencies_a_dry_run_prints_stop_every_wave_on_a_failed_prep_job(
+    tmp_path: pathlib.Path, failed: str, survivors: int
+) -> None:
+    """Replay of the printed dependencies in submission order over one job failing: a failed prepare or golden job
+    cancels the wave after the first too, which afterany on the cancelled wave alone would have started; a failed wave
+    job stops nothing."""
+    root = tree(tmp_path)
+    knobs = {"KERNELS_FILE": "subset.txt", "LANGUAGES": "c hip", "PREPARE": "1"}
+    dry = submit(root, **knobs)
+    assert dry.returncode == 0, dry.stderr
+    nodes = re.search(r"^prepared \S+ \((\d+) nodes", dry.stdout, re.MULTILINE)
+    assert nodes is not None, dry.stdout
+    dry = submit(root, **knobs, MAX_NODES=nodes[1])
+    assert dry.returncode == 0, dry.stderr
+    states = {"prepare-wave": "FAILED" if failed == "prepare-wave" else "COMPLETED"}
+    waves = {}
+    for line in dry.stdout.splitlines():
+        if (job := DRY_JOB.match(line)) is None:
+            continue
+        name = job["setup"] or f"goldens-wave-{job['lang']}"
+        outcome = slurm_outcome(job["dependency"], states)
+        states[name] = "FAILED" if name == failed else {"RUN": "COMPLETED", "CANCELLED": "CANCELLED"}[outcome]
+        if job["setup"]:
+            waves[name] = outcome
+    assert len(waves) == 2, dry.stdout
+    assert sum(outcome == "RUN" for outcome in waves.values()) == survivors, waves
+
+
+def transient_then_ok_sbatch(failures: int, message: str) -> str:
+    """A stub sbatch failing with ``message`` its first ``failures`` calls, counted in ``sbatch.count``."""
+    return f"""n=$(( $(cat "${{STUB_MARKERS}}/sbatch.count" 2>/dev/null || echo 0) + 1 ))
+echo "${{n}}" > "${{STUB_MARKERS}}/sbatch.count"
+if (( n <= {failures} )); then echo "sbatch: error: {message}" >&2; exit 1; fi
+echo "4242;cluster"
+"""
+
+
+def retried(tmp_path: pathlib.Path, failures: int, message: str) -> tuple[subprocess.CompletedProcess[str], int]:
+    """``sbatch_retry`` under the stub, without its waits; the result and the sbatch calls made."""
+    bash_stub(tmp_path / "bin", "sbatch", transient_then_ok_sbatch(failures, message))
+    bash_stub(tmp_path / "bin", "sleep", "exit 0")
+    done = run_bash(tmp_path, 'jid=$(sbatch_retry --parsable job.sbatch) || exit $?\necho "jid=${jid}"')
+    return done, int((tmp_path / "sbatch.count").read_text())
+
+
+def test_a_transient_sbatch_failure_is_retried_and_only_the_id_is_captured(tmp_path: pathlib.Path) -> None:
+    done, calls = retried(tmp_path, 2, "cli_filter plugin terminated with error")
+    assert (done.returncode, calls) == (0, 3), done.stderr
+    assert "jid=4242;cluster" in done.stdout.splitlines()
+    assert "cli_filter plugin terminated with error" in done.stderr
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Batch job submission failed: Invalid account or account/partition combination specified",
+        "Batch job submission failed: Invalid partition name specified",
+        "Batch job submission failed: Access/permission denied",
+        "Batch job submission failed: Socket timed out on send/recv operation",
+    ],
+)
+def test_a_failure_a_retry_cannot_fix_or_may_duplicate_fails_at_once(tmp_path: pathlib.Path, message: str) -> None:
+    done, calls = retried(tmp_path, 9, message)
+    assert (done.returncode, calls) == (1, 1), done.stderr
+    assert message in done.stderr
+
+
+def test_a_transient_failure_that_persists_gives_up_with_its_status(tmp_path: pathlib.Path) -> None:
+    done, calls = retried(tmp_path, 9, "cli_filter plugin terminated with error")
+    assert (done.returncode, calls) == (1, 4), done.stderr
+
+
+def test_a_setup_job_goes_through_the_retry(tmp_path: pathlib.Path) -> None:
+    bash_stub(tmp_path / "bin", "sleep", "exit 0")
+    (tmp_path / "bin").mkdir(exist_ok=True)
+    done = submit_three_setups(tmp_path, SUBMIT="1", FAIL_FIRST="1")
+    assert done.returncode == 0, done.stderr
+    assert "cli_filter" in done.stderr
+    assert [line.split()[1] for line in (tmp_path / "sbatch.chain").read_text().splitlines()] == ["s1", "s2", "s3"]
+
+
+def test_a_deadline_already_past_is_refused_before_anything_is_staged(tmp_path: pathlib.Path) -> None:
+    done = run_bash(tmp_path, 'deadline_setup "2000-01-01 00:00:00 UTC" 300')
+    assert done.returncode == 2
+    assert "has passed" in done.stderr
+
+
+@pytest.mark.parametrize("failing", ["squeue", "sacct"])
+def test_a_queue_guard_that_cannot_look_says_so(tmp_path: pathlib.Path, failing: str) -> None:
+    bash_stub(tmp_path / "bin", "squeue", "echo 7")
+    bash_stub(tmp_path / "bin", failing, "exit 1")
+    if failing == "squeue":
+        bash_stub(tmp_path / "bin", "sacct", "exit 0")
+    done = run_bash(tmp_path, f"refuse_if_queue_references {tmp_path}/.env.x")
+    assert done.returncode == 0, done.stderr
+    assert f"{failing} failed; NOT checking" in done.stderr
+
+
+def test_a_pin_that_cannot_read_its_file_leaves_it_alone(tmp_path: pathlib.Path) -> None:
+    env = tmp_path / ".env.x"
+    env.write_text("KEY=old\nOTHER=kept\n")
+    bash_stub(tmp_path / "bin", "awk", "exit 2")
+    done = run_bash(tmp_path, f". {CLUSTER_DIR / 'pin_env_kv.sh'}\npin_env_kv {env} KEY=new || exit $?")
+    assert done.returncode == 2
+    assert env.read_text() == "KEY=old\nOTHER=kept\n"
+    assert [path.name for path in tmp_path.glob(".env.x*")] == [".env.x"]
 
 
 def test_the_root_account_submits_no_prepare_job_either(tmp_path: pathlib.Path) -> None:
