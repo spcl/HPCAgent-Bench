@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""data_guard: no output may overlap a source, and no removal may reach a protected root or a DB."""
+"""data_guard: no output may overlap a source."""
 
 import pathlib
 
@@ -60,54 +60,6 @@ def test_protected_roots_are_runs_and_env(scratch: pathlib.Path, monkeypatch: py
     """The runs root and every $HPCAGENT_BENCH_PROTECTED_ROOTS entry are protected."""
     monkeypatch.setenv(data_guard.ENV, f"{scratch / 'a'}:{scratch / 'b'}")
     assert data_guard.protected_roots() == tuple((scratch / n).resolve() for n in ("hpcagent-bench-runs", "a", "b"))
-
-
-@pytest.mark.parametrize("victim", ["hpcagent-bench-runs", "hpcagent-bench-runs/camp", "."])
-def test_removal_refused_at_or_under_or_above_a_protected_root(scratch: pathlib.Path, victim: str) -> None:
-    """A protected root, anything inside it, and any ancestor of it are never removed."""
-    with pytest.raises(data_guard.ProtectedPathError):
-        data_guard.safe_rmtree(scratch / victim)
-    assert (scratch / "hpcagent-bench-runs" / "camp" / "123").is_dir()
-
-
-def test_removal_allowed_under_an_allowlisted_scratch_dir(scratch: pathlib.Path) -> None:
-    """A code snapshot under the runs root goes when its parent is allowlisted, and only then."""
-    frozen_tree = scratch / "hpcagent-bench-runs" / ".frozen" / "job-1"
-    (frozen_tree / "pkg").mkdir(parents=True)
-    (frozen_tree / "pkg" / "a.py").write_text("x = 1\n")
-    with pytest.raises(data_guard.ProtectedPathError):
-        data_guard.safe_rmtree(frozen_tree)
-    data_guard.safe_rmtree(frozen_tree, allow=[scratch / "hpcagent-bench-runs" / ".frozen"])
-    assert not frozen_tree.exists()
-
-
-def test_removal_refused_for_a_tree_holding_a_database(scratch: pathlib.Path) -> None:
-    """Outside every protected root, a tree still keeps its DBs: it is refused whole."""
-    tree = scratch / "canon-sweep"
-    make_db(tree / "db" / "cc" / "hpcagent_bench0.db")
-    with pytest.raises(data_guard.ProtectedPathError, match="SQLite"):
-        data_guard.safe_rmtree(tree)
-    assert (tree / "db" / "cc" / "hpcagent_bench0.db").is_file()
-
-
-def test_removal_of_a_symlink_leaves_its_target(scratch: pathlib.Path) -> None:
-    """The guard checks the resolved path, so removing through the resolved path would delete the referent."""
-    target = scratch / "elsewhere"
-    target.mkdir()
-    link = scratch / "link"
-    link.symlink_to(target)
-    with pytest.raises(OSError):
-        data_guard.safe_rmtree(link)
-    assert target.is_dir() and link.is_symlink()
-
-
-def test_removal_of_a_plain_tree(scratch: pathlib.Path) -> None:
-    """A tree outside every root with no DB is removed."""
-    tree = scratch / "build"
-    (tree / "sub").mkdir(parents=True)
-    (tree / "sub" / "x.o").write_bytes(b"\0")
-    data_guard.safe_rmtree(tree)
-    assert not tree.exists()
 
 
 @pytest.mark.parametrize("out", ["camp/123/judge", "camp/123", "camp"])

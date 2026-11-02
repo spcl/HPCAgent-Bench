@@ -98,14 +98,14 @@ def git_head(root: pathlib.Path = ROOT, *, short: bool = False) -> str:
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
-def git_dirty(root: pathlib.Path) -> bool:
-    """Whether the git checkout at ``root`` has uncommitted changes to tracked files; False when git cannot tell."""
+def git_dirty(root: pathlib.Path) -> bool | None:
+    """Whether the git checkout at ``root`` has uncommitted changes to tracked files; None when git cannot tell."""
     argv = ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"]
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError):
-        return False
-    return done.returncode == 0 and bool(done.stdout.strip())
+        return None
+    return bool(done.stdout.strip()) if done.returncode == 0 else None
 
 
 def scratch_dir() -> pathlib.Path:

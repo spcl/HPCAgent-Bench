@@ -41,6 +41,7 @@ The ``<id>.req`` file is a :class:`GangRequest`, written here and read by the re
 import fcntl
 import math
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -301,7 +302,8 @@ def relay_call(directory: Path, ident: str, cmd: Sequence[str], timeout: float, 
     for suffix, stream in ((".out", sys.stdout), (".err", sys.stderr)):
         out = base.with_name(base.name + suffix)
         if out.exists():
-            stream.write(out.read_text(errors="replace"))
+            with out.open(errors="replace") as text:
+                shutil.copyfileobj(text, stream)
     sys.stdout.flush()
     sys.stderr.flush()
     rc = int(rc_file.read_text().strip() or "1")
