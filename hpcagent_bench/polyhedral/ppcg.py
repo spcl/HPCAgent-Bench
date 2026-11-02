@@ -12,11 +12,12 @@ import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
 
+from hpcagent_bench import config
 from hpcagent_bench.categories import Language
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework, ToolMissing
 from hpcagent_bench.languages import GPU_HOST_LANG, LANG_EXT, gpu_backend
 from hpcagent_bench.polyhedral.pluto_normalize import normalize_ppcg_input
-from hpcagent_bench.polyhedral.pluto import OVERRIDE_INPUT_SUFFIX, assert_affine, scop_inputs
+from hpcagent_bench.polyhedral.pluto import OVERRIDE_INPUT_SUFFIX, assert_affine, run_bounded, scop_inputs
 from hpcagent_bench.translators.numpyto_c.emit import NPB_HD_GUARD
 
 __all__ = [
@@ -178,11 +179,22 @@ def hipify(scratch: pathlib.Path, stem: str) -> None:
     exe = hipify_exe()
     if exe is None:  # declined in transformed_sources; keeps the argv typed
         raise ToolMissing(FRAMEWORK, stem, f"{HIPIFY} is not installed on this host")
+
+    def run(*argv: str) -> subprocess.CompletedProcess:
+        # A hipify refusal declines the column (polygeist.run_tool) rather than escaping the build
+        # as an unexpected CalledProcessError.
+        try:
+            return subprocess.run([exe, *argv], capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            raise NotSupportedByFramework(
+                FRAMEWORK, stem, f"{HIPIFY} failed on {argv[-1]}: {(exc.stderr or exc.stdout or '').strip()[-300:]}"
+            ) from None
+
     for half in ("host", "kernel"):
         cu = scratch / f"{stem}_{half}.cu"
-        translated = subprocess.run([exe, str(cu)], capture_output=True, text=True, check=True)
+        translated = run(str(cu))
         (scratch / f"{stem}_{half}.{LANG_EXT[Language.HIP]}").write_text(translated.stdout)
-    subprocess.run([exe, "-inplace", str(scratch / f"{stem}_kernel.hu")], capture_output=True, check=True)
+    run("-inplace", str(scratch / f"{stem}_kernel.hu"))
 
 
 #: One ``hipMalloc``/``hipMemcpy``/``hipFree`` statement naming the device mirror ``{mirror}``, possibly
@@ -305,18 +317,18 @@ def device_helpers(prelude: str, kernel_src: str) -> str:
             if depth == 0:
                 break
         bodies[match.group(1)] = prelude[match.start() : end + 1]
-    wanted: list[str] = []
+    wanted: set[str] = set()
     pending = [n for n in re.findall(r"\b(\w+)\s*\(", kernel_src) if n in bodies]
     while pending:
         name = pending.pop()
         if name in wanted:
             continue
-        wanted.append(name)
+        wanted.add(name)
         pending.extend(n for n in re.findall(r"\b(\w+)\s*\(", bodies[name]) if n in bodies and n != name)
     if not wanted:
         return ""
-    # Callees first: a helper must be declared before a helper that calls it.
-    return NPB_HD_GUARD + "".join(f"{bodies[n]}\n" for n in reversed(wanted))
+    # Prelude order: the prelude compiles as written, so each helper already follows the helpers it calls.
+    return NPB_HD_GUARD + "".join(f"{body}\n" for name, body in bodies.items() if name in wanted)
 
 
 def with_device_helpers(prelude: str, kernel_src: str) -> str:
@@ -372,15 +384,14 @@ def run_ppcg(
         readable = pathlib.Path(scratch) / scop.name
         # pet's normalizations apply to ppcg as to polycc; the Pluto-only rewrites are left out (normalize_ppcg_input).
         readable.write_text(drop_const_params(normalize_ppcg_input(scop.read_text()), entry))
-        proc = subprocess.run(
-            [str(exe), *args, str(readable)],
-            cwd=scratch,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=ppcg_run_env(str(exe)),
-            check=False,
-        )
+        try:
+            # run_bounded, not subprocess.run: the bound must kill ppcg's whole process group, and an expiry
+            # declines (polygeist.run_tool) instead of escaping the build as an unexpected error.
+            proc = run_bounded(
+                [str(exe), *args, str(readable)], cwd=str(scratch), timeout=timeout, env=ppcg_run_env(str(exe))
+            )
+        except subprocess.TimeoutExpired:
+            raise NotSupportedByFramework(FRAMEWORK, scop.stem, f"ppcg timed out on {scop.name}") from None
         if proc.returncode == 0:
             host_cu = pathlib.Path(scratch) / f"{scop.stem}_host.cu"
             if host_cu.is_file():
@@ -421,7 +432,7 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Language 
         assert_affine(scop, base)
         produced = transformed_paths(scop, vendor)
         if any(not p.exists() or p.stat().st_mtime < scop.stat().st_mtime for p in produced):
-            argv, proc = run_ppcg(scop, vendor)
+            argv, proc = run_ppcg(scop, vendor, timeout=config.current().oracle.polycc_timeout(base))
             if proc.returncode != 0 or any(not p.is_file() for p in produced):
                 raise NotSupportedByFramework(
                     FRAMEWORK, base, f"ppcg rejected {scop.name}: {proc.stderr.strip()[-500:]}"
