@@ -350,11 +350,13 @@ def recorded() -> str:
 
 def provenance(plugin: Plugin) -> str:
     """``plugin``'s folder digest, ``+<commit>`` of its install root's checkout when it has one in git, and
-    ``-dirty`` when that checkout has uncommitted changes (the commit alone would name code that never ran)."""
+    ``-dirty`` when that checkout has uncommitted changes (the commit alone would name code that never ran), or
+    ``-status-unknown`` when git could not say."""
     root = install_root(plugin)
     commit = paths.git_head(root) if root is not None and (root / ".git").exists() else ""
-    dirty = "-dirty" if commit and root is not None and paths.git_dirty(root) else ""
-    return agent_plugins.digest(plugin.root) + (f"+{commit}{dirty}" if commit else "")
+    dirty = paths.git_dirty(root) if commit and root is not None else False
+    marker = "-dirty" if dirty else "-status-unknown" if dirty is None else ""
+    return agent_plugins.digest(plugin.root) + (f"+{commit}{marker}" if commit else "")
 
 
 def page_path(page: str) -> pathlib.Path | None:
