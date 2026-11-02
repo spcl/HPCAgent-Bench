@@ -224,7 +224,7 @@ def numba_omp_pool_launched() -> bool:
 
 
 def prepend_path(entries: Iterable[str], current: str) -> str:
-    """``entries`` (absent directories dropped) ahead of the ``:``-separated ``current``, deduplicated."""
+    """``entries`` ahead of the ``:``-separated ``current``, empty entries dropped and duplicates removed."""
     seen: list[str] = []
     for item in [*entries, *current.split(os.pathsep)]:
         if item and item not in seen:
