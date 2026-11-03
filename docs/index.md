@@ -43,6 +43,7 @@ kernel_extraction
 mpi_patterns
 tvm_authoring
 triton_authoring
+student_cluster_triton
 input_fuzzing
 ```
 
