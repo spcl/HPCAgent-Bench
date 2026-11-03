@@ -21,6 +21,7 @@ import ast
 import re
 
 from hpcagent_bench.translators.numpyto_common import operators
+from hpcagent_bench.translators.numpyto_common.ast_build import set_field
 from hpcagent_bench.translators.numpyto_common.emit_io import assemble_python_module
 from hpcagent_bench.translators.numpyto_common.frontend import PruneSparseDispatch
 from hpcagent_bench.translators.numpyto_common.ir import FLOAT_DTYPES, KernelIR, descs
@@ -129,7 +130,8 @@ class NarrowFloatLiterals(ast.NodeTransformer):
             v if operators.folded_float_constant(v) is not None else self.visit(v)
             for v in (node.left, *node.comparators)
         ]
-        node.left, node.comparators = kept[0], kept[1:]
+        set_field(node, "left", kept[0])
+        set_field(node, "comparators", kept[1:])
         return node
 
     def visit(self, node: ast.AST) -> ast.AST:
