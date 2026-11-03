@@ -125,9 +125,11 @@ class NarrowFloatLiterals(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Compare(self, node: ast.Compare) -> ast.expr:
-        for field, values in (("left", [node.left]), ("comparators", node.comparators)):
-            kept = [v if operators.folded_float_constant(v) is not None else self.visit(v) for v in values]
-            setattr(node, field, kept[0] if field == "left" else kept)
+        kept = [
+            v if operators.folded_float_constant(v) is not None else self.visit(v)
+            for v in (node.left, *node.comparators)
+        ]
+        node.left, node.comparators = kept[0], kept[1:]
         return node
 
     def visit(self, node: ast.AST) -> ast.AST:
