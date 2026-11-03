@@ -224,5 +224,14 @@ def test_cli_marks_a_not_provisioned_refusal_with_a_cause(monkeypatch: pytest.Mo
     assert body["cause"] == "not_provisioned"
 
 
+def test_cli_answers_a_bad_setting_with_the_json_error_body() -> None:
+    env = {**os.environ, "WEBSEARCH_MAX_RESULTS": "abc"}
+    proc = subprocess.run(
+        [sys.executable, str(TOOL), "--query", "anything"], env=env, capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 2, proc.stderr
+    assert json.loads(proc.stderr)["ok"] is False
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

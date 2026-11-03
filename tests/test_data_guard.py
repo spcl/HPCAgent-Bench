@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""data_guard: no output may overlap a source, and no removal may reach a protected root or a DB."""
+"""data_guard: no output may overlap a source."""
 
 import pathlib
 
@@ -62,43 +62,6 @@ def test_protected_roots_are_runs_and_env(scratch: pathlib.Path, monkeypatch: py
     assert data_guard.protected_roots() == tuple((scratch / n).resolve() for n in ("hpcagent-bench-runs", "a", "b"))
 
 
-@pytest.mark.parametrize("victim", ["hpcagent-bench-runs", "hpcagent-bench-runs/camp", "."])
-def test_removal_refused_at_or_under_or_above_a_protected_root(scratch: pathlib.Path, victim: str) -> None:
-    """A protected root, anything inside it, and any ancestor of it are never removed."""
-    with pytest.raises(data_guard.ProtectedPathError):
-        data_guard.safe_rmtree(scratch / victim)
-    assert (scratch / "hpcagent-bench-runs" / "camp" / "123").is_dir()
-
-
-def test_removal_allowed_under_an_allowlisted_scratch_dir(scratch: pathlib.Path) -> None:
-    """A code snapshot under the runs root goes when its parent is allowlisted, and only then."""
-    frozen_tree = scratch / "hpcagent-bench-runs" / ".frozen" / "job-1"
-    (frozen_tree / "pkg").mkdir(parents=True)
-    (frozen_tree / "pkg" / "a.py").write_text("x = 1\n")
-    with pytest.raises(data_guard.ProtectedPathError):
-        data_guard.safe_rmtree(frozen_tree)
-    data_guard.safe_rmtree(frozen_tree, allow=[scratch / "hpcagent-bench-runs" / ".frozen"])
-    assert not frozen_tree.exists()
-
-
-def test_removal_refused_for_a_tree_holding_a_database(scratch: pathlib.Path) -> None:
-    """Outside every protected root, a tree still keeps its DBs: it is refused whole."""
-    tree = scratch / "canon-sweep"
-    make_db(tree / "db" / "cc" / "hpcagent_bench0.db")
-    with pytest.raises(data_guard.ProtectedPathError, match="SQLite"):
-        data_guard.safe_rmtree(tree)
-    assert (tree / "db" / "cc" / "hpcagent_bench0.db").is_file()
-
-
-def test_removal_of_a_plain_tree(scratch: pathlib.Path) -> None:
-    """A tree outside every root with no DB is removed."""
-    tree = scratch / "build"
-    (tree / "sub").mkdir(parents=True)
-    (tree / "sub" / "x.o").write_bytes(b"\0")
-    data_guard.safe_rmtree(tree)
-    assert not tree.exists()
-
-
 @pytest.mark.parametrize("out", ["camp/123/judge", "camp/123", "camp"])
 def test_extract_refuses_an_unscanned_output_that_is_a_source_or_holds_a_judge_database(
     scratch: pathlib.Path, capsys: pytest.CaptureFixture, out: str
@@ -110,6 +73,46 @@ def test_extract_refuses_an_unscanned_output_that_is_a_source_or_holds_a_judge_d
     rc = observations_extract.main(
         ["--runs", str(runs / "camp"), "--benchmarks", str(scratch / "corpus"), "--out", str(runs / out)]
     )
+    assert rc == 1
+    assert "overlaps source" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("db", ["corpus/gemm/gemm.yaml", "regrades/shard.db", "daint/rank-0/hpcagent_bench0.db"])
+def test_extract_refuses_a_db_written_over_a_file_it_reads(
+    scratch: pathlib.Path, capsys: pytest.CaptureFixture, db: str
+) -> None:
+    """write_db replaces its target: the corpus and the regrade shards are read, so a --db naming one is
+    refused, and the file survives."""
+    corpus = scratch / "corpus" / "gemm" / "gemm.yaml"
+    corpus.parent.mkdir(parents=True)
+    corpus.write_text("{}")
+    make_db(scratch / "regrades" / "shard.db")
+    make_db(scratch / "daint" / "rank-0" / "hpcagent_bench0.db")
+    target = scratch / db
+    before = target.read_bytes()
+    rc = observations_extract.main(
+        [
+            "--runs", str(scratch / "nomatch*"), "--benchmarks", str(scratch / "corpus"), "--out", str(scratch / "out"),
+            "--db", str(target), "--regrades", str(scratch / "regrades" / "*"),
+            "--platform-regrades", f"gh200={scratch / 'daint'}",
+        ]
+    )  # fmt: skip
+    assert rc == 1
+    assert "overlaps source" in capsys.readouterr().err
+    assert target.read_bytes() == before
+
+
+def test_extract_refuses_an_output_inside_a_regrade_directory(
+    scratch: pathlib.Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A regrade directory is walked for every ``*.db``, with no skip of --out, so the skip's exception is not its."""
+    (scratch / "regrades").mkdir()
+    rc = observations_extract.main(
+        [
+            "--runs", str(scratch / "nomatch*"), "--benchmarks", str(scratch / "corpus"),
+            "--out", str(scratch / "regrades" / "out"), "--regrades", str(scratch / "regrades"),
+        ]
+    )  # fmt: skip
     assert rc == 1
     assert "overlaps source" in capsys.readouterr().err
 
@@ -138,20 +141,26 @@ def test_the_run_root_scan_skips_the_extractions_own_output(tmp_path: pathlib.Pa
     assert [db.path for db in found] == [judge.resolve()]
 
 
-def test_the_run_root_scan_names_a_corrupt_shard_it_skips(
+def test_the_run_root_scan_refuses_a_corrupt_shard_and_passes_over_a_broken_agent_file(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
-    """A shard truncated by an OOM-killed rank was dropped from the scan without a word, so the extraction
-    read as if that rank had graded nothing."""
+    """A shard truncated by an OOM-killed rank must stop the extraction, or it reads as if that rank had graded
+    nothing. An agent's workspace holds its tools' own ``.db`` files, which are no record."""
     judge = make_db(tmp_path / "camp" / "123" / "judge" / "rank-0" / "hpcagent_bench0.db")
-    corrupt = tmp_path / "camp" / "123" / "judge" / "rank-1" / "hpcagent_bench1.db"
-    corrupt.parent.mkdir(parents=True)
-    corrupt.write_bytes(b"truncated by an OOM-killed rank")
+    stray = tmp_path / "camp" / "123" / "shared" / "agent-0" / "profile.db"
+    stray.parent.mkdir(parents=True)
+    stray.write_bytes(b"not a database")
 
     found = observations_extract.discover_databases([str(tmp_path / "camp")])
 
     assert [db.path for db in found] == [judge.resolve()]
-    assert f"unreadable results DB skipped: {corrupt.resolve()}" in capsys.readouterr().err
+    assert f"unreadable file skipped: {stray.resolve()}" in capsys.readouterr().err
+
+    corrupt = tmp_path / "camp" / "123" / "judge" / "rank-1" / "hpcagent_bench1.db"
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_bytes(b"truncated by an OOM-killed rank")
+    with pytest.raises(ValueError, match="hpcagent_bench1.db"):
+        observations_extract.discover_databases([str(tmp_path / "camp")])
 
 
 def test_merge_results_refuses_to_overwrite_a_shard(tmp_path: pathlib.Path) -> None:

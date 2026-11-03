@@ -112,6 +112,9 @@ docker run --rm --privileged -v "$PWD:/repo" -w /repo ubuntu:24.04 bash -c '
   .venv/bin/python -m pytest -q -rfEs -m sealed tests/'
 ```
 
+A guard test must be able to fail: pair a scan or `assert not x` with a premise assert that the scan saw
+something, or a control that feeds it a violation.
+
 ## Documentation
 
 `docs/` is Markdown built with Sphinx, MyST and Furo; `docs/index.md` holds the toctree, so a new

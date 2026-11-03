@@ -6,6 +6,7 @@
 import json
 import pathlib
 import threading
+import time
 
 import pytest
 
@@ -33,6 +34,26 @@ def problems_file(tmp_path: pathlib.Path, kernels: list[str]) -> pathlib.Path:
     return path
 
 
+def test_a_plugin_routes_terminal_work_queues_as_a_submission() -> None:
+    """A plugin's route is exploration, unless it serves a /submit: NestForge builds what it submits on its own route."""
+    asked: list[int] = []
+
+    class Pool:
+        def acquire(self, priority: int, gone: threading.Event) -> DeviceSlot:
+            asked.append(priority)
+            return DeviceSlot("cpu", 0)
+
+        def release(self, slot: DeviceSlot) -> None:
+            pass
+
+    handler = service.JudgeHandler.__new__(service.JudgeHandler)
+    handler.device_pool, handler.route, handler.gone = Pool(), "nestforge", threading.Event()
+    for terminal in (False, True):
+        with handler.device_slot(terminal):
+            pass
+    assert asked == [service.EXPLORATION_PRIORITY, service.SLOT_PRIORITY["submit"]]
+
+
 def test_the_warm_up_waits_behind_every_request() -> None:
     assert judge_warmup.PRIORITY > service.EXPLORATION_PRIORITY
     assert max(service.SLOT_PRIORITY.values()) < judge_warmup.PRIORITY
@@ -54,7 +75,9 @@ def test_a_waiting_request_takes_the_slot_before_the_warm_up(monkeypatch: pytest
 
     warmer = Warmer([Cell(ML_KERNEL, Baseline.TORCH_AUTOTUNE_CPU, None)], acquire, pool.release, Preset.S, "float64")
     (thread,) = warmer.start(1)
+    deadline = time.monotonic() + WAIT_S
     while not pool.waiters:
+        assert time.monotonic() < deadline, "the warmer never queued a slot request (see WAIT_S)"
         threading.Event().wait(0.01)
 
     def submit() -> None:
@@ -65,7 +88,9 @@ def test_a_waiting_request_takes_the_slot_before_the_warm_up(monkeypatch: pytest
 
     request = threading.Thread(target=submit)
     request.start()
+    deadline = time.monotonic() + WAIT_S
     while len(pool.waiters) < 2:
+        assert time.monotonic() < deadline, "the submit request never queued a slot request (see WAIT_S)"
         threading.Event().wait(0.01)
     pool.release(held)
     request.join(WAIT_S)

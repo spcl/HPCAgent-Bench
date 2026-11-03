@@ -210,6 +210,19 @@ def test_blocks_equal_the_whole_array_and_the_field_builders_equal_both() -> Non
     assert np.array_equal(big.ravel(), rng.normal(rng.counter(big.shape).ravel(), 9, 1))
 
 
+def test_the_field_builders_accept_an_empty_shape() -> None:
+    """A draw of no elements is an empty array on the reference and on the fast backend alike (an initializer may
+    size a draw from an axis a spec leaves empty)."""
+    for build in (
+        lambda: rng.uniform_field((0,), 5, 1),
+        lambda: rng.normal_field((0, 4), 5, 1),
+        lambda: rng.integers_field((0,), 5, 10, 1),
+    ):
+        out = build()
+        assert out.size == 0
+        assert out.dtype in (np.float64, np.int64)
+
+
 def test_seeds_and_streams_are_independent_draws_and_the_seed_is_reproducible() -> None:
     index = np.arange(1 << 18)
     base = rng.uniform(index, 1, 0)

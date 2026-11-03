@@ -880,16 +880,18 @@ def figure_mode_grid(
         [study_tags.kernel_short_display_name(k) for k in kernels] + [GEOMEAN_LABEL] * geomean_panel,
         type_,
     )
-    for ax in axes.flat:
-        fit_y(ax)
-        decade_ticks(ax)
+    if quantity == Quantity.SPEEDUP:
+        for ax in axes.flat:
+            fit_y(ax)
+            decade_ticks(ax)
     # Room for the shared label's one line and no more: tight_layout's own pad would sit between it
     # and the row labels.
     ylabel_in = type_.label_pt * 1.25 / plotstyle.POINTS_PER_INCH
     fig.tight_layout(pad=0.2, w_pad=0.15, h_pad=0.3, rect=(ylabel_in / width, 0.0, 1.0, 1.0))
     handles = [ideals[0], *series_handles(drawn, type_.line_width, counted=geomean_panel)]
     place_legend(fig, handles, list(axes[-1]), type_, xlabel="GPUs $P$")
-    shared_ylabel(fig, list(axes[:, 0]), SPEEDUP_LABEL, type_)
+    label = SPEEDUP_LABEL if quantity == Quantity.SPEEDUP else axis_label(quantity, present[0])
+    shared_ylabel(fig, list(axes[:, 0]), label, type_)
     return fig
 
 

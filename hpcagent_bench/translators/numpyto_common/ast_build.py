@@ -51,6 +51,12 @@ def walk_nodes(node: ast.AST) -> Iterator[ast.AST]:
         yield node
 
 
+def positional_defaults(args: ast.arguments) -> dict[str, ast.expr]:
+    """Each defaulted positional parameter with its default; ``ast.arguments`` aligns defaults to the last params."""
+    names = [a.arg for a in args.args]
+    return dict(zip(names[len(names) - len(args.defaults) :], args.defaults, strict=True))
+
+
 def name_(name: str) -> ast.Name:
     """Build a load of ``name``."""
     return ast.Name(id=name, ctx=ast.Load())
@@ -100,6 +106,16 @@ def const_int(node: ast.expr | None) -> int | None:
         if inner is not None:
             return -inner if isinstance(node.op, ast.USub) else inner
     return None
+
+
+def refuse_negative_int_power(base: ast.expr, exponent: ast.expr) -> None:
+    """Refuse an integer base under a negated exponent, for a caller that has proven both operands integer.
+
+    Python answers a float and numpy raises, so no integer power helper can stand in for it."""
+    if isinstance(exponent, ast.UnaryOp) and isinstance(exponent.op, ast.USub) or (const_int(exponent) or 0) < 0:
+        raise NotImplementedError(
+            f"{ast.unparse(base)} ** {ast.unparse(exponent)}: an integer to a negative power; use a float base"
+        )
 
 
 class SubstituteLoads(ast.NodeTransformer):

@@ -12,7 +12,13 @@ from functools import lru_cache
 from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.translators.numpyto_c.pluto_predicate import if_convert
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, line_of, name_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    const_int,
+    line_of,
+    name_,
+    refuse_negative_int_power,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers import fftw
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
     CONJ_ATTRS,
@@ -42,7 +48,12 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     FFTN_LIBRARY_MARKER,
 )
 from hpcagent_bench.translators.numpyto_common.limits import FIXPOINT_ROUNDS
-from hpcagent_bench.translators.numpyto_common.lowering import helper_returns_int, integer_valued_locals, walk_complex
+from hpcagent_bench.translators.numpyto_common.lowering import (
+    helper_returns_int,
+    integer_valued_locals,
+    kernel_float_dtype,
+    walk_complex,
+)
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import negative_literal_offset
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.statement_desugar import binding_names
@@ -358,22 +369,8 @@ C_FP8_NAMES = fp8_function_names("__npb_")
 
 
 def default_float_dtype(kir: KernelIR) -> str:
-    """The floating dtype for an untyped temp: kir.float_precision if set; else the compute dtype of the
-    storage-only format the arrays cross the ABI in (bf16 -> float32: reads promote, and the numpy
-    oracle computes on the promoted arrays); else inferred from the signature (float32 iff every
-    floating array/scalar is float32)."""
-    if kir.float_precision:
-        return dtypes.compute_dtype(kir.float_precision)
-    storage = {dtypes.compute_dtype(a.dtype) for a in kir.arrays if a.dtype and dtypes.is_storage_only(a.dtype)}
-    if len(storage) == 1:
-        return storage.pop()
-    cts: set[str] = set()
-    for desc in descs(kir.arrays, kir.scalars):
-        if desc.dtype:
-            cts.add(c_type_(dtypes.compute_dtype(desc.dtype)))
-    if cts & {"float", "double"} == {"float"}:
-        return "float32"
-    return "float64"
+    """The floating dtype for an untyped temp, in its compute width: :func:`kernel_float_dtype`."""
+    return dtypes.compute_dtype(kernel_float_dtype(kir))
 
 
 def array_signature(arr: ArrayDesc) -> str:
@@ -801,11 +798,15 @@ class CBodyEmitter(BaseEmitter):
         for a once-only guard is inside the ``if`` branch -- so the ``else`` branch, and everything
         after the ``if``, referenced a name out of scope and the C would not build. Moving it to the
         enclosing block keeps every loop variable its extent names in scope, since the ``if`` sits
-        inside those loops already.
+        inside those loops already -- UNLESS the extent names a variable the ``if`` itself binds (an
+        inner ``for`` target, or an assignment inside a branch): hoisted above the ``if`` that name
+        is out of scope and the C does not build, so such a local stays with its marker, which sits
+        inside the scope that binds it.
         """
         inline_locals = self.inline_local_decls
         if not inline_locals:
             return ""
+        bound_by_if = set(names_bound_by(node))
         decls = []
         for stmt in walk_nodes(node):
             if not (
@@ -816,10 +817,21 @@ class CBodyEmitter(BaseEmitter):
             ):
                 continue
             name = stmt.targets[0].id
-            shape = inline_locals.pop(name)
+            shape = inline_locals[name]
+            if {tok for dim in shape for tok in IDENT_RE.findall(dim)} & bound_by_if:
+                continue  # the ``if`` binds a shape variable: the marker declares it in scope
+            inline_locals.pop(name)
             local_dtypes = self.local_dtypes_for_inline
             c_type = c_type_(local_dtypes.get(name, default_float_dtype(self.kir)))
-            decls.append(f"{indent}{c_type} {name}[{flat_size(shape)}];")
+            size = flat_size(shape)
+            lines = [f"{indent}{c_type} {name}[{size}];"]
+            fill = explicit_fill(self.kir.zeros_fills.get(name))
+            if fill is not None:
+                # The constructor fill travels with the hoisted declaration, and a later marker is
+                # a reset, not a second declaration -- the rule the fn-top and marker paths follow.
+                lines.append(self.body_fill_stmt(name, size, c_type, fill, indent))
+                self.zeros_refill[name] = (size, c_type, fill)
+            decls.append("\n".join(lines))
         return "\n".join(decls)
 
     def branch_block(self, stmts: Sequence[ast.stmt], indent: str) -> str:
@@ -905,7 +917,18 @@ class CBodyEmitter(BaseEmitter):
         if t in inline_locals:
             shape = inline_locals.pop(t)  # only emit decl once
             dtype_tag = self.local_dtypes_for_inline.get(t, default_float_dtype(self.kir))
-            return f"{indent}{c_type_(dtype_tag)} {t}[{flat_size(shape)}];"
+            c_ty = c_type_(dtype_tag)
+            size = flat_size(shape)
+            lines = [f"{indent}{c_ty} {t}[{size}];"]
+            fill = explicit_fill(self.kir.zeros_fills.get(t))
+            if fill is not None:
+                # The constructor fill travels with the declaration: the VLA is scoped to this
+                # block, so np.zeros/np.ones semantics hold only if the fill runs here too.
+                lines.append(self.body_fill_stmt(t, size, c_ty, fill, indent))
+                # A later marker in the same block is a RESET, not a second declaration -- same
+                # rule the function-top and branch-scoped locals follow.
+                self.zeros_refill[t] = (size, c_ty, fill)
+            return "\n".join(lines)
         # A fn-top zeros/ones local reset in a loop must be re-filled; skip the refill for a __reassign__ self-update.
         refill = self.zeros_refill
         if t in refill and not is_reassign:
@@ -957,6 +980,9 @@ class CBodyEmitter(BaseEmitter):
         # fp8 re-rounding) -- otherwise ``//=`` raises and ``%=`` emits raw C dividend-sign modulo.
         if isinstance(node.op, (ast.FloorDiv, ast.Mod)):
             rhs = self.emit_expr(ast.BinOp(left=node.target, op=node.op, right=node.value))
+            fns = self.store_fns(node.target)
+            if fns is not None:  # storage-only target: demote the computed RHS like the plain ops do
+                return f"{indent}{self.emit_expr(node.target)} = {fns.demote}({rhs});"
             return f"{indent}{self.emit_expr(node.target)} = {rhs};"
         op = BINOP_.get(type(node.op))
         if op is None:
@@ -1343,6 +1369,8 @@ class CBodyEmitter(BaseEmitter):
             return f"(({c_type_(fn)})({self.emit_expr(node.args[0])}))"
         # np.sign: numpy sign(nan) == nan (the naive form gives 0 and double-evaluates) -> the __npb_sign helper.
         if fn == "__npb_sign" and len(node.args) == 1:
+            if self.is_complex_operand(node.args[0]):
+                raise NotImplementedError("np.sign of a complex operand is z / |z|, not __npb_sign")
             return f"__npb_sign({self.emit_expr(node.args[0])})"
         return None
 
@@ -1420,6 +1448,8 @@ class CBodyEmitter(BaseEmitter):
             return f"({x})" if attr == "real" else "0.0"
         # np.sign(x) in scalar context: same NaN-aware __npb_sign helper as the array marker.
         if attr == "sign" and len(node.args) == 1:
+            if self.is_complex_operand(node.args[0]):
+                raise NotImplementedError("np.sign of a complex operand is z / |z|, not __npb_sign")
             return f"__npb_sign({self.emit_expr(node.args[0])})"
         # np.abs(x) in scalar context: complex -> cabs, float -> fabs, integer -> llabs (mirrors builtin abs).
         if attr in ("abs", "absolute", "fabs") and len(node.args) == 1:
@@ -1620,6 +1650,7 @@ class CBodyEmitter(BaseEmitter):
         to int64 -- silently wrong for exactly the large-integer kernels that use it.
         Both spellings (``a ** b`` and a synthesized ``pow(a, b)`` call) come here."""
         if self.is_int_operand(left) and self.is_int_operand(right):
+            refuse_negative_int_power(left, right)
             return f"__npb_int_pow({self.emit_expr(left)}, {self.emit_expr(right)})"
         return f"{self.math_name('pow')}({self.emit_expr(left)}, {self.emit_expr(right)})"
 

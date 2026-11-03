@@ -10,6 +10,7 @@ import pytest
 import scipy.sparse as sp
 
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, SparseArrayDesc
+from hpcagent_bench.translators.numpyto_numba.sparse import rewrite_sparse_matmuls
 from tests.own_process import isolated
 from tests.translators.test_numba_typing_desugar import emit_and_load
 
@@ -97,6 +98,27 @@ def test_format_matvec_matches_scipy(tmp_path: pathlib.Path, fmt: str, transpose
     np.testing.assert_allclose(got, want, rtol=1e-12)
 
 
+def test_coo_result_extent_is_never_guessed_from_stored_indices() -> None:
+    """numpy's ``min`` sees the empty last row of ``A`` as a zero; a result sized by ``row.max() + 1`` would lose it."""
+    src = "def f(A, x, out):\n    out[0] = (A @ x).min()\n"
+    names = {role: f"A_{role}" for role in ("row", "col", "data")}
+    arrays = [
+        ArrayDesc(name="A_row", dtype="int32", shape=("NNZ",)),
+        ArrayDesc(name="A_col", dtype="int32", shape=("NNZ",)),
+        ArrayDesc(name="A_data", dtype="float64", shape=("NNZ",)),
+        ArrayDesc(name="x", dtype="float64", shape=("N",)),
+        ArrayDesc(name="out", dtype="float64", shape=(1,)),
+    ]
+    kir = KernelIR(
+        tree=ast.parse(src).body[0],
+        kernel_name="f",
+        input_args=[*names.values(), "x", "out"],
+        arrays=arrays,
+        sparse={"A": SparseArrayDesc("A", "coo", ("M", "N"), names)},
+    )
+    assert rewrite_sparse_matmuls(src, kir) is None
+
+
 if __name__ == "__main__":
     import tempfile
 
@@ -104,3 +126,4 @@ if __name__ == "__main__":
         for case_transposed in (False, True):
             with tempfile.TemporaryDirectory() as case_dir:
                 test_format_matvec_matches_scipy(pathlib.Path(case_dir), case_fmt, case_transposed)
+    test_coo_result_extent_is_never_guessed_from_stored_indices()

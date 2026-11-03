@@ -3,7 +3,6 @@
 """``hpcagent_bench/stats/commands/kernel_speedups.py``: speedup per kernel, compilers and setups over one baseline."""
 
 import pathlib
-import sqlite3
 import tempfile
 
 import pandas as pd
@@ -12,6 +11,7 @@ import pytest
 from hpcagent_bench import paths
 from hpcagent_bench.stats import cost
 from hpcagent_bench.stats.commands import kernel_speedups as kernel_speedups_command
+from tests.sqlite_closing import connect
 
 REPO = paths.ROOT
 
@@ -29,7 +29,7 @@ def test_a_canon_db_alone_draws_its_columns_over_the_baseline(tmp_path: pathlib.
         ("dace_cpu", "k1", 10.0),
     ]
     frame = pd.DataFrame([{"run": "r", "column": c, "kernel": k, "median_ms": ms, "validated": 1} for c, k, ms in rows])
-    with sqlite3.connect(canon_db) as conn:
+    with connect(canon_db) as conn:
         frame.to_sql("canon", conn, index=False)
     out = tmp_path / "figures" / "compilers.pdf"
     args = plot.build_parser().parse_args(
@@ -43,6 +43,15 @@ def test_a_canon_db_alone_draws_its_columns_over_the_baseline(tmp_path: pathlib.
     assert pluto.to_dict() == pytest.approx({"k1": 2.0, "k2": 10.0})
     dace = kernels[kernels.framework == "dace_cpu"].set_index("kernel")["speedup"]
     assert dace["k2"] == pytest.approx(1.0)  # never timed: entered at 1x, not dropped
+
+
+def test_an_indented_comment_in_a_tag_file_is_not_a_kernel(tmp_path: pathlib.Path) -> None:
+    """A phantom kernel would leave every setup incomplete over the tag."""
+    tag = tmp_path / "tag.txt"
+    tag.write_text("  # dace_cpu still pending\n", encoding="utf-8")
+    args = plot.build_parser().parse_args(["--tag-file", str(tag), "--out", str(tmp_path / "f.pdf")])
+    with pytest.raises(SystemExit, match="no tag kernel named"):
+        plot.draw(args, cost.resolve())
 
 
 def test_observations_need_the_experiment(tmp_path: pathlib.Path) -> None:

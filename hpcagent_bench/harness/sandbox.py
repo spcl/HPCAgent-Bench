@@ -101,7 +101,8 @@ class AgentFolderLine(pydantic.BaseModel):
 def folder_lines(log: pathlib.Path) -> list[AgentFolderLine]:
     """The readable lines of the folder log ``log``; a line another node is still appending is skipped."""
     lines: list[AgentFolderLine] = []
-    for text in log.read_text(encoding="utf-8").splitlines():
+    # errors="replace": an append torn inside a UTF-8 character invalidates its own line, not the whole read.
+    for text in log.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             lines.append(AgentFolderLine.model_validate_json(text))
         except pydantic.ValidationError:
@@ -200,7 +201,7 @@ def inside_any(path: pathlib.Path, folders: Sequence[pathlib.Path], root: pathli
         return True
     return any(
         path.is_relative_to(folder.resolve())
-        and not path.relative_to(folder.resolve()).parts[0].startswith(run_layout.AGENT_DIR_PREFIX)
+        and not path.relative_to(folder.resolve()).as_posix().startswith(run_layout.AGENT_DIR_PREFIX)
         for folder in folders
         if folder != root
     )

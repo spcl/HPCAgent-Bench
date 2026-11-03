@@ -22,14 +22,9 @@ import pytest
 from tests.fresh_module import fresh
 
 
-def load_example_module(name: str) -> ModuleType:
-    """``sys.modules`` must carry the module BEFORE exec, matching tests/test_agent_driver_context.py."""
-    return fresh(name)
-
-
 @pytest.fixture(name="driver")
 def driver_fixture() -> ModuleType:
-    return load_example_module("agent_driver")
+    return fresh("agent_driver")
 
 
 #: A tool_use block opened and never closed, with no closing "result" event: the LIVE shape (stream

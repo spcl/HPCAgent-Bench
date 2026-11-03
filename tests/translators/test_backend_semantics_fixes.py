@@ -18,7 +18,6 @@ run) against numpy.
 
 import importlib.util
 import pathlib
-import sys
 import tempfile
 
 import numpy as np
@@ -26,6 +25,7 @@ import pytest
 
 from hpcagent_bench.frameworks.cupy_framework import cupy_source
 from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
+from tests.fresh_module import module_at
 from tests.translators import op_oracle
 from tests.translators.source_module import run_source
 
@@ -117,12 +117,7 @@ def test_numba_parallel_scan_stays_correct() -> None:
     with tempfile.TemporaryDirectory() as td:
         mod = pathlib.Path(td) / "scan_p.py"
         mod.write_text(nb_src)
-        spec = importlib.util.spec_from_file_location("scan_p", mod)
-        m = importlib.util.module_from_spec(spec)
-        # Registered BEFORE exec: dataclasses resolves a string annotation through
-        # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-        sys.modules[spec.name] = m
-        spec.loader.exec_module(m)
+        m = module_at(mod, "scan_p")
         a = np.zeros_like(x)
         m.scan(x.copy(), a)
     np.testing.assert_allclose(a, np.cumsum(x))

@@ -5,7 +5,7 @@ import copy
 import math
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name, wrap_for_loops
 
@@ -23,6 +23,7 @@ __all__ = [
     "expand_ifftn",
     "read_fft_axes",
     "read_fft_norm",
+    "supplied",
 ]
 
 #: Pseudo-call a library-capable target's emitter renders as a whole-array 1-D DFT: FFTW3
@@ -44,15 +45,21 @@ FFT_LIBRARY_MARKER = "__fft_1d_library"
 FFTN_LIBRARY_MARKER = "__fftn_library"
 
 
+def supplied(node: ast.expr | None) -> ast.expr | None:
+    """``node``, or ``None`` for an argument left out or passed as a literal ``None``."""
+    return None if isinstance(node, ast.Constant) and node.value is None else node
+
+
 def read_fft_norm(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None) -> str:
     """``norm`` of an ``np.fft.*`` call -- ``'backward'`` (default)/``'forward'``/
-    ``'ortho'`` -- from keyword ``norm=`` or positional slot 3. Missing /
-    non-literal / ``None`` falls back to ``'backward'`` (unnormalized forward,
-    ``1/prod(N)`` on the inverse)."""
-    node = kwarg_or_pos(args, kwargs, 3, "norm")
+    ``'ortho'`` -- from keyword ``norm=`` or positional slot 3. Missing or ``None`` is ``'backward'``
+    (unnormalized forward, ``1/prod(N)`` on the inverse); anything else is refused."""
+    node = supplied(kwarg_or_pos(args, kwargs, 3, "norm"))
+    if node is None:
+        return "backward"
     if isinstance(node, ast.Constant) and node.value in ("backward", "forward", "ortho"):
         return node.value
-    return "backward"
+    raise NotImplementedError(f"np.fft.*: norm must be a literal, got {ast.unparse(node)}")
 
 
 def read_fft_axes(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None, rank: int, is_n: bool) -> list[int]:
@@ -71,15 +78,20 @@ def read_fft_axes(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None, ra
             raise NotImplementedError(f"np.fft.*: axis {a} is outside the operand rank {rank}")
         return pos
 
-    if is_n:
-        spec = kwarg_or_pos(args, kwargs, 2, "axes")
-        if isinstance(spec, (ast.Tuple, ast.List)):
-            return [norm_(e.value) for e in spec.elts if isinstance(e, ast.Constant) and isinstance(e.value, int)]
-        return list(range(rank))  # default: every axis
-    spec = kwarg_or_pos(args, kwargs, 2, "axis")
-    if isinstance(spec, ast.Constant) and isinstance(spec.value, int):
-        return [norm_(spec.value)]
-    return [rank - 1]  # default: last axis
+    def literal(node: ast.expr) -> int:
+        axis = const_int(node)
+        if axis is None:
+            raise NotImplementedError(f"np.fft.*: axis must be an integer literal, got {ast.unparse(node)}")
+        return norm_(axis)
+
+    spec = supplied(kwarg_or_pos(args, kwargs, 2, "axes" if is_n else "axis"))
+    if spec is None:
+        return list(range(rank)) if is_n else [rank - 1]  # default: every axis / the last one
+    if not is_n:
+        return [literal(spec)]
+    if not isinstance(spec, (ast.Tuple, ast.List)):
+        raise NotImplementedError(f"np.fft.*: axes must be a literal sequence, got {ast.unparse(spec)}")
+    return [literal(e) for e in spec.elts]
 
 
 #: ``norm=`` encoded as a small int for :data:`FFT_LIBRARY_MARKER`'s last arg -- an emitter
@@ -169,6 +181,9 @@ def expand_dftn(
     if not shape:
         raise NotImplementedError("np.fft.*: source shape unknown")
     rank = len(shape)
+    length = supplied(kwarg_or_pos(args, kwargs, 1, "s" if is_n else "n"))
+    if length is not None:
+        raise NotImplementedError(f"np.fft.*: a transform length crops or pads, got {ast.unparse(length)}")
     taxes = read_fft_axes(args, kwargs, rank, is_n)
     if library and rank == 1:
         return expand_dft_1d_library(target, src, shape[0], inverse, read_fft_norm(args, kwargs))

@@ -79,8 +79,6 @@ def test_a_judge_agent_image_installs_only_what_it_builds_from_source(image: str
     """Every other locked package is installed when a job starts. An image sync names its groups with --only-group:
     --no-install-project alone still installs the project's dependencies (dace and torch were baked that way)."""
     text = recipe(image)
-    assert "COPY pyproject.toml uv.lock /opt/hpcagent-bench/" in text
-    assert "COPY agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml" in text
     sync = re.search(
         r"uv sync --frozen --(?:exact|inexact)[^;]*--only-group image-python "
         r"--no-binary-package mpi4py;",
@@ -98,14 +96,11 @@ def test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_bui
     text = recipe(image)
     args = launch_args(text)
     assert args.startswith(f"--no-install-project --extra {EXTRA_OF[image]} --group judge-proxy"), args
-    assert {f"--no-install-package {name}" for name in IMAGE_BUILT[image]} <= {
-        f"--no-install-package {word}" for word in args.split("--no-install-package ")[1:] for word in [word.strip()]
-    }, args
+    assert set(IMAGE_BUILT[image]) <= set(re.findall(r"--no-install-package (\S+)", args)), args
     assert 'ENTRYPOINT ["/opt/launch/launch_venv.sh"]' in text
     assert re.search(r"^COPY .*containers/images/lib/launch_venv.sh.* /opt/launch/$", text, re.MULTILINE)
     judge = text[text.index("FROM agent AS judge") :]
     assert "RUN python3 /judge_stage.py" in judge, "a judge job installs hpcagent_bench"
-    assert "package_hook.sh" not in judge
     for name in ("DACE_COMMIT", "direct_url.json", "/opt/dace", "constraint.txt", "image-pins"):
         assert name not in "\n".join(code_lines(text)), name
 
@@ -122,7 +117,7 @@ def test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(image: s
     assert gate is not None, image
     for check in (
         "import torch",
-        "playwright install",
+        "playwright install-deps chromium",
         "one_openmp.sh /opt/view",
         "omp_contexts.sh",
         "openmp_gate.py context --context gnu --wheels --torch",
@@ -132,15 +127,6 @@ def test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(image: s
     after = text[gate.end() :]
     assert 'python3 -c "import torch' not in after
     assert "import dace" not in after
-
-
-@pytest.mark.parametrize("image", JUDGE_AGENT)
-def test_the_package_hook_serves_only_the_harness_venvs(image: str) -> None:
-    text = recipe(image)
-    assert "ln -s /opt/hpcagent-bench-agent /opt/hpcagent-bench/agent" in text
-    hooks = re.findall(r"sh /tmp/package_hook\.sh [^;]*", text)
-    assert hooks
-    assert all('"/opt/harness/${venv}"' in hook and '--group "harness-${venv}"' in hook for hook in hooks)
 
 
 @pytest.mark.parametrize("image", JUDGE_AGENT)
@@ -160,11 +146,10 @@ def test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild() -> N
 
 def test_the_launch_hook_builds_one_locked_venv_per_pin_beside_the_image_python() -> None:
     hook = (LIB / "launch_venv.sh").read_text(encoding="utf-8")
-    # The key: the lock, the image's sync arguments and id, and the plugins' install sources.
-    assert (
-        'cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id" "$0"; printf \'%s\' "${sources}"; } | sha256sum'
-        in hook
-    )
+    # The key: the lock, the image's sync arguments and id, an agent's harness pins and the plugins' install sources.
+    assert 'cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id" "$0"\n' in hook
+    assert 'cat "${harness}/pins.env" "${harness}/node/package-lock.json"\n' in hook
+    assert "printf '%s' \"${sources}\"; } | sha256sum" in hook
     assert "flock 9" in hook
     assert 'touch "${home}/ready"' in hook
     assert "zz-image-site.pth" in hook, "the image's source builds stay visible after the venv's own packages"
@@ -260,7 +245,6 @@ if __name__ == "__main__":
         test_a_judge_agent_image_installs_only_what_it_builds_from_source(name)
         test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_build(name)
         test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(name)
-        test_the_package_hook_serves_only_the_harness_venvs(name)
         test_the_openblas_rebuild_syncs_the_image_group_only(name)
     test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild()
     test_the_launch_hook_builds_one_locked_venv_per_pin_beside_the_image_python()

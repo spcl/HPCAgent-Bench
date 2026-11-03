@@ -23,6 +23,7 @@ __all__ = [
     "SparseLoweringRefused",
     "SparseMatmulRewriter",
     "call_leaf",
+    "coo_covers",
     "dense_operands_are_vectors",
     "rewrite_sparse_matmuls",
     "sparse_operand",
@@ -113,8 +114,14 @@ def symbol_readbacks(kir: KernelIR, params: set[str]) -> dict[str, str]:
                 continue
         if known[0].isidentifier():
             exprs.setdefault(*known)
-    # coo stores no extent, but its largest stored index plus one covers every entry: an index past it is a row or
-    # column of zeros, so a product over that extent is exact.
+    return exprs
+
+
+def coo_covers(kir: KernelIR, params: set[str]) -> dict[str, str]:
+    """``{shape token: python expression}`` of a covering extent: coo stores no extent, but its largest stored index
+    plus one covers every entry. An index past it is a row or column of zeros, so a product summed over that extent
+    is exact, while a result sized by it would lose its trailing zeros (:meth:`SparseMatmulRewriter.bound`)."""
+    covers: dict[str, str] = {}
     covering: dict[str, list[str]] = {}
     for desc in kir.sparse.values():
         if desc.format == "coo" and set(desc.buffers.values()) <= params and len(desc.logical_shape) == 2:
@@ -123,8 +130,8 @@ def symbol_readbacks(kir: KernelIR, params: set[str]) -> dict[str, str]:
     for token, indices in covering.items():
         bounds = [f"({index}.max() + 1 if {index}.size > 0 else 0)" for index in indices]
         if token.isidentifier():
-            exprs.setdefault(token, bounds[0] if len(bounds) == 1 else f"max({', '.join(bounds)})")
-    return exprs
+            covers[token] = bounds[0] if len(bounds) == 1 else f"max({', '.join(bounds)})"
+    return covers
 
 
 def dense_operands_are_vectors(fn: ast.FunctionDef, kir: KernelIR, buffers: set[str]) -> bool:
@@ -152,7 +159,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
     hoisted above it.
     """
 
-    __slots__ = ("bounds", "counter", "pre", "ranks", "sparse", "symbol_exprs", "vectors_only")
+    __slots__ = ("bounds", "counter", "covers", "pre", "ranks", "sparse", "symbol_exprs", "vectors_only")
 
     def __init__(
         self,
@@ -160,9 +167,11 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         symbol_exprs: dict[str, str],
         vectors_only: bool,
         ranks: dict[str, int] | None = None,
+        covers: dict[str, str] | None = None,
     ) -> None:
         self.sparse = sparse
         self.symbol_exprs = symbol_exprs
+        self.covers = covers or {}
         self.vectors_only = vectors_only
         self.ranks = ranks or {}
         self.counter = 0
@@ -216,9 +225,10 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         self.pre.extend(self.lower(temp, desc, node.right, transposed))
         return name_(temp)
 
-    def bound(self, token: object) -> str:
-        """Name of the function-top local holding shape symbol ``token``."""
-        expr = self.symbol_exprs.get(str(token))
+    def bound(self, token: object, summed: bool = False) -> str:
+        """Name of the function-top local holding shape symbol ``token``; a ``summed`` extent never sizes a result, so
+        a coo cover serves it."""
+        expr = self.symbol_exprs.get(str(token)) or (self.covers.get(str(token)) if summed else None)
         if expr is None:
             raise SparseLoweringRefused(f"shape symbol {token!r} is not readable from any parameter")
         name = f"__sp_{token}"
@@ -230,8 +240,9 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         return ast.parse(f"{temp} = np.zeros({shape}, dtype={data_buffer}.dtype)").body[0]
 
     def extents(self, desc: SparseArrayDesc) -> EntryExtents:
-        """The extents the stored-entry walk of ``desc`` needs, read at run time off its buffers."""
-        rows, cols = self.bound(desc.logical_shape[0]), self.bound(desc.logical_shape[1])
+        """The extents the stored-entry walk of ``desc`` needs, read at run time off its buffers. :meth:`lower` bounds
+        every result extent first, so what is left to a cover here is the summed index of a product."""
+        rows, cols = self.bound(desc.logical_shape[0], summed=True), self.bound(desc.logical_shape[1], summed=True)
         data = desc.buffers["data"]
         if desc.format == "bcsr":
             return EntryExtents(
@@ -347,6 +358,7 @@ def rewrite_sparse_matmuls(numpy_source: str, kir: KernelIR) -> str | None:
         symbol_readbacks(kir, set(expanded)),
         dense_operands_are_vectors(fn, kir, buffers),
         rank_table(fn, seed),
+        coo_covers(kir, set(expanded)),
     )
     try:
         rewriter.visit(fn)

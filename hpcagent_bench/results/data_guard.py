@@ -1,17 +1,12 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Guards that keep collection, extraction and cleanup code from deleting source data.
+"""The guard that keeps collection and extraction code from overwriting source data.
 
 Run roots and judge databases are the only copy of an experiment.
 
-* :func:`check_output` -- the output must not be, contain, or sit inside any source it reads,
-  except inside a directory of that source the reader skips (its own output directory). The
-  collectors (:mod:`hpcagent_bench.results.collect`, :mod:`hpcagent_bench.results.extract`) call it before
-  writing.
-* :func:`safe_rmtree` -- a tree is removed only when it holds no SQLite database, is not a
-  protected root (or an ancestor of one) and, inside a protected root, only under an allowlisted
-  scratch subdirectory. Only the tests call it today: the tools that remove trees
-  (``cluster/baseline.py``, ``export/harbor.py``, ``cpf/prerender.py``) still call ``shutil.rmtree`` directly.
+:func:`check_output`: the output must not be, contain, or sit inside any source it reads, except
+inside a directory of that source the reader skips (its own output directory). The collectors
+(:mod:`hpcagent_bench.results.collect`, :mod:`hpcagent_bench.results.extract`) call it before writing.
 
 Protected roots: the experiment run root (:func:`hpcagent_bench.experiments.runs_root`) and every entry of
 ``$HPCAGENT_BENCH_PROTECTED_ROOTS`` (``os.pathsep`` separated).
@@ -19,39 +14,31 @@ Protected roots: the experiment run root (:func:`hpcagent_bench.experiments.runs
 
 import os
 import pathlib
-import shutil
 from collections.abc import Iterable
 
 __all__ = [
-    "DB_SUFFIXES",
     "ENV",
     "PathLike",
     "ProtectedPathError",
     "check_output",
-    "check_removable",
-    "holds_database",
     "holds_judge_database",
     "protected_roots",
     "real",
-    "safe_rmtree",
     "within",
 ]
 
 #: Extra protected roots, ``os.pathsep`` separated.
 ENV = "HPCAGENT_BENCH_PROTECTED_ROOTS"
 
-#: File suffixes that mark a tree as holding recorded data.
-DB_SUFFIXES = frozenset({".db", ".sqlite", ".db-wal", ".sqlite-wal"})
-
 type PathLike = str | os.PathLike[str]
 
 
 class ProtectedPathError(ValueError):
-    """A write or delete would touch source data."""
+    """A write would touch source data."""
 
 
 def protected_roots() -> tuple[pathlib.Path, ...]:
-    """Every root whose contents no collection or cleanup tool may delete or overwrite."""
+    """Every root a collection tool scans by default and must not overwrite."""
     from hpcagent_bench import experiments  # lazy: keeps check_output free of the registry imports
 
     roots = [experiments.runs_root()]
@@ -92,29 +79,3 @@ def check_output(dest: PathLike, sources: Iterable[PathLike], *, unscanned: Iter
 def holds_judge_database(path: pathlib.Path) -> bool:
     """Whether the directory ``path`` holds a ``*.db`` file, the kind a run-root scan reads."""
     return path.is_dir() and any(p.is_file() for p in path.rglob("*.db"))
-
-
-def holds_database(path: pathlib.Path) -> bool:
-    """Whether ``path`` is, or (as a directory) contains, a SQLite database file."""
-    if path.is_file() or path.is_symlink():
-        return path.suffix in DB_SUFFIXES
-    return any(p.suffix in DB_SUFFIXES for p in path.rglob("*") if p.is_file())
-
-
-def check_removable(path: PathLike, *, allow: Iterable[PathLike] = ()) -> pathlib.Path:
-    """``path`` resolved when :func:`safe_rmtree` may remove it; raises :class:`ProtectedPathError`."""
-    target = real(path)
-    allowed = [real(a) for a in allow]
-    for root in protected_roots():
-        if within(root, target):
-            raise ProtectedPathError(f"refusing to remove {target}: it is (or holds) protected root {root}")
-        if within(target, root) and not any(within(target, a) for a in allowed):
-            raise ProtectedPathError(f"refusing to remove {target}: it lies under protected root {root}")
-    if target.exists() and holds_database(target):
-        raise ProtectedPathError(f"refusing to remove {target}: it holds a SQLite database")
-    return target
-
-
-def safe_rmtree(path: PathLike, *, allow: Iterable[PathLike] = ()) -> None:
-    """``shutil.rmtree`` behind :func:`check_removable`; ``allow`` names scratch dirs inside protected roots."""
-    shutil.rmtree(check_removable(path, allow=allow))

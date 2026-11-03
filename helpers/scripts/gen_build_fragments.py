@@ -237,17 +237,18 @@ def render(language: Language) -> str:
 def main() -> int:
     out_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else paths.ROOT / "agent"
     out_dir.mkdir(parents=True, exist_ok=True)
-    written = 0
+    written, skipped = 0, 0
     for language in CPU_LANGUAGES:
         try:
             text = render(language)
         except Exception as exc:  # noqa: BLE001 -- this image wires no compiler for it; not fatal
             print(f"gen_build_fragments: no build command for {language.text!r} here ({exc})", file=sys.stderr)
+            skipped += 1
             continue
         (out_dir / f"build-{language.text}.md").write_text(text, encoding="utf-8")
         written += 1
     print(f"gen_build_fragments: {written} fragment(s) under {out_dir}")
-    return 0
+    return 1 if skipped else 0  # the caller keeps going on the baked fragments, and says so
 
 
 if __name__ == "__main__":

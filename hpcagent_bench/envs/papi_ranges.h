@@ -181,6 +181,13 @@ static inline void papi_ranges_setup(struct papi_ranges *state, int thread) {
 static inline void papi_ranges_start(struct papi_ranges *state, int thread) {
   struct papi_ranges_thread *const slot = &state->per_thread[thread];
   if (slot->setup_code == PAPI_OK) {
+    if (slot->started) {
+      /* A range whose end team dropped this thread left its set running (its "not in the end
+       * team" slot keeps started): stop it and drop the stale values, or this and every later
+       * PAPI_start on the set fails with PAPI_EISRUN and the thread stops measuring. */
+      long long discarded[PAPI_RANGES_MAX_EVENTS] = {};
+      PAPI_stop(slot->eventset, discarded);
+    }
     slot->call = "PAPI_start";
     slot->code = PAPI_start(slot->eventset);
     slot->started = slot->code == PAPI_OK;

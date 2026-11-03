@@ -46,6 +46,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import
 )
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import HoistMultiStmtHelpers, unroll_const_list_loops
 from hpcagent_bench.translators.numpyto_common.frontend.module_constants import (
+    fold_default_args,
     inline_module_constants,
     materialize_const_arrays,
 )
@@ -366,7 +367,16 @@ class HelperKirBuilder:
         # Resolution only: they never join ``oarrays`` (the emitted ABI).
         oarr_by.update(copy.deepcopy(self.chased_locals(owner_fn, oarr_by, osca_by, osym_by)))
         assign = assign_of.get(hdef.name)
+        call = call_of[hdef.name]
         hfn = copy.deepcopy(hdef)
+        # A call that stops short of the helper's positional parameters leaves the rest DEFAULTED,
+        # and a defaulted parameter no call passes is a compile-time constant, exactly as a kernel's
+        # own defaulted params are (:func:`fold_default_args`). Left in the signature the parameter
+        # keeps an ABI slot the call never fills -- the call reads one register off from there on --
+        # and the body reads a name no descriptor covers ("unknown parameter 'k'").
+        fold_default_args(
+            hfn, [a.arg for a in hfn.args.args[: len(call.args)]] + [kw.arg for kw in call.keywords if kw.arg]
+        )
         pnames = [a.arg for a in hfn.args.args]
         return Site(
             hdef=hdef,
@@ -378,7 +388,7 @@ class HelperKirBuilder:
             oarr_by=oarr_by,
             osca_by=osca_by,
             osym_by=osym_by,
-            call=call_of[hdef.name],
+            call=call,
             assign=assign,
             assigns=assigns_of.get(hdef.name, [assign] if assign is not None else []),
             lhs=assign.targets[0] if assign is not None else None,

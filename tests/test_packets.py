@@ -10,7 +10,6 @@ import pytest
 from hpcagent_bench import packets
 from hpcagent_bench import study_tags as tags
 from hpcagent_bench.stats import palette
-from tests.test_palette import PUBLISHED_PACKET_COLORS
 
 
 def test_resolve_control_is_empty() -> None:
@@ -354,11 +353,6 @@ def test_every_registered_key_is_coloured_by_the_part_this_module_leads_it_with(
     parts = packets.spec_parts(key)
     expected = palette.control_color() if not parts else palette.color(packets.lead(parts))
     assert palette.color(key) == expected
-
-
-@pytest.mark.parametrize(("spec", "expected"), sorted(PUBLISHED_PACKET_COLORS.items()))
-def test_a_packet_colour_matches_the_published_colours(spec: str, expected: str) -> None:
-    assert palette.color(spec) == expected
 
 
 def test_the_colour_of_an_ad_hoc_combination_is_deterministic() -> None:

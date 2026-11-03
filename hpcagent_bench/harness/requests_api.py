@@ -559,7 +559,8 @@ AGENT_SCHEMA_DROPPED = frozenset({"title", "minLength", "minItems", "maxItems", 
 
 def agent_schema(node: object) -> object:
     """``node`` without :data:`AGENT_SCHEMA_DROPPED`. Only a schema keyword is dropped: a property of that name
-    (its value a schema object under ``properties``) stays."""
+    (its value a schema object under ``properties``) stays. A ``description`` is one spaced line: relayout's are
+    docstrings, which keep their indentation below Python 3.13."""
     if isinstance(node, list):
         return [agent_schema(item) for item in node]
     if not isinstance(node, dict):
@@ -568,6 +569,8 @@ def agent_schema(node: object) -> object:
         key: (
             {name: agent_schema(value) for name, value in child.items()}
             if key == "properties" and isinstance(child, dict)
+            else " ".join(child.split())
+            if key == "description" and isinstance(child, str)
             else agent_schema(child)
         )
         for key, child in node.items()

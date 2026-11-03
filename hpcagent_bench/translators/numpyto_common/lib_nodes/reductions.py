@@ -5,12 +5,17 @@ import copy
 from collections.abc import Callable, Collection, Mapping, Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
-from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import eval_axes, read_axis_keepdims, read_kwarg
+from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
+    eval_axes,
+    read_axis_keepdims,
+    read_kwarg,
+)
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
     falsy,
     first_name,
+    flat_index_,
     if_set,
     make_iter_name,
     resolve_shape,
@@ -43,9 +48,9 @@ __all__ = [
     "full_reduction",
     "init_for",
     "nan_reduce_op",
-    "normalized_axes",
     "reduction_elem_is_integer",
     "reduction_output_index",
+    "normalized_axes",
     "reduction_output_refs",
     "reduction_source_index",
     "reduction_update",
@@ -406,9 +411,8 @@ def reject_zero_size_reduction(
         return
     n_dim = len(shape)
     axes = read_axis_keepdims(args, kwargs)[0]
-    red_axes = range(n_dim) if axes is None else [a + n_dim if a < 0 else a for a in axes]
-    for ax in red_axes:
-        if 0 <= ax < n_dim and str(shape[ax]) == "0":
+    for ax in range(n_dim) if axes is None else normalized_axes(axes, n_dim):
+        if str(shape[ax]) == "0":
             raise NotImplementedError("zero-size array to reduction which has no identity")
 
 
@@ -586,18 +590,7 @@ def expand_arg_reduction(
     axes, keepdims = read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
     cmp_op = ast.Gt() if op == "argmax" else ast.Lt()
-    # Normalise axes -> set + ordered list (for flat-index mapping).
-    if axes is None:
-        axes_norm = list(range(n_dim))
-    else:
-        axes_norm = []
-        for ax in axes:
-            na = ax + n_dim if ax < 0 else ax
-            if na < 0 or na >= n_dim:
-                raise NotImplementedError(f"np.{op} axis {ax} out of range for ndim {n_dim}")
-            if na in axes_norm:
-                raise NotImplementedError(f"np.{op} duplicate axis {ax}")
-            axes_norm.append(na)
+    axes_norm = list(range(n_dim)) if axes is None else normalized_axes(axes, n_dim)
     axes_set = set(axes_norm)
     kept_axes = [k for k in range(n_dim) if k not in axes_set]
     outer_iter_names = [make_iter_name("__aax", i) for i in range(len(kept_axes))]
@@ -623,13 +616,7 @@ def expand_arg_reduction(
     ]
     # Flat index across the reduction axes (in source order):
     #   ((red_iter[0] * shape[axis1]) + red_iter[1]) * shape[axis2] + red_iter[2] + ...
-    flat_idx: ast.expr = name_(red_iter_map[axes_norm[0]])
-    for k in range(1, len(axes_norm)):
-        flat_idx = ast.BinOp(
-            left=ast.BinOp(left=flat_idx, op=ast.Mult(), right=const_or_name(shape[axes_norm[k]])),
-            op=ast.Add(),
-            right=name_(red_iter_map[axes_norm[k]]),
-        )
+    flat_idx = flat_index_([red_iter_map[ax] for ax in axes_norm], tuple(shape[ax] for ax in axes_norm))
     # NaN semantics (numpy): argmax/argmin return the index of the FIRST NaN.
     # Update rule ``(best == best) and (src != src or src <cmp> best)``:
     # ``best == best`` goes false once ``best`` is NaN, locking the index at the
@@ -706,17 +693,7 @@ def expand_var_or_std(
     shape = resolve_shape(a, shape_table)
     axes, keepdims = read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
-    if axes is None:
-        axes_norm = list(range(n_dim))
-    else:
-        axes_norm = []
-        for ax in axes:
-            na = ax + n_dim if ax < 0 else ax
-            if na < 0 or na >= n_dim:
-                raise NotImplementedError(f"np.{finish or 'var'} axis {ax} out of range")
-            if na in axes_norm:
-                raise NotImplementedError(f"np.{finish or 'var'} duplicate axis {ax}")
-            axes_norm.append(na)
+    axes_norm = list(range(n_dim)) if axes is None else normalized_axes(axes, n_dim)
     axes_set = set(axes_norm)
     kept_axes = [k for k in range(n_dim) if k not in axes_set]
 

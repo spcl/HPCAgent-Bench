@@ -475,15 +475,10 @@ def test_an_unreachable_service_fails_loudly(service: types.ModuleType) -> None:
 
 
 def test_the_launcher_never_writes_the_key_value_into_the_run_tree() -> None:
-    """Two files the launcher writes outlive the job: the LiteLLM proxy config and the container env
-    slice. Neither may carry the key's VALUE -- the config names the variable for LiteLLM to read,
-    and the slice is a tmpfs file removed with the job, not ``${RUN_DIR}/job.env``."""
+    """The LiteLLM proxy config outlives the job, so it names the variable for LiteLLM to read, never its value."""
     script = (paths.ROOT / "hpcagent_bench" / "cluster" / "run_cluster.sh").read_text(encoding="utf-8")
     assert "api_key: ${VLLM_API_KEY" not in script, "the proxy config would hold the key literally"
     assert "os.environ/VLLM_API_KEY" in script
-    assert 'JOB_ENV_FILE="${RUN_DIR}' not in script, "the env slice would persist in the run tree"
-    assert "chmod 600" in script
-    assert 'rm -f "${JOB_ENV_FILE:-}"' in script
 
 
 def listing(model: str, *pricings: dict[str, str]) -> dict[str, object]:

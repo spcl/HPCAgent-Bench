@@ -10,6 +10,8 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import extent_i
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
+    is_scalar_axis,
+    slice_axes,
     slice_step_any,
     step_is_negative,
     step_node,
@@ -20,12 +22,11 @@ from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     advanced_runs,
     basic_axis_count,
     binop,
+    broadcast_reshape_entries,
     gather_slice_offset,
-    is_scalar_index,
     name_of_subscript,
     np_func_name,
     shift_index,
-    slice_dims,
     slice_free_gather_layout,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import NP_ELEMENTWISE
@@ -287,16 +288,16 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         # below, from the pre-visit form.
         keep = {
             i: copy.deepcopy(d)
-            for i, d in enumerate(slice_dims(node))
+            for i, d in enumerate(slice_axes(node))
             if not isinstance(d, ast.Name) and self.advanced_rank(d) >= 1
         }
         self.generic_visit(node)
         if keep:
-            restored = slice_dims(node)
+            restored = slice_axes(node)
             for i, d in keep.items():
                 restored[i] = d
             node.slice = restored[0] if len(restored) == 1 else ast.Tuple(elts=restored, ctx=ast.Load())
-        dims = slice_dims(node)
+        dims = slice_axes(node)
         if not any(isinstance(d, ast.Slice) for d in dims):
             return self.slice_free_read(node, dims)
         return self.sliced_read(node, dims)
@@ -307,11 +308,8 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         inner expression is scalarised against just the iters mapped to the ``:`` axes (each newaxis
         adds a result axis with no source axis), BEFORE generic_visit, so the inner expression gets
         the newaxis-aware iter mapping rather than the raw right-aligned one."""
-        sl0 = node.slice
-        elts0 = list(sl0.elts) if isinstance(sl0, ast.Tuple) else [sl0]
-        full_ = lambda e: isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
-        newax = lambda e: isinstance(e, ast.Constant) and e.value is None
-        if elts0 and all(full_(e) or newax(e) for e in elts0) and any(full_(e) for e in elts0):
+        elts0 = broadcast_reshape_entries(node)
+        if elts0 is not None:
             lhs_slice_iters = [
                 (iv, rng[0])
                 for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges, strict=False)
@@ -319,7 +317,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             ]
             align = max(0, len(lhs_slice_iters) - len(elts0))
             if len(elts0) <= len(lhs_slice_iters):
-                sub_iters = [lhs_slice_iters[align + pos] for pos, e in enumerate(elts0) if full_(e)]
+                sub_iters = [lhs_slice_iters[align + pos] for pos, e in enumerate(elts0) if is_full_slice(e)]
                 sub = SliceToScalarRewriter(
                     self.array_shapes,
                     [iv for iv, unused in sub_iters],
@@ -386,7 +384,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         # have no negative indexing) and keep it -- the stencil_*_vc
         # last-weight read inside a slice-fused statement.
         if source_shape is not None and len(dims) == len(source_shape):
-            resolved = [self.resolve_scalar_index(d, name, axis) for axis, d in enumerate(dims)]
+            resolved = [self.resolve_bound(d, name, axis, default=d) for axis, d in enumerate(dims)]
             if any(r is not d for r, d in zip(resolved, dims, strict=False)):
                 slot = resolved[0] if len(resolved) == 1 else ast.Tuple(elts=resolved, ctx=ast.Load())
                 return ast.Subscript(value=node.value, slice=slot, ctx=node.ctx)
@@ -438,7 +436,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
                     ]
                     new_elts.append(self.bind_gather_operand(d, giters))
                 else:
-                    new_elts.append(self.resolve_scalar_index(d, name, axis))
+                    new_elts.append(self.resolve_bound(d, name, axis, default=d))
             for unused in range(max(0, n_trailing)):
                 new_elts.append(self.iter_minus_start(lhs_iters[pos], lhs_starts[pos]))
                 pos += 1
@@ -506,7 +504,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
                     idx_nodes.append(self.bind_gather_operand(d, giters))
                     continue
             if not isinstance(d, ast.Slice):
-                idx_nodes.append(self.resolve_scalar_index(d, rhs_name, axis))
+                idx_nodes.append(self.resolve_bound(d, rhs_name, axis, default=d))
                 continue
             if align + rhs_slice_idx >= len(lhs_slice_iters):
                 # More RHS slices than LHS slice axes -- keep the slice
@@ -607,12 +605,12 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             return None
         entries: list[ast.expr] = []
         view_axes = iter(view_index)
-        for axis, d in enumerate(slice_dims(inner)):
+        for axis, d in enumerate(slice_axes(inner)):
             if isinstance(d, ast.Slice):
                 start = self.resolve_bound(d.lower, base.id, axis, default=const_(0))
                 entries.append(shift_index(next(view_axes), start))
             else:
-                entries.append(self.resolve_scalar_index(d, base.id, axis))
+                entries.append(self.resolve_bound(d, base.id, axis, default=d))
         entries.extend(view_axes)
         return ast.Subscript(value=base, slice=index_slot(entries), ctx=node.ctx)
 
@@ -621,17 +619,17 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         inner = node.value
         if not (isinstance(inner, ast.Subscript) and isinstance(inner.value, ast.Name)):
             return None
-        inner_dims = slice_dims(inner)
+        inner_dims = slice_axes(inner)
         if len(inner_dims) > len(self.array_shapes.get(inner.value.id) or ()):
             return None
         basic = all(self.is_basic_view_entry(d) for d in inner_dims)
-        return inner.value if basic and any(self.advanced_rank(d) >= 1 for d in slice_dims(node)) else None
+        return inner.value if basic and any(self.advanced_rank(d) >= 1 for d in slice_axes(node)) else None
 
     def is_basic_view_entry(self, d: ast.expr) -> bool:
         """An inner entry a scalar index composes onto: a forward, unstrided slice, or one position."""
         if isinstance(d, ast.Slice):
             return d.step is None and not counts_from_end(d.lower)
-        return is_scalar_index(d) and not counts_from_end(d) and self.advanced_rank(d) == 0
+        return is_scalar_axis(d) and not counts_from_end(d) and self.advanced_rank(d) == 0
 
     def view_index(self, node: ast.Subscript) -> list[ast.expr] | None:
         """One scalar index per result axis of the view under ``node`` for its outer entries, read at this
@@ -650,7 +648,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         index array left over means the outer entries did not fully scalarize."""
         if not (isinstance(read, ast.Subscript) and isinstance(read.value, ast.Name) and read.value.id == CHAINED_VIEW):
             return None
-        index = slice_dims(read)
+        index = slice_axes(read)
         unbound = any(isinstance(e, ast.Slice) or is_newaxis(e) or self.advanced_rank(e) >= 1 for e in index)
         return None if unbound or len(index) != rank else index
 
@@ -733,23 +731,11 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         node.slice = ast.Tuple(elts=new_dims, ctx=ast.Load())
         return node
 
-    def resolve_scalar_index(self, idx: ast.expr, array_name: str | None, axis: int) -> ast.expr:
-        """A negative constant scalar index ``-K`` on a non-slice axis
-        (``imgIn[:, -1]``) wraps to ``axis_length - K`` -- numpy
-        semantics. Mirrors :meth:`SliceFusion.resolve_scalar_index` but
-        reads the operand shape from ``self.array_shapes`` (RHS side)."""
-        shape = self.array_shapes.get(array_name) if array_name else None
-        val = negative_literal_offset(idx)
-        if val is not None and shape and axis < len(shape):
-            axis_len = const_or_name(str(shape[axis]))
-            return binop(axis_len, ast.Sub(), const_(val))
-        return idx
-
     def resolve_bound(self, bound: ast.expr | None, array_name: str | None, axis: int, default: ast.expr) -> ast.expr:
         """Mirror :meth:`SliceFusion.resolve_bound` for the RHS scalarizer.
 
-        Resolves negative-index bounds against the operand array's shape
-        (not the LHS shape). Required so a stencil read
+        Resolves a negative slice bound or scalar index (``imgIn[:, -1]``) against the operand
+        array's shape (not the LHS shape). Required so a stencil read
         ``A[1:-1, 1:-1, 1:-1]`` on a 3-D ``A`` rewrites to
         ``A[i, j, k]`` with iter vars whose upper bound is ``N - 1``
         rather than the literal ``-1`` (which would generate an empty loop).

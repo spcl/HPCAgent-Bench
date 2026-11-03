@@ -122,7 +122,7 @@ def test_the_link_step_names_every_object(lang: str, tmp_path: pathlib.Path) -> 
     entry, kernels = write_units(lang, tmp_path)
     cmds = languages.build_shared_lib_commands(lang, entry, tmp_path / "libunits.so", extra_sources=[kernels])
     link = cmds[-1]
-    assert f"{entry}.o" in link or f"{entry}.o" in " ".join(link), f"{lang}: link misses the entry object:\n{link}"
+    assert f"{entry}.o" in link, f"{lang}: link misses the entry object:\n{link}"
     assert f"{kernels}.o" in " ".join(link), f"{lang}: link misses the second unit's object:\n{link}"
 
 

@@ -3,9 +3,7 @@
 """Overlapping slice stores and ``max`` / ``min`` / ``eye`` calls keep ``parallel=True`` and numpy's answer
 (:mod:`numpyto_numba.parfor`): the emitted module runs on several threads against the source run as numpy."""
 
-import importlib.util
 import pathlib
-import sys
 import textwrap
 from types import ModuleType
 
@@ -13,6 +11,7 @@ import numpy as np
 
 from hpcagent_bench import modules
 from hpcagent_bench.translators.numpyto_numba.emit import emit_numba, emits_parallel
+from tests.fresh_module import module_at
 from tests.own_process import isolated
 
 #: Threads the emitted module runs on: enough that a racing store answers wrongly.
@@ -23,13 +22,7 @@ def load(tmp_path: pathlib.Path, name: str, source: str) -> ModuleType:
     """Import ``source`` from a file under ``tmp_path`` (``cache=True`` needs a file-backed module)."""
     path = tmp_path / f"{name}.py"
     path.write_text(source)
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(path, name)
 
 
 def run_both(

@@ -236,10 +236,11 @@ def replay(queues: Sequence[pathlib.Path], judge_url: str, workers: int) -> Repl
             with lock:
                 failed.append(f"{entry.request_id}: HTTP {answer.status_code}: {answer.text[:300]}")
             return False
-        with lock, queue.with_name(queue.name + DONE_SUFFIX).open("a", encoding="utf-8") as handle:
-            handle.write(entry.request_id + "\n")
+        # Thawed first: a done entry is never replayed again, so nothing would thaw its folder afterwards.
         if entry.folder:
             thaw(pathlib.Path(entry.folder))
+        with lock, queue.with_name(queue.name + DONE_SUFFIX).open("a", encoding="utf-8") as handle:
+            handle.write(entry.request_id + "\n")
         return True
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:

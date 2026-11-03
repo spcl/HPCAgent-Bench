@@ -11,6 +11,7 @@ import json
 import pathlib
 import shutil
 import subprocess
+import threading
 import types
 from collections.abc import Callable
 from types import ModuleType
@@ -29,7 +30,7 @@ SESSION = "5e55a0c1-0000-4000-8000-000000000001"
 
 def load_capture() -> ModuleType:
     """The golden capture harness beside the fixtures: a recorded claude process, one run_agent."""
-    return module_at(FIXTURES / "regen.py", "crash_resume_capture")
+    return module_at(FIXTURES / "capture.py", "crash_resume_capture")
 
 
 capture = load_capture()
@@ -105,9 +106,13 @@ def spawner(
 
 
 def run_agent(
-    root: pathlib.Path, spawn: Callable[..., object], env: tuple[tuple[str, str], ...] = capture.BASE_ENV
+    root: pathlib.Path,
+    spawn: Callable[..., object],
+    env: tuple[tuple[str, str], ...] = capture.BASE_ENV,
+    start_watchers: Callable[..., list[threading.Thread]] | None = None,
 ) -> ModuleType:
-    """One run_agent with ``spawn`` in place of the agent process; returns the driver it ran."""
+    """One run_agent with ``spawn`` in place of the agent process (and ``start_watchers`` in place of the watchers,
+    when given); returns the driver it ran."""
     shutil.copytree(FIXTURES / "templates", root / "shared")
     with capture.isolated(root, env):
         driver = capture.load_driver(DRIVER)
@@ -121,6 +126,8 @@ def run_agent(
         driver.agent_cpus = lambda worker_index, agents: []
         driver.claude_supports_flag = lambda binary, flag: True
         driver.TOKEN_POLL_SECONDS = 0.01
+        if start_watchers is not None:
+            driver.start_watchers = start_watchers
         problem = {"id": 7, "kernel": capture.KERNEL, "language": "c", "task": capture.TASK}
         driver.run_agent(problem, 2, capture.NODE_DIR, list(capture.JUDGES), 7, 3)
     return driver
@@ -177,6 +184,23 @@ def test_the_ledger_records_the_crash_and_keeps_the_first_legs_start(
     assert lines[0]["start_ms"] == lines[1]["start_ms"]
     record = json.loads((workdir / "tokens.json").read_text(encoding="utf-8"))
     assert record["final_attempt_start_ms"] == lines[0]["start_ms"]
+
+
+def test_a_leg_the_watchdog_killed_does_not_file_the_clean_resumed_leg_as_an_api_timeout(
+    tmp_path: pathlib.Path,
+) -> None:
+    legs: list[int] = []
+
+    def watch(process: object, harness: object, files: object, cap: int, threshold: float, state: dict) -> list:
+        legs.append(1)
+        if len(legs) == 1:
+            state["dead_stream"] = True
+        return []
+
+    run_agent(tmp_path, spawner([]), start_watchers=watch)
+    assert len(legs) == 2
+    record = json.loads((tmp_path / capture.WORKDIR / "tokens.json").read_text(encoding="utf-8"))
+    assert record["returncode"] == 0
 
 
 #: A runner's two legs: (calls, each call's prompt and completion, how the leg ends).

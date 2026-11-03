@@ -50,10 +50,9 @@ def test_the_judge_installs_the_mounted_checkout_at_launch_and_bakes_none_of_it(
     docker = (IMAGES / image / "Dockerfile").read_text(encoding="utf-8")
     judge = docker[docker.index("FROM agent AS judge") :]
     assert "RUN python3 /judge_stage.py" in judge, "the shared judge stage script runs"
-    assert "package_hook" not in judge
     stage = (IMAGES / "lib" / "judge_stage.py").read_text(encoding="utf-8")
     assert '"^--no-install-project "' in stage.replace('r"', '"'), "the judge's launch sync installs it"
-    assert 'find_spec("hpcagent_bench") is None' in stage
+    assert 'find_spec("hpcagent_bench") is not None' in stage
     template = (IMAGES / image / "judge.edf.toml.in").read_text(encoding="utf-8")
     assert f'"<hpcagent_bench_checkout>:{PACKAGE_ROOT}"' in template, image
 

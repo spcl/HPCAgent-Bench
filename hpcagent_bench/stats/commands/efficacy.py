@@ -52,6 +52,7 @@ __all__ = [
     "control_rows",
     "corrected",
     "dot_measures",
+    "experiment_rows",
     "family_pairs",
     "family_stats",
     "figure_config",
@@ -574,13 +575,20 @@ def spec_observations(spec: dict[str, str], default: Sequence[pathlib.Path]) -> 
     return [pathlib.Path(p) for p in spec["observations"].split(",")] if "observations" in spec else default
 
 
+def experiment_rows(
+    observations: Sequence[pathlib.Path], experiment: str, card: cost.CostModel, setups: str = ""
+) -> pd.DataFrame:
+    """The rows of one experiment across every observations file, as one frame."""
+    return pd.concat([studies.setup_rows(path, experiment, card, setups) for path in observations], ignore_index=True)
+
+
 def spec_experiment(
     spec: dict[str, str], default_observations: Sequence[pathlib.Path], default_experiment: str, card: cost.CostModel
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]] | None:
     """``(every row, the no-packet control, the tag)`` of the spec's ONE experiment, the tag
     being every kernel any of its setups touched; ``None`` without a control."""
     observations = spec_observations(spec, default_observations)
-    frame_all = studies.setup_rows(observations[0], spec.get("experiment", default_experiment), card)
+    frame_all = experiment_rows(observations, spec.get("experiment", default_experiment), card)
     control = control_rows(frame_all)
     if control.empty:
         return None
@@ -632,7 +640,9 @@ def build_comparison(
         return spec.get("title", ""), spec.get("intervention", ""), pd.DataFrame(), pd.DataFrame()
     if "treatments" in spec:
         return build_multi_comparison(spec, default_observations, default_experiment, include_incomplete, card, over)
-    intervention = spec["intervention"]
+    intervention = spec.get("intervention") or spec.get("treatment")
+    if not intervention:
+        raise SystemExit(f"--comparison {spec} names neither intervention= nor treatment=")
     title = spec.get("title") or study_tags.packet_name(intervention)
     observations = spec_observations(spec, default_observations)
     if "pairs" in spec:
@@ -853,10 +863,17 @@ def figure_from_comparisons(
     if not built:
         raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
     panels, specs = (list(part) for part in zip(*built, strict=True))
+    # The CSVs are keyed by title, not by the packet(s) shaping the panel; a stub panel writes none.
+    suffixes = [f"-{title.lower().replace(' ', '-')}" for title, *_ in panels]
+    written_suffixes = [
+        suffix
+        for suffix, (_, _, _, frame) in zip(suffixes, panels, strict=True)
+        if not (isinstance(frame, pd.DataFrame) and frame.empty)
+    ]
+    if len(set(written_suffixes)) < len(written_suffixes):
+        raise SystemExit(f"two --comparison panels share a title, their tables would collide: {written_suffixes}")
     args.table.parent.mkdir(parents=True, exist_ok=True)
-    for title, _treatment, stats, frame in panels:
-        # The CSV is keyed by title, not by the packet(s) shaping the panel.
-        suffix = f"-{title.lower().replace(' ', '-')}"
+    for suffix, (_title, _treatment, stats, frame) in zip(suffixes, panels, strict=True):
         write_panel_tables(args.table, suffix, stats, frame, args.speedup_over, card)
     comparators = [spec_comparators(spec) for spec in specs]
     drawn = [comparator for column in comparators for comparator in column]
@@ -885,7 +902,7 @@ def figure_from_treatments(
     if not args.experiment:
         raise SystemExit("--experiment names the experiment to split; pass it, or --pairs-csv/--comparison")
     treatments = args.treatment or ["lang-skills"]
-    frame_all = studies.setup_rows(args.observations[0], args.experiment, card, args.setups)
+    frame_all = experiment_rows(args.observations, args.experiment, card, args.setups)
     control = control_rows(frame_all)
     if control.empty:
         raise SystemExit(f"no no-packet control rows for experiment {args.experiment!r}")

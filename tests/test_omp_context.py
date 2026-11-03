@@ -6,6 +6,7 @@ libraries a context can serve."""
 import json
 import os
 import pathlib
+from collections.abc import Iterator
 import subprocess
 
 import numpy as np
@@ -22,7 +23,7 @@ from hpcagent_bench.support.bindings.contract import binding_from_spec
 
 
 @pytest.fixture
-def root(tmp_path: pathlib.Path) -> pathlib.Path:
+def root(tmp_path: pathlib.Path) -> Iterator[pathlib.Path]:
     """A fake ``/opt/omp`` with an llvm context (lib and view) and an nvhpc one (lib only)."""
     (tmp_path / "llvm" / "lib").mkdir(parents=True)
     (tmp_path / "llvm" / "view" / "lib" / "pkgconfig").mkdir(parents=True)
@@ -30,7 +31,10 @@ def root(tmp_path: pathlib.Path) -> pathlib.Path:
     config.set_override(omp_context.ROOT_KEY, str(tmp_path))
     languages.pkg_config_answer.cache_clear()
     languages.library_tokens.cache_clear()
-    return tmp_path
+    yield tmp_path
+    # Both caches ignore the context root: an answer from this fake tree must not reach a later test.
+    languages.pkg_config_answer.cache_clear()
+    languages.library_tokens.cache_clear()
 
 
 def variant(root: pathlib.Path, context: str, module: str) -> pathlib.Path:

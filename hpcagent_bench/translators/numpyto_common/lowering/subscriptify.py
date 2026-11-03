@@ -13,8 +13,12 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     step_is_negative,
     step_node,
 )
-from hpcagent_bench.translators.numpyto_common.lowering.indexing import advanced_runs
-from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
+from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
+    advanced_runs,
+    broadcast_reshape_entries,
+    shift_index,
+)
+from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, negative_literal_offset
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 __all__ = ["UNHANDLED", "SubscriptifyNames", "resolve_neg_index"]
@@ -25,22 +29,9 @@ def resolve_neg_index(idx: ast.expr, axis_len: ast.expr) -> ast.expr:
 
     numpy ``arr[-1]`` reads the last element; C / Fortran have no negative
     indexing, so a literal ``-K`` must become ``dim - K`` (the stencils'
-    ``w_dist[-1]`` last-weight read). Both spellings -- ``Constant(-K)`` and
-    ``UnaryOp(USub, Constant(K))`` -- are handled; everything else passes
-    through unchanged."""
-    k = None
-    if isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0:
-        k = -idx.value
-    elif (
-        isinstance(idx, ast.UnaryOp)
-        and isinstance(idx.op, ast.USub)
-        and isinstance(idx.operand, ast.Constant)
-        and isinstance(idx.operand.value, int)
-    ):
-        k = idx.operand.value
-    if k is None:
-        return idx
-    return ast.BinOp(left=copy.deepcopy(axis_len), op=ast.Sub(), right=ast.Constant(value=k))
+    ``w_dist[-1]`` last-weight read). Everything else passes through unchanged."""
+    k = negative_literal_offset(idx)
+    return idx if k is None else ast.BinOp(left=copy.deepcopy(axis_len), op=ast.Sub(), right=ast.Constant(value=k))
 
 
 #: A :class:`SubscriptifyNames` step that does not apply to the subscript.
@@ -111,14 +102,8 @@ class SubscriptifyNames(ast.NodeTransformer):
         broadcast-reshape -- only ``:`` and ``np.newaxis`` (``(q_nb[:, None, :] * fs)[:, :, :, None]``):
         the inner expression scalarised at the iters mapped to the ``:`` axes; each newaxis adds a
         result axis (and consumes an iter) but contributes no source axis."""
-        sl0 = node.slice
-        elts0 = list(sl0.elts) if isinstance(sl0, ast.Tuple) else [sl0]
-        if (
-            elts0
-            and all(is_full_slice(e) or is_newaxis(e) for e in elts0)
-            and any(is_full_slice(e) for e in elts0)
-            and len(elts0) <= len(self.iters)
-        ):
+        elts0 = broadcast_reshape_entries(node)
+        if elts0 is not None and len(elts0) <= len(self.iters):
             offset = len(self.iters) - len(elts0)
             sub_iters = [self.iters[offset + k] for k, e in enumerate(elts0) if is_full_slice(e)]
             return SubscriptifyNames(self.shape_table, sub_iters).visit(copy.deepcopy(node.value))
@@ -181,8 +166,8 @@ class SubscriptifyNames(ast.NodeTransformer):
             return ast.Subscript(value=base, slice=idx, ctx=ast.Load())
         if self.iters:
             iter_node: ast.expr = name_(self.iters[-1])
-            if sl.lower is not None and not (isinstance(sl.lower, ast.Constant) and sl.lower.value == 0):
-                iter_node = ast.BinOp(left=iter_node, op=ast.Add(), right=sl.lower)
+            if sl.lower is not None:
+                iter_node = shift_index(iter_node, sl.lower)
             return ast.Subscript(value=base, slice=iter_node, ctx=ast.Load())
         return UNHANDLED
 
@@ -192,7 +177,7 @@ class SubscriptifyNames(ast.NodeTransformer):
         sl = node.slice
         if not (isinstance(sl, ast.Tuple) and sl.elts):
             return UNHANDLED
-        if all(isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None for e in sl.elts):
+        if all(is_full_slice(e) for e in sl.elts):
             return self.visit_Name(base)
         if any(self.index_rank(e) >= 1 for e in sl.elts):
             scalar = self.advanced_tuple(node, base, sl.elts)
@@ -247,12 +232,8 @@ class SubscriptifyNames(ast.NodeTransformer):
                 continue
             it: ast.expr = name_(self.iters[offset + pos])
             pos += 1
-            if (
-                isinstance(e, ast.Slice)
-                and e.lower is not None
-                and not (isinstance(e.lower, ast.Constant) and e.lower.value == 0)
-            ):
-                it = ast.BinOp(left=it, op=ast.Add(), right=e.lower)
+            if isinstance(e, ast.Slice) and e.lower is not None:
+                it = shift_index(it, e.lower)
             new_elts.append(it)
         slot = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
         return ast.Subscript(value=base, slice=slot, ctx=ast.Load())
@@ -285,8 +266,8 @@ class SubscriptifyNames(ast.NodeTransformer):
                 iter_node: ast.expr = name_(self.iters[axis_pos])
                 axis_pos += 1
                 src_axis += 1
-                if e.lower is not None and not (isinstance(e.lower, ast.Constant) and e.lower.value == 0):
-                    iter_node = ast.BinOp(left=iter_node, op=ast.Add(), right=e.lower)
+                if e.lower is not None:
+                    iter_node = shift_index(iter_node, e.lower)
                 new_elts.append(iter_node)
             elif isinstance(e, ast.Constant) and e.value is None:
                 axis_pos += 1

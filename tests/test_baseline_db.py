@@ -47,6 +47,14 @@ def test_a_stored_race_round_trips_including_a_lost_candidate() -> None:
     assert baseline_db.load(dataclasses.replace(KEY, node="elsewhere")) is None
 
 
+def test_only_the_shared_store_gives_up_soon_on_a_lock(tmp_path: pathlib.Path) -> None:
+    """A stalled writer of the store costs a grade the reuse; a recording waits, or its grade is lost."""
+    with contextlib.closing(baseline_db.open_shared(tmp_path / baseline_db.SHARED_DB)) as shared:
+        assert shared.execute("PRAGMA busy_timeout").fetchone()[0] <= 60_000
+    with contextlib.closing(results_db.open_db(tmp_path / "results.db")) as own:
+        assert own.execute("PRAGMA busy_timeout").fetchone()[0] == 1_800_000
+
+
 def test_a_later_measurement_of_a_race_replaces_its_row() -> None:
     baseline_db.store(KEY, race())
     later = ({"c": 900}, {"c": [900, 950]})
@@ -174,3 +182,14 @@ def test_merging_keeps_the_latest_race_and_a_tie_is_no_conflict(tmp_path: pathli
     other = stored(tmp_path / "d.db", TIMING, 500, dataclasses.replace(KEY, threads=4))
     results_db.merge(tmp_path / "merged.db", [late, early, tie, other])
     assert merged_rows(tmp_path / "merged.db") == [(json.dumps(TIMING[1], sort_keys=True), 500), ('{"c": [1]}', 2_000)]
+
+
+def test_publishing_an_older_race_keeps_the_newer_shared_row(tmp_path: pathlib.Path) -> None:
+    newer = stored(tmp_path / "shared.db", ({"c": 900}, {"c": [900, 950]}), 2_000)
+    older = stored(tmp_path / "older.db", TIMING, 1_000)
+    latest, stale = baseline_db.row_in(newer, KEY), baseline_db.row_in(older, KEY)
+    assert latest is not None and stale is not None
+
+    baseline_db.publish(newer, KEY, stale)
+
+    assert baseline_db.row_in(newer, KEY) == latest

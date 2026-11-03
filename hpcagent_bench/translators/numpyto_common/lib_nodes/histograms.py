@@ -81,7 +81,7 @@ def expand_histogram(
     local_dtypes: dict[str, str] | None = None,
     fresh_local_allocs: dict[str, tuple[str, ...]] | None = None,
 ) -> list[ast.stmt]:
-    """``hist = np.histogram(a, bins[, range=(lo, hi)][, weights=w])[0]``.
+    """``hist = np.histogram(a, bins[, range=(lo, hi)][, weights=w])[0]``; ``density=`` is refused.
     Implements the numpy histogram contract: if ``range`` is None, lo/hi come
     from an inline min/max pass; if ``weights=w`` is given, each element
     contributes ``w[i]`` instead of 1.0. Bin index: ``min(bins - 1, max(0, (a[i]
@@ -96,6 +96,8 @@ def expand_histogram(
     ``np.histogram(a, bins, lo, hi, weights=w)``.
     """
     kwargs = kwargs or []
+    if any(k.arg == "density" for k in kwargs):
+        raise NotImplementedError("np.histogram: density= is not lowered")
     a = first_name(args)
     if len(args) < 2 or a is None:
         raise NotImplementedError("np.histogram needs (a, bins[, lo, hi])")
@@ -174,7 +176,7 @@ def expand_histogram(
     # same index and then walks it one step against linspace's edges. The two round apart --
     # probing every edge and one ulp either side, the closed form alone puts 248 of 3005 probes
     # one bin over at bins=1000. The edges are therefore rebuilt with linspace's own arithmetic
-    # and in the SAMPLE dtype, one rounding per statement -- which is why ``step``
+    # and in numpy's edge dtype (the sample's if float, else float64), one rounding per statement -- which is why ``step``
     # is parked in the buffer rather than left in a scalar a backend may evaluate wider. Only
     # edges 0..bins-1 are read (the walk up stops at bins-1), hence no top edge.
     #
@@ -188,8 +190,10 @@ def expand_histogram(
     if local_dtypes is not None:
         a_dt = local_dtypes.get(a.id)
         if a_dt is not None:
-            local_dtypes[edges_name] = a_dt
-            local_dtypes[step_name] = a_dt
+            # numpy's edges are float for an integer sample: in the sample dtype they truncate.
+            edge_dt = a_dt if a_dt.startswith(("float", "complex")) else "float64"
+            local_dtypes[edges_name] = edge_dt
+            local_dtypes[step_name] = edge_dt
     if fresh_local_allocs is not None:
         fresh_local_allocs[edges_name] = (bins_dim,)
 

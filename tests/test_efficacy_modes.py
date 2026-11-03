@@ -49,11 +49,20 @@ def test_the_band_prints_tokens_in_thousands_or_millions(tokens: float, text: st
     assert efficacy.baseline_text(point, efficacy.Measure.COST) == text
 
 
-def test_relative_mode_draws_one_mark_per_column_and_the_baseline_band(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("base", [efficacy.DEFAULT_CONFIG, efficacy.PAPER_CONFIG], ids=["author", "print"])
+def test_relative_mode_draws_one_mark_per_column_and_the_baseline_band(
+    tmp_path: pathlib.Path, base: efficacy.FigureConfig
+) -> None:
+    """At print size ``style.save`` refuses any text outside the print range, the band's label included."""
     frame = pair(2.0, 4.0, 100e3, 50e3)
     stats = fixtures.plot.points(frame[~frame.skills], frame[frame.skills])
-    config = dataclasses.replace(efficacy.DEFAULT_CONFIG, mode=marks.Mode.RELATIVE)
+    config = dataclasses.replace(base, mode=marks.Mode.RELATIVE)
     out = efficacy.figure_dot_row([("Blind", "no-score", stats, frame)], tmp_path / "dots.pdf", config=config)
+    assert pathlib.Path(out).with_suffix(".pdf").exists()
+
+
+def test_a_row_of_stub_columns_draws_with_no_key(tmp_path: pathlib.Path) -> None:
+    out = efficacy.figure_dot_row([("Stub", "cpf-src", pd.DataFrame(), pd.DataFrame())], tmp_path / "dots.pdf")
     assert pathlib.Path(out).with_suffix(".pdf").exists()
 
 

@@ -57,7 +57,7 @@ log lines), which is the shipped configuration ([knobs.md](knobs.md#aiter-correc
 
 ## Measured: decode, one replica (10-29)
 
-Distinct random prompts, steady-state decode while every stream decodes (`jobs/qwen-serve-bench/decode_bench.py`).
+Distinct random prompts, steady-state decode while every stream decodes.
 
 | Leg (aggregate tok/s) | 1 stream, 1k | 8 streams, 1k | 20 streams, 1k | 20 streams, 100k |
 |---|---|---|---|---|

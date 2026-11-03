@@ -161,6 +161,7 @@ Defaults are in `containers/images/images.env` and `build_common.sh`; `IMAGE_REQ
 | `CE_IMAGES` | `$SCRATCH/ce-images` | squashfs images, their sidecars and build logs |
 | `CE_TMPFS` | `/dev/shm/$USER` | per-user tmpfs for podman stores and image mounts (Lustre cannot hold them) |
 | `CE_BUILD_CACHE` | `1` | keep the node's podman layer store and mount the spack and pip caches; `0` builds cold |
+| `CE_LAYER_CACHE`, `CE_LAYER_CACHE_GB` | `1`, `300` | keep layers between build jobs in a registry on scratch, and its size cap |
 | `CE_PULL` | `1` | pull a registry image whose build-inputs label matches instead of building; `only`, `0` |
 | `REGISTRY_REPO`, `PULL_REPO` | `docker.io/spcleth/hpcagent-bench`, `PUSH_REPO` | the published image repository, and the one pull-first reads |
 | `SPACK_BUILDCACHE`, `UV_BUILD_CACHE`, `BASE_CACHE`, `GIT_MIRRORS` | under `$SCRATCH` | the binary, wheel, base-image and git caches the builds mount |

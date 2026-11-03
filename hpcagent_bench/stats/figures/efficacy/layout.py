@@ -35,7 +35,6 @@ from hpcagent_bench.stats.figures.efficacy.reduce import (
     setup_groups,
     setup_point,
     skill_halves,
-    solved_flags,
     speedup_mask,
 )
 from hpcagent_bench.stats.figures.marks import Mark, Mode
@@ -317,6 +316,8 @@ PAIRED_COLUMNS: tuple[str, ...] = (
     "treated_tokens",
     "baseline_ns",
     "native_ns",
+    "treated_baseline_ns",
+    "treated_native_ns",
     "delivered",
     "control_solved",
     "treated_solved",
@@ -340,7 +341,6 @@ def paired_kernels(
     kernels = control_answers.index.intersection(treated_answers.index)
     if len(kernels) == 0:
         return pd.DataFrame(columns=PAIRED_COLUMNS)
-    has_delivered = population.DELIVERED_COLUMN in control_answers and population.DELIVERED_COLUMN in treated_answers
     frame = pd.DataFrame(
         {
             "control_speedup": control_answers.loc[kernels, "speedup"].astype(float),
@@ -353,14 +353,18 @@ def paired_kernels(
             "native_ns": control_answers.loc[kernels, "native_ns"].astype(float)
             if "native_ns" in control_answers
             else math.nan,
+            "treated_baseline_ns": treated_answers.loc[kernels, "baseline_ns"].astype(float)
+            if "baseline_ns" in treated_answers
+            else math.nan,
+            "treated_native_ns": treated_answers.loc[kernels, "native_ns"].astype(float)
+            if "native_ns" in treated_answers
+            else math.nan,
             "delivered": (
                 control_answers.loc[kernels, population.DELIVERED_COLUMN].astype(bool)
                 & treated_answers.loc[kernels, population.DELIVERED_COLUMN].astype(bool)
-            )
-            if has_delivered
-            else True,
-            "control_solved": solved_flags(control_answers, kernels),
-            "treated_solved": solved_flags(treated_answers, kernels),
+            ),
+            "control_solved": control_answers.loc[kernels, population.SOLVED_COLUMN].astype(bool),
+            "treated_solved": treated_answers.loc[kernels, population.SOLVED_COLUMN].astype(bool),
         },
         index=kernels,
     )
@@ -406,6 +410,8 @@ def reduce_pair(
         delivered=int(paired.delivered.sum()),
         baseline_ns=float(paired.baseline_ns.median()),
         native_ns=float(paired.native_ns.median()),
+        treated_baseline_ns=float(paired.treated_baseline_ns.median()),
+        treated_native_ns=float(paired.treated_native_ns.median()),
         control_tokens=float(paired.control_tokens[priced].median()),
         treated_tokens=float(paired.treated_tokens[priced].median()),
         token_kernels=int(priced.sum()),
@@ -1040,7 +1046,7 @@ VERDICT_MARKS: dict[Measure, str] = {Measure.COST: COST_SIG_MARK}
 BASELINE_BAND_FRACTION: float = 0.45
 BASELINE_HEADROOM_FRACTION: float = 0.12
 #: The baseline band's type size as a share of the key's: it is a footnote to the marks above it.
-BASELINE_BAND_TYPE: float = 0.85
+BASELINE_BAND_TYPE: float = 0.92
 
 
 #: Relative mode's row names: each row is a change over the LLM's own baseline, not a level.
@@ -1478,6 +1484,8 @@ def pairs_table(
                 "delivered": series.delivered,
                 "baseline_ns": series.baseline_ns,
                 "native_ns": series.native_ns,
+                "treated_baseline_ns": series.treated_baseline_ns,
+                "treated_native_ns": series.treated_native_ns,
                 "control_tokens": series.control_tokens,
                 "treated_tokens": series.treated_tokens,
                 "speedup_over": over.text,

@@ -77,6 +77,10 @@ class FinfoEpsFold(ast.NodeTransformer):
             and call.func.attr == "finfo"
             and is_numpy_module(call.func.value)
         ):
+            # ``np.finfo(np.float32)`` names its dtype; ``np.finfo(x.dtype)`` is the working precision.
+            named = call.args[0] if call.args else None
+            if isinstance(named, ast.Attribute) and is_numpy_module(named.value) and named.attr.startswith("float"):
+                return ast.copy_location(ast.Constant(value=dtypes.float_eps(named.attr)), node)
             return ast.copy_location(ast.Constant(value=self.eps), node)
         return node
 

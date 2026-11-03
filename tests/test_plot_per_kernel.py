@@ -12,7 +12,6 @@ import pytest
 
 mpl.use("Agg")
 
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.collections import PathCollection
 
@@ -86,22 +85,16 @@ def test_speedup_yticks_grows_to_cover_a_wide_range() -> None:
 def test_box_style_draws_a_real_box_only_at_or_above_the_spread_floor(n: int, boxed: bool) -> None:
     cell = pk.KernelCell("k1", tuple(float(i + 1) for i in range(n)))
     fig, ax = plt.subplots()
-    try:
-        pk.draw_box(ax, pk.Series("", (cell,), "#1155cc"), {"k1": 0})
-        assert (len(ax.patches) > 0) == boxed
-    finally:
-        plt.close(fig)
+    pk.draw_box(ax, pk.Series("", (cell,), "#1155cc"), {"k1": 0})
+    assert (len(ax.patches) > 0) == boxed
 
 
 def test_ci_style_never_draws_a_box_patch() -> None:
     """``ci`` draws a point and a whisker, never a boxplot artist -- even at a spread-worthy n."""
     cell = pk.KernelCell("k1", (1.0, 2.0, 4.0, 8.0, 16.0))
     fig, ax = plt.subplots()
-    try:
-        pk.draw_ci(ax, pk.Series("", (cell,), "#1155cc"), {"k1": 0}, log2_space=True)
-        assert len(ax.patches) == 0
-    finally:
-        plt.close(fig)
+    pk.draw_ci(ax, pk.Series("", (cell,), "#1155cc"), {"k1": 0}, log2_space=True)
+    assert len(ax.patches) == 0
 
 
 # The --summary column.
@@ -130,14 +123,11 @@ def test_a_figure_with_one_summary_statistic_names_it_as_a_horizontal_x_tick() -
     not floating above the frame."""
     speed = speed_metric([pk.KernelCell("k1", (2.0,)), pk.KernelCell("k2", (4.0,))])
     fig = pk.figure_panels([speed], ["k1", "k2"], pk.Style.CI, True, "")
-    try:
-        (ax,) = fig.axes
-        ticks = ax.get_xticklabels()
-        assert [tick.get_text() for tick in ticks][-1] == "Geomean"
-        assert ticks[-1].get_rotation() == 0.0
-        assert "Geomean" not in [text.get_text() for text in ax.texts]
-    finally:
-        plt.close(fig)
+    (ax,) = fig.axes
+    ticks = ax.get_xticklabels()
+    assert [tick.get_text() for tick in ticks][-1] == "Geomean"
+    assert ticks[-1].get_rotation() == 0.0
+    assert "Geomean" not in [text.get_text() for text in ax.texts]
 
 
 def test_a_caller_spells_the_kernel_ticks() -> None:
@@ -147,10 +137,7 @@ def test_a_caller_spells_the_kernel_ticks() -> None:
     fig = pk.figure_panels(
         [speed], ["tsvc_2_s115"], pk.Style.CI, True, "", tick_label=lambda kernel: kernel.split("_")[-1]
     )
-    try:
-        assert fig.axes[0].get_xticklabels()[0].get_text() == "s115"
-    finally:
-        plt.close(fig)
+    assert fig.axes[0].get_xticklabels()[0].get_text() == "s115"
 
 
 def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once() -> None:
@@ -159,13 +146,10 @@ def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once
     speed = speed_metric([pk.KernelCell("k1", (2.0,))])
     tokens = token_metric([pk.KernelCell("k1", (100.0,))])
     fig = pk.figure_panels([speed, tokens], ["k1"], pk.Style.CI, True, "demo")
-    try:
-        top_ax, bottom_ax = fig.axes
-        texts = [text.get_text() for ax in (top_ax, bottom_ax) for text in ax.texts]
-        assert [label.get_text() for label in bottom_ax.get_xticklabels()] == ["k1", "Geomean"]
-        assert "Median" not in texts
-    finally:
-        plt.close(fig)
+    top_ax, bottom_ax = fig.axes
+    texts = [text.get_text() for ax in (top_ax, bottom_ax) for text in ax.texts]
+    assert [label.get_text() for label in bottom_ax.get_xticklabels()] == ["k1", "Geomean"]
+    assert "Median" not in texts
 
 
 # --layout separate vs stacked, and which files a run writes.
@@ -178,26 +162,20 @@ def test_the_speedup_panel_carries_a_major_grid_and_a_minor_one_on_the_value_axi
     """The measured axis is ruled at the pinned powers of two and, lighter, at the shared minors
     between them; the kernel axis carries names and no line at all."""
     fig, ax = plt.subplots()
-    try:
-        pk.style_speedup_axis(ax, [pk.KernelCell("k1", (1.0, 2.0))])
-        assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-        assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
-        assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
-        assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
-    finally:
-        plt.close(fig)
+    pk.style_speedup_axis(ax, [pk.KernelCell("k1", (1.0, 2.0))])
+    assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+    assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+    assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
+    assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
 
 
 def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_and_a_minor_grid() -> None:
     """A token count is a measured quantity, so it is on Y; the kernel names are the x categories."""
     fig, ax = plt.subplots()
-    try:
-        pk.style_token_axis(ax, [pk.KernelCell("k1", (120.0,)), pk.KernelCell("k2", (90000.0,))])
-        assert ax.get_yscale() == "log"
-        assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-        assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
-    finally:
-        plt.close(fig)
+    pk.style_token_axis(ax, [pk.KernelCell("k1", (120.0,)), pk.KernelCell("k2", (90000.0,))])
+    assert ax.get_yscale() == "log"
+    assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+    assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
 
 
 @pytest.mark.parametrize(
@@ -298,11 +276,8 @@ def test_an_undelivered_cell_draws_hollow_and_crossed_at_its_own_value() -> None
     """The cross is what separates a placeholder from a measured value at the same height; it goes
     on the cell's own value, which for a one-sided ratio is not 1x."""
     fig, ax = plt.subplots()
-    try:
-        pk.draw_ci(ax, pk.Series("", (pk.KernelCell("k1", (4.0,), delivered=False),), "#1155cc"), {"k1": 0}, True)
-        at = [c for c in ax.collections if isinstance(c, PathCollection) and list(c.get_offsets()[0]) == [0.0, 4.0]]
-    finally:
-        plt.close(fig)
+    pk.draw_ci(ax, pk.Series("", (pk.KernelCell("k1", (4.0,), delivered=False),), "#1155cc"), {"k1": 0}, True)
+    at = [c for c in ax.collections if isinstance(c, PathCollection) and list(c.get_offsets()[0]) == [0.0, 4.0]]
     assert len(at) == 3, at  # the white halo, the hollow mark, the cross
     assert any(len(c.get_facecolors()) == 0 for c in at)
 
@@ -372,16 +347,13 @@ def test_every_series_gets_one_summary_slot_and_one_settled_value_label() -> Non
     """Summaries that agree to a few percent, drawn in one column, hid all but the top mark; and the
     value a caption quotes has to be on the figure, tagged so it settles clear of the marks."""
     fig = pk.figure_panels([three_series_metric()], ["k1", "k2"], pk.Style.CI, True, "")
-    try:
-        (ax,) = fig.axes
-        separator = pk.summary_separator_x(2)
-        slots = sorted(
-            {round(float(x), 6) for c in ax.collections if isinstance(c, PathCollection) for x in c.get_offsets()[:, 0]
-             if x > separator}
-        )  # fmt: skip
-        labels = [t for t in ax.texts if t.get_gid() == style.CLEAR_GID]
-    finally:
-        plt.close(fig)
+    (ax,) = fig.axes
+    separator = pk.summary_separator_x(2)
+    slots = sorted(
+        {round(float(x), 6) for c in ax.collections if isinstance(c, PathCollection) for x in c.get_offsets()[:, 0]
+         if x > separator}
+    )  # fmt: skip
+    labels = [t for t in ax.texts if t.get_gid() == style.CLEAR_GID]
     assert slots == [round(pk.summary_slot_x(2, slot), 6) for slot in range(3)], slots
     assert len(labels) == 3, [t.get_text() for t in labels]
 
@@ -390,10 +362,7 @@ def test_a_summary_value_label_prints_the_geomean_over_solved_kernels_only() -> 
     """Series b solved k1 at 3x and failed k2: its printed value is 3x, not the geomean with the
     placeholder's 1x (1.7x)."""
     fig = pk.figure_panels([three_series_metric()], ["k1", "k2"], pk.Style.CI, True, "")
-    try:
-        texts = [t.get_text() for t in fig.axes[0].texts if t.get_gid() == style.CLEAR_GID]
-    finally:
-        plt.close(fig)
+    texts = [t.get_text() for t in fig.axes[0].texts if t.get_gid() == style.CLEAR_GID]
     assert texts == [style.ratio_label(8.0**0.5), style.ratio_label(3.0), style.ratio_label(0.5)], texts
 
 
@@ -433,15 +402,11 @@ def test_a_key_grows_the_canvas_and_never_overprints_the_kernel_names() -> None:
     key = [mpl.lines.Line2D([], [], marker="o", linestyle="none", label=f"series {i}") for i in range(9)]
     bare = pk.figure_panels([metric], kernels, pk.Style.CI, False, "", width_in=3.3)
     keyed = pk.figure_panels([metric], kernels, pk.Style.CI, False, "", width_in=3.3, legend=key)
-    try:
-        assert keyed.get_size_inches()[1] > bare.get_size_inches()[1]
-        keyed.canvas.draw()
-        names = ink_box_in(keyed, [t for t in keyed.axes[0].get_xticklabels() if t.get_text()])
-        (legend,) = ink_box_in(keyed, list(keyed.legends))
-        width = float(keyed.get_size_inches()[0])
-    finally:
-        plt.close(bare)
-        plt.close(keyed)
+    assert keyed.get_size_inches()[1] > bare.get_size_inches()[1]
+    keyed.canvas.draw()
+    names = ink_box_in(keyed, [t for t in keyed.axes[0].get_xticklabels() if t.get_text()])
+    (legend,) = ink_box_in(keyed, list(keyed.legends))
+    width = float(keyed.get_size_inches()[0])
     assert min(box.y0 for box in names) >= legend.y1, (min(box.y0 for box in names), legend.y1)
     assert legend.y0 >= 0.0
     assert all(box.x0 >= 0.0 and box.x1 <= width for box in names)
@@ -453,12 +418,9 @@ def test_every_panel_of_a_stack_ends_where_the_widest_summary_does() -> None:
     speed = three_series_metric()
     tokens = pk.token_series_metric([pk.Series("a", (pk.KernelCell("k1", (100.0,)),), "#1155cc")], "Tokens")
     fig = pk.figure_panels([speed, tokens], ["k1", "k2"], pk.Style.CI, True, "")
-    try:
-        top, bottom = fig.axes
-        assert top.get_xlim() == bottom.get_xlim()
-        assert top.get_xlim()[1] > pk.summary_slot_x(2, 2)
-    finally:
-        plt.close(fig)
+    top, bottom = fig.axes
+    assert top.get_xlim() == bottom.get_xlim()
+    assert top.get_xlim()[1] > pk.summary_slot_x(2, 2)
 
 
 def test_a_stated_pitch_sizes_the_canvas_to_the_kernel_axis() -> None:
@@ -467,23 +429,17 @@ def test_a_stated_pitch_sizes_the_canvas_to_the_kernel_axis() -> None:
     kernels = [f"k{i}" for i in range(40)]
     metric = speed_metric([pk.KernelCell(k, (2.0,)) for k in kernels])
     fig = pk.figure_panels([metric], kernels, pk.Style.CI, True, "", pitch_in=0.3)
-    try:
-        assert pk.column_pitch_in(fig.axes[0]) == pytest.approx(0.3)
-    finally:
-        plt.close(fig)
+    assert pk.column_pitch_in(fig.axes[0]) == pytest.approx(0.3)
 
 
 def test_the_speedup_axis_is_pinned_just_past_its_outermost_ticks() -> None:
     """The limits come from the cells, not from autoscaling, so the chrome is measured before any
     mark is drawn and a position means the same ratio wherever the figure is read."""
     fig, ax = plt.subplots()
-    try:
-        cells = [pk.KernelCell("k1", (0.3,)), pk.KernelCell("k2", (40.0,))]
-        pk.style_speedup_axis(ax, cells)
-        ticks = pk.speedup_yticks(cells)
-        low, high = ax.get_ylim()
-    finally:
-        plt.close(fig)
+    cells = [pk.KernelCell("k1", (0.3,)), pk.KernelCell("k2", (40.0,))]
+    pk.style_speedup_axis(ax, cells)
+    ticks = pk.speedup_yticks(cells)
+    low, high = ax.get_ylim()
     assert low == pytest.approx(ticks[0] / 2.0**pk.VALUE_PAD_OCTAVES)
     assert high == pytest.approx(ticks[-1] * 2.0**pk.VALUE_PAD_OCTAVES)
 
@@ -519,13 +475,10 @@ def test_a_y_label_taller_than_its_panel_is_fitted_to_the_panel() -> None:
     long = "Speedup Ratio (Repository Formulation / Bare Kernel)"
     metric = pk.speedup_series_metric([pk.Series("", (pk.KernelCell("k1", (2.0,)),), "#1155cc")], long)
     fig = pk.figure_panels([metric, metric], ["k1"], pk.Style.CI, True, "")
-    try:
-        fig.canvas.draw()
-        renderer = fig.canvas.get_renderer()
-        heights = [ax.yaxis.label.get_window_extent(renderer).height / fig.dpi for ax in fig.axes]
-        words = [" ".join(ax.get_ylabel().split()) for ax in fig.axes]
-    finally:
-        plt.close(fig)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    heights = [ax.yaxis.label.get_window_extent(renderer).height / fig.dpi for ax in fig.axes]
+    words = [" ".join(ax.get_ylabel().split()) for ax in fig.axes]
     assert all(height <= pk.PANEL_HEIGHT_IN for height in heights), heights
     assert words == [long, long]
 
@@ -535,11 +488,8 @@ def test_a_print_size_figure_gets_the_short_print_panel() -> None:
     panel, and the height is the library's to set, not each caller's."""
     speed = speed_metric([pk.KernelCell("k1", (2.0,))])
     fig = pk.figure_panels([speed], ["k1"], pk.Style.CI, True, "", width_in=5.5)
-    try:
-        height = fig.axes[0].get_position().height * fig.get_size_inches()[1]
-        assert height == pytest.approx(pk.PRINT_PANEL_HEIGHT_IN, abs=1e-3)
-    finally:
-        plt.close(fig)
+    height = fig.axes[0].get_position().height * fig.get_size_inches()[1]
+    assert height == pytest.approx(pk.PRINT_PANEL_HEIGHT_IN, abs=1e-3)
 
 
 @pytest.mark.parametrize(

@@ -8,8 +8,13 @@ from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks, name
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, wrap_for_loops
-from hpcagent_bench.translators.numpyto_common.lowering.indexing import has_negative_step, is_scalar_index, view_offset
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_,
+    const_or_name,
+    is_scalar_axis,
+    wrap_for_loops,
+)
+from hpcagent_bench.translators.numpyto_common.lowering.indexing import has_negative_step, view_offset
 from hpcagent_bench.translators.numpyto_common.lowering.slice_fusion import strided_trip_count
 from hpcagent_bench.translators.numpyto_common.lowering.subscriptify import SubscriptifyNames
 
@@ -234,17 +239,18 @@ def collect_bool_names(tree: ast.AST, arrays: list[ArrayDesc]) -> set[str]:
     The conservative criterion that separates ``arr[bool_mask]`` (a masked
     select) from ``arr[int_idx]`` (an integer gather): only unambiguously
     boolean producers count, so an integer index array is never misread as a
-    mask. A single forward pass over the body suffices because a mask is
-    defined before it is used (``m = a > c``; later ``m2 = m & other``)."""
+    mask. Iterated to a fixed point: the walk is breadth-first, so ``m2 = m & other`` can be met before
+    a nested ``m = a > c``."""
     bn: set[str] = {a.name for a in arrays if a.dtype in ("bool", "bool_")}
-    for node in walk_nodes(tree):
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and is_bool_value(node.value, bn)
-        ):
-            bn.add(node.targets[0].id)
+    bindings = [
+        (node.targets[0].id, node.value)
+        for node in walk_nodes(tree)
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+    ]
+    size = -1
+    while size != len(bn):
+        size = len(bn)
+        bn.update(name for name, value in bindings if is_bool_value(value, bn))
     return bn
 
 
@@ -288,10 +294,13 @@ def is_bool_value(e: ast.expr, bn: set[str]) -> bool:
 
 
 def is_bool_call(e: ast.Call, bn: set[str]) -> bool:
-    """``any`` / ``all`` in either spelling; a boolean ``np`` function; ``np.where`` exactly when
-    BOTH branches are boolean (it selects between them); an ``np`` constructor with ``dtype=bool``."""
+    """``any`` / ``all`` in either spelling; a copy of a boolean; a boolean ``np`` function; ``np.where``
+    exactly when BOTH branches are boolean (it selects between them); an ``np`` constructor with
+    ``dtype=bool``."""
     if isinstance(e.func, ast.Attribute) and e.func.attr in ("any", "all"):
         return True
+    if isinstance(e.func, ast.Attribute) and e.func.attr == "copy":
+        return is_bool_value(e.args[0] if e.args else e.func.value, bn)
     if not (isinstance(e.func, ast.Attribute) and is_numpy_module(e.func.value)):
         return False
     if e.func.attr in BOOLEAN_NP_FUNCS:
@@ -462,7 +471,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         """
         if isinstance(arr, str):
             shape = self.shape_table.get(arr) or self.shape_table.get(mask)
-            n_expr = self.tok_to_ast(shape[0]) if shape else ast.Call(func=name_("len"), args=[name_(arr)], keywords=[])
+            n_expr = const_or_name(shape[0]) if shape else ast.Call(func=name_("len"), args=[name_(arr)], keywords=[])
             return (
                 lambda idx: ast.Subscript(value=name_(arr), slice=idx, ctx=ast.Load()),
                 n_expr,
@@ -478,13 +487,13 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         kept = [k for k, e in enumerate(elts) if isinstance(e, ast.Slice)]
         if len(kept) != 1 or has_negative_step(elts):
             return None
-        if not all(isinstance(e, ast.Slice) or is_scalar_index(e) for e in elts):
+        if not all(isinstance(e, ast.Slice) or is_scalar_axis(e) for e in elts):
             return None
         axis = kept[0]
         view = elts[axis]
         if not isinstance(view, ast.Slice):
             return None
-        upper = view.upper if view.upper is not None else self.tok_to_ast(shape[axis])
+        upper = view.upper if view.upper is not None else const_or_name(shape[axis])
         n_expr = strided_trip_count(view.lower or const_(0), upper, view.step or 1)
 
         def load(idx: ast.expr) -> ast.expr:
@@ -648,13 +657,6 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         for s in out:
             ast.fix_missing_locations(s)
         return out
-
-    def tok_to_ast(self, tok: str) -> ast.expr:
-        """Parse a shape token like ``'N'`` or ``'N - 1'`` to an AST."""
-        try:
-            return ast.parse(str(tok), mode="eval").body
-        except SyntaxError:
-            return name_(str(tok))
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.stmt:
         node.body = self.walk_body(node.body)

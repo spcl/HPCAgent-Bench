@@ -38,17 +38,18 @@ class OptimizeBudget:
     @classmethod
     def from_env(cls, scale: str | None = None) -> "OptimizeBudget":
         """Resolve the budget from ``scale`` or ``$HPCAGENT_BENCH_OPTIMIZE_BUDGET`` -- a
-        named scale, or a bare integer that caps both backends explicitly."""
+        named scale, or a positive bare integer that caps both backends explicitly. Anything else is refused."""
         raw = scale or os.environ.get("HPCAGENT_BENCH_OPTIMIZE_BUDGET") or DEFAULT_SCALE
         if raw in SCALES:
             trials, configs = SCALES[raw]
             return cls(scale=raw, trials=trials, configs=configs)
         try:
             n = int(raw)
-            return cls(scale="custom", trials=n, configs=n)
         except (TypeError, ValueError):
-            trials, configs = SCALES[DEFAULT_SCALE]
-            return cls(scale=DEFAULT_SCALE, trials=trials, configs=configs)
+            n = 0
+        if n < 1:
+            raise ValueError(f"optimize budget {raw!r} is neither a scale ({sorted(SCALES)}) nor a positive integer")
+        return cls(scale="custom", trials=n, configs=n)
 
     def tvm_trials(self) -> int:
         """MetaSchedule trial count (the ``trials`` field of this budget)."""

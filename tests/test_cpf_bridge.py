@@ -196,6 +196,16 @@ def test_a_form_rendered_again_from_the_stored_sdfg_is_the_first_render_byte_for
     assert (entry / manifest.artefacts[Role.SOURCE].name).read_text() == text
 
 
+def test_a_device_unit_is_named_for_its_dialect_not_the_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(languages, "gpu_backend", lambda: Language.parse("cuda"))
+    dialect = cpf_cache.served_dialect(Target.GPU, "hip")
+    form = cpf_bridge.RenderedForm(
+        "k_fp64_cpf.cpp", "", "{}", "k", (), 1, device_code="// kernels\n", device_dialect=dialect
+    )
+    assert form.device_name == "k_fp64_cpf.hip"
+    assert (Role.DEVICE, "k_fp64_cpf.hip", b"// kernels\n") in form.artefacts()
+
+
 def test_the_target_reaches_the_child_and_the_device_is_not_hidden(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:

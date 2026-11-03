@@ -33,7 +33,7 @@ def test_a_slow_call_sends_progress_until_it_answers(
     monkeypatch: pytest.MonkeyPatch, meta: dict[str, object] | None, beats: bool
 ) -> None:
     monkeypatch.setattr(mcp_server, "answer", slow_answer)
-    monkeypatch.setattr(mcp_server, "HEARTBEAT_SECONDS", 0.1)
+    monkeypatch.setattr(mcp_server, "HEARTBEAT_SECONDS", 0.02)
     session = Session()
     context = builtin_types.SimpleNamespace(meta=meta, session=session)
     params = builtin_types.SimpleNamespace(name="score", arguments={})

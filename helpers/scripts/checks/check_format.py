@@ -24,7 +24,7 @@ fprettify reports which of a batch it would rewrite.
 
 Exit status: 0 when every checked file is already formatted; 1 when one or more
 need reformatting (the offenders and the fix command are printed); 2 on a setup
-error (a needed formatter is missing). ``--fix`` reformats in place instead.
+error (a needed formatter is missing, or a formatter run failed). ``--fix`` reformats in place instead.
 """
 
 import argparse
@@ -61,6 +61,13 @@ SKIP_NAME_MARKERS = ("_generated.",)
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+
+
+def require_ruff_verdict(done: subprocess.CompletedProcess[str]) -> None:
+    """Exit 2 on a failed ruff run: 0 and 1 are verdicts, anything else left no output to parse."""
+    if done.returncode not in (0, 1):
+        print(f"error: ruff failed (exit {done.returncode}): {(done.stderr or done.stdout).strip()}", file=sys.stderr)
+        raise SystemExit(2)
 
 
 def git_lines(args: list[str]) -> list[str]:
@@ -145,6 +152,7 @@ def ruff_offenders(rels: list[str], fix: bool) -> list[str]:
         return []
     check = ["ruff", "format", "--check", "--output-format", "json", "--line-length", str(PY_LINE_LENGTH), *rels]
     out = _run(check)
+    require_ruff_verdict(out)
     # json, not the prose. ruff's concise/full output changed shape between releases -- 0.16.5 emits
     # "unformatted: File would be reformatted" with the path on a following "--> path:line:col"
     # line, so a parser keyed on "Would reformat:" finds NOTHING and the gate passes every file
@@ -178,6 +186,7 @@ def pyupgrade_offenders(rels: list[str], fix: bool) -> list[str]:
     if fix:
         _run([*cmd, "--fix", *rels])
     out = _run([*cmd, *rels])
+    require_ruff_verdict(out)
     return sorted({os.path.relpath(entry["filename"], REPO_ROOT) for entry in json.loads(out.stdout or "[]")})
 
 

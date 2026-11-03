@@ -17,16 +17,16 @@ ce_image_args() {
     ce_amd_targets
     ce_spack_target
     ce_pin_commits
+    ce_lock_keys --only-group image-cupy-rocm
     ce_libfabric_commit
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
-    ce_build_args IMAGE_VERSION LIBFABRIC_REF LIBFABRIC_COMMIT ROCM_ARCH ROCM_ARCH_CSV SPACK_TARGET
+    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK LIBFABRIC_REF LIBFABRIC_COMMIT ROCM_ARCH ROCM_ARCH_CSV SPACK_TARGET
 }
 
 # The 30 GB rocm/pytorch base comes from the scratch cache; spack's binary buildcache (gcc 16 and
 # llvm 22 are 60-80 minutes) and the uv wheel cache survive between jobs outside the image. The uv
 # cache is keyed by the GPU target list: uv keys a built wheel by its sdist, not HCC_AMDGPU_TARGET.
 ce_image_inputs() {
-    ce_require_kernelbench
     ce_mirror_args
     ce_require_mirror_commit "spcl/dace.git" "${DACE_COMMIT}"
     ce_require_mirror_commit "ThrudPrimrose/relayout.git" "${RELAYOUT_COMMIT}"

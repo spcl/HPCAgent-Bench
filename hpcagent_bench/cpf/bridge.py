@@ -506,6 +506,8 @@ class RenderedForm(NamedTuple):
     workspace_bytes: str = "0"
     #: The SDFG the units were generated from (after the render-time edits), compressed (``.sdfgz``).
     sdfg: bytes = b""
+    #: The dialect ``device_code`` is written in, which names the device unit.
+    device_dialect: str = ""
 
     @property
     def binding_name(self) -> str:
@@ -513,7 +515,7 @@ class RenderedForm(NamedTuple):
 
     @property
     def device_name(self) -> str:
-        return f"{pathlib.Path(self.name).stem}.{LANGUAGE_EXT[cpf_cache.device_dialect()]}"
+        return f"{pathlib.Path(self.name).stem}.{LANGUAGE_EXT[self.device_dialect]}"
 
     @property
     def sdfg_name(self) -> str:
@@ -594,6 +596,7 @@ def render_canonical(
         libraries=tuple(rendering.libraries),
         workspace_bytes=binding_workspace_bytes(rendering.workspace_bytes, native, renames),
         sdfg=compressed_sdfg(sdfg),
+        device_dialect=emitted,
     )
 
 

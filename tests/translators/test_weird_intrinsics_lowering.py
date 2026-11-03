@@ -13,26 +13,19 @@ rather than silently failing CI; drop the skip once the mapping is fixed and the
 The non-edge cases carry NO skips, so they are real all-backend coverage.
 """
 
-import sys
+import json
+import pathlib
 
 import numpy as np
 import pytest
 
-# Reuse the standalone numerical oracle harness (build + run + numpy compare).
-try:
-    from tests.translators import op_oracle as oo
-except ImportError:
-    import importlib.util
-    import pathlib
+from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
+from hpcagent_bench.translators.numpyto_common.lowering import lower
+from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
+from hpcagent_bench.translators.numpyto_fortran.intrinsics import renders_natively
 
-    spec_ = importlib.util.spec_from_file_location(
-        "op_oracle", pathlib.Path(__file__).resolve().parent / "op_oracle.py"
-    )
-    oo = importlib.util.module_from_spec(spec_)
-    # Registered BEFORE exec: dataclasses resolves a string annotation through
-    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-    sys.modules[spec_.name] = oo
-    spec_.loader.exec_module(oo)
+# Reuse the standalone numerical oracle harness (build + run + numpy compare).
+from tests.translators import op_oracle as oo
 
 ALL = ("c", "cpp", "fortran", "numba")
 
@@ -44,8 +37,7 @@ NAN_SUPPRESS: dict[str, str] = {}
 
 
 def skip_(status: dict[str, str], label: str) -> None:
-    fails = {b: s for b, s in status.items() if s.startswith("FAIL")}
-    assert not fails, f"{label}: {fails}"
+    oo.assert_all_ok(status, label)
 
 
 #: (label, source, inputs, out_shape, syms, shapes, skip_backends)
@@ -270,12 +262,62 @@ def test_float32_transcendental_precision() -> None:
         shapes={"a": "(N,)", "out": "(N,)"},
         backends=ALL,
         dtypes={"a": "float32", "out": "float32"},
-        skip_backends={
-            "fortran": "the `* 0.1` literal is float64, promoting the float32 multiply to double",
-            "numba": "numba types the `0.1` literal float64, promoting the float32 multiply to double",
-        },
     )
     skip_(status, "float32_transcendental_precision")
+
+
+def test_storage_only_kernel_types_fortran_literals_in_its_compute_float(tmp_path: pathlib.Path) -> None:
+    """A bf16 ABI computes in float32: a double literal would not even compile against the elemental demote helper."""
+    src = tmp_path / "f_numpy.py"
+    src.write_text("import numpy as np\ndef f(a, out):\n    out[:] = np.tanh(a) * 0.1\n")
+    bench_info = tmp_path / "bi.json"
+    shapes = {"a": "(N,)", "out": "(N,)"}
+    bench_info.write_text(
+        json.dumps(oo.bench_info_("f", ["a"], ["out"], shapes, {"N": 4}, dict.fromkeys(shapes, "bf16")))
+    )
+    emitted = emit_fortran(lower(parse_kernel(src, bench_info), native_call=renders_natively), fn_name="f")
+    assert "0.1_c_float" in emitted
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "result", "a", "b"),
+    [
+        ("int32", "int64", "int64", [[2, 3], [5, 7]], [[3_000_000_000, 1], [1, 4_000_000_000]]),
+        ("uint8", "int8", "int16", [[200, 100], [1, 2]], [[100, -100], [3, 4]]),
+    ],
+    ids=["left-narrower", "neither-operand-holds-the-result"],
+)
+def test_mixed_width_integer_matmul(left: str, right: str, result: str, a: list, b: list) -> None:
+    """``a @ b`` accumulates in numpy's result dtype: at the left operand's, the wide products wrap."""
+    oo.native()
+    status = oo.run_op(
+        "import numpy as np\ndef f(a, b, out):\n    out[:] = a @ b\n",
+        "f",
+        {"a": np.array(a, dtype=left), "b": np.array(b, dtype=right)},
+        {"out": (2, 2)},
+        {"N": 2},
+        shapes={"a": "(N, N)", "b": "(N, N)", "out": "(N, N)"},
+        backends=ALL,
+        dtypes={"a": left, "b": right, "out": result},
+    )
+    skip_(status, "mixed_width_integer_matmul")
+
+
+def test_batched_mixed_width_integer_matmul() -> None:
+    """A batched ``t = a @ b`` allocates ``t`` in numpy's result dtype, not the left operand's."""
+    oo.native()
+    wide = np.array([[3_000_000_000, 1], [1, 4_000_000_000]], dtype=np.int64)
+    status = oo.run_op(
+        "import numpy as np\ndef f(a, b, out):\n    t = a @ b\n    out[:] = t\n",
+        "f",
+        {"a": np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2), "b": np.stack([wide, wide])},
+        {"out": (2, 2, 2)},
+        {"N": 2},
+        shapes={"a": "(N, N, N)", "b": "(N, N, N)", "out": "(N, N, N)"},
+        backends=("numba",),
+        dtypes={"a": "int32", "b": "int64", "out": "int64"},
+    )
+    skip_(status, "batched_mixed_width_integer_matmul")
 
 
 def test_complex_dot_no_conjugation() -> None:

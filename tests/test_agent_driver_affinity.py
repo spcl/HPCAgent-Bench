@@ -31,14 +31,9 @@ import pytest
 from tests.fresh_module import DRIVER_DIR, fresh
 
 
-def load_example_module(name: str) -> ModuleType:
-    """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    return fresh(name)
-
-
 @pytest.fixture(name="driver")
 def driver_fixture() -> ModuleType:
-    return load_example_module("agent_driver")
+    return fresh("agent_driver")
 
 
 @pytest.fixture(name="node")

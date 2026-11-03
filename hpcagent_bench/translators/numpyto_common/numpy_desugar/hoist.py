@@ -32,6 +32,8 @@ class HoistTables:
     gathers: dict[str, tuple]
     #: The ``np.linalg.solve`` rhs ranks the backend lowers to loops.
     solve_rhs_ranks: frozenset
+    #: Exact dtypes of the kernel arrays this scope never rebinds.
+    widths: dict[str, str]
 
 
 def always_live(tables: HoistTables) -> bool:

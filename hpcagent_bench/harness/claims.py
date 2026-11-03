@@ -140,8 +140,8 @@ class ClaimQueue:
             path = self.claim(key, attempt)
             if create_exclusive(path):
                 rivals = self.live_elsewhere(key)
-                # Its holder finished, renaming this claim away, since the caller looked; or another job won the race.
-                if self.done(key).exists() or any(rival < self.job for rival in rivals):
+                # Its holder finished or gave up, removing this claim, since the caller looked; or another job won.
+                if self.settled(key) or any(rival < self.job for rival in rivals):
                     path.unlink()
                     return None
                 return path
@@ -196,6 +196,7 @@ def claim_each[ItemT](
                 queue.finish(name, claim)
             else:
                 create_exclusive(queue.closed(name))
+                claim.unlink()  # nobody holds it now: another job must not wait for it to go stale
         if not wait or not held_elsewhere:
             return
         pending = held_elsewhere

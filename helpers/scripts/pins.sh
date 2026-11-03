@@ -20,15 +20,27 @@ bump=0
 [[ "${1:-}" == "--bump" ]] && { bump=1; shift; }
 package="${1:-dace}"
 [[ -n "${repo[${package}]:-}" ]] || { echo "pins.sh: unknown package '${package}' (dace or relayout)" >&2; exit 2; }
+declare -A heads
 for name in dace relayout; do
     pin="$(pinned "${name}")"
     [[ -n "${pin}" ]] || { echo "pins.sh: pyproject.toml holds no 40-character ${name} rev" >&2; exit 2; }
     if ((bump)); then
-        new="$(git ls-remote "${repo[${name}]}" "refs/heads/${branch[${name}]}" | cut -f1)"
-        [[ "${new}" =~ ^[0-9a-f]{40}$ ]] || { echo "pins.sh: no ${branch[${name}]} head from ${repo[${name}]}" >&2; exit 2; }
-        # The rev in [tool.uv.sources] and dace's override-dependencies URL (which wins over a plugin's pin) move together.
-        sed -i "s/rev = \"${pin}\"/rev = \"${new}\"/; s/@${pin}\"/@${new}\"/" "${root}/pyproject.toml"
+        heads["${pin}"]="$(git ls-remote "${repo[${name}]}" "refs/heads/${branch[${name}]}" | cut -f1)"
+        [[ "${heads[${pin}]}" =~ ^[0-9a-f]{40}$ ]] || { echo "pins.sh: no ${branch[${name}]} head from ${repo[${name}]}" >&2; exit 2; }
     fi
 done
-((bump)) && (cd "${root}" && uv lock -q --upgrade-package dace --upgrade-package relayout)
+if ((bump)); then
+    # Both heads resolved before either file moves; a failed relock puts pyproject.toml back, so it never
+    # disagrees with uv.lock, which every `uv sync --frozen` reads beside it.
+    before="$(cat "${root}/pyproject.toml"; echo x)"
+    for pin in "${!heads[@]}"; do
+        # The rev in [tool.uv.sources] and dace's override-dependencies URL (which wins over a plugin's pin) move together.
+        sed -i "s/rev = \"${pin}\"/rev = \"${heads[${pin}]}\"/; s/@${pin}\"/@${heads[${pin}]}\"/" "${root}/pyproject.toml"
+    done
+    (cd "${root}" && uv lock -q --upgrade-package dace --upgrade-package relayout) || {
+        printf '%s' "${before%x}" >"${root}/pyproject.toml"
+        echo "pins.sh: uv lock failed; pyproject.toml keeps the previous pins" >&2
+        exit 1
+    }
+fi
 pinned "${package}"

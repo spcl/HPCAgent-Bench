@@ -177,10 +177,15 @@ class FoldSliceLocals:
         return folded
 
     def rewrite_uses(self, stmt: ast.stmt, live: dict[str, ast.Slice]) -> set[str]:
-        """Substitute every live window into this statement's own index slots."""
+        """Substitute every live window into this statement's own index slots.
+
+        Nested blocks are skipped: walk_() revisits them with their own live map, and a window
+        rebound inside an if/for body must not be folded with THIS statement's binding (a folded
+        use is deep-copied, leaving no Name for the inner pass to correct)."""
         folded: set[str] = set()
+        nested = {id(n) for blk in nested_blocks(stmt) for st in blk for n in walk_nodes(st)}
         for node in walk_nodes(stmt):
-            if not isinstance(node, ast.Subscript):
+            if id(node) in nested or not isinstance(node, ast.Subscript):
                 continue
             slots = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
             new_slots: list[ast.expr] = []
@@ -839,12 +844,15 @@ class FoldTupleLocals(ast.NodeTransformer):
     literal ``(a, b, c)`` so ``reshape`` sees an ordinary shape tuple.
 
     Conservative: only a ``name = <Tuple>`` bound exactly once and not a parameter is inlined, and
-    only when the tuple is built from values that do not change under a loop. A binding NESTED in a
-    loop counts: ls3df_scf's ``shp = Y.shape`` sits in the per-fragment loop, and a top-level-only
-    scan left ``reshape(shp)`` reading a name that both the rank table and the extent oracle then
-    sized as a single dimension. What makes that safe to lift out of the loop is the second half of
-    the rule -- an element naming a loop VARIABLE has a different value each iteration, so the
-    definition and its uses are not interchangeable and the local stays.
+    only when the tuple is built from values that do not change under a loop or a REBINDING. A
+    binding NESTED in a loop counts: ls3df_scf's ``shp = Y.shape`` sits in the per-fragment loop,
+    and a top-level-only scan left ``reshape(shp)`` reading a name that both the rank table and the
+    extent oracle then sized as a single dimension. What makes that safe to lift out of the loop is
+    the second half of the rule -- an element naming a loop VARIABLE has a different value each
+    iteration, so the definition and its uses are not interchangeable and the local stays. A
+    rebinding is the same hazard off a loop: the substitution re-reads each element at the USE site,
+    so an element bound again after the tuple would trade the snapshot the tuple captured for the
+    live value.
     """
 
     __slots__ = ("params", "subst")
@@ -876,6 +884,13 @@ class FoldTupleLocals(ast.NodeTransformer):
             ):
                 continue
             if any(n.id in loop_vars for n in walk_nodes(s.value) if isinstance(n, ast.Name)):
+                continue
+            # An element keeps its value only when it is bound at most ONCE here, a parameter counting
+            # as one binding: otherwise the inline re-reads it at the use site with a value the tuple
+            # never held (``shp = (n, m)`` then ``n = n * 2``).
+            if any(
+                binds.get(n.id, 0) + (n.id in self.params) > 1 for n in walk_nodes(s.value) if isinstance(n, ast.Name)
+            ):
                 continue
             self.subst[s.targets[0].id] = s.value
 

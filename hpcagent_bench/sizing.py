@@ -130,8 +130,8 @@ def variant_bytes(variant: SparseLayoutVariant, namespace: Mapping[str, FuzzValu
 def layout_bound_namespace(
     spec: BenchSpec, namespace: Mapping[str, FuzzValue], block_size: int
 ) -> dict[str, FuzzValue] | None:
-    """``namespace`` plus an UPPER BOUND on every padded-format scalar, sized by the stored entries (padding past the
-    cap is the requester's choice); ``None`` when an extent does not resolve."""
+    """``namespace`` plus a FILL LIMIT on every padded-format scalar: the stored entries spread evenly, which a skewed
+    matrix can exceed (padding past it is the requester's choice); ``None`` when an extent does not resolve."""
     out = dict(namespace)
     for logical, layout in spec.sparse_layouts.items():
         try:
@@ -259,7 +259,7 @@ def shape_namespace(spec: BenchSpec, values: Mapping[str, object]) -> dict[str, 
 MEMORY_COPIES: int = 2
 
 #: Bytes in the gibibyte the memory cap is quoted in (``call_isolated(memory_gb=...)``).
-BYTES_PER_GB: int = 1 << 30
+BYTES_PER_GB: int = BYTES_PER_GIB
 
 
 def kernel_memory_gb(

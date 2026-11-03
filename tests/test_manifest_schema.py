@@ -49,6 +49,10 @@ def test_every_corpus_manifest_matches_the_schema() -> None:
         ("mpi", {"decomposition": {"axis": ["NI"], "work_exponent": "1"}}, "mpi.decomposition.work_exponent"),
         ("level", True, "level: Input should be a valid integer"),
         ("timeout_s", "600", "timeout_s: expected a number (got str)"),
+        ("timeout_s", 0, "timeout_s: Input should be greater than 0"),
+        ("timeout_s", -5, "timeout_s: Input should be greater than 0"),
+        ("floor_bytes_fraction", 1.5, "floor_bytes_fraction: Input should be less than or equal to 1"),
+        ("args", {"A": {"dtype": "flaot64"}}, "unknown dtype 'flaot64'"),
     ],
 )
 def test_a_mistyped_block_is_refused_naming_its_key_path(key: str, value: object, reported: str) -> None:
@@ -119,6 +123,15 @@ def test_a_non_text_parameter_key_is_refused() -> None:
     raw = gemm_raw()
     raw["parameters"] = {"S": {True: 1, "NI": 1, "NJ": 1, "NK": 1}}
     with pytest.raises(ValueError, match=r"parameters\.S: key True: Input should be a valid string"):
+        BenchSpec.from_yaml(raw, source=str(GEMM))
+
+
+def test_a_non_text_key_inside_a_parameter_value_is_named() -> None:
+    """pydantic does not render ``!r`` in custom error templates, so the repr travels in the error
+    context: the refusal must name the offending key, not show a literal ``{key!r}`` placeholder."""
+    raw = gemm_raw()
+    raw["parameters"] = {"S": {"NI": {1: "x"}}}
+    with pytest.raises(ValueError, match=r"parameters\.S\.NI: expected text mapping keys \(got int key 1\)"):
         BenchSpec.from_yaml(raw, source=str(GEMM))
 
 

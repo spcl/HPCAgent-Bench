@@ -20,6 +20,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
+    slice_axes,
     slice_step_any,
     wrap_for_loops,
 )
@@ -29,7 +30,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.complex import (
     dtype_carrying_operands,
     scalar_expr_complex,
 )
-from hpcagent_bench.translators.numpyto_common.lowering.indexing import slice_dims
 from hpcagent_bench.translators.numpyto_common.lowering.overlap import (
     OVERLAP_TEMP_PREFIX,
     reads_a_stored_cell,
@@ -44,6 +44,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.views import (
     refuse_scalarising_a_contraction,
 )
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 __all__ = [
     "UNCHANGED",
@@ -820,9 +821,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             isinstance(target, ast.Subscript)
             and isinstance(target.value, ast.Name)
             and target.value.id in self.shape_table
-            and isinstance(target.slice, ast.Slice)
-            and target.slice.lower is None
-            and target.slice.upper is None
+            and is_full_slice(target.slice)
         ):
             # Skip constructor-style calls (np.repeat / reshape /
             # transpose / mgrid / zeros etc.) -- they are NOT
@@ -1148,7 +1147,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         True when there is one and every one matches the target."""
         has_array = False
         for sub in walk_nodes(expr):
-            if not (isinstance(sub, ast.Subscript) and any(isinstance(e, ast.Slice) for e in slice_dims(sub))):
+            if not (isinstance(sub, ast.Subscript) and any(isinstance(e, ast.Slice) for e in slice_axes(sub))):
                 continue
             extent = iter_extent_of(sub, self.shape_table)
             if extent is None:

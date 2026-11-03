@@ -211,7 +211,7 @@ def test_a_read_only_snapshot_env_is_staged_with_its_problems_line(tmp_path: pat
     launch = tmp_path / "launch"
     stage(CLUSTER_DIR, launch, env_file, str(tmp_path / PROBLEMS))
     assert (launch / ".env").read_text().splitlines()[-1] == f"PROBLEMS_FILE={PROBLEMS}"
-    assert not os.access(launch / ".env", os.W_OK), "the staged env is still read-only once written"
+    assert not (launch / ".env").stat().st_mode & 0o222, "the staged env is still read-only once written"
 
 
 def test_a_fused_waves_setups_are_staged_beside_the_env(tmp_path: pathlib.Path) -> None:

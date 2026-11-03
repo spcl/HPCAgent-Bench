@@ -10,7 +10,6 @@ python process started by a script outside the repo. These tests keep both there
 scripts that are GENERATED rather than checked in, and prove the check FAILS on a regression.
 """
 
-import importlib.util
 import os
 import pathlib
 import subprocess
@@ -19,13 +18,9 @@ import sys
 import pytest
 
 from hpcagent_bench import core_dumps, paths
+from tests.fresh_module import module_at
 
-SPEC = importlib.util.spec_from_file_location(
-    "check_core_dumps", paths.ROOT / "helpers" / "scripts" / "checks" / "check_core_dumps.py"
-)
-check_core_dumps = importlib.util.module_from_spec(SPEC)
-sys.modules["check_core_dumps"] = check_core_dumps
-SPEC.loader.exec_module(check_core_dumps)
+check_core_dumps = module_at(paths.ROOT / "helpers" / "scripts" / "checks" / "check_core_dumps.py", "check_core_dumps")
 
 CHECKER = paths.ROOT / "helpers" / "scripts" / "checks" / "check_core_dumps.py"
 
@@ -48,6 +43,18 @@ def test_every_sbatch_emitter_disables_core_dumps() -> None:
     assert not missing, f"sbatch emitters without `{check_core_dumps.GUARD}`: {[str(p) for p in missing]}"
 
 
+def test_an_emitter_scan_keeps_the_script_scope_for_staged_paths(tmp_path: pathlib.Path) -> None:
+    """The core-dumps hook filters no paths itself, so a doc that QUOTES a job header reaches the
+    check with the staged set: the emitter scan keeps the .py/.sh scope of the whole-tree run."""
+    doc = tmp_path / "submit.md"
+    doc.write_text("# How to submit\n\n    #SBATCH --job-name=demo\n    srun ./kernel\n")
+    assert check_core_dumps.emitters([str(doc)]) == []
+    assert checker_rc(doc) == 0, "a doc quoting a header is not an emitter and must not block a commit"
+    emitter = tmp_path / "emit.py"
+    emitter.write_text('HEADER = """#!/bin/bash\\n#SBATCH --job-name=x\\n"""\n')
+    assert check_core_dumps.emitters([str(emitter)]) == [emitter], "a real .py emitter is still named"
+
+
 def test_unguarded_shell_script_is_reported(tmp_path: pathlib.Path) -> None:
     """A deliberately unguarded .sh fails the check, and the same file passes once guarded.
 
@@ -67,6 +74,17 @@ def test_unguarded_shell_script_is_reported(tmp_path: pathlib.Path) -> None:
     extensionless = tmp_path / "agent-tool"
     extensionless.write_text('#!/bin/sh\nexec python3 "$0.py" "$@"\n')
     assert checker_rc(extensionless) == 1, "a shell shebang is an entry point whatever it is called"
+
+
+def test_a_non_utf8_script_is_reported_not_crashed_on(tmp_path: pathlib.Path) -> None:
+    """A latin-1 comment byte must not traceback the checker (the hook then dies with no verdict):
+    the unguarded script is still named, and --fix leaves the byte it only meant to read in place."""
+    bad = tmp_path / "latin1.sh"
+    bad.write_bytes(b"#!/usr/bin/env bash\n# Fr\xe9d\xe9ric's launcher, 5 \xb5s per step\nsrun ./kernel\n")
+    assert checker_rc(bad) == 1
+    subprocess.run([sys.executable, str(CHECKER), "--fix", str(bad)], capture_output=True, text=True, check=False)
+    assert b"Fr\xe9d\xe9ric" in bad.read_bytes(), "--fix rewrote bytes outside the guard it inserted"
+    assert "ulimit -c 0" in bad.read_text(encoding="utf-8", errors="surrogateescape")
 
 
 def test_script_that_re_enables_core_dumps_is_reported(tmp_path: pathlib.Path) -> None:

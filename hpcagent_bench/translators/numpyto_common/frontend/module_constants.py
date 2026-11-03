@@ -8,7 +8,14 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    SubstituteLoads,
+    name_,
+    numpy_attribute,
+    positional_defaults,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
@@ -73,30 +80,17 @@ def fold_default_args(fn: ast.FunctionDef, input_args: list[str]) -> None:
     is exactly as constant as a defaulted positional one. Skipping them left cegterg's whole QE
     config surface (``gamma_only``, ``lda_plus_u``, ``deeq_nc``, ...) in the emitted signature as
     15 ABI slots the harness never passes, shifting every positional argument after them."""
-    args = fn.args.args
-    defaults = fn.args.defaults
+    positional = positional_defaults(fn.args)
     kwonlyargs = fn.args.kwonlyargs
-    defaulted = list(zip(args[len(args) - len(defaults) :], defaults, strict=False))
     # kw_defaults is positionally aligned with kwonlyargs; None means "no default".
-    kw_defaulted = [(a, d) for a, d in zip(kwonlyargs, fn.args.kw_defaults, strict=False) if d is not None]
-    subst: dict[str, ast.expr] = {}
-    for a, d in defaulted + kw_defaulted:
-        if a.arg not in input_args:
-            subst[a.arg] = default_const(d)
+    kw_defaulted = {a.arg: d for a, d in zip(kwonlyargs, fn.args.kw_defaults, strict=False) if d is not None}
+    subst = {name: default_const(d) for name, d in (positional | kw_defaulted).items() if name not in input_args}
     if not subst:
         return
 
-    class Substitute(ast.NodeTransformer):
-        __slots__ = ()
-
-        def visit_Name(self, node: ast.Name) -> ast.expr:
-            if isinstance(node.ctx, ast.Load) and node.id in subst:
-                return ast.copy_location(copy.deepcopy(subst[node.id]), node)
-            return node
-
-    Substitute().visit(fn)
-    fn.args.args = [a for a in args if a.arg not in subst]
-    fn.args.defaults = [d for a, d in defaulted if a.arg not in subst]
+    SubstituteLoads(subst).visit(fn)
+    fn.args.args = [a for a in fn.args.args if a.arg not in subst]
+    fn.args.defaults = [d for name, d in positional.items() if name not in subst]
     fn.args.kw_defaults = [d for a, d in zip(kwonlyargs, fn.args.kw_defaults, strict=False) if a.arg not in subst]
     fn.args.kwonlyargs = [a for a in kwonlyargs if a.arg not in subst]
     ast.fix_missing_locations(fn)

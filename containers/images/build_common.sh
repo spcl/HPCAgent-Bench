@@ -9,7 +9,8 @@
 #                     this checkout (ce_pull_wanted); only = pull the tag or fail; 0 = always build.
 #   PULL_REPO         where ce_pull_wanted looks: PUSH_REPO when set, else images.env REGISTRY_REPO.
 #   CE_LAYER_CACHE=1  keep podman's layers between jobs in a registry on scratch (ce_layer_registry), so a
-#                     failed build on any node resumes from its last unchanged step; 0 (default) does not.
+#                     failed build on any node resumes from its last unchanged step; 0 does not.
+#   CE_LAYER_CACHE_GB the registry's size cap (default 300): past it the next build starts it empty.
 
 # No core dumps: they land in the CWD on an inode-quota filesystem.
 ulimit -c 0
@@ -20,15 +21,16 @@ CE_REPO_DIR="$(cd -- "${CE_IMAGES_DIR}/../.." && pwd)"
 [[ -n "${CE_IMAGE_TABLE:-}" ]] || source "${CE_IMAGES_DIR}/images.env"
 CE_BUILD_CACHE="${CE_BUILD_CACHE:-1}"
 CE_PULL="${CE_PULL:-1}"
-CE_LAYER_CACHE="${CE_LAYER_CACHE:-0}"
+CE_LAYER_CACHE="${CE_LAYER_CACHE:-1}"
+CE_LAYER_CACHE_GB="${CE_LAYER_CACHE_GB:-300}"
 CE_LAYER_PORT="${CE_LAYER_PORT:-5000}"
 PULL_REPO="${PULL_REPO:-${PUSH_REPO:-${REGISTRY_REPO}}}"
 # The image label that records ce_build_fingerprint; ce_pull_wanted compares against it.
 CE_INPUTS_LABEL="org.hpcagent-bench.build-inputs"
 
-# Diskless nodes: podman temp/runtime dirs on tmpfs (CE_TMPFS). The layer store under it survives
-# between jobs on the same node (CE_BUILD_CACHE=1); CE_BUILD_CACHE=0, or a store podman cannot
-# read, wipes it. Sets CE_BUILD_FLAGS for `podman build`.
+# Diskless nodes: podman temp/runtime dirs on tmpfs (CE_TMPFS). The layer store under it lasts as long as the node's
+# tmpfs does (CE_BUILD_CACHE=1), which on daint is the job; CE_BUILD_CACHE=0, or a store podman cannot read, wipes it.
+# Sets CE_BUILD_FLAGS for `podman build`.
 ce_podman_env() {
     unset DBUS_SESSION_BUS_ADDRESS
     export TMPDIR="${CE_TMPFS}/tmp"
@@ -46,10 +48,13 @@ ce_podman_env() {
         export CONTAINERS_STORAGE_CONF="${CE_TMPFS}/storage.conf"
     fi
     CE_BUILD_FLAGS=(--layers=true)
-    ce_layer_registry || return 2
+    # The registry only makes a rerun cheaper: without it this is a build that cannot resume, never a wrong one.
+    ce_layer_registry || { CE_LAYER_REPO=""; echo "no layer registry: this build's layers die with its job" >&2; }
     if [[ "${CE_BUILD_CACHE}" == 1 ]] && podman images >/dev/null 2>&1; then
-        printf 'podman layer cache %s/root on %s (%s); resubmit with --nodelist=%s to resume\n' \
-            "${CE_TMPFS}" "$(hostname)" "$(du -sh "${CE_TMPFS}/root" 2>/dev/null | cut -f1)" "$(hostname)"
+        local resume="only on this node, while its tmpfs lasts"
+        [[ -z "${CE_LAYER_REPO}" ]] || resume="on any node from the layer registry"
+        printf 'podman layer cache %s/root on %s (%s); a failed build resumes %s\n' \
+            "${CE_TMPFS}" "$(hostname)" "$(du -sh "${CE_TMPFS}/root" 2>/dev/null | cut -f1)" "${resume}"
         return 0
     fi
     podman unshare rm -rf "${CE_TMPFS}/root" 2>/dev/null || true
@@ -60,7 +65,8 @@ ce_podman_env() {
 # CE_LAYER_CACHE=1: a registry (distribution v3) on 127.0.0.1:CE_LAYER_PORT over
 # ${JIT_CACHE_ROOT}/container-layers (helpers/scripts/cache_env.sh), which ce_build passes as --cache-from/--cache-to. The node's
 # layer store under CE_TMPFS is wiped when the job ends (daint /dev/shm), so without it every build redoes every
-# step. Sets CE_LAYER_REPO; the registry binary is fetched once into the cache's tools/, checksum-pinned.
+# step. Sets CE_LAYER_REPO; the registry binary is fetched once into the cache's tools/, checksum-pinned. Every cached
+# layer is a tag, so the registry's own garbage-collect frees nothing: past CE_LAYER_CACHE_GB the store starts empty.
 ce_layer_registry() {
     CE_LAYER_REPO=""
     [[ "${CE_LAYER_CACHE}" == 1 && "${CE_BUILD_CACHE}" == 1 ]] || return 0
@@ -84,6 +90,11 @@ ce_layer_registry() {
         mkdir -p "${tools}" && mv -f "${staging}/registry" "${tools}/registry" && rm -rf "${staging}"
     fi
     mkdir -p "${store}"
+    if (( $(du -sm "${store}" | cut -f1) > CE_LAYER_CACHE_GB * 1024 )); then
+        echo "layer registry ${store} is past ${CE_LAYER_CACHE_GB} GB: starting it empty" >&2
+        mv "${store}" "${store}.old.$$" && rm -rf "${store}.old.$$"
+        mkdir -p "${store}"
+    fi
     printf 'version: 0.1\nlog:\n  level: warn\nstorage:\n  filesystem:\n    rootdirectory: %s\nhttp:\n  addr: 127.0.0.1:%s\n' \
         "${store}" "${CE_LAYER_PORT}" > "${conf}"
     "${tools}/registry" serve "${conf}" > "${CE_TMPFS}/layer-registry.log" 2>&1 &
@@ -92,7 +103,8 @@ ce_layer_registry() {
         curl -fs "http://127.0.0.1:${CE_LAYER_PORT}/v2/" >/dev/null && break
         sleep 1
     done
-    curl -fs "http://127.0.0.1:${CE_LAYER_PORT}/v2/" >/dev/null \
+    # kill -0: whatever answers when ours died is another build's registry, over another store.
+    { curl -fs "http://127.0.0.1:${CE_LAYER_PORT}/v2/" >/dev/null && kill -0 "${CE_LAYER_PID}" 2>/dev/null; } \
         || { echo "ce_layer_registry: registry did not start" >&2; tail -5 "${CE_TMPFS}/layer-registry.log" >&2; return 2; }
     # Plain HTTP on loopback: the system registries plus this one marked insecure.
     { cat /etc/containers/registries.conf 2>/dev/null
@@ -322,8 +334,9 @@ ce_build_fingerprint() {
         {print}
         /^FROM[[:space:]]/ && t != "" && toupper($(NF-1)) == "AS" && $NF == t {done = 1}' "${dockerfile}")"
     local -a srcs
-    mapfile -t srcs < <(awk '/^COPY[[:space:]]/ && $0 !~ /--from=/ {
-        for (i = 2; i < NF; i++) if ($i !~ /^--/) print $i }' <<<"${prefix}")
+    mapfile -t srcs < <(awk '/^COPY[[:space:]]/ {
+        while (/\\[[:space:]]*$/ && (getline more) > 0) { sub(/\\[[:space:]]*$/, ""); $0 = $0 " " more }
+        if ($0 !~ /--from=/) for (i = 2; i < NF; i++) if ($i !~ /^--/) print $i }' <<<"${prefix}")
     if (( ${#srcs[@]} )) && ! git -C "${context}" diff --quiet HEAD -- "${srcs[@]}" 2>/dev/null; then
         echo "build inputs differ from git (uncommitted edits under: ${srcs[*]}); no pull" >&2
         return 1
@@ -342,16 +355,19 @@ ce_build_fingerprint() {
 }
 
 # Prints the value of image label $2 of registry image $1 (repo:tag) from its config blob, without
-# pulling any layer. Anonymous; docker.io gets its pull token. Exit 1 when the tag cannot be read.
+# pulling any layer. docker.io gets its pull token, for REGISTRY_USER when set (env-only, as a push): anonymous manifest
+# reads count against the runner's shared address. Exit 1 when the tag cannot be read.
 ce_registry_label() {
     local ref="$1" label="$2" repo tag host path token manifest arch digest accept
-    local -a auth=()
+    local -a auth=() login=()
     repo="${ref%:*}" tag="${ref##*:}"
     host="${repo%%/*}" path="${repo#*/}"
     command -v jq >/dev/null && command -v curl >/dev/null || return 1
     if [[ "${host}" == docker.io ]]; then
         host=registry-1.docker.io
-        token="$(curl -fsS "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${path}:pull" \
+        [[ -z "${REGISTRY_USER:-}" || -z "${REGISTRY_TOKEN:-}" ]] || login=(-u "${REGISTRY_USER}:${REGISTRY_TOKEN}")
+        token="$(curl -fsS "${login[@]}" \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${path}:pull" \
             | jq -r .token)" || return 1
         auth=(-H "Authorization: Bearer ${token}")
     fi
@@ -548,9 +564,10 @@ ce_export_image() {
     ce_squash_image "${image_tag}" "${output_sqsh}"
     printf 'Wrote %s\n' "${output_sqsh}"
 
-    # The OCI archive keeps layers and config (a squashfs is flattened), so registry.sh push can
-    # publish later without a rebuild. SAVE_OCI_ARCHIVE=0 skips it.
-    if [[ "${SAVE_OCI_ARCHIVE:-1}" != "0" ]]; then
+    # The OCI archive keeps layers and config (a squashfs is flattened), so registry.sh push can publish later without a
+    # rebuild. Only a build that can be published writes it: a native image never is, a pulled one already was.
+    # SAVE_OCI_ARCHIVE=0 skips it for any build.
+    if [[ "${SAVE_OCI_ARCHIVE:-1}" != 0 && "${CE_IMAGE_FLAVOR}" != native && "${CE_PULLED:-0}" != 1 ]]; then
         local archive="${output_sqsh%.sqsh}.oci.tar"
         rm -f "${archive}"
         if podman save --format oci-archive -o "${archive}" "${image_tag}"; then
@@ -581,6 +598,28 @@ ce_pin_commits() {
     printf 'dace @ %s, relayout @ %s\n' "${DACE_COMMIT}" "${RELAYOUT_COMMIT}"
 }
 
+# ce_lock_digest <uv export flags>: a digest of the locked packages a `uv sync` with those flags installs, whatever
+# else uv.lock and pyproject.toml hold.
+ce_lock_digest() {
+    local locked
+    locked="$(uv export --frozen --no-header --no-annotate --no-emit-workspace --project "${CE_REPO_DIR}" "$@")" \
+        || { echo "uv export $* failed: nothing keys the image's locked packages" >&2; return 2; }
+    sha256sum <<<"${locked}" | cut -c1-16
+}
+
+# Exports IMAGE_PYTHON_LOCK, the build arg that stands for the pins of the source builds ($@ names an image's extra
+# groups) in the fingerprint and the layer cache: the Dockerfiles bind uv.lock and pyproject.toml for the steps that read
+# them, so a moved wheel the image does not carry rebuilds nothing. CE_PULL=only compares nothing.
+#   ce_lock_keys [uv export flags]
+ce_lock_keys() {
+    IMAGE_PYTHON_LOCK=""
+    if [[ "${CE_PULL}" != only ]]; then
+        IMAGE_PYTHON_LOCK="$(ce_lock_digest --only-group image-python --only-group openblas-build "$@")" || return 2
+    fi
+    export IMAGE_PYTHON_LOCK
+    printf 'image python lock %s\n' "${IMAGE_PYTHON_LOCK}"
+}
+
 # Exports LIBFABRIC_REF (default v2.6.0) and LIBFABRIC_COMMIT, the tag resolved to its commit here so
 # the sha is the cache key and the Dockerfile asserts it: a git tag is mutable. libfabric is only
 # spack MPICH's compile-time link target; the netstack hook supplies the runtime one.
@@ -606,14 +645,6 @@ ce_march() {
         *) echo "no -march known for spack target ${SPACK_TARGET}" >&2; return 2 ;;
     esac
     export MARCH
-}
-
-# Fails fast when the KernelBench submodule is not checked out: the judge stage COPYs it, which would
-# otherwise fail only after the agent stage's hours.
-ce_require_kernelbench() {
-    [[ -d "${CE_REPO_DIR}/third_party/KernelBench/KernelBench" ]] && return 0
-    echo "third_party/KernelBench is empty; run: git submodule update --init third_party/KernelBench" >&2
-    return 2
 }
 
 # ce_require_arch <uname -m>: refuse to build on another CPU family (the GH200 images build on aarch64).

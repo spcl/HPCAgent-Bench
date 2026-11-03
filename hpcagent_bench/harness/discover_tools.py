@@ -23,6 +23,7 @@ import yaml
 from hpcagent_agent.coded import Coded
 
 from hpcagent_bench import paths
+from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.config import Hardware
 
 __all__ = [
@@ -53,6 +54,7 @@ __all__ = [
     "main",
     "missing_for_target",
     "print_human",
+    "so_version",
     "toolset",
 ]
 
@@ -253,6 +255,11 @@ def detect_binary(spec: ToolSpec) -> DetectResult:
     }
 
 
+def so_version(path: str) -> tuple[int, ...]:
+    """The numbers in a shared object's file name, so ``.so.10`` ranks above ``.so.9``."""
+    return tuple(int(part) for part in re.findall(r"\d+", pathlib.Path(path).name))
+
+
 def detect_library(spec: ToolSpec) -> DetectResult:
     # 1) pkg-config (authoritative; gives a version)
     if shutil.which("pkg-config"):
@@ -274,7 +281,7 @@ def detect_library(spec: ToolSpec) -> DetectResult:
         for d in lib_dirs():
             hits = [str(path) for pattern in (so, so + ".*") for path in pathlib.Path(d).glob(pattern)]
             if hits:
-                return {"found": True, "via": "libdir", "path": max(hits)}
+                return {"found": True, "via": "libdir", "path": max(hits, key=so_version)}
     # 3) header on the include path
     for hdr in spec.header:
         for d in include_dirs():
@@ -359,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
             else yaml.safe_dump(report, sort_keys=False)
         )
         if args.out:
-            pathlib.Path(args.out).write_text(text)
+            write_atomic(pathlib.Path(args.out), text.encode("utf-8"))
             print(f"wrote {args.out}", file=sys.stderr)
         else:
             print(text)

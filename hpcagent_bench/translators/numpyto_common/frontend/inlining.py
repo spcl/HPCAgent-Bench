@@ -4,9 +4,16 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, nested_blocks, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    name_,
+    nested_blocks,
+    positional_defaults,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.limits import HELPER_NESTING_ROUNDS
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
 __all__ = [
     "INLINABLE_STMTS",
@@ -70,9 +77,7 @@ def resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> list[ast.expr]
     untouched.
     """
     param_names = [a.arg for a in helper.args.args]
-    defaults = dict(
-        zip(param_names[len(param_names) - len(helper.args.defaults) :], helper.args.defaults, strict=False)
-    )
+    defaults = positional_defaults(helper.args)
     call_args = list(call.args)
     if len(call_args) > len(param_names) or any(kw.arg is None for kw in call.keywords):
         return None  # too many positionals, or a **kwargs splat we cannot resolve
@@ -260,10 +265,7 @@ def static_flag_params(tree: ast.Module) -> dict[str, frozenset[str]]:
         pnames = [a.arg for a in hdef.args.args]
         # An unsupplied trailing parameter takes its default, which is itself a compile-time value
         # when the default is a literal -- ``_logsumexp(x, axis=1)`` leaves keepdims=False.
-        bound: dict[str, ast.expr | None] = {}
-        offset = len(pnames) - len(hdef.args.defaults)
-        for i, default in enumerate(hdef.args.defaults):
-            bound[pnames[offset + i]] = default
+        bound: dict[str, ast.expr | None] = {**positional_defaults(hdef.args)}
         for i, arg in enumerate(call.args):
             if i < len(pnames):
                 bound[pnames[i]] = arg
@@ -520,6 +522,12 @@ class ConstListLoopUnroller(ast.NodeTransformer):
             seq = self.list_binds[node.iter.id]
             src = node.iter.id
         if seq is None:
+            return node
+        target_names = {n.id for n in walk_nodes(node.target) if isinstance(n, ast.Name)}
+        if any(
+            n.id in target_names and is_store(n) for st in node.body for n in walk_nodes(st) if isinstance(n, ast.Name)
+        ):
+            # A rebound loop variable has no element to substitute; left as a loop it is refused.
             return node
         out: list[ast.stmt] = []
         for elt in seq:
@@ -832,17 +840,30 @@ class InlineHelpers(ast.NodeTransformer):
         prefix = f"__inl{self._counter[0]}_"
         local_names = collect_assigned_names(body)
         rename: dict[str, ast.expr] = dict(zip(param_names, node.value.args, strict=False))
+        param_inits: list[ast.stmt] = []
+        nodes = [n for st in body for n in walk_nodes(st)]
+        in_place = {id(n.target) for n in nodes if isinstance(n, ast.AugAssign)}
+        rebound = {n.id for n in nodes if isinstance(n, ast.Name) and is_store(n) and id(n) not in in_place}
         for ln in local_names:
             if ln in param_names:
-                # The helper rebinds a parameter (e.g. ``pn = p.copy()``
-                # then later uses of ``pn``). Don't rename it, but
-                # tracking it in ``rename`` would shadow the call-site
-                # arg -- which is what we want for ``pn`` to remain a
-                # distinct local through the inlined body.
+                # ``p += x`` updates the caller's array. A rebound parameter is instead a fresh local seeded
+                # from the arg, so reads after the rebind see the rebound value and the caller keeps its own.
+                if ln not in rebound:
+                    continue
+                if any(isinstance(n, ast.Subscript) and is_store(n) and base_name(n) == ln for n in nodes):
+                    raise NotImplementedError(f"helper {helper.name} both writes through and rebinds parameter {ln}")
+                local = f"{prefix}{ln}"
+                rename[ln] = name_(local)
+                param_inits.append(
+                    ast.Assign(
+                        targets=[store_(local)],
+                        value=copy.deepcopy(node.value.args[param_names.index(ln)]),
+                    )
+                )
                 continue
             rename[ln] = name_(f"{prefix}{ln}")
         renamer = SubstNames(rename)
-        new_body: list[ast.stmt] = []
+        new_body: list[ast.stmt] = param_inits
         for stmt in body:
             cloned = ast.parse(ast.unparse(stmt)).body[0]
             cloned = renamer.visit(cloned)
@@ -893,6 +914,10 @@ class InlineHelpers(ast.NodeTransformer):
             ifexp = ast.IfExp(test=cond, body=then, orelse=else_)
             return SubstNames(subst).visit(ast.fix_missing_locations(ifexp))
         return node
+
+
+def is_store(node: ast.Name | ast.Subscript) -> bool:
+    return isinstance(node.ctx, ast.Store)
 
 
 def collect_assigned_names(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:

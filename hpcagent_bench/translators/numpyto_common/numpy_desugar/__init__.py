@@ -250,14 +250,16 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
         noncontig = noncontig_names(fn)
         masked_gathers = masked_reduce_map(fn, ranks, dtypes)
         consts = const_name_values(fn)
-        tables = HoistTables(ranks, dtypes, masked_gathers, lower_solve_rhs_ranks)
+        stored = {n.id for n in walk_nodes(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+        widths = {name: dt for name, dt in kir_array_dtypes.items() if is_kernel and name not in stored}
+        tables = HoistTables(ranks, dtypes, masked_gathers, lower_solve_rhs_ranks, widths)
         numba_reshape_passes: list[DesugarPass] = (
             [ReshapeFortranOrderInline(), NumbaDtypeFixups(dtype_table_(fn, param_kinds.get(fn_name or "", {})))]
             if backend == "numba"
             else []
         )
         passes: list[DesugarPass] = [
-            DropGuards(),
+            DropGuards(keep_data=backend == "numba"),
             # First: splices statements out of a ``with`` body; every pass below walks only top-level statements.
             SpliceErrstate(),
             ConstComprehensionFold(consts),
@@ -273,7 +275,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes, keep_library=backend == "dace"),
             ValueHoist(LINALG_HOIST, tables),
             # dace lowers batched and reshape-wrapped matmul and einsum itself, to library nodes.
-            *([] if backend == "dace" else [ReshapeMatmulInline(ranks), BatchedMatmulToLoop(ranks)]),
+            *([] if backend == "dace" else [ReshapeMatmulInline(ranks, widths), BatchedMatmulToLoop(ranks, widths)]),
             PadInline(ranks, lower_symbolic_constant=backend == "dace"),
             *([] if backend == "dace" else [ValueHoist(EINSUM_HOIST, tables)]),
             *([] if backend in NATIVE_FFT_BACKENDS else [FftInline(ranks, kir_array_dtypes)]),

@@ -23,13 +23,14 @@
 #                               one N-task step: node r / tasks-per-node, GPU slot l = r % tasks-per-node, on the
 #                               first thread of the l-th block of SLURM_CPUS_PER_TASK cores (socket-major, the
 #                               --hint=nomultithread block an N-task step gives it). Returns the last failing
-#                               shard's status, 0 when every shard succeeded.
+#                               shard's status, 0 when every shard succeeded; JOB_SHARDS_OK counts those that did.
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 JOB_STEP_EDF=""
 JOB_STEP_ENV=()
+JOB_SHARDS_OK=0
 
 #: What every step task runs: the launch environment the OpenMP runtimes read once, then the verb.
 JOB_STEP_SCRIPT='ulimit -s "$(ulimit -H -s)"
@@ -75,7 +76,7 @@ job_step_core_mask() {
     # <cores-per-slot> physical cores, the cores in socket-major order; fails when the node has too few.
     lscpu -p=CPU,CORE,SOCKET | grep -v '^#' | sort -t, -k3,3n -k2,2n -k1,1n | awk -F, -v slot="$1" -v per="$2" '
         BEGIN { top = 0 }
-        seen[$2]++ { next }
+        seen[$3 "," $2]++ { next }
         { n++ }
         n > slot * per && n <= (slot + 1) * per {
             cpu = $1 + 0
@@ -95,7 +96,8 @@ run_job_shards() {
     local cpus="${SLURM_CPUS_PER_TASK:?run_job_shards: no --cpus-per-task: name the cores a shard grades on}"
     local -a nodes masks pids
     mapfile -t nodes < <(scontrol show hostnames "${SLURM_JOB_NODELIST:?run_job_shards: no SLURM_JOB_NODELIST}")
-    if (( ntasks % ${#nodes[@]} != 0 )); then
+    # mapfile cannot carry a scontrol failure out of the substitution: the list is empty instead.
+    if (( ${#nodes[@]} == 0 || ntasks % ${#nodes[@]} != 0 )); then
         echo "run_job_shards: ${ntasks} tasks do not split evenly over ${#nodes[@]} nodes" >&2
         return 2
     fi
@@ -121,6 +123,6 @@ run_job_shards() {
         ) &
         pids+=("$!")
     done
-    for pid in "${pids[@]}"; do wait "${pid}" || status=$?; done
+    for pid in "${pids[@]}"; do wait "${pid}" && JOB_SHARDS_OK=$(( JOB_SHARDS_OK + 1 )) || status=$?; done
     return "${status}"
 }

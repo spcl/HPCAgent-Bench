@@ -9,7 +9,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import read_a
 from hpcagent_bench.translators.numpyto_common.lib_nodes.contractions import EINSUM_TEMP, OP_SPILL_TEMP
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
-    attr_call,
     const_,
     const_or_name,
     first_name,
@@ -22,7 +21,8 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalar
 
 __all__ = [
     "LINALG_AW",
-    "SolveRhs",
+    "GaussJordanSide",
+    "cholesky_loop",
     "classify_norm_ord",
     "expand_cholesky",
     "expand_linalg_det",
@@ -30,6 +30,7 @@ __all__ = [
     "expand_linalg_norm",
     "expand_linalg_solve",
     "expand_lstsq",
+    "gauss_jordan_nest",
     "guarded_div",
     "lstsq_array_base",
     "lstsq_first_axis_size",
@@ -79,6 +80,7 @@ def expand_linalg_norm(
     args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
+    local_dtypes: dict[str, str] | None = None,
 ) -> list[ast.stmt]:
     """``s = np.linalg.norm(v[, ord, axis=None, keepdims=False])``. numpy puts
     ``ord`` SECOND (positional) -- unlike a reduction, whose second positional
@@ -116,6 +118,9 @@ def expand_linalg_norm(
             iters = [make_iter_name("__nr", i) for i in range(len(extent))]
             sa = scalarize_at_iters(a, [name_(it) for it in iters], shape_table)
             acc_init = ast.Assign(targets=[store_(target.id)], value=const_(0.0))
+            # A complex element squares through its modulus: ``z * z`` is not ``|z|**2``.
+            if reads_complex(a, local_dtypes or {}):
+                sa = ast.Call(func=name_("abs"), args=[sa], keywords=[])
             inner: list[ast.stmt] = [
                 ast.AugAssign(target=store_(target.id), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sa))
             ]
@@ -429,6 +434,26 @@ def lstsq_index1d(name: str, i: ast.expr, base: list[ast.expr | None] | None) ->
     return ast.Subscript(value=name_(name), slice=slot, ctx=ast.Load())
 
 
+def cholesky_loop(temp: str, a: str, n: str, p: str, column_sum: str, conj: str, diag: str) -> list[str]:
+    """Lines of the Cholesky-Banachiewicz loop filling the lower triangle of ``temp`` from ``a``.
+
+    ``p`` prefixes the iterators and the diagonal sum, ``column_sum`` names the off-diagonal one, ``conj`` is the
+    format spelling the second inner-product factor and ``diag`` the expression of the diagonal entry."""
+    jk, ik = f"{temp}[{p}_j, {p}_k]", f"{temp}[{p}_i, {p}_k]"
+    return [
+        f"for {p}_j in range({n}):",
+        f"    {p}_s = {a}[{p}_j, {p}_j]",
+        f"    for {p}_k in range({p}_j):",
+        f"        {p}_s -= {jk} * {conj.format(jk)}",
+        f"    {temp}[{p}_j, {p}_j] = {diag}",
+        f"    for {p}_i in range({p}_j + 1, {n}):",
+        f"        {column_sum} = {a}[{p}_i, {p}_j]",
+        f"        for {p}_k in range({p}_j):",
+        f"            {column_sum} -= {ik} * {conj.format(jk)}",
+        f"        {temp}[{p}_i, {p}_j] = {column_sum} / {temp}[{p}_j, {p}_j]",
+    ]
+
+
 def expand_cholesky(
     target: ast.Name,
     args: Sequence[ast.expr],
@@ -464,106 +489,6 @@ def expand_cholesky(
             local_dtypes.setdefault("__s", a_dt)
     n = a_shape[0]
     n_ast = const_or_name(n)
-    inner_k: list[ast.stmt] = [
-        ast.AugAssign(
-            target=store_("__s"),
-            op=ast.Sub(),
-            value=ast.BinOp(
-                left=ast.Subscript(
-                    value=name_(target.id),
-                    slice=ast.Tuple(elts=[name_("__j"), name_("__k")], ctx=ast.Load()),
-                    ctx=ast.Load(),
-                ),
-                op=ast.Mult(),
-                right=attr_call(
-                    "np",
-                    "conj",
-                    [
-                        ast.Subscript(
-                            value=name_(target.id),
-                            slice=ast.Tuple(elts=[name_("__j"), name_("__k")], ctx=ast.Load()),
-                            ctx=ast.Load(),
-                        )
-                    ],
-                ),
-            ),
-        ),
-    ]
-    inner_i = [
-        ast.Assign(
-            targets=[store_("__s")],
-            value=ast.Subscript(
-                value=name_(a.id), slice=ast.Tuple(elts=[name_("__i"), name_("__j")], ctx=ast.Load()), ctx=ast.Load()
-            ),
-        ),
-        range_for(
-            "__k",
-            [name_("__j")],
-            [
-                ast.AugAssign(
-                    target=store_("__s"),
-                    op=ast.Sub(),
-                    value=ast.BinOp(
-                        left=ast.Subscript(
-                            value=name_(target.id),
-                            slice=ast.Tuple(elts=[name_("__i"), name_("__k")], ctx=ast.Load()),
-                            ctx=ast.Load(),
-                        ),
-                        op=ast.Mult(),
-                        right=attr_call(
-                            "np",
-                            "conj",
-                            [
-                                ast.Subscript(
-                                    value=name_(target.id),
-                                    slice=ast.Tuple(elts=[name_("__j"), name_("__k")], ctx=ast.Load()),
-                                    ctx=ast.Load(),
-                                )
-                            ],
-                        ),
-                    ),
-                )
-            ],
-        ),
-        ast.Assign(
-            targets=[
-                ast.Subscript(
-                    value=name_(target.id),
-                    slice=ast.Tuple(elts=[name_("__i"), name_("__j")], ctx=ast.Load()),
-                    ctx=ast.Store(),
-                )
-            ],
-            value=ast.BinOp(
-                left=name_("__s"),
-                op=ast.Div(),
-                right=ast.Subscript(
-                    value=name_(target.id),
-                    slice=ast.Tuple(elts=[name_("__j"), name_("__j")], ctx=ast.Load()),
-                    ctx=ast.Load(),
-                ),
-            ),
-        ),
-    ]
-    j_body = [
-        ast.Assign(
-            targets=[store_("__s")],
-            value=ast.Subscript(
-                value=name_(a.id), slice=ast.Tuple(elts=[name_("__j"), name_("__j")], ctx=ast.Load()), ctx=ast.Load()
-            ),
-        ),
-        range_for("__k", [name_("__j")], inner_k),
-        ast.Assign(
-            targets=[
-                ast.Subscript(
-                    value=name_(target.id),
-                    slice=ast.Tuple(elts=[name_("__j"), name_("__j")], ctx=ast.Load()),
-                    ctx=ast.Store(),
-                )
-            ],
-            value=ast.Call(func=name_("sqrt"), args=[name_("__s")], keywords=[]),
-        ),
-        range_for("__i", [ast.BinOp(left=name_("__j"), op=ast.Add(), right=const_(1)), n_ast], inner_i),
-    ]
     # numpy's cholesky returns 0 in the strict upper triangle, but the
     # Banachiewicz loop below only writes the lower triangle + diagonal.
     # Pre-zero the upper triangle so unwritten cells aren't malloc garbage;
@@ -590,10 +515,8 @@ def expand_cholesky(
             )
         ],
     )
-    return [
-        zero_upper,
-        range_for("__j", [n_ast], j_body),
-    ]
+    loop = cholesky_loop(target.id, a.id, n, "_", "__s", "np.conj({0})", "sqrt(__s)")
+    return [zero_upper, *ast.parse("\n".join(loop)).body]
 
 
 def expand_linalg_solve(
@@ -623,17 +546,14 @@ def expand_linalg_solve(
         raise NotImplementedError("np.linalg.solve: b must be 1-D or 2-D")
     n = a_shape[0]
     n_ast = const_or_name(n)
-    # Same Gauss-Jordan body as expand_linalg_inv, but the row ops apply to
-    # ``b`` (not the identity), giving x = A^-1 @ b. ``__sol_aw`` is the
-    # working copy of A. A fixed name would alias across call sites with
-    # different sizes, so number it like ``expand_linalg_inv`` does.
+    # The row ops apply to ``b``, giving x = A^-1 @ b. ``__sol_aw`` is the working copy of A. A fixed name
+    # would alias across call sites with different sizes, so number it like ``expand_linalg_inv`` does.
     aw_name = f"__sol_aw{LINALG_AW[0]}"
     LINALG_AW[0] += 1
-    aw = lambda r, c: ast.Subscript(value=name_(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
-    aw_store = lambda r, c: ast.Subscript(
-        value=name_(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
-    )
-    rhs = SolveRhs(target.id, b_shape)
+    aw = GaussJordanSide("__sol", aw_name)
+    is_2d = len(b_shape) == 2
+    rhs = GaussJordanSide("__sol", target.id, is_2d)
+    source = GaussJordanSide("__sol", b.id, is_2d)
     publish_solve_workspace(aw_name, n, a.id, b.id, target.id, shape_table, local_dtypes, fresh_local_allocs)
     out.append(
         ast.Assign(
@@ -641,95 +561,29 @@ def expand_linalg_solve(
         )
     )
     # Init: copy A into __sol_aw and b into target.
-    copy_inner = rhs.copy_row(b.id)
+    copy_rhs = ast.Assign(targets=[rhs.store("i", "j")], value=source.cell("i", "j"))
+    copy_row = range_for("__sol_j", [const_or_name(b_shape[1])], [copy_rhs]) if is_2d else copy_rhs
+    copy_a = ast.Assign(targets=[aw.store("i", "j")], value=GaussJordanSide("__sol", a.id).cell("i", "j"))
+    out.append(range_for("__sol_i", [n_ast], [range_for("__sol_j", [n_ast], [copy_a]), copy_row]))
+
+    def on_a(body: list[ast.stmt]) -> ast.For:
+        return range_for("__sol_c", [n_ast], body)
+
+    def on_rhs(body: list[ast.stmt]) -> list[ast.stmt]:
+        return [range_for("__sol_c", [const_or_name(b_shape[1])], body)] if is_2d else body
+
+    # A 1-D element is exchanged only when the rows differ; a column loop has no such guard.
+    rows_differ = ast.Compare(left=aw.iterator("p"), ops=[ast.NotEq()], comparators=[aw.iterator("k")])
+    swap_rhs = on_rhs(rhs.swap()) if is_2d else [ast.If(test=rows_differ, body=rhs.swap(), orelse=[])]
     out.append(
-        range_for(
-            "__sol_i",
-            [n_ast],
-            [
-                range_for(
-                    "__sol_j",
-                    [n_ast],
-                    [
-                        ast.Assign(
-                            targets=[aw_store(name_("__sol_i"), name_("__sol_j"))],
-                            value=ast.Subscript(
-                                value=name_(a.id),
-                                slice=ast.Tuple(elts=[name_("__sol_i"), name_("__sol_j")], ctx=ast.Load()),
-                                ctx=ast.Load(),
-                            ),
-                        )
-                    ],
-                ),
-                copy_inner,
-            ],
+        gauss_jordan_nest(
+            aw,
+            n_ast,
+            [on_a(aw.swap()), *swap_rhs],
+            [on_a(aw.divide()), *on_rhs(rhs.divide())],
+            [on_a(aw.eliminate()), *on_rhs(rhs.eliminate())],
         )
     )
-    # Gauss-Jordan on (__sol_aw | target).
-    K = name_("__sol_k")
-    P = name_("__sol_p")
-    R = name_("__sol_r")
-    C = name_("__sol_c")
-    F = name_("__sol_factor")
-    T = name_("__sol_tmp")
-    # Pivot search.
-    pivot_init = ast.Assign(targets=[store_("__sol_p")], value=K)
-    pivot_scan = range_for(
-        "__sol_r",
-        [ast.BinOp(left=K, op=ast.Add(), right=const_(1)), n_ast],
-        [
-            ast.If(
-                test=ast.Compare(
-                    left=ast.Call(func=name_("abs"), args=[aw(R, K)], keywords=[]),
-                    ops=[ast.Gt()],
-                    comparators=[ast.Call(func=name_("abs"), args=[aw(P, K)], keywords=[])],
-                ),
-                body=[ast.Assign(targets=[store_("__sol_p")], value=R)],
-                orelse=[],
-            )
-        ],
-    )
-    # Swap row p and row k in __sol_aw.
-    swap_aw: list[ast.stmt] = [
-        ast.Assign(targets=[store_("__sol_tmp")], value=aw(K, C)),
-        ast.Assign(targets=[aw_store(K, C)], value=aw(P, C)),
-        ast.Assign(targets=[aw_store(P, C)], value=T),
-    ]
-    swap_aw_loop = range_for("__sol_c", [n_ast], swap_aw)
-    swap_b_loop = rhs.swap_rows(K, P, C, T)
-    # Divide pivot row by aw[k, k]. Stash divisor.
-    pivot_div_stash = ast.Assign(targets=[store_("__sol_factor")], value=aw(K, K))
-    pivot_div_aw_body: list[ast.stmt] = [
-        ast.Assign(targets=[aw_store(K, C)], value=ast.BinOp(left=aw(K, C), op=ast.Div(), right=F)),
-    ]
-    pivot_div_aw = range_for("__sol_c", [n_ast], pivot_div_aw_body)
-    pivot_div_b = rhs.divide_row(K, C, F)
-    # Eliminate other rows.
-    elim_factor = ast.Assign(targets=[store_("__sol_factor")], value=aw(R, K))
-    elim_aw_inner = range_for(
-        "__sol_c",
-        [n_ast],
-        [
-            ast.Assign(
-                targets=[aw_store(R, C)],
-                value=ast.BinOp(left=aw(R, C), op=ast.Sub(), right=ast.BinOp(left=F, op=ast.Mult(), right=aw(K, C))),
-            )
-        ],
-    )
-    elim_b_inner = rhs.eliminate_row(R, K, C, F)
-    elim_outer = range_for(
-        "__sol_r",
-        [n_ast],
-        [
-            ast.If(
-                test=ast.Compare(left=R, ops=[ast.NotEq()], comparators=[K]),
-                body=[elim_factor, elim_aw_inner, elim_b_inner],
-                orelse=[],
-            )
-        ],
-    )
-    k_body = [pivot_init, pivot_scan, swap_aw_loop, swap_b_loop, pivot_div_stash, pivot_div_aw, pivot_div_b, elim_outer]
-    out.append(range_for("__sol_k", [n_ast], k_body))
     return out
 
 
@@ -806,113 +660,98 @@ def publish_solve_workspace(
         fresh_local_allocs[aw_name] = (n, n)
 
 
-class SolveRhs:
-    """The right-hand side ``b`` of a Gauss-Jordan solve, held in the target: its row operations,
-    over every column for a 2-D ``b`` and on the single element of a 1-D one."""
+class GaussJordanSide:
+    """Cells of one side of the augmented matrix ``[A | b]``, with rows and columns named by tag (``k``, ``p``, ...).
 
-    __slots__ = ("b_shape", "is_2d", "target_id")
+    Every reference is a FRESH node, never a shared one: the Fortran emitter's loop-variable uniquifier mutates Name
+    nodes in place, and the row and column iterators each bind several sibling and nested loops here, so a shared
+    node's rename from the first loop would stick on every later occurrence and read the wrong row (see
+    ``FortranRenameTemps.visit_Name``). A 1-D side has no column."""
 
-    def __init__(self, target_id: str, b_shape: tuple[str, ...]) -> None:
-        self.target_id = target_id
-        self.b_shape = b_shape
-        self.is_2d = len(b_shape) == 2
+    __slots__ = ("array", "is_2d", "prefix")
 
-    def load(self, r: ast.expr, c: ast.expr | None = None) -> ast.Subscript:
-        if self.is_2d:
-            if c is None:
-                raise ValueError("a 2-D right-hand side needs a column index")
-            return ast.Subscript(
-                value=name_(self.target_id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load()
+    def __init__(self, prefix: str, array: str, is_2d: bool = True) -> None:
+        self.prefix = prefix
+        self.array = array
+        self.is_2d = is_2d
+
+    def iterator(self, tag: str) -> ast.Name:
+        return name_(f"{self.prefix}_{tag}")
+
+    def scratch(self, tag: str) -> ast.Name:
+        return store_(f"{self.prefix}_{tag}")
+
+    def cell(self, row: str, col: str = "c", ctx: ast.expr_context | None = None) -> ast.Subscript:
+        index = self.iterator(row)
+        slot = ast.Tuple(elts=[index, self.iterator(col)], ctx=ast.Load()) if self.is_2d else index
+        return ast.Subscript(value=name_(self.array), slice=slot, ctx=ctx or ast.Load())
+
+    def store(self, row: str, col: str = "c") -> ast.Subscript:
+        return self.cell(row, col, ast.Store())
+
+    def swap(self) -> list[ast.stmt]:
+        """Rows k and p exchanged at the current column."""
+        return [
+            ast.Assign(targets=[self.scratch("tmp")], value=self.cell("k")),
+            ast.Assign(targets=[self.store("k")], value=self.cell("p")),
+            ast.Assign(targets=[self.store("p")], value=self.iterator("tmp")),
+        ]
+
+    def divide(self) -> list[ast.stmt]:
+        """Row k divided by the stashed pivot at the current column."""
+        return [
+            ast.Assign(
+                targets=[self.store("k")],
+                value=ast.BinOp(left=self.cell("k"), op=ast.Div(), right=self.iterator("factor")),
             )
-        return ast.Subscript(value=name_(self.target_id), slice=r, ctx=ast.Load())
+        ]
 
-    def store(self, r: ast.expr, c: ast.expr | None = None) -> ast.Subscript:
-        if self.is_2d:
-            if c is None:
-                raise ValueError("a 2-D right-hand side needs a column index")
-            return ast.Subscript(
-                value=name_(self.target_id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
+    def eliminate(self) -> list[ast.stmt]:
+        """Row r minus the stashed factor times row k at the current column."""
+        scaled = ast.BinOp(left=self.iterator("factor"), op=ast.Mult(), right=self.cell("k"))
+        return [ast.Assign(targets=[self.store("r")], value=ast.BinOp(left=self.cell("r"), op=ast.Sub(), right=scaled))]
+
+
+def gauss_jordan_nest(
+    aw: GaussJordanSide, n: ast.expr, swap: list[ast.stmt], divide: list[ast.stmt], eliminate: list[ast.stmt]
+) -> ast.For:
+    """Gauss-Jordan with partial pivoting on the working copy ``aw``: ``swap`` runs on the pivot row, ``divide`` once
+    the pivot is stashed (the loop overwrites ``aw[k, k]`` before every use), ``eliminate`` on every other row."""
+
+    def abs_at(row: str) -> ast.Call:
+        return ast.Call(func=name_("abs"), args=[aw.cell(row, "k")], keywords=[])
+
+    pivot_scan = range_for(
+        f"{aw.prefix}_r",
+        [ast.BinOp(left=aw.iterator("k"), op=ast.Add(), right=const_(1)), n],
+        [
+            ast.If(
+                test=ast.Compare(left=abs_at("r"), ops=[ast.Gt()], comparators=[abs_at("p")]),
+                body=[ast.Assign(targets=[aw.scratch("p")], value=aw.iterator("r"))],
+                orelse=[],
             )
-        return ast.Subscript(value=name_(self.target_id), slice=r, ctx=ast.Store())
-
-    def columns(self, body: list[ast.stmt]) -> ast.For:
-        return range_for("__sol_c", [const_or_name(self.b_shape[1])], body)
-
-    def copy_row(self, b_id: str) -> ast.stmt:
-        """Row ``__sol_i`` of ``b`` copied into the target."""
-        if not self.is_2d:
-            return ast.Assign(
-                targets=[self.store(name_("__sol_i"))],
-                value=ast.Subscript(value=name_(b_id), slice=name_("__sol_i"), ctx=ast.Load()),
+        ],
+    )
+    other_rows = range_for(
+        f"{aw.prefix}_r",
+        [n],
+        [
+            ast.If(
+                test=ast.Compare(left=aw.iterator("r"), ops=[ast.NotEq()], comparators=[aw.iterator("k")]),
+                body=[ast.Assign(targets=[aw.scratch("factor")], value=aw.cell("r", "k")), *eliminate],
+                orelse=[],
             )
-        return range_for(
-            "__sol_j",
-            [const_or_name(self.b_shape[1])],
-            [
-                ast.Assign(
-                    targets=[self.store(name_("__sol_i"), name_("__sol_j"))],
-                    value=ast.Subscript(
-                        value=name_(b_id),
-                        slice=ast.Tuple(elts=[name_("__sol_i"), name_("__sol_j")], ctx=ast.Load()),
-                        ctx=ast.Load(),
-                    ),
-                )
-            ],
-        )
-
-    def swap_rows(self, k: ast.expr, p: ast.expr, c: ast.expr, tmp: ast.expr) -> ast.stmt:
-        """Rows k and p exchanged (the 1-D element only when they differ)."""
-        if self.is_2d:
-            return self.columns(
-                [
-                    ast.Assign(targets=[store_("__sol_tmp")], value=self.load(k, c)),
-                    ast.Assign(targets=[self.store(k, c)], value=self.load(p, c)),
-                    ast.Assign(targets=[self.store(p, c)], value=tmp),
-                ]
-            )
-        return ast.If(
-            test=ast.Compare(left=p, ops=[ast.NotEq()], comparators=[k]),
-            body=[
-                ast.Assign(targets=[store_("__sol_tmp")], value=self.load(k)),
-                ast.Assign(targets=[self.store(k)], value=self.load(p)),
-                ast.Assign(targets=[self.store(p)], value=tmp),
-            ],
-            orelse=[],
-        )
-
-    def divide_row(self, k: ast.expr, c: ast.expr, factor: ast.expr) -> ast.stmt:
-        """Row k divided by the stashed pivot."""
-        if self.is_2d:
-            return self.columns(
-                [
-                    ast.Assign(
-                        targets=[self.store(k, c)], value=ast.BinOp(left=self.load(k, c), op=ast.Div(), right=factor)
-                    )
-                ]
-            )
-        return ast.Assign(targets=[self.store(k)], value=ast.BinOp(left=self.load(k), op=ast.Div(), right=factor))
-
-    def eliminate_row(self, r: ast.expr, k: ast.expr, c: ast.expr, factor: ast.expr) -> ast.stmt:
-        """Row r minus factor times row k."""
-        if self.is_2d:
-            return self.columns(
-                [
-                    ast.Assign(
-                        targets=[self.store(r, c)],
-                        value=ast.BinOp(
-                            left=self.load(r, c),
-                            op=ast.Sub(),
-                            right=ast.BinOp(left=factor, op=ast.Mult(), right=self.load(k, c)),
-                        ),
-                    )
-                ]
-            )
-        return ast.Assign(
-            targets=[self.store(r)],
-            value=ast.BinOp(
-                left=self.load(r), op=ast.Sub(), right=ast.BinOp(left=factor, op=ast.Mult(), right=self.load(k))
-            ),
-        )
+        ],
+    )
+    k_body = [
+        ast.Assign(targets=[aw.scratch("p")], value=aw.iterator("k")),
+        pivot_scan,
+        *swap,
+        ast.Assign(targets=[aw.scratch("factor")], value=aw.cell("k", "k")),
+        *divide,
+        other_rows,
+    ]
+    return range_for(f"{aw.prefix}_k", [n], k_body)
 
 
 #: Monotone counter for the ``inv`` scratch working-copy buffer. A fixed name
@@ -1033,109 +872,22 @@ def expand_linalg_inv(
             ],
         )
     )
-    # Outer loop over pivot column k = 0..n:
-    # 1) find pivot row p = k; for r in k+1..n: if |aw[r,k]| > |aw[p,k]|: p = r
-    # 2) swap rows p and k in aw and target
-    # 3) divide aw[k, :] and target[k, :] by aw[k, k]
-    # 4) for r != k: factor = aw[r, k]; aw[r, :] -= factor * aw[k, :];
-    #                target[r, :] -= factor * target[k, :]
-    aw = lambda r, c: ast.Subscript(value=name_(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
-    aw_store = lambda r, c: ast.Subscript(
-        value=name_(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
+
+    aw = GaussJordanSide("__inv", aw_name)
+    tgt = GaussJordanSide("__inv", target.id)
+
+    def on_both(body: list[ast.stmt]) -> ast.For:
+        return range_for("__inv_c", [n_ast], body)
+
+    out.append(
+        gauss_jordan_nest(
+            aw,
+            n_ast,
+            [on_both([*aw.swap(), *tgt.swap()])],
+            [on_both([*tgt.divide(), *aw.divide()])],
+            [on_both([*tgt.eliminate(), *aw.eliminate()])],
+        )
     )
-    tgt = lambda r, c: ast.Subscript(
-        value=name_(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load()
-    )
-    tgt_store = lambda r, c: ast.Subscript(
-        value=name_(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
-    )
-    # Every use below is a FRESH node from this factory, never a shared one: the Fortran
-    # emitter's loop-variable uniquifier mutates Name nodes in place, and __inv_r / __inv_c each
-    # bind THREE separate sibling/nested loops here (pivot_scan+elim_outer; swap_loop+pivot_div+
-    # elim_inner_loop). A shared node's rename from the first loop stuck on every later occurrence,
-    # so elim_outer's body kept reading pivot_scan's row and swap_loop's column -- silently wrong
-    # data (not a crash) that only showed up as a numeric mismatch, and one build compiled from
-    # freed-then-realloc'd memory besides. See FortranRenameTemps.visit_Name.
-    nm = lambda tag: name_(f"__inv_{tag}")
-    # Pivot search.
-    pivot_init = ast.Assign(targets=[store_("__inv_p")], value=nm("k"))
-    pivot_scan = range_for(
-        "__inv_r",
-        [ast.BinOp(left=nm("k"), op=ast.Add(), right=const_(1)), n_ast],
-        [
-            ast.If(
-                test=ast.Compare(
-                    left=ast.Call(func=name_("abs"), args=[aw(nm("r"), nm("k"))], keywords=[]),
-                    ops=[ast.Gt()],
-                    comparators=[ast.Call(func=name_("abs"), args=[aw(nm("p"), nm("k"))], keywords=[])],
-                ),
-                body=[ast.Assign(targets=[store_("__inv_p")], value=nm("r"))],
-                orelse=[],
-            )
-        ],
-    )
-    # Swap row p and row k in both aw and target.
-    swap_body: list[ast.stmt] = [
-        ast.Assign(targets=[store_("__inv_tmp")], value=aw(nm("k"), nm("c"))),
-        ast.Assign(targets=[aw_store(nm("k"), nm("c"))], value=aw(nm("p"), nm("c"))),
-        ast.Assign(targets=[aw_store(nm("p"), nm("c"))], value=nm("tmp")),
-        ast.Assign(targets=[store_("__inv_tmp")], value=tgt(nm("k"), nm("c"))),
-        ast.Assign(targets=[tgt_store(nm("k"), nm("c"))], value=tgt(nm("p"), nm("c"))),
-        ast.Assign(targets=[tgt_store(nm("p"), nm("c"))], value=nm("tmp")),
-    ]
-    swap_loop = range_for("__inv_c", [n_ast], swap_body)
-    # Divide pivot row by aw[k, k] -- stash it first since the loop overwrites
-    # aw[k, k] itself before every use.
-    pivot_div_stash = ast.Assign(targets=[store_("__inv_factor")], value=aw(nm("k"), nm("k")))
-    pivot_div_body_safe: list[ast.stmt] = [
-        ast.Assign(
-            targets=[tgt_store(nm("k"), nm("c"))],
-            value=ast.BinOp(left=tgt(nm("k"), nm("c")), op=ast.Div(), right=nm("factor")),
-        ),
-        ast.Assign(
-            targets=[aw_store(nm("k"), nm("c"))],
-            value=ast.BinOp(left=aw(nm("k"), nm("c")), op=ast.Div(), right=nm("factor")),
-        ),
-    ]
-    pivot_div = [
-        pivot_div_stash,
-        range_for("__inv_c", [n_ast], pivot_div_body_safe),
-    ]
-    # Eliminate other rows.
-    elim_factor = ast.Assign(targets=[store_("__inv_factor")], value=aw(nm("r"), nm("k")))
-    elim_body_inner: list[ast.stmt] = [
-        ast.Assign(
-            targets=[tgt_store(nm("r"), nm("c"))],
-            value=ast.BinOp(
-                left=tgt(nm("r"), nm("c")),
-                op=ast.Sub(),
-                right=ast.BinOp(left=nm("factor"), op=ast.Mult(), right=tgt(nm("k"), nm("c"))),
-            ),
-        ),
-        ast.Assign(
-            targets=[aw_store(nm("r"), nm("c"))],
-            value=ast.BinOp(
-                left=aw(nm("r"), nm("c")),
-                op=ast.Sub(),
-                right=ast.BinOp(left=nm("factor"), op=ast.Mult(), right=aw(nm("k"), nm("c"))),
-            ),
-        ),
-    ]
-    elim_inner_loop = range_for("__inv_c", [n_ast], elim_body_inner)
-    elim_outer = range_for(
-        "__inv_r",
-        [n_ast],
-        [
-            ast.If(
-                test=ast.Compare(left=nm("r"), ops=[ast.NotEq()], comparators=[nm("k")]),
-                body=[elim_factor, elim_inner_loop],
-                orelse=[],
-            )
-        ],
-    )
-    # K-loop body.
-    k_body = [pivot_init, pivot_scan, swap_loop, *pivot_div, elim_outer]
-    out.append(range_for("__inv_k", [n_ast], k_body))
     return out
 
 

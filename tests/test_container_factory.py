@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Unit tests for the container-launch factory: argv assembly, backend resolution, Harbor provider name."""
+"""Unit tests for the backend table: backend resolution, Harbor provider name, and the Apptainer installer."""
 
 import os
 import pathlib
@@ -11,7 +11,6 @@ import pytest
 
 from hpcagent_bench import config, containers
 from hpcagent_bench.config import ContainerRuntime as R
-from hpcagent_bench.config import Hardware
 
 
 @pytest.fixture(autouse=True)
@@ -25,36 +24,17 @@ def clean_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_load_backends_lists_every_backend() -> None:
     """Two OCI implementations that consume the shipped image directly, the SIF conversion
     target, the Alps container engine, and the no-container path."""
-    spellings, passthrough = containers.load_backends()
-    assert set(spellings) == {R.DOCKER, R.PODMAN, R.APPTAINER, R.CE, R.NATIVE}
-    assert "ANTHROPIC_API_KEY" in passthrough
-    assert spellings[R.APPTAINER].verb == ("exec",)
-    assert spellings[R.PODMAN].verb == ("run", "--rm", "--network", "host")
-    assert spellings[R.DOCKER].verb == ("run", "--rm", "--network", "host")
+    assert list(containers.load_backends()) == [R.DOCKER, R.PODMAN, R.APPTAINER, R.CE, R.NATIVE]
 
 
 def test_oci_is_a_standard_not_a_program() -> None:
-    """docker and podman are two IMPLEMENTATIONS of one standard: same verb, same
-    bind/workdir/env flags, same image form. Only the NVIDIA flag and the rootless property
-    differ, which is why `oci` is an alias over both rather than a runtime of its own. Nothing is
-    ever launched as `oci` -- selecting it always resolves to a program."""
-    spellings, _ = containers.load_backends()
-    assert R.OCI not in spellings  # a standard has no row: it is not a thing you exec
+    """docker and podman are two IMPLEMENTATIONS of one standard, which is why `oci` is an alias over both rather than a
+    runtime of its own. Nothing is ever launched as `oci`: selecting it always resolves to a program."""
+    assert R.OCI not in containers.load_backends()  # a standard has no row: it is not a thing you exec
     assert containers.family_members(R.OCI) == (R.DOCKER, R.PODMAN)
     assert containers.family_members(R.SIF) == (R.APPTAINER,)
     assert containers.family_members(R.CE) == (R.CE,)
     assert containers.family_members(R.NATIVE) == (R.NATIVE,)
-    podman, docker = spellings[R.PODMAN], spellings[R.DOCKER]
-    assert podman.verb == docker.verb
-    assert (podman.bind_flag, podman.workdir_flag, podman.env_flag) == (
-        docker.bind_flag,
-        docker.workdir_flag,
-        docker.env_flag,
-    )
-    assert podman.image_form == docker.image_form == "tag"
-    assert podman.gpu[Hardware.NVIDIA] != docker.gpu[Hardware.NVIDIA]  # the one flag spelling that differs
-    assert podman.rootless
-    assert not docker.rootless
 
 
 def test_a_family_name_resolves_to_whichever_flavour_is_installed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,55 +55,6 @@ def test_every_family_has_at_least_one_runtime() -> None:
     """A family nobody implements would resolve to nothing and fail far from its cause."""
     for family in containers.FAMILIES:
         assert containers.family_members(family), family
-
-
-def test_backend_image_forms() -> None:
-    """podman runs the OCI tag unconverted; apptainer needs a SIF and ce an EDF."""
-    spellings, _ = containers.load_backends()
-    assert spellings[R.PODMAN].image_form == "tag"
-    assert spellings[R.APPTAINER].image_form == "sif"
-    assert spellings[R.CE].image_form == "edf"
-
-
-def test_ce_is_a_different_shape_of_backend_not_just_different_flags() -> None:
-    """Alps' container engine has NO wrapper argv: the image comes from an EDF on the srun line
-    and the command runs unwrapped. Synthesising a wrapper it does not have would emit an argv
-    that cannot run, so local_run_command must hand the command back untouched."""
-    spellings, _ = containers.load_backends()
-    assert spellings[R.CE].kind == "srun_env"
-    assert spellings[R.CE].verb == ()
-    assert spellings[R.CE].bind_flag == ""
-    assert containers.local_run_command(["hpcagent-bench", "run"], backend=R.CE) == ["hpcagent-bench", "run"]
-    assert all(spellings[name].kind == "exec" for name in containers.EXEC_BACKENDS)
-
-
-def test_native_is_a_supported_backend_not_a_missing_one() -> None:
-    """A site with no container runtime still has to run. Saying so as a backend keeps that path
-    on the same seam as the others; it consumes no image, so asking it for one is an error."""
-    spellings, _ = containers.load_backends()
-    assert spellings[R.NATIVE].kind == "none"
-    assert spellings[R.NATIVE].image_form == ""
-    assert containers.local_run_command(["hpcagent-bench", "run"], backend=R.NATIVE) == ["hpcagent-bench", "run"]
-    with pytest.raises(ValueError, match="consumes no image"):
-        containers.default_image(R.NATIVE)
-
-
-def test_a_sif_is_never_the_distributed_artifact() -> None:
-    """An OCI image converts INTO a SIF or a SquashFS and neither converts back, so shipping a
-    converted form would strand every user of the other runtimes. Exactly one backend family
-    consumes the shipped image unconverted, and the shipped image is OCI."""
-    spellings, _ = containers.load_backends()
-    unconverted = {name for name, s in spellings.items() if s.image_form == "tag"}
-    assert unconverted == {R.DOCKER, R.PODMAN}
-    assert spellings[R.APPTAINER].image_form == "sif"
-    assert spellings[R.CE].image_form == "edf"
-
-
-def test_ce_has_no_image_reference_of_its_own() -> None:
-    """Its EDF names the image, so asking this factory for one is a category error, not a
-    default to invent."""
-    with pytest.raises(ValueError, match="no image reference"):
-        containers.default_image(R.CE, Hardware.CPU)
 
 
 def test_detect_backend_probes_path_rather_than_assuming(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,53 +86,6 @@ def test_the_config_rejects_an_unknown_backend() -> None:
             config.set_override("runtime.backend", dropped)
 
 
-def test_local_run_command_apptainer_cpu() -> None:
-    argv = containers.local_run_command(
-        ["python", "-m", "hpcagent_bench.cli", "agent"], backend=R.APPTAINER, hardware=Hardware.CPU, repo_root="/repo"
-    )
-    assert argv == [
-        "apptainer",
-        "exec",
-        "--env",
-        "HPCAGENT_BENCH_IMAGE=cpu",
-        "--bind",
-        "/repo:/repo",
-        "--pwd",
-        "/repo",
-        "/repo/hpcagent_bench-cpu.sif",
-        "python",
-        "-m",
-        "hpcagent_bench.cli",
-        "agent",
-    ]
-
-
-def test_local_run_command_podman_nvidia_gpu_tokens() -> None:
-    argv = containers.local_run_command(["run"], backend=R.PODMAN, hardware=Hardware.NVIDIA, repo_root="/r")
-    # podman run --rm --network host --device nvidia.com/gpu=all ...
-    assert argv[:5] == ["podman", "run", "--rm", "--network", "host"]
-    assert "--device" in argv
-    assert "nvidia.com/gpu=all" in argv
-    assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
-
-
-def test_local_run_command_podman_amd_gpu_tokens() -> None:
-    argv = containers.local_run_command(["x"], backend=R.PODMAN, hardware=Hardware.AMD, repo_root="/r")
-    assert "/dev/kfd" in argv
-    assert "--group-add" in argv
-    assert "keep-groups" in argv
-
-
-def test_local_run_command_docker_nvidia_uses_the_docker_gpu_spelling() -> None:
-    """docker and podman differ on exactly one thing that matters here: the NVIDIA flag."""
-    argv = containers.local_run_command(["run"], backend=R.DOCKER, hardware=Hardware.NVIDIA, repo_root="/r")
-    assert argv[:5] == ["docker", "run", "--rm", "--network", "host"]
-    assert "--gpus" in argv
-    assert "all" in argv
-    assert "nvidia.com/gpu=all" not in argv  # that is podman's spelling, not docker's
-    assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
-
-
 def test_harbor_provider_names_docker_podman_and_singularity() -> None:
     """Harbor (>= 0.23) drives docker, podman and singularity. ce has no provider, so it must raise
     rather than emit one Harbor would reject."""
@@ -210,39 +94,6 @@ def test_harbor_provider_names_docker_podman_and_singularity() -> None:
     assert containers.harbor_env_for(R.APPTAINER) == "singularity"
     with pytest.raises(ValueError, match="Harbor"):
         containers.harbor_env_for(R.CE)
-
-
-def test_default_image_sif_tag_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert containers.default_image(R.APPTAINER, Hardware.CPU, repo_root="/r") == "/r/hpcagent_bench-cpu.sif"
-    assert containers.default_image(R.PODMAN, Hardware.NVIDIA) == "hpcagent_bench:nvidia"
-    monkeypatch.setenv("HPCAGENT_BENCH_SIF", "/scratch/my.sif")
-    assert containers.default_image(R.APPTAINER, Hardware.CPU, repo_root="/r") == "/scratch/my.sif"
-    monkeypatch.setenv("HPCAGENT_BENCH_DOCKER_IMAGE", "reg/img:tag")
-    assert containers.default_image(R.PODMAN, Hardware.CPU) == "reg/img:tag"
-
-
-def test_collect_env_order_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk")  # a passthrough (non-HPCAGENT_BENCH) var
-    monkeypatch.setenv("HPCAGENT_BENCH_ZED", "z")  # dynamic HPCAGENT_BENCH_*, sorts last
-    monkeypatch.setenv("HPCAGENT_BENCH_ABC", "a")  # dynamic HPCAGENT_BENCH_*, sorts before ZED
-    pairs = containers.collect_env(Hardware.CPU)
-    assert pairs[0] == ("HPCAGENT_BENCH_IMAGE", "cpu")  # image first
-    assert ("ANTHROPIC_API_KEY", "sk") in pairs
-    keys = [k for k, _ in pairs]
-    assert keys.index("HPCAGENT_BENCH_ABC") < keys.index("HPCAGENT_BENCH_ZED")  # sorted
-    assert keys.count("HPCAGENT_BENCH_IMAGE") == 1  # no duplicate
-
-
-def test_collect_env_rejects_a_newline_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_BAD", "line1\nline2")
-    with pytest.raises(ValueError):
-        containers.collect_env(Hardware.CPU)
-
-
-def test_harbor_env_for_maps_and_raises() -> None:
-    assert containers.harbor_env_for(R.APPTAINER) == "singularity"
-    with pytest.raises(ValueError):
-        containers.harbor_env_for(R.CE)  # the CSCS container engine is launched directly, not via Harbor
 
 
 # install_apptainer retry: both fetches are live-network; subprocess/sleep stubbed, stays pure-unit
@@ -357,7 +208,7 @@ def test_ce_stays_its_own_family_even_though_it_is_podman_underneath() -> None:
     what a user selects to mean "whatever this machine has", and it must never resolve to the one
     backend with no local launch form, which fails without an EDF and only inside an allocation.
     The runtime is shared; the launch contract is not."""
-    spellings, _ = containers.load_backends()
+    spellings = containers.load_backends()
     assert containers.family_members(R.OCI) == (R.DOCKER, R.PODMAN)
     assert containers.family_members(R.CE) == (R.CE,)
     assert spellings[R.CE].kind == "srun_env"

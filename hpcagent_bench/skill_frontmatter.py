@@ -39,10 +39,12 @@ class SkillFrontmatter(pydantic.BaseModel):
 
 
 def split_frontmatter(text: str) -> tuple[SkillFrontmatter, str]:
-    """``text`` (a ``SKILL.md``) as its frontmatter and its body; a file without frontmatter is all body."""
+    """``text`` (a ``SKILL.md``) as its frontmatter and its body; a file without frontmatter is all body, and one that
+    never closes its opening ``---`` is refused: it would read as an unrestricted page."""
     if text.startswith("---"):
         rest = text.partition("\n")[2]
         raw, sep, body = rest.partition("\n---")
         if sep:
             return SkillFrontmatter.model_validate(yaml.safe_load(raw) or {}), body.partition("\n")[2]
+        raise ValueError("a page that opens with '---' must close the block")
     return SkillFrontmatter(), text

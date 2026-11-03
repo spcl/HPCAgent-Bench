@@ -12,7 +12,7 @@ import pathlib
 
 import pandas as pd
 
-from hpcagent_bench import paths, study_tags
+from hpcagent_bench import paths, study_tags, tags
 from hpcagent_bench.results import studies
 from hpcagent_bench.results.observation_columns import RowKind
 from hpcagent_bench.stats import cost, population, style
@@ -23,6 +23,7 @@ __all__ = [
     "build_parser",
     "draw",
     "main",
+    "series_label",
 ]
 
 
@@ -37,6 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="draw a '?' for a kernel a row has not attempted yet, left out of its geomean",
     )
     parser.add_argument("--canon-db", type=pathlib.Path, default=None, help="the canon table a baseline sweep records")
+    parser.add_argument(
+        "--canon-run",
+        action="append",
+        default=[],
+        metavar="RUN",
+        help="keep only this run's canon rows; repeatable, for columns swept in different runs",
+    )
     parser.add_argument(
         "--canon-columns", default="", help="comma-separated canon columns drawn as rows, e.g. pluto,dace_cpu"
     )
@@ -61,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--series-label",
         action="append",
         default=[],
+        type=series_label,
         metavar="KEY=LABEL",
         help="rename a row by column or setup; repeatable",
     )
@@ -71,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=pathlib.Path, default=paths.ROOT / paths.PLOTS_DIR / "kernel_speedups.pdf")
     cost.add_arguments(parser)
     return parser
+
+
+def series_label(item: str) -> tuple[str, str]:
+    """``KEY=LABEL`` of ``--series-label`` as ``(key, label)``."""
+    key, sep, label = item.partition("=")
+    if not sep:
+        raise argparse.ArgumentTypeError(f"expected KEY=LABEL, got {item!r}")
+    return key, label
 
 
 def draw(args: argparse.Namespace, card: cost.CostModel) -> None:
@@ -85,10 +102,10 @@ def draw(args: argparse.Namespace, card: cost.CostModel) -> None:
     if args.observations and not args.experiment:
         raise SystemExit("observations need --experiment (the setup prefix)")
     canon_frame = studies.read_table(args.canon_db, "canon") if args.canon_db is not None else pd.DataFrame()
+    if args.canon_run:
+        canon_frame = canon_frame.loc[canon_frame["run"].isin(args.canon_run)]
     tag_kernels = (
-        [line.strip() for line in args.tag_file.read_text().splitlines() if line.strip() and not line.startswith("#")]
-        if args.tag_file is not None
-        else setup_names.tag_of(canon_frame)
+        tags.split_names(args.tag_file.read_text()) if args.tag_file is not None else setup_names.tag_of(canon_frame)
     )
     if not tag_kernels:
         raise SystemExit("no tag kernel named: pass --tag-file or a --canon-db with rows")
@@ -120,7 +137,7 @@ def draw(args: argparse.Namespace, card: cost.CostModel) -> None:
         else None,
         baseline=baseline,
         title=args.title,
-        labels={key: style.title_case(label) for key, label in (item.split("=", 1) for item in args.series_label)},
+        labels={key: style.title_case(label) for key, label in args.series_label},
         offset=args.offset,
         mark_pending=args.mark_pending,
         baseline_fallback=args.baseline_fallback,

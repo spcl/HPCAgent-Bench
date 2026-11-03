@@ -5,6 +5,7 @@ import ast
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
+from hpcagent_bench.translators.numpyto_common.lib_nodes.linalg import cholesky_loop
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, HoistTables, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
@@ -29,20 +30,7 @@ def cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) -
     conjugates the second inner-product factor (``a = L L^H``) and takes the real part before ``sqrt``."""
     cj = "np.conj({0})" if hermitian else "{0}"
     diag = f"np.sqrt({p}_s.real)" if hermitian else f"np.sqrt({p}_s)"
-    jk, ik = f"{temp}[{p}_j, {p}_k]", f"{temp}[{p}_i, {p}_k]"
-    return [
-        f"{temp} = np.zeros(({n}, {n}), {a}.dtype)",
-        f"for {p}_j in range({n}):",
-        f"    {p}_s = {a}[{p}_j, {p}_j]",
-        f"    for {p}_k in range({p}_j):",
-        f"        {p}_s -= {jk} * {cj.format(jk)}",
-        f"    {temp}[{p}_j, {p}_j] = {diag}",
-        f"    for {p}_i in range({p}_j + 1, {n}):",
-        f"        {p}_t = {a}[{p}_i, {p}_j]",
-        f"        for {p}_k in range({p}_j):",
-        f"            {p}_t -= {ik} * {cj.format(jk)}",
-        f"        {temp}[{p}_i, {p}_j] = {p}_t / {temp}[{p}_j, {p}_j]",
-    ]
+    return [f"{temp} = np.zeros(({n}, {n}), {a}.dtype)", *cholesky_loop(temp, a, n, p, f"{p}_t", cj, diag)]
 
 
 def gauss_jordan_lines(aw: str, o: str, n: str, m: str | None, p: str) -> list[str]:

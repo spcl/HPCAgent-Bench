@@ -2,16 +2,20 @@
 # Move images between this machine and the registry, and make a verified candidate live.
 #
 #   registry.sh promote <role>... | --all     rename each role's verified candidate over its live name
-#   registry.sh push --check <role>... | --all  preflight only: sizes, flavor, tag (nothing published)
+#   registry.sh push --check <role>... | --all  preflight only: sizes, flavor, tag, CVE report (nothing published)
 #   registry.sh push <role>... | --all        publish each role's live OCI archive as REGISTRY_REPO:<tag>
 #   registry.sh pull <role> [sha256:<digest>] import the role's tag (or a pinned digest) as its squashfs
+#   registry.sh prune [--days N] <role>... | --all  remove unverified candidates and base-image copies idle N days (7)
 #
 # Roles, tags and file names come from images.env; --all means every role of this host's platform
 # (build_common.sh ce_platform) that has what the action needs. A push reads the OCI archive the build saved beside
-# the squashfs (ce_export_image): a squashfs is flattened and cannot stand in for one. Credentials come
-# only from the environment (REGISTRY_USER, REGISTRY_TOKEN), never a file. Only the portable latest
-# flavor is published: a native build or a tag not ending in -latest is refused. registry.sbatch runs
-# this on a compute node.
+# the squashfs (ce_export_image): a squashfs is flattened and cannot stand in for one, and a push that
+# succeeded replaces the archive with a .pushed marker naming the tag and digest; a role whose marker names
+# its target counts as done, with or without --check. Credentials come only from the environment
+# (REGISTRY_USER, REGISTRY_TOKEN), never a file. Only the portable latest flavor is published: a native build
+# or a tag not ending in -latest is refused. The preflight writes a CVE report beside the archive when trivy
+# is on PATH (.scan.txt, its first line the digest); it informs and never refuses. registry.sbatch runs this
+# on a compute node.
 set -Eeuo pipefail
 ulimit -c 0
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +24,7 @@ source "${HERE}/build_common.sh"
 MAX_LAYER_GB="${MAX_LAYER_GB:-10}"
 MAX_IMAGE_GB="${MAX_IMAGE_GB:-100}"
 
-usage() { sed -n '4,7p' "${BASH_SOURCE[0]}" >&2; exit 2; }
+usage() { sed -n '4,8p' "${BASH_SOURCE[0]}" >&2; exit 2; }
 
 # roles_for <column> <args>: the roles named, or with --all every CE_PLATFORM role with that column.
 roles_for() {
@@ -38,15 +42,36 @@ roles_for() {
 
 gb() { awk -v b="$1" 'BEGIN { printf "%.1f", b / 1073741824 }'; }
 
+# scan_archive <archive> <digest>: the preflight's CVE report, or a line saying why there is none.
+scan_archive() {
+    local report="${1%.oci.tar}.scan.txt"
+    command -v trivy >/dev/null || { echo "  no CVE report: trivy is not on PATH"; return 0; }
+    printf '%s\n' "$2" > "${report}"
+    if trivy image --quiet --input "$1" --scanners vuln --severity HIGH,CRITICAL >> "${report}"; then
+        echo "  CVE report ${report}: $(grep -c 'CRITICAL' "${report}" || true) lines name a CRITICAL"
+    else
+        echo "  WARNING: trivy failed on ${1##*/}; no CVE report" >&2
+        rm -f "${report}"
+    fi
+}
+
 # push_one <role> <check 0|1>: load the role's archive into a private store, check it, push it.
 push_one() {
-    local role="$1" check="$2" tag archive root local_tag total biggest target
+    local role="$1" check="$2" tag archive marker root local_tag total biggest target digest
     : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
     tag="$(ce_image "${role}" tag)" || { echo "${role}: images.env gives it no registry tag" >&2; return 1; }
     [[ "${tag}" == *-latest ]] || { echo "${role}: a published tag is <thing>-latest, got ${tag}" >&2; return 1; }
     archive="${CE_IMAGES}/$(ce_image "${role}" sqsh)"
     archive="${archive%.sqsh}.oci.tar"
-    [[ -f "${archive}" ]] || { echo "${role}: no ${archive}; build and promote the role first" >&2; return 1; }
+    if [[ ! -f "${archive}" ]]; then
+        marker="${archive%.oci.tar}.pushed"
+        [[ "$(cut -d' ' -f1 "${marker}" 2>/dev/null)" == "${REGISTRY_REPO}:${tag}" ]] || {
+            echo "${role}: no ${archive}; build and promote the role first" >&2
+            return 1
+        }
+        echo "${role}: already pushed as $(<"${marker}")"
+        return 0
+    fi
     root="${CE_TMPFS}/registry-$$-${role}"
     # podman's events and pause state go under XDG_RUNTIME_DIR; the login node's /run/user/<uid> does not
     # exist on a compute node, and the first podman call there fails (0 GB, no digest) instead of pushing.
@@ -80,9 +105,10 @@ with tarfile.open(sys.argv[1]) as tar:
     print(max((layer["size"] for layer in manifest.get("layers", [])), default=0))
 PY
 )"
+    digest="$("${pm[@]}" image inspect --format '{{.Digest}}' "${local_tag}")"
     printf '%s -> %s:%s\n  image %s GB (limit %s), largest layer %s GB (limit %s), digest %s\n' "${role}" \
-        "${REGISTRY_REPO}" "${tag}" "$(gb "${total}")" "${MAX_IMAGE_GB}" "$(gb "${biggest}")" "${MAX_LAYER_GB}" \
-        "$("${pm[@]}" image inspect --format '{{.Digest}}' "${local_tag}")"
+        "${REGISTRY_REPO}" "${tag}" "$(gb "${total}")" "${MAX_IMAGE_GB}" "$(gb "${biggest}")" "${MAX_LAYER_GB}" "${digest}"
+    scan_archive "${archive}" "${digest}"
     local rc=0
     if awk -v b="${total}" -v m="${MAX_IMAGE_GB}" 'BEGIN { exit !(b > m * 1073741824) }'; then
         echo "  refusing: the image exceeds ${MAX_IMAGE_GB} GB" >&2; rc=1
@@ -102,7 +128,11 @@ PY
         "${pm[@]}" tag "${local_tag}" "${target}"
         # OCI manifests, forced: podman would otherwise keep the source's docker v2s2 type.
         "${pm[@]}" push --format oci "${target}" || rc=1
-        [[ "${rc}" -ne 0 ]] || echo "  PUSHED ${target}"
+        if [[ "${rc}" -eq 0 ]]; then
+            echo "  PUSHED ${target}"
+            printf '%s %s\n' "${target}" "${digest}" > "${archive%.oci.tar}.pushed"
+            rm -f -- "${archive}"
+        fi
     fi
     podman unshare rm -rf "${root}" 2>/dev/null || rm -rf "${root}"
     return "${rc}"
@@ -155,13 +185,41 @@ promote_one() {
     for ext in "" .digest .sha256; do
         [[ ! -e "${cand}${ext}" ]] || mv -f -- "${cand}${ext}" "${live}${ext}"
     done
+    # What the old image's push left says nothing about this one, and an old archive would publish the wrong image.
+    rm -f -- "${live%.sqsh}.oci.tar" "${live%.sqsh}.pushed" "${live%.sqsh}.scan.txt"
     if [[ -e "${cand%.sqsh}.oci.tar" ]]; then
         mv -f -- "${cand%.sqsh}.oci.tar" "${live%.sqsh}.oci.tar"
-    else
+    elif [[ "${CE_IMAGE_FLAVOR}" != native ]]; then
         echo "  WARNING: no OCI archive; this role cannot be pushed without a rebuild" >&2
     fi
     rm -f -- "${marker}"
     PROMOTED+=("${live##*/}")
+}
+
+# prune_candidate <role> <days>: a candidate no job verified and nobody touched for <days> is an abandoned build. A
+# verified one waits for its promote, and a build in progress keeps its files fresh.
+prune_candidate() {
+    local cand
+    : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
+    cand="${CE_IMAGES}/$(ce_image "$1" candidate)"
+    [[ ! -e "${cand}.verified" ]] || return 0
+    ce_refuse_mounted "${cand}"
+    find "${CE_IMAGES}" -maxdepth 1 -type f -mtime +"$2" \( -name "${cand##*/}" -o -name "${cand##*/}.digest" \
+        -o -name "${cand##*/}.sha256" -o -name "$(basename "${cand%.sqsh}").oci.tar" \) -print -delete
+}
+
+# prune_base_images <days>: drop the ce_cache_base_image copies no Dockerfile's `ARG BASE_IMAGE` names any more.
+prune_base_images() {
+    local keep="" dockerfile cache entry
+    for dockerfile in "${HERE}"/*/Dockerfile; do
+        keep+="$(ce_dockerfile_base "${dockerfile}" | tr '/:@' '___')"$'\n'
+    done
+    for cache in "${SCRATCH:?}"/base-images "${SCRATCH}"/base-images-*; do
+        [[ -d "${cache}" ]] || continue
+        while read -r entry; do
+            grep -qxF "${entry##*/}" <<<"${keep}" || { echo "removing ${entry}"; rm -rf -- "${entry}"; }
+        done < <(find "${cache}" -mindepth 1 -maxdepth 1 -type d -mtime +"$1")
+    done
 }
 
 action="${1:-}"
@@ -188,6 +246,12 @@ case "${action}" in
         ;;
     pull)
         pull_one "${1:?usage: registry.sh pull <role> [sha256:<digest>]}" "${2:-}" || failed=1
+        ;;
+    prune)
+        days=7
+        [[ "${1:-}" != --days ]] || { days="$2"; shift 2; }
+        for role in $(roles_for candidate "$@"); do prune_candidate "${role}" "${days}" || failed=$((failed + 1)); done
+        prune_base_images "${days}"
         ;;
     *) usage ;;
 esac

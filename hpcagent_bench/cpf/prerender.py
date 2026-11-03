@@ -390,13 +390,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return render_command(args)
     target, hints = cpf_cache.Target.parse(args.target), cpf_cache.HintDetail.parse(args.hints)
     if args.command == "check":
-        kernels = [k for k in args.kernels.split(",") if k.strip()]
+        # Stripped like the render and verify commands: a space after a comma is a spelling of the same
+        # list, not a kernel whose name starts with one.
+        kernels = [k.strip() for k in args.kernels.split(",") if k.strip()]
         misses = missing(args.cache, kernels, args.language, args.precision, target, hints, args.verified)
         for line in misses:
             print(line)
         return 1 if misses else 0
     try:
-        print(stage(args.cache, args.kernel, args.language, args.precision, hints, args.dest, target, args.name))
+        print(
+            stage(args.cache, args.kernel.strip(), args.language, args.precision, hints, args.dest, target, args.name)
+        )
     except cpf_cache.CacheMiss as exc:
         print(f"cpf_prerender: {exc}", file=sys.stderr)
         return 1

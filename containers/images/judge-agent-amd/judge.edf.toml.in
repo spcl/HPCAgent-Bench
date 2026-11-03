@@ -23,7 +23,7 @@ mounts = [
     # The node's /dev/shm with exec (the CE mounts the container's own noexec): the launch venv's home.
     "/dev/shm:/opt/node-shm",
     # The image carries the editable-install hook of hpcagent_bench and none of its code
-    # (containers/images/lib/package_hook.sh): the checkout that renders this EDF is the package. A run rewrites
+    # (containers/images/lib/launch_venv.sh): the checkout that renders this EDF is the package. A run rewrites
     # the source to its own checkout.
     "<hpcagent_bench_checkout>:/opt/hpcagent-bench",
 ]
@@ -36,8 +36,6 @@ writable = true
 entrypoint = true
 
 [env]
-# uv's wheel cache for the launch venv, on a filesystem every node mounts.
-UV_CACHE_DIR = "${SCRATCH}/.cache/uv"
 FI_CXI_RX_MATCH_MODE = "software"
 FI_MR_CACHE_MONITOR = "disabled"
 # FI_PROVIDER is deliberately NOT set: this image also runs MPI, and MPICH inherits it and

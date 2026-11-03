@@ -6,7 +6,7 @@ from collections.abc import Callable
 from functools import lru_cache
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, walk_nodes
-from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import expand_definitions
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE, expand_definitions
 
 __all__ = [
     "FOLD_OPS",
@@ -40,11 +40,6 @@ def resolve_shape_attr_tokens(tokens: tuple[str, ...], parsed_seed: dict[str, tu
         return m.group(0)
 
     return tuple(re.sub(r"(\w+)\.shape\[(\d+)\]", repl_, str(tok)) for tok in tokens)
-
-
-#: Word-boundary matcher for a single identifier token inside a shape
-#: string (so substituting ``K`` does not also hit ``C_out`` / ``__inl1_K``).
-IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
 def binding_counts(fn: ast.FunctionDef) -> dict[str, int]:

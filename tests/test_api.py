@@ -181,3 +181,11 @@ def test_container_mode_scores_via_a_running_judge(make_judge: Callable[..., tup
     assert isinstance(s, Score)
     assert s.correct
     assert s.speedup > 0
+
+
+def test_run_config_turns_spellings_into_members() -> None:
+    """``mode`` is compared with ``is``, and ``"auto"`` is the boundary spelling of the per-track baseline."""
+    cfg = api.RunConfig(mode="container", baseline="auto", preset="S")
+    assert (cfg.mode, cfg.baseline, cfg.preset) == (api.RunMode.CONTAINER, None, Preset.S)
+    with pytest.raises(ValueError, match="not a"):
+        api.RunConfig(mode="containre")

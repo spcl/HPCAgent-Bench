@@ -28,20 +28,26 @@ CSV="${OUT_DIR}/${ROLE}-$(hostname).csv"
 STOP=0
 trap 'STOP=1' TERM INT
 
+# A wedged GPU driver can hang its smi tool forever, which would stall this monitor at startup (no
+# probe answer, so no header and no CSV at all) or mid-run (no more rows, silently): cap every smi
+# call (SMI_TIMEOUT seconds) so a hang costs one probe or one blank sample, and the loop keeps sampling.
+# The bound is generous because a healthy slow startup probe that times out loses the GPU columns for the whole CSV.
+smi() { timeout -k 5 "${SMI_TIMEOUT:-30}" "$@"; }
+
 # Decide once which GPU tool works and how many GPUs it reports; per-sample code
 # below just calls that one tool, so a missing/broken rocm-smi never costs a second
 # failing fork every 5s, and the header (below) stays fixed for the life of the CSV.
 GPU_TOOL=none
 NGPU=0
 if command -v rocm-smi >/dev/null 2>&1; then
-    probe=$(rocm-smi --showuse --showmeminfo vram --json 2>/dev/null)
+    probe=$(smi rocm-smi --showuse --showmeminfo vram --json 2>/dev/null)
     if [ $? -eq 0 ]; then
         GPU_TOOL=rocm
         NGPU=$(printf '%s' "${probe}" | grep -oE '"GPU use \(%\)"' | wc -l | tr -d ' ')
     fi
 fi
 if [ "${GPU_TOOL}" = none ] && command -v amd-smi >/dev/null 2>&1; then
-    probe=$(amd-smi metric -u --json 2>/dev/null | tr -s '[:space:]' ' ')
+    probe=$(smi amd-smi metric -u --json 2>/dev/null | tr -s '[:space:]' ' ')
     if [ $? -eq 0 ]; then
         GPU_TOOL=amdsmi
         NGPU=$(printf '%s' "${probe}" | grep -oE '"gfx_activity"' | wc -l | tr -d ' ')
@@ -55,7 +61,13 @@ while [ "${i}" -lt "${NGPU}" ]; do
     HEADER="${HEADER},gpu${i}_pct"
     i=$((i + 1))
 done
-[ -s "${CSV}" ] || echo "${HEADER}" > "${CSV}"
+# A relaunch appends to the file it finds, whose header stays: its width decides every row's.
+if [ -s "${CSV}" ]; then
+    IFS= read -r kept_header < "${CSV}"
+    NGPU=$(printf '%s' "${kept_header}" | tr ',' '\n' | grep -cE '^gpu[0-9]+_pct$')
+else
+    echo "${HEADER}" > "${CSV}"
+fi
 
 cpu_fields() {
     # prints the numeric fields of the "cpu " line from /proc/stat, space separated
@@ -94,7 +106,7 @@ sample_gpu() {
     blank=$(per_gpu_list < /dev/null)
     case "${GPU_TOOL}" in
         rocm)
-            json=$(rocm-smi --showuse --showmeminfo vram --json 2>/dev/null) || { gpu_row "" "" "" "${blank}"; return; }
+            json=$(smi rocm-smi --showuse --showmeminfo vram --json 2>/dev/null) || { gpu_row "" "" "" "${blank}"; return; }
             util=$(printf '%s' "${json}" | grep -oE '"GPU use \(%\)": *"?[0-9.]+' \
                 | grep -oE '[0-9.]+' | awk '{s += $1; n++} END {if (n > 0) printf "%.1f", s / n}')
             vu=$(printf '%s' "${json}" | grep -oE '"VRAM Total Used Memory \(B\)": *"?[0-9]+' \
@@ -107,7 +119,7 @@ sample_gpu() {
             ;;
         amdsmi)
             # metric -u is usage-only: no vram fields come back from this call
-            json=$(amd-smi metric -u --json 2>/dev/null | tr -s '[:space:]' ' ') || { gpu_row "" "" "" "${blank}"; return; }
+            json=$(smi amd-smi metric -u --json 2>/dev/null | tr -s '[:space:]' ' ') || { gpu_row "" "" "" "${blank}"; return; }
             util=$(printf '%s' "${json}" | grep -oE '"gfx_activity": *\{ *"value": *[0-9.]+' \
                 | grep -oE '[0-9.]+' | awk '{s += $1; n++} END {if (n > 0) printf "%.1f", s / n}')
             per=$(printf '%s' "${json}" | grep -oE '"gfx_activity": *\{ *"value": *[0-9.]+' \

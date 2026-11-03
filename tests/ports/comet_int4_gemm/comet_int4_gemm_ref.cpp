@@ -76,9 +76,6 @@
 
 namespace {
 
-constexpr int kGm2BitUnknown = 2; // CoMet's GM_2BIT_UNKNOWN; not excluded on this
-                                  // port's default (--sparse no) path.
-
 // cnt_1(v) = number of 1-bits among v's 2 bits; cnt_0 = 2 - cnt_1.
 // (src/tc_in.i.hh:202-210, the value tc_buf_write_kernel_ writes as an int4 operand.)
 inline int Cnt1(unsigned v) { return int(v & 1u) + int((v >> 1) & 1u); }

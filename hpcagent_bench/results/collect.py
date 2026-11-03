@@ -126,7 +126,7 @@ def copy_db(src: pathlib.Path, dst: pathlib.Path) -> None:
     """A consistent snapshot of ``src`` at ``dst`` (read-only), else a copy with its -wal/-shm sidecars."""
     try:
         with (
-            contextlib.closing(results_db.connect_ro(src, timeout=60)) as source,
+            contextlib.closing(results_db.connect_ro(src, timeout=60, finished=results_db.finished_db(src))) as source,
             contextlib.closing(sqlite3.connect(dst)) as target,
         ):
             source.backup(target)
@@ -212,9 +212,11 @@ def verify(out: pathlib.Path, *, threads: int = 8) -> list[str]:
     sums = out / SUMS
     if not sums.is_file():
         return [f"{sums} missing"]
-    expected = {rel: digest for digest, rel in (line.split("  ", 1) for line in sums.read_text().splitlines() if line)}
+    lines = [line.partition("  ") for line in sums.read_text().splitlines() if line]
+    expected = {rel: digest for digest, sep, rel in lines if sep}
     present = {p.relative_to(out).as_posix(): p for p in files_of(out)}
-    problems = [f"missing {rel}" for rel in sorted(expected.keys() - present.keys())]
+    problems = [f"malformed {SUMS} line: {digest}" for digest, sep, _ in lines if not sep]
+    problems += [f"missing {rel}" for rel in sorted(expected.keys() - present.keys())]
     problems += [f"not in {SUMS}: {rel}" for rel in sorted(present.keys() - expected.keys())]
     common = sorted(expected.keys() & present.keys())
     with concurrent.futures.ThreadPoolExecutor(threads) as pool:
@@ -228,7 +230,8 @@ def verify(out: pathlib.Path, *, threads: int = 8) -> list[str]:
 
 def quick_check(db: pathlib.Path) -> list[str]:
     try:
-        with contextlib.closing(results_db.connect_ro(db)) as conn:
+        # A collected directory has no writer, and a sidecar in it would fail the next verify.
+        with contextlib.closing(results_db.connect_ro(db, finished=True)) as conn:
             result = [row[0] for row in conn.execute("PRAGMA quick_check")]
     except sqlite3.Error as exc:
         return [str(exc)]
