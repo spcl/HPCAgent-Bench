@@ -146,7 +146,7 @@ Filled in when the release is cut; nothing below is claimed until its row says s
 | Source commit, tag | pending |
 | Release CI | pending: the `release-v0.5.0` pull request run on the final commit |
 | Review findings | all 930 closed; the limits of the last 18 are under Known limits |
-| Pins: dace, NestForge, Alloy | `7c06b5194`, `c1989d5`, `b922256` |
+| Pins: dace, NestForge, Alloy | `7c06b5194`, `bc07961`, `d9919a8` |
 | Images, GH200 NVIDIA | pending: rebuild, verify, promote, digest |
 | Images, AMD | judge-agent, judge, sglang and vllm verified, promoted, pushed; verifier pending |
 | Images, x86-64 CPU and NVIDIA | judge-agent images verified, promoted, pushed; verifier pending |
