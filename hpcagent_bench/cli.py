@@ -641,9 +641,17 @@ def cmd_run_framework(args: argparse.Namespace) -> int:
         if failures == NO_ROWS:
             return 2
         return 1 if failures else 0
-    from hpcagent_bench.support.collect.sweep import CanonTarget, run_framework_sweep
+    from hpcagent_bench.support.collect.sweep import CanonTarget, LedgerTarget, run_framework_sweep
 
     canon = CanonTarget.default(args.canon_db, args.canon_run)
+    ledger_target = None
+    if not args.no_ledger:
+        from hpcagent_bench.support.collect import ledger
+
+        options = {k: v for k, v in vars(args).items() if k != "func"}
+        ledger_target = LedgerTarget(
+            args.ledger_db, ledger.capture(sys.argv, options), args.canon_run
+        )
 
     preset = resolve_preset(args.preset)
     failed = run_framework_sweep(
@@ -659,6 +667,7 @@ def cmd_run_framework(args: argparse.Namespace) -> int:
         shard=parse_shard(args.shard),
         canon=canon,
         opt_reports_dir=args.opt_reports,
+        ledger_target=ledger_target,
     )
     # A sweep in which every kernel died is a failure; ``--ignore-errors`` opts out.
     return 1 if failed and not args.ignore_errors else 0
@@ -1126,6 +1135,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="the run label every canon row carries; with --summarize, report on that run only",
     )
+    rf.add_argument(
+        "--ledger-db",
+        type=pathlib.Path,
+        default=RESULTS_DIR / "ledger.db",
+        help="record every measured impl, its raw timing samples, the command and the code into this ledger file "
+        "(not an hb-results DB; canon is unaffected)",
+    )
+    rf.add_argument("--no-ledger", action="store_true", help="do not write the ledger")
     rf.add_argument(
         "--opt-reports",
         default=None,
