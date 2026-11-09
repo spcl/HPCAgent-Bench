@@ -11,6 +11,7 @@ layout) through the judge's own grading path instead (docs/sparse_abi.md).
 canon DB (:mod:`~hpcagent_bench.support.collect.canon_db`); ``--summarize`` reports on that DB
 (:func:`summarize`)."""
 
+import importlib.util
 import math
 import os
 import pathlib
@@ -18,6 +19,7 @@ import statistics
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -33,7 +35,7 @@ from hpcagent_bench.harness import recording
 from hpcagent_bench.kernel_key import kernel_stem
 from hpcagent_bench.spec import KERNELS, BenchSpec
 from hpcagent_bench.support.bindings import binding_from_spec
-from hpcagent_bench.support.collect import canon_db
+from hpcagent_bench.support.collect import canon_db, ledger
 from hpcagent_bench.support.helpers.sparse.abi import BLOCK_FORMAT, LayoutRefused
 from hpcagent_bench.vocabulary import FRAMEWORKS, Arch
 
@@ -43,6 +45,7 @@ __all__ = [
     "SPARSE_OK_STATUSES",
     "CanonTarget",
     "SparseCase",
+    "LedgerTarget",
     "best_impl_row",
     "best_ms",
     "discover_sparse_benches",
@@ -154,6 +157,7 @@ def run_framework_sweep(
     canon: "CanonTarget | None" = None,
     distributed: bool = False,
     opt_reports_dir: str | None = None,
+    ledger_target: "LedgerTarget | None" = None,
 ) -> list[str]:
     """Run the ``kernel`` selection under ``framework``, forking each kernel; returns the kernels whose
     child failed. ``skip_existing`` drops kernels already recorded.
@@ -200,6 +204,8 @@ def run_framework_sweep(
         # Recorded per kernel, so an interrupted multi-hour sweep keeps its rows.
         if canon is not None:
             canon.record(sweep_rows(benchname, framework_names, preset, datatype or "float64", r))
+        if ledger_target is not None:
+            ledger_target.record(ledger_rows(benchname, framework_names, preset, datatype or "float64", r))
         # Reports only after a successful child, read in this unforked process from the shared filesystem.
         if opt_reports_dir and r.ok:
             from hpcagent_bench import opt_reports as opt_reports_mod
@@ -250,6 +256,30 @@ class CanonTarget:
                 for row in rows
             ],
         )
+
+
+def kernel_dir(benchname: str) -> pathlib.Path | None:
+    """The directory holding ``benchname``'s ``<kernel>_numpy.py``, ``None`` when it cannot be located."""
+    try:
+        spec = importlib.util.find_spec(Benchmark(benchname).impl_module("numpy"))
+    except (ImportError, ValueError):
+        return None
+    return pathlib.Path(spec.origin).parent if spec is not None and spec.origin else None
+
+
+@dataclass(frozen=True)
+class LedgerTarget:
+    """Where a sweep records its measurements and samples (:mod:`~hpcagent_bench.support.collect.ledger`), under the
+    invocation it is part of."""
+
+    db: pathlib.Path
+    invocation: "ledger.Invocation"
+    run: str = ""
+
+    def record(self, rows: Sequence[dict[str, object]]) -> int:
+        """Record ``rows`` (all of one kernel) with the code they ran: the kernel's files and the shared ones."""
+        sources = ledger.read_sources(kernel_dir(str(rows[0]["kernel"]))) if rows else {}
+        return ledger.record(self.db, self.invocation, self.run, [{**row, "sources": sources} for row in rows])
 
 
 #: :func:`summarize` result when no row exists; negative, so it never equals a failure count.
@@ -320,6 +350,47 @@ def sweep_rows(
                 ]
             )
         )
+    return rows
+
+
+def ledger_rows(
+    benchname: str, framework_names: Sequence[str], preset: Preset, datatype: str, result: RunResult
+) -> list[dict[str, object]]:
+    """Ledger rows for one ``run_forked(run_one, ...)`` outcome: like :func:`sweep_rows` but one row per impl (none
+    is dropped), each with its raw ``samples`` as ``(host_ms, device_ms)`` pairs. ``median_ms`` is
+    :func:`best_ms`, and ``median_source`` names the series it came from."""
+    base = {"preset": preset.text, "datatype": datatype, "kernel": benchname}
+    if not result.ok:
+        why = forked_failure_reason(result)
+        return [
+            {**base, "measurement_id": str(uuid.uuid4()), "column": name, "status": "crash", "error": why, "samples": []}
+            for name in framework_names
+        ]
+    rows: list[dict[str, object]] = []
+    for name in framework_names:
+        per_impl: dict[str, Any] = (result.result or {}).get(name) or {}
+        if not per_impl:
+            rows.append({**base, "measurement_id": str(uuid.uuid4()), "column": name, "status": "ok", "samples": []})
+        for impl_name, timing in per_impl.items():
+            host, device = list(timing.get("python") or []), list(timing.get("native") or [])
+            width = max(len(host), len(device))
+            rows.append(
+                {
+                    **base,
+                    "measurement_id": str(uuid.uuid4()),
+                    "column": name,
+                    "impl": impl_name,
+                    "status": "ok",
+                    "median_ms": best_ms(device, host),
+                    "median_source": "native" if any(device) else "python" if any(host) else "",
+                    "validated": None if "validated" not in timing else int(bool(timing["validated"])),
+                    "failure": timing.get("failure") or "",
+                    "samples": [
+                        (host[i] if i < len(host) else None, device[i] if i < len(device) else None)
+                        for i in range(width)
+                    ],
+                }
+            )
     return rows
 
 
