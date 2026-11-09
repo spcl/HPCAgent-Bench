@@ -23,10 +23,59 @@ MARKER = "dphpc26_ledger"
 
 #: The tables a snapshot holds, exactly (no others, no triggers, no views).
 TABLES = {"source_files", "measurements", "timing_samples"}
+#: The ledger's tables, a copy of ``SCHEMA`` in hpcagent_bench/support/collect/ledger.py (this file cannot import the
+#: package): keep the two in step. Only ``init_team_db`` uses it; a merge copies the columns both sides have.
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS source_files (
+    hash    TEXT PRIMARY KEY,               -- sha256 of content, UTF-8
+    content TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS measurements (
+    measurement_id TEXT PRIMARY KEY,        -- uuid4, made when the row is built, so a write retry keeps it
+    invocation_id  TEXT NOT NULL,           -- uuid4 of one `run-framework` command
+    started_at     TEXT NOT NULL,           -- the command's start, UTC ISO 8601
+    user           TEXT NOT NULL DEFAULT '',-- the OS user who ran the command (getpass.getuser)
+    command        TEXT NOT NULL,           -- JSON list: sys.argv (not the shell line that launched it)
+    metadata       TEXT NOT NULL,           -- JSON, layout `format` 1 (capture)
+    sources        TEXT NOT NULL DEFAULT '{}',
+                                            -- JSON {path relative to the checkout: source_files.hash | null}
+    run            TEXT NOT NULL DEFAULT '',-- the --canon-run label, as in canon.run
+    "column"       TEXT NOT NULL,           -- the framework column
+    kernel         TEXT NOT NULL,
+    preset         TEXT NOT NULL,
+    datatype       TEXT NOT NULL,
+    impl           TEXT NOT NULL DEFAULT '',
+    median_ms      REAL,                    -- NULL = no time
+    median_source  TEXT NOT NULL DEFAULT '',-- 'native' (device) or 'python' (host): the series median_ms is of
+    validated      INTEGER CHECK (validated IN (0, 1)),
+    status         TEXT NOT NULL CHECK (status IN ('ok', 'crash', 'timeout')),
+    failure        TEXT NOT NULL DEFAULT '',
+    error          TEXT NOT NULL DEFAULT '',
+    node           TEXT NOT NULL DEFAULT '',
+    gpu            TEXT NOT NULL DEFAULT '',
+    ts_ms          INTEGER NOT NULL,
+    UNIQUE (invocation_id, "column", kernel, preset, datatype, impl)
+);
+CREATE TABLE IF NOT EXISTS timing_samples (
+    measurement_id TEXT NOT NULL REFERENCES measurements (measurement_id) ON DELETE CASCADE,
+    sample_index   INTEGER NOT NULL,        -- 0-based, execution order; warmups are not retained
+    host_ms        REAL,                    -- NULL = not measured, never 0
+    device_ms      REAL,                    -- CUDA events; NULL on a column without them
+    PRIMARY KEY (measurement_id, sample_index)
+);
+"""
+
 #: Limits recv enforces.
 MAX_BYTES = 64 * 1024 * 1024  # one snapshot
 MAX_PENDING = 20  # snapshots waiting in the inbox from one sender
 MAX_INBOX_BYTES = 512 * 1024 * 1024  # the whole inbox
+
+
+def init_team_db() -> None:
+    """Create ``team.db`` with empty tables unless it exists, so it can be read before the first merge."""
+    ROOT.mkdir(parents=True, exist_ok=True)
+    with contextlib.closing(sqlite3.connect(TEAM_DB)) as conn:
+        conn.executescript(SCHEMA)
 
 
 def check_snapshot(path: pathlib.Path) -> str | None:

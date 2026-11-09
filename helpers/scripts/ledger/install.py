@@ -13,7 +13,9 @@ The key defaults to ``~/.ssh/dphpc26_ledger_shared`` and the team to :data:`TEAM
   (``restrict`` switches off shells, forwarding and ptys). The public key is derived from the private one. The line
   ends in the word ``dphpc26_ledger``, which is how a later run finds and replaces it; every other line is kept, and the
   old file is saved as ``authorized_keys.dphpc26_ledger.bak`` first;
-* writes the list of accounts ``send`` delivers to."""
+* creates ``team.db`` with empty tables, so it can be read before the first merge;
+* writes the list of accounts ``send`` delivers to;
+* appends the bin directory to PATH at the end of ``~/.profile`` (once; a line ending in ``# dphpc26_ledger`` marks it)."""
 
 import argparse
 import os
@@ -80,6 +82,19 @@ def install_authorized_key(public_key: str) -> None:
     os.replace(scratch, authorized)
 
 
+def add_to_path() -> bool:
+    """Append the bin directory to PATH at the end of ``~/.profile`` unless it is there; whether it was added."""
+    profile = pathlib.Path.home() / ".profile"
+    text = profile.read_text(encoding="utf-8") if profile.exists() else ""
+    if any(line.rstrip().endswith(f"# {common.MARKER}") for line in text.splitlines()):
+        return False
+    separator = "" if not text or text.endswith("\n") else "\n"
+    profile.write_text(
+        f'{text}{separator}export PATH="$HOME/dphpc26_ledger/bin:$PATH"  # {common.MARKER}\n', encoding="utf-8"
+    )
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--key", type=pathlib.Path, default=DEFAULT_KEY, help="the team's shared PRIVATE key file")
@@ -88,7 +103,10 @@ def main() -> int:
 
     install_tools()
     install_authorized_key(install_key(args.key))
+    common.init_team_db()
     common.TEAM_FILE.write_text("\n".join(args.team) + "\n", encoding="utf-8")
+    if add_to_path():
+        print("added the bin directory to PATH in ~/.profile (open a new login shell, or: . ~/.profile)")
 
     if pathlib.Path.home().stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         print("warning: your home directory is group- or world-writable; sshd will ignore authorized_keys")
