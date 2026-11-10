@@ -214,9 +214,7 @@ def subtrees(tree: ast.AST) -> collections.Counter[str]:
     def visit(node: ast.AST) -> tuple[str, int]:
         children = [visit(child) for child in ast.iter_child_nodes(node)]
         size = 1 + sum(count for _, count in children)
-        scalars = [
-            (f, getattr(node, f)) for f in node._fields if isinstance(getattr(node, f), (str, int, float, complex))
-        ]
+        scalars = [(f, v) for f, v in ast.iter_fields(node) if isinstance(v, (str, int, float, complex))]
         label = f"{type(node).__name__}{scalars!r}|" + "|".join(digest for digest, _ in children)
         digest = hashlib.sha256(label.encode()).hexdigest()[:16]
         if size >= MIN_SUBTREE:

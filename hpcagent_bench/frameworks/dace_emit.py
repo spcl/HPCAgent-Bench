@@ -136,8 +136,6 @@ def emit_program_sources(
     )
     sdfg = copy.deepcopy(sdfg)
     sdfg.name = name or f"{sdfg.name}_{pipe.name}"  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
-    if not hasattr(sdfg, "generate_code"):
-        raise DaceEmitError("this DaCe has no SDFG.generate_code(); upgrade the pinned DaCe tree")
     with _pipeline_config(pipe.config), _backend_config(target):
         try:
             pipe.transform(sdfg, ctx)

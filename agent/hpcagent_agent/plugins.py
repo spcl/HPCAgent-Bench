@@ -471,7 +471,7 @@ def import_hook(plugin: Plugin, target: str) -> Callable[[Mapping[str, object]],
             raise
         import_package(plugin)
         holder = importlib.import_module(f"{plugin.package}.{module}")
-    function = getattr(holder, attr, None)
+    function = holder.__dict__.get(attr)
     if not callable(function):
         raise ValueError(f"plugin {plugin.name!r}: {module}:{attr} is no callable")
     return function
