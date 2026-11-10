@@ -13,6 +13,7 @@ import dace
 import pytest
 
 from hpcagent_bench.cpf import canonical as cpf_canonical
+from hpcagent_bench.cpf.cache import CACHE_ENV as CPF_CACHE_ENV
 from hpcagent_bench.frameworks import Benchmark
 from hpcagent_bench.frameworks.dace_framework import DaceFramework, pipeline_canonicalize
 from hpcagent_bench.spec import BenchSpec
@@ -65,6 +66,23 @@ def test_the_canon_column_reads_the_canonical_sdfg_the_cpf_prerender_caches(
     assert loaded.to_json() == produced.to_json()
     # finalize expands library nodes into nested SDFGs of their own, so the marker is the top-level graph's.
     assert loaded.openmp_array_reductions, "the cached graph is not canonical"
+
+
+def test_the_canon_column_drops_a_returned_copy_of_an_argument(monkeypatch: pytest.MonkeyPatch) -> None:
+    """vector_stencil_4d_vc returns its ``out_grid`` argument: as in the native bridge, the timed canon column must
+    not pay for copying it into ``__return``."""
+    monkeypatch.delenv(CPF_CACHE_ENV, raising=False)
+    framework = DaceFramework("dace_cpu_canon")
+    framework.set_datatype("float64")
+    bench = Benchmark("vector_stencil_4d_vc")
+    program = framework.import_kernel(bench)
+    parsed = program.to_sdfg(simplify=True).arrays
+    assert any(name.startswith("__return") for name in parsed), "the parse returns no copy; the test is vacuous"
+
+    sdfgs = framework.build_sdfgs(program, framework.build_context(), bench)
+
+    assert len(sdfgs) == 1, "the canon pipeline failed"
+    assert not [name for sdfg in sdfgs.values() for name in sdfg.arrays if name.startswith("__return")]
 
 
 @dace.program

@@ -34,6 +34,7 @@ from dace.frontend.python.parser import DaceProgram
 from dace.transformation.dataflow import MapCollapse
 
 from hpcagent_bench import array_facts, languages, modules, paths, phase_clock
+from hpcagent_bench.cpf import bridge as cpf_bridge
 from hpcagent_bench.cpf import canonical as cpf_canonical
 from hpcagent_bench import flags as bench_flags
 from hpcagent_bench.categories import Language
@@ -499,8 +500,8 @@ def pipeline_canonicalize(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
     target = "gpu" if ctx.device is dace_dtypes.DeviceType.GPU else "cpu"
     cpf_canonical.declare_small(sdfg, ctx.small)
     cpf_canonical.declare_positive(sdfg, ctx.positive)
-    # validate_all re-validates after every stage (a bisect aid); the final validate still runs.
-    canonicalize(sdfg, target=target, validate_all=False, nonnegative_symbols=sorted(ctx.nonnegative))
+    # One validate of the result; validate_all would re-validate after every stage (a bisect aid).
+    canonicalize(sdfg, target=target, validate=True, validate_all=False, nonnegative_symbols=sorted(ctx.nonnegative))
     if target == "gpu":
         offload_to_gpu(sdfg)
         if ctx.offloaded is not None:
@@ -867,13 +868,27 @@ class DaceFramework(Framework):
             pipe = pipeline_named(name)
             try:
                 apply_pipeline_config(pipe)
-                if pipe.transform is pipeline_canonicalize and canonical_root:
+                canonical = pipe.transform is pipeline_canonicalize
+                if canonical and canonical_root:
                     sdfg = self.cached_canonical(bench, pathlib.Path(canonical_root))
                     sdfg.name = pipe.name  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
                 else:
-                    sdfg = copy.deepcopy(base_sdfg)
+                    # canon parses as the CPF cache does, so the measured form is the one agents are shown.
+                    parse_simplify = cpf_canonical.PARSE_SIMPLIFY
+                    sdfg = ct_impl.to_sdfg(simplify=parse_simplify) if canonical else copy.deepcopy(base_sdfg)
                     sdfg.name = pipe.name  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
                     pipe.transform(sdfg, ctx)
+                if canonical:
+                    # As the native bridge does: a returned copy of an argument is a copy the ABI has no slot for.
+                    spec = bench.spec
+                    renames = self.arg_renames(bench)
+                    impl = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_{self.column.postfix}.py"
+                    cpf_bridge.drop_returned_arguments(
+                        sdfg,
+                        [renames.get(name, name) for name in spec.input_args],
+                        [renames.get(name, name) for name in spec.output_args],
+                        cpf_bridge.returned_slots(impl, spec.func_name),
+                    )
                 # The residency contract, once, after every GPU pipeline.
                 if self.column.arch is Arch.GPU:
                     enforce_gpu_residency(sdfg)
