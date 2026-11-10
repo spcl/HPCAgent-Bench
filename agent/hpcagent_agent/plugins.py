@@ -349,6 +349,10 @@ def import_tools(environ: Mapping[str, str] = os.environ) -> tuple[Plugin, ...]:
         import_package(plugin)
         for stem in plugin.modules("tools"):
             importlib.import_module(f"{plugin.package}.tools.{stem}")
+        if plugin.manifest.overrides:
+            from hpcagent_agent.tools import mcp_server  # noqa: PLC0415 -- mcp_server imports this module
+
+            mcp_server.load_core_tools()  # an override replaces a core tool, whoever imported the plugins first
         for name, block in plugin.manifest.overrides.items():
             registry.override(name, block.build, block.description)
     return found
