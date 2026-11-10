@@ -8,6 +8,7 @@ speedups over one baseline, with tokens spent below (:func:`hpcagent_bench.stats
 """
 
 import argparse
+import dataclasses
 import pathlib
 
 import pandas as pd
@@ -15,27 +16,55 @@ import pandas as pd
 from hpcagent_bench import paths, study_tags, tags
 from hpcagent_bench.results import studies
 from hpcagent_bench.results.observation_columns import RowKind
-from hpcagent_bench.stats import cost, population, style
+from hpcagent_bench.stats import choices, cost, population, style
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 from hpcagent_bench.stats.figures import kernel_speedups, setup_names
 
 __all__ = [
+    "Options",
     "build_parser",
-    "draw",
     "main",
+    "plot",
     "series_label",
 ]
 
 
+@dataclasses.dataclass(kw_only=True)
+class Options:
+    """What ``hpcagent-bench plot kernel-speedups`` takes: one field per flag (``--canon-db`` is ``canon_db``), at
+    the flag's default. :func:`plot` draws from it, on the command line and from Python alike."""
+
+    observations: pathlib.Path | None = None
+    experiment: str = ""
+    setups: str = ""
+    include_incomplete: bool = False
+    mark_pending: bool = False
+    canon_db: pathlib.Path | None = None
+    canon_run: list[str] = dataclasses.field(default_factory=list)
+    canon_columns: str = ""
+    baseline: str | None = None
+    baseline_fallback: str = "cc_autopar"
+    language: str = "c"
+    conditions: str = ""
+    tag_file: pathlib.Path | None = None
+    series_label: list[tuple[str, str]] = dataclasses.field(default_factory=list)
+    offset: float = 0.0
+    title: str = ""
+    out: pathlib.Path = paths.ROOT / paths.PLOTS_DIR / "kernel_speedups.pdf"
+    cost_model: str = cost.DEFAULT_COST_MODEL
+    cost_models: pathlib.Path | None = None
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("observations", type=pathlib.Path, nargs="*", help="extracted observations; at most one")
+    parser = choices.Parser("hpcagent-bench plot kernel-speedups", __doc__)
+    parser.add_argument("observations", type=pathlib.Path, nargs="?", help="extracted observations")
     population.add_selection_arguments(parser, experiment_help="setup prefix naming ONE experiment")
     parser.add_argument(
         "--mark-pending",
         action="store_true",
         default=False,
-        help="draw a '?' for a kernel a row has not attempted yet, left out of its geomean",
+        help="draw a '?' for a kernel a row has not attempted yet, left out of its geomean (implies "
+        "--include-incomplete)",
     )
     parser.add_argument("--canon-db", type=pathlib.Path, default=None, help="the canon table a baseline sweep records")
     parser.add_argument(
@@ -90,32 +119,35 @@ def series_label(item: str) -> tuple[str, str]:
     return key, label
 
 
-def draw(args: argparse.Namespace, card: cost.CostModel) -> None:
-    """One row per canon column and per ``--experiment`` setup over the tag. Without ``--canon-db`` only the
-    setups are drawn, over the kernels of ``--tag-file``."""
-    if args.canon_db is None and args.canon_columns:
+def plot(options: Options) -> pathlib.Path:
+    """Draw the figure ``options`` describe and write its tables; returns the figure's path without suffix (the
+    ``.pdf`` and ``.png`` and the ``-kernels.csv``, ``-summary.csv`` and ``-tokens-summary.csv`` tables start with
+    it). One row per canon column and per ``experiment`` setup over the tag; without ``canon_db`` only the setups
+    are drawn, over the kernels of ``tag_file``."""
+    if options.canon_db is None and options.canon_columns:
         raise SystemExit("--canon-columns needs --canon-db")
-    if args.canon_db is None and args.tag_file is None:
+    if options.canon_db is None and options.tag_file is None:
         raise SystemExit("without --canon-db, pass --tag-file")
-    if len(args.observations) > 1:
-        raise SystemExit("pass at most one observations file")
-    if args.observations and not args.experiment:
+    if options.observations is not None and not options.experiment:
         raise SystemExit("observations need --experiment (the setup prefix)")
-    canon_frame = studies.read_table(args.canon_db, "canon") if args.canon_db is not None else pd.DataFrame()
-    if args.canon_run:
-        canon_frame = canon_frame.loc[canon_frame["run"].isin(args.canon_run)]
+    card = cost.resolve(options.cost_model, options.cost_models)
+    canon_frame = studies.read_table(options.canon_db, "canon") if options.canon_db is not None else pd.DataFrame()
+    if options.canon_run:
+        canon_frame = canon_frame.loc[canon_frame["run"].isin(options.canon_run)]
     tag_kernels = (
-        tags.split_names(args.tag_file.read_text()) if args.tag_file is not None else setup_names.tag_of(canon_frame)
+        tags.split_names(options.tag_file.read_text())
+        if options.tag_file is not None
+        else setup_names.tag_of(canon_frame)
     )
     if not tag_kernels:
         raise SystemExit("no tag kernel named: pass --tag-file or a --canon-db with rows")
     observations = None
-    if args.observations:
+    if options.observations is not None:
         observations = population.select_setups(
-            studies.read_observations(args.observations[0]), args.experiment, args.setups
+            studies.read_observations(options.observations), options.experiment, options.setups
         )
         observations = cost.priced(observations, card)
-    baseline = args.baseline
+    baseline = options.baseline
     if baseline is None:
         submitted = (
             observations.loc[observations.row_kind == RowKind.SUBMISSION.text] if observations is not None else None
@@ -125,31 +157,37 @@ def draw(args: argparse.Namespace, card: cost.CostModel) -> None:
             if submitted is not None and not submitted.empty
             else kernel_speedups.BASELINE
         )
-    stem = kernel_speedups.kernel_comparison(
-        canon_frame,
-        observations,
-        tag_kernels,
-        args.out.with_suffix(""),
-        canon_columns=[c for c in args.canon_columns.split(",") if c],
-        pattern=setup_names.setup_pattern(args.experiment, args.language) if observations is not None else None,
-        conditions=[study_tags.canonical("packets", c) for c in args.conditions.split(",")]
-        if args.conditions
-        else None,
-        baseline=baseline,
-        title=args.title,
-        labels={key: style.title_case(label) for key, label in args.series_label},
-        offset=args.offset,
-        mark_pending=args.mark_pending,
-        baseline_fallback=args.baseline_fallback,
-        cost_label=efficacy_figures.cost_axis_label(card),
-    )
+    try:
+        stem = kernel_speedups.kernel_comparison(
+            canon_frame,
+            observations,
+            tag_kernels,
+            options.out.with_suffix(""),
+            canon_columns=[c for c in options.canon_columns.split(",") if c],
+            pattern=setup_names.setup_pattern(options.experiment, options.language)
+            if observations is not None
+            else None,
+            conditions=[study_tags.canonical("packets", c) for c in options.conditions.split(",")]
+            if options.conditions
+            else None,
+            baseline=baseline,
+            title=options.title,
+            labels={key: style.title_case(label) for key, label in options.series_label},
+            offset=options.offset,
+            mark_pending=options.mark_pending,
+            baseline_fallback=options.baseline_fallback,
+            cost_label=efficacy_figures.cost_axis_label(card),
+            include_incomplete=options.include_incomplete,
+        )
+    except ValueError as refused:
+        raise SystemExit(str(refused)) from refused
     print(f"figure -> {stem}.pdf (+ .png)")
     print(f"tables -> {stem}-kernels.csv, {stem}-summary.csv")
+    return stem
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
-    draw(args, cost.resolve(args.cost_model, args.cost_models))
+    plot(build_parser().parse_args(argv, namespace=Options()))
 
 
 if __name__ == "__main__":

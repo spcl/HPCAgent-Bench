@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CORRECTIONS",
-    "DEFAULT_POWER",
     "PAIRED_PROPORTION_TESTS",
     "PAIRED_TESTS",
     "PROPORTION_TESTS",
@@ -347,10 +346,6 @@ def equivalence(
         entry.name,
         entry.version,
     )
-
-
-#: The power a minimum detectable effect is stated at when ``statistics.detectable_power`` is not consulted.
-DEFAULT_POWER: float = 0.8
 
 
 def detectable(log_ratios: "Sequence[float] | FloatArray", *, alpha: float = 0.05, power: float | None = None) -> float:

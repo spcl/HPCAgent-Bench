@@ -3,7 +3,6 @@
 """The efficacy command: stars survive the BH correction only for real effects, and the dot-row contract holds
 (one column per (LLM, delivery), hollow control, per-row stars)."""
 
-import argparse
 import dataclasses
 import itertools
 import math
@@ -1101,7 +1100,7 @@ def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_
 def test_without_the_success_row_speedup_and_cost_keep_their_order(
     success_row: bool, want: tuple[Measure, ...]
 ) -> None:
-    assert plot.dot_measures(argparse.Namespace(success_row=success_row)) == want
+    assert plot.dot_measures(plot.Options(success_row=success_row)) == want
 
 
 def setup(x: float, high: float, solved: int = 4, served: int = 6) -> efficacy_figures.SetupPoint:

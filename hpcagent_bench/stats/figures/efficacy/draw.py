@@ -115,6 +115,7 @@ from hpcagent_bench.study_tags import Marker
 
 __all__ = [
     "SETUP_DOTS_ROW_HEIGHT_IN",
+    "TOKEN_COVERAGE_NOTE",
     "category_x_axis",
     "colour_legend_marks",
     "comparator_legend_marks",
@@ -167,6 +168,7 @@ __all__ = [
     "stagger_crowded_ticks",
     "thin_rules",
     "token_axis",
+    "token_coverage",
     "treatment_legend_marks",
     "widen_y_axis_linear",
 ]
@@ -890,14 +892,32 @@ def control_key_marks(drawn: Sequence[DotColumn], config: FigureConfig) -> list[
 
 
 def note_marks(rows: Sequence[SetupRow], config: FigureConfig) -> list[Line2D]:
-    """The pending "?" swatch and the few-kernels note, each only where the figure shows one."""
+    """The pending "?" swatch, the few-kernels note and the token-coverage note (:func:`token_coverage`), each only
+    where the figure shows one."""
     handles: list[Line2D] = []
     if config.mark_pending and any(is_pending(row) for row in rows):
         handles.append(style.pending_legend_mark(config.legend_marker_pt))
     if config.key_notes and few_kernel_marks(rows, config):
         note = FEW_KERNELS_NOTE.format(config.min_interval_kernels)
         handles.append(Line2D([], [], linestyle="none", marker="none", label=note))
+    short = token_coverage(rows)
+    if short:
+        handles.append(Line2D([], [], linestyle="none", marker="none", label=TOKEN_COVERAGE_NOTE.format(short)))
     return handles
+
+
+#: The key's note naming every column whose cost is over fewer kernels than it served (a task total still to come).
+TOKEN_COVERAGE_NOTE: str = "Tokens Recorded for: {}"
+
+
+def token_coverage(rows: Sequence[SetupRow]) -> str:
+    """``"<model> <leg> <kernels with a token total>/<served>"`` for each column of ``rows`` whose cost leaves
+    served kernels out (an episode with no task total: its job still runs), comma separated; "" when none does."""
+    return ", ".join(
+        f"{study_tags.model_name(row.model)} {row.leg} {row.treated.token_kernels}/{row.treated.served}"
+        for row in rows
+        if 0 < row.treated.token_kernels < row.treated.served
+    )
 
 
 def comparator_legend_marks(rows: Sequence[SetupRow], config: FigureConfig) -> list[Line2D]:
