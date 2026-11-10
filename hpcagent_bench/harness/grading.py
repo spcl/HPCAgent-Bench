@@ -1377,7 +1377,7 @@ def reference_cast_targets(binding: Binding, data: dict) -> tuple[tuple[str, str
     for a in binding.args:
         if a.kind != "ptr" or a.name not in data:
             continue
-        given, abi = np.dtype(data[a.name].dtype), np.dtype(dtype_registry.canonical(a.dtype))
+        given, abi = np.dtype(data[a.name].dtype), np.dtype(dtype_registry.storage_dtype(a.dtype))
         if given != abi and kind(given) and kind(given) == kind(abi):
             targets.append((a.name, abi.name))
     return tuple(sorted(targets))

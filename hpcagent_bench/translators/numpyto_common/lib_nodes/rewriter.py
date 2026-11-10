@@ -50,6 +50,8 @@ def call_expander(
     blas_float: str | None = None,
     extent_values: dict[str, int] | None = None,
     blas_complex: bool = False,
+    element_dtypes: dict[str, str] | None = None,
+    opmath: bool = False,
 ) -> list[ast.stmt]:
     """Adapter: pass ``keywords``/``local_dtypes``/``fresh_local_allocs``/``library`` to
     expanders that accept them, else call with the legacy signature. The two
@@ -59,7 +61,8 @@ def call_expander(
     ``expand_ifft``/``expand_fftn``/``expand_ifftn`` are its other consumer, see
     FFT_LIBRARY_MARKER). ``blas_float`` is the float of the gemm a BLAS target renders (None: no BLAS),
     ``extent_values`` the compile-time integer behind a shape token (a pinned knob), ``blas_complex`` whether
-    that gemm also takes complex operands.
+    that gemm also takes complex operands, ``element_dtypes`` every array's element dtype (a scan picks its carry
+    from its target's), ``opmath`` the kernel's arithmetic on narrow floats (:attr:`KernelIR.opmath`).
     """
     sig = inspect.signature(expander)
     params = sig.parameters
@@ -82,6 +85,10 @@ def call_expander(
         extras["blas_complex"] = blas_complex
     if "extent_values" in params and extent_values is not None:
         extras["extent_values"] = extent_values
+    if "element_dtypes" in params and element_dtypes is not None:
+        extras["element_dtypes"] = element_dtypes
+    if "opmath" in params:
+        extras["opmath"] = opmath
     return expander(target, args, shape_table, **extras)
 
 
@@ -356,6 +363,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         "matmul_temps",
         "native_call",
         "native_dtypes",
+        "opmath",
         "scalar_call_temps",
         "scalar_helpers",
         "shape_table",
@@ -378,8 +386,11 @@ class LibNodeRewriter(ast.NodeTransformer):
         blas_float: str = BLAS_LOWERING_FLOAT,
         extent_values: dict[str, int] | None = None,
         blas_complex: bool = False,
+        opmath: bool = False,
     ) -> None:
         self.shape_table = shape_table
+        #: The kernel's arithmetic on narrow floats (:attr:`KernelIR.opmath`), for the expanders that read it.
+        self.opmath = opmath
         #: Kernel helpers emitted as by-value SCALAR functions. A call to one is rank 0 whatever
         #: its array arguments are, and the generic extent sizer reads an unrecognised call as
         #: elementwise -- which sizes a reduction's result like the array it reduces.
@@ -630,6 +641,8 @@ class LibNodeRewriter(ast.NodeTransformer):
                 blas_float=self.gemm_float,
                 extent_values=self.extent_values,
                 blas_complex=self.blas_complex,
+                element_dtypes=self.native_dtypes,
+                opmath=self.opmath,
             )
         except NotImplementedError:
             return None
@@ -682,6 +695,8 @@ class LibNodeRewriter(ast.NodeTransformer):
                 blas_float=self.gemm_float,
                 extent_values=self.extent_values,
                 blas_complex=self.blas_complex,
+                element_dtypes=self.native_dtypes,
+                opmath=self.opmath,
             )
         except NotImplementedError:
             return None
@@ -732,6 +747,8 @@ class LibNodeRewriter(ast.NodeTransformer):
                             blas_float=self.gemm_float,
                             extent_values=self.extent_values,
                             blas_complex=self.blas_complex,
+                            element_dtypes=self.native_dtypes,
+                            opmath=self.opmath,
                         )
                         # Same note as the direct path: the hoister split ``out = f(np.sum(a))`` into
                         # a temp assign, and it is THIS statement that becomes the loop nest.

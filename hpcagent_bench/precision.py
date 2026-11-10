@@ -202,9 +202,8 @@ def derived_band(precision: Precision) -> ToleranceBand:
 
 
 #: Corpus-validated bands that OVERRIDE the eps-derived default of
-#: :func:`derived_band`. fp64 is kept tight (exact-grade); fp32 keeps the
-#: gemm-validated ``1e-3`` (its derived ~3e-4 is too tight for a deep fp32
-#: reduction); the low-precision formats keep the bands the fp16/bf16/fp8 kernels
+#: :func:`derived_band`. fp64 is kept tight (exact-grade); fp32 keeps ``1e-3``
+#: (measured, see below); the low-precision formats keep the bands the fp16/bf16/fp8 kernels
 #: were tuned against. A precision NOT listed here takes its derived band.
 #:
 #: Every ``atol`` is at least one ULP of its own format (:func:`atol_below_one_ulp` pins it): a

@@ -53,6 +53,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.manifest import (
     fallback_shape_for_legacy,
     infer_scalar_dtype,
     load_bench_info,
+    load_bench_opmath,
     parse_shape_expression,
     pinned_config_in_use,
     pinned_values,
@@ -274,8 +275,11 @@ def build_kernel_ir(
     # The sign evidence for every bound name, for scalars the emitter promotes to symbols.
     bound = set(sig.scalars) | {n for preset in sig.parameters.values() for n in preset}
     kir.symbol_signs = {n: sign for n in sorted(bound) if (sign := sig.sign_of(n))}
+    # The track's arithmetic on storage-only floats (numpy's per-op rounding, or PyTorch's opmath).
+    kir.opmath = load_bench_opmath(bench_info)
     for helper in kir.helpers:
         helper.symbol_signs = kir.symbol_signs
+        helper.opmath = kir.opmath
     return kir
 
 

@@ -293,8 +293,10 @@ class BaseEmitter:
         return fp8_functions(dtype, self.fp8_names)
 
     def fp8_round(self, node: ast.BinOp, text: str) -> str:
-        """Wrap a float BinOp result in the fp8 round-to-grid helper (per-op rounding is load-bearing, not decorative)."""
-        if isinstance(node.op, FP8_NON_ARITH_OPS):
+        """Wrap a float BinOp result in the fp8 round-to-grid helper (per-op rounding is load-bearing, not decorative)
+        -- numpy semantics only: an :attr:`KernelIR.opmath` kernel keeps the result in the compute dtype and rounds
+        where it is stored, so neither a reduction's running sum nor a GEMM's products are rounded to the grid."""
+        if isinstance(node.op, FP8_NON_ARITH_OPS) or self.kir.opmath:
             return text
         fns = self.kernel_fp8_fns
         if fns is None or not self.touches_fp8(node):
