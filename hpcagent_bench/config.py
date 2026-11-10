@@ -428,6 +428,7 @@ class Statistics(Section):
     two_sample_test: str
     equivalence_margin: Annotated[float, Gt(1)]
     detectable_power: Annotated[float, Gt(0), Lt(1)]
+    exclude_degenerate: bool
 
 
 class Cost(Section):
