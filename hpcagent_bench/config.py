@@ -538,6 +538,7 @@ class Grading(Section):
     fill_goldens: bool
     precision_override_kernels: tuple[str, ...]
     strict_small: bool
+    relative_atol: bool
 
 
 class Anticheat(Section):
