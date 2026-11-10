@@ -92,6 +92,7 @@ class Row:
     delivered: dict[str, bool] = dataclasses.field(default_factory=dict)  # ratio vs 1x placeholder
     pending: frozenset[str] = frozenset()  # kernels not attempted yet (mark_pending only)
     filled: bool = True  # hollow = the no-packet control (palette.CONTROL_MARKER)
+    spends_tokens: bool = False  # an agent's row (agent_kernel_row): no token total is a missing one, not none spent
 
 
 def sign_test(ratios: Mapping[str, float]) -> tuple[int, int]:
@@ -326,7 +327,7 @@ def agent_kernel_row(
     return Row(
         setup, label, ratios, numerator_ms, denominator_ms, "; ".join(notes) or "none",
         palette.model_color(model), palette.packet_marker(condition), ratios_low, ratios_high, tokens,
-        pending=pending, filled=bool(condition),
+        pending=pending, filled=bool(condition), spends_tokens=True,
     )  # fmt: skip
 
 
@@ -500,10 +501,11 @@ def kernel_metrics(
 
 def token_coverage(row: Row, tag_kernels: Sequence[str]) -> str:
     """``" (Tokens: 35 of 40 Kernels)"`` for a row whose token geomean leaves served kernels of ``tag_kernels`` out
-    (an episode with no task total: its job still runs); "" for a row that spends none or misses none."""
+    (an episode with no task total: its job still runs), none of them included; "" for a row that spends none
+    (:attr:`Row.spends_tokens`) or misses none."""
     served = set(tag_kernels) - row.pending
     counted = len(served & row.tokens.keys())
-    return f" (Tokens: {counted} of {len(served)} Kernels)" if 0 < counted < len(served) else ""
+    return f" (Tokens: {counted} of {len(served)} Kernels)" if row.spends_tokens and counted < len(served) else ""
 
 
 def legend_handles(

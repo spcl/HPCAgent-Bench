@@ -583,6 +583,10 @@ def test_an_incomplete_setup_is_dropped_by_name_or_kept_with_its_coverage_in_the
     assert kernel_speedups.token_coverage(row, TAG40) == ""
     untotalled = dataclasses.replace(row, tokens={"k1": row.tokens["k1"]})
     assert kernel_speedups.token_coverage(untotalled, TAG40) == " (Tokens: 1 of 2 Kernels)"
+    # No total yet for any kernel: the row has no token mark at all, so the key must say so.
+    assert kernel_speedups.token_coverage(dataclasses.replace(row, tokens={}), TAG40) == " (Tokens: 0 of 2 Kernels)"
+    # A canon column spends no tokens: nothing is missing.
+    assert kernel_speedups.token_coverage(dataclasses.replace(row, tokens={}, spends_tokens=False), TAG40) == ""
 
 
 def test_the_legend_keys_pending_apart_from_the_cross(pending_canon: pd.DataFrame) -> None:
