@@ -96,8 +96,9 @@ parse_job_flags() {
 
 # scale_time <value> -> <value> * TIME_SCALE, clamped so one batch plus STAGING_HOURS still fits the partition's
 # longest time limit (max_time_hours, from the system or HPCAGENT_BENCH_MAX_TIME_HOURS): a --time past it is one the
-# partition never grants, and the job stays PENDING forever. Without a known limit nothing is clamped.
-# scale_tokens is uncapped: a token ceiling costs money, not a job that never starts.
+# partition never grants, and the job stays PENDING forever. Without a known limit nothing is clamped. A clamp is
+# said on stderr, in a dry run too: the wall clock then runs at less than TIME_SCALE while the tokens run at
+# TOKEN_SCALE. scale_tokens is uncapped: a token ceiling costs money, not a job that never starts.
 scale_time() {
     require_budget_extension || return 2
     local scaled=$(( $1 * TIME_SCALE )) limit cap
@@ -109,9 +110,26 @@ scale_time() {
             echo "scale_time: STAGING_HOURS=${STAGING_HOURS} leaves no room under the ${limit} h time limit" >&2
             return 2
         }
-        (( scaled <= cap )) || scaled="${cap}"
+        (( scaled <= cap )) || {
+            echo "scale_time: ${TIME_SCALE}x of $1 s is ${scaled} s, past the ${limit} h time limit less ${STAGING_HOURS} h of staging: capped to ${cap} s" >&2
+            scaled="${cap}"
+        }
     fi
     printf '%s\n' "${scaled}"
+}
+
+# job_walltime <env> <kernels> -> the job's --time: setup_walltime, capped at the same max_time_hours (sbatch refuses
+# a --time past the partition's limit). A capped job ends before its last agent batch has had
+# AGENT_TIMEOUT_SECONDS, which the note on stderr says, in a dry run too.
+job_walltime() {
+    local walltime limit
+    walltime=$(setup_walltime "$1" "$2") || return 2
+    limit=$(job_options --print max_time_hours) || return 2
+    if [[ -n "${limit}" ]] && (( 10#${walltime%%:*} > limit )); then
+        echo "job_walltime: $2 kernels of $1 need --time ${walltime}, past the ${limit} h time limit: capped to $(hms $(( limit * 3600 ))), which cuts the last agent batch short (more AGENT_NODES or a split tag fit every batch)" >&2
+        walltime=$(hms $(( limit * 3600 )))
+    fi
+    printf '%s\n' "${walltime}"
 }
 scale_tokens() {
     require_budget_extension || return 2
