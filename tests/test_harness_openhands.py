@@ -156,9 +156,23 @@ def test_the_stdio_factory_builds_the_drivers_server_command_without_connecting(
     assert handle.params.cwd == str(tmp_path)
 
 
+def agent_installed() -> bool:
+    """Whether the ``hpcagent-agent`` distribution is installed: the real MCP server reads its own version from
+    the package metadata when it starts, so a source tree on ``PYTHONPATH`` alone cannot start it."""
+    try:
+        importlib.metadata.version("hpcagent-agent")
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return True
+
+
 @pytest.mark.skipif(
     mcp_major() < 2,
     reason="the driver's MCP server is written against mcp 2.x (agent/pyproject.toml); this interpreter resolves 1.x",
+)
+@pytest.mark.skipif(
+    not agent_installed(),
+    reason="the real MCP server needs the hpcagent-agent package installed (it reads its version from the metadata)",
 )
 def test_an_openhands_client_lists_the_bench_tools(tmp_path: pathlib.Path) -> None:
     """The runner's stdio client lists the core tools of the real server this interpreter starts: the
