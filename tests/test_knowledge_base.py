@@ -397,3 +397,34 @@ def test_a_persisted_index_gives_the_same_answers_and_is_not_part_of_the_hash(ba
     assert knowledge.stored_counts(base_dir, stated, len(indexed.passages))
     assert knowledge.search(indexed, "mad.lo multiply", 5) == before
     assert knowledge.stored_counts(base_dir, "sha256:" + "0" * 64, len(indexed.passages)) == ()
+
+
+def test_staging_copies_a_checked_base_under_the_shared_mount_with_its_index(
+    base_dir: pathlib.Path, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The launch step: ``stage`` validates, copies to ``<shared>/knowledge/<name>/`` and indexes; ``staged`` is the
+    ``agent.knowledge`` value of what is there, and the staged copy loads (the index is not part of its hash)."""
+    shared = tmp_path / "shared"
+    assert knowledge.main(["staged", str(shared)]) == 0
+    assert capsys.readouterr().out.strip() == ""
+    assert knowledge.main(["stage", str(shared), str(base_dir)]) == 0
+    target = shared / knowledge.STAGED_DIR / "sample-isa"
+    assert knowledge.staged(shared) == str(target)
+    assert knowledge.index_path(target, knowledge.content_hash(base_dir)).is_file()
+    assert knowledge.load(target).manifest.content_hash == knowledge.content_hash(base_dir)
+    (base_dir / "notes.txt").write_text("changed\n", encoding="utf-8")
+    knowledge.load.cache_clear()
+    assert knowledge.main(["stage", str(shared), str(base_dir)]) == 1, "a base off its stated hash is not staged"
+
+
+def test_an_export_ships_the_documents_only_of_a_redistributable_base(tmp_path: pathlib.Path) -> None:
+    """Publishing is opt-in per base: without ``redistributable = true`` only the manifest leaves."""
+    kept = write_base(tmp_path / "kept")
+    assert knowledge.main(["export", str(kept), str(tmp_path / "out-kept")]) == 0
+    assert sorted(path.name for path in (tmp_path / "out-kept").rglob("*")) == [knowledge.MANIFEST_NAME]
+    knowledge.load.cache_clear()
+    free = write_base(tmp_path / "free", redistributable=True)
+    knowledge.write_index(free)
+    assert knowledge.export(free, tmp_path / "out-free") is True
+    assert knowledge.content_hash(tmp_path / "out-free") == knowledge.content_hash(free)
+    assert not list((tmp_path / "out-free").glob(f"{knowledge.INDEX_PREFIX}*"))
