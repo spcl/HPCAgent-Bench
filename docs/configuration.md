@@ -122,7 +122,7 @@ itself, each exported under the name its runtime already reads: `--agent-memory-
 limit a submission sets is resolved once (flag, variable, system), pinned into the staged setup env under the name
 that applies it (`--mem` as `HPCAGENT_BENCH_RECORD_MEM`, the sbatch option applies it) and so recorded with the run:
 each setup's env carries it and each episode's `tokens.json` repeats it beside the identity. The results schema
-(`user_version` 22) holds no `setups.resources` column; if a later version adds one, it takes this JSON.
+(`user_version` 23) holds no `setups.resources` column; if a later version adds one, it takes this JSON.
 
 ## Variables
 

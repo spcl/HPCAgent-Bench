@@ -96,6 +96,7 @@ __all__ = [
     "copy_into",
     "credited_cells",
     "direct_inputs",
+    "derive_launches",
     "discover_databases",
     "distinct",
     "episode_rows",
@@ -589,7 +590,8 @@ ORDER BY r.id
 
 
 #: ``episodes`` column -> the observation column of an episode row that carries it: the limits the episode ran
-#: under and how the attempt before its final one ended. NULL (not recorded) is a blank cell; 0 is "no cap".
+#: under, how the attempt before its final one ended and what a rerun stamped at launch. NULL (not recorded) is a
+#: blank cell; 0 is "no cap".
 EPISODE_LIMIT_COLUMNS: dict[str, str] = {
     "token_limit": "episode_token_limit",
     "output_token_limit": "episode_output_token_limit",
@@ -597,6 +599,8 @@ EPISODE_LIMIT_COLUMNS: dict[str, str] = {
     "token_scale": "episode_token_scale",
     "time_scale": "episode_time_scale",
     "previous_attempt_result": "episode_previous_attempt_result",
+    "launch": "episode_launch",
+    "previous_launch_result": "episode_previous_launch_result",
 }
 
 
@@ -1438,6 +1442,23 @@ def read_all(databases: list[Database], args: Options) -> tuple[list[dict[str, A
     return distinct(observations), distinct(sources)
 
 
+def derive_launches(observations: list[dict[str, Any]]) -> None:
+    """Fill ``episode_launch`` and ``episode_previous_launch_result`` of every episode row whose launch stamped none
+    from the episodes ``observations`` hold, per (setup, kernel, slot) in start then job order, and name the origin
+    in ``episode_launch_source``. A derived value counts only the jobs whose databases were extracted."""
+    runs: dict[tuple[Any, Any, Any], list[dict[str, Any]]] = {}
+    for row in observations:
+        if row["row_kind"] == RowKind.EPISODE.text:
+            runs.setdefault((row["setup"], row["kernel"], row["slot"]), []).append(row)
+    for rows in runs.values():
+        rows.sort(key=lambda row: (float(row["ts_ms"] or 0), str(row["job"])))
+        for index, row in enumerate(rows):
+            row["episode_launch_source"] = "derived" if row["episode_launch"] == "" else "stamped"
+            if row["episode_launch"] == "":
+                row["episode_launch"] = index + 1
+                row["episode_previous_launch_result"] = rows[index - 1]["episode_result"] if index else ""
+
+
 def regraded(
     observations: list[dict[str, Any]], files: list[str]
 ) -> tuple[list[dict[str, Any]], dict[FinalKey, dict[str, Any]]]:
@@ -1463,6 +1484,7 @@ def extract(options: Options) -> Extracted:
     print(f"databases: {len(databases)} under {len({d.run_root for d in databases})} run roots", file=sys.stderr)
     job_dirs = {(db.run_root, db.job): db.job_dir for db in databases}
     observations, sources = read_all(databases, args)
+    derive_launches(observations)
 
     files = [str(db.path) for db in databases]
     files += [path for path in regrade_files(args.regrades) if path not in files]
