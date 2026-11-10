@@ -252,7 +252,7 @@ FEATURE_KERNELS = [
     "vadv",
     "banded_mmt",
     "stockham_fft",
-    "cholesky2",
+    "cholesky_lapack",
     "contour_integral",
     "azimint_naive",
 ]

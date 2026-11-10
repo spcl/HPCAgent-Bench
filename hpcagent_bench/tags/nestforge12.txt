@@ -4,7 +4,7 @@
 icon_aes_graupel
 bellman_ford
 bfs
-cholesky2
+cholesky_lapack
 fuse_physics_into_scan
 fuse_stencil_through_transient
 harris_corner
