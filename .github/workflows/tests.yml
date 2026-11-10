@@ -168,6 +168,12 @@ jobs:
         if: ${{ matrix.floor && !cancelled() }}
         timeout-minutes: 3
         run: python helpers/scripts/checks/check_doc_links.py
+      # The measured reduction lengths are keyed by task fingerprint: an edited reference, initializer or manifest
+      # leaves its kernel's entry stale, and the grade then silently falls back to the wider symbolic floor.
+      - name: Tables -- reduction_axes.json holds every kernel's current fingerprint
+        if: ${{ matrix.floor && !cancelled() }}
+        timeout-minutes: 5
+        run: python -m helpers.scripts.reduction_axes_table --check
       - name: Docs -- Sphinx build (warnings are errors)
         if: ${{ matrix.floor && !cancelled() }}
         timeout-minutes: 5
