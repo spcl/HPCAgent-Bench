@@ -29,6 +29,8 @@ from hpcagent_bench.precision import (
     derived_band,
     machine_eps,
     numpy_dtype,
+    rtol_below_one_ulp,
+    safe_max,
 )
 
 
@@ -85,3 +87,31 @@ def test_the_fp8_formats_are_the_coarse_case_this_guards() -> None:
             f"{precision.value} eps is {machine_eps(precision):g} -- no longer the "
             "coarse case, so the guard's premise changed"
         )
+
+
+def test_no_band_is_finer_than_one_ulp_relative() -> None:
+    """The relative twin of the atol rule: one ULP at the bottom of a binade is ``eps * |x|``, so an
+    ``rtol`` below eps fails two correct implementations whose results round to neighbouring values
+    there. The fp8 rows carried 0.1 / 0.2 against eps 0.125 / 0.25 (F22)."""
+    finer = rtol_below_one_ulp()
+    assert not finer, ", ".join(f"{p.value}: rtol={r:g} < eps={e:g}" for p, (r, e) in sorted(finer.items()))
+
+
+@pytest.mark.parametrize("precision", list(Precision), ids=lambda p: p.value)
+def test_a_one_ulp_disagreement_passes_the_band_in_every_binade(precision: Precision) -> None:
+    """Neighbouring representable values pass the band at the bottom of every binade up to the format's
+    safe magnitude, in both directions -- not only at a reference of zero."""
+    rtol, atol = TOLERANCE_MATRIX[precision].as_tuple()
+    dtype = numpy_dtype(precision)
+    top = min(safe_max(precision), 1e30)
+    exponent = -6
+    while 2.0**exponent <= top:
+        # At the bottom of a binade the next representable value up is one eps of the binade's base away.
+        here = np.asarray([2.0**exponent, 2.0**exponent * (1.0 + machine_eps(precision))], dtype=dtype)
+        a, b = float(here[0]), float(here[1])
+        assert a != b, f"{precision.value}: no neighbour above {a:g}"
+        for ref, got in ((a, b), (b, a)):
+            assert abs(got - ref) <= atol + rtol * abs(ref), (
+                f"{precision.value}: {got:g} vs reference {ref:g} (one ULP) fails rtol={rtol:g}, atol={atol:g}"
+            )
+        exponent += 1
