@@ -226,6 +226,22 @@ def test_a_failing_hook_is_logged_and_the_next_one_still_runs(
     assert "1 ok, 1 failed of 2" in err
 
 
+def test_a_failing_required_hook_is_the_exit_code_the_entrypoint_stops_the_launch_on(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``job_init_required = true`` makes the hook's failure fail the start; the default stays a log line."""
+    manifest = manifest_with("boomplugin", "preload:run") + "job_init_required = true\n"
+    boom = plugin_folder(tmp_path, "boomplugin", manifest, stub_module(tmp_path / "c", "boom", "raise RuntimeError"))
+
+    code, home = run_hook_cli(tmp_path, monkeypatch, [boom])
+
+    assert code == agent_plugins.JOB_INIT_REQUIRED_FAILED
+    stamp = json.loads((home / agent_plugins.JOB_INIT_STAMP).read_text(encoding="utf-8"))
+    assert [(entry["status"], entry["required"]) for entry in stamp["hooks"]] == [("failed", True)]
+    stops = f"[ $? -ne {agent_plugins.JOB_INIT_REQUIRED_FAILED} ] || {{"
+    assert any(line.strip().startswith(stops) and line.endswith("exit 1; }") for line in entrypoint_lines())
+
+
 @pytest.mark.parametrize("target", ["no.such.module:fn", "preload:no_such_name", "preload.run:fn"])
 def test_an_unresolvable_target_is_a_failed_hook(
     tmp_path: pathlib.Path,

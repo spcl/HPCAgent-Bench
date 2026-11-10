@@ -36,6 +36,7 @@ PINNED_GATES = (
     "sanitizers",
     "final_grade",
     "foreign_library",
+    "identity_output",
 )
 
 

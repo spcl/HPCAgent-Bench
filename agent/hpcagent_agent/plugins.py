@@ -36,6 +36,7 @@ __all__ = [
     "JOB_INIT_ENV",
     "JOB_INIT_ENV_VAR",
     "JOB_INIT_PLUGINS",
+    "JOB_INIT_REQUIRED_FAILED",
     "JOB_INIT_STAMP",
     "MANIFEST",
     "PACKAGE",
@@ -88,6 +89,9 @@ JOB_INIT_ENV = "env.sh"
 JOB_INIT_STAMP = "job-init.json"
 JOB_INIT_PLUGINS = "job-init.plugins"
 JOB_INIT_ENV_VAR = "HPCAGENT_BENCH_JOB_INIT"
+#: :func:`run_job_init`'s exit code when a ``job_init_required`` hook failed: the entrypoint stops the launch on it
+#: (1 is any other failed hook, 2 the argument parser's).
+JOB_INIT_REQUIRED_FAILED = 3
 
 
 #: The container roles a plugin's package can be installed into: the judge's interpreter, the agent's.
@@ -133,11 +137,15 @@ class Hooks(pydantic.BaseModel):
     ``job_init`` names ``package.module:function``; the images' entrypoint runs it once per node and role, after
     the launch venv exists and before the service starts, with the mapping :func:`job_init_context` (paths, the
     environment). The hook may write :data:`JOB_INIT_ENV` at the context's ``env_file`` for the service
-    environment to source; a hook that fails is logged and left behind, it never stops the service."""
+    environment to source; a hook that fails is logged and left behind, and stops the service from starting only
+    under ``job_init_required``."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
     job_init: str | None = pydantic.Field(default=None, pattern=r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
+    #: Whether a failure of ``job_init`` fails the launch (:data:`JOB_INIT_REQUIRED_FAILED`) instead of being a log
+    #: line.
+    job_init_required: bool = False
 
 
 class Manifest(pydantic.BaseModel):
@@ -484,14 +492,15 @@ def run_job_init(
     role: Role = "judge",
     environ: Mapping[str, str] = os.environ,
 ) -> int:
-    """Run every plugin's ``[hooks]`` ``job_init`` for ``role``, and return nonzero when any hook failed: the
-    entrypoint calls this once per node (its ``ready`` file gates it) after the launch venv exists and before
-    the service starts, so a hook failure is a log line, never a service that does not start. Each function
+    """Run every plugin's ``[hooks]`` ``job_init`` for ``role``, and return nonzero when any hook failed
+    (:data:`JOB_INIT_REQUIRED_FAILED` when one of them is ``job_init_required``): the entrypoint calls this once per
+    node (its ``ready`` file gates it) after the launch venv exists and before the service starts. A hook failure
+    is a log line and the service starts without it, unless its plugin requires it. Each function
     runs with :func:`job_init_context`; start, end, duration and status go to stderr (the job log), the stamp
     (:data:`JOB_INIT_STAMP`) records what ran, and the plugins' names land in :data:`JOB_INIT_PLUGINS` for the
     entrypoint to export as :data:`JOB_INIT_ENV_VAR`. Without a hook nothing runs and nothing is written."""
     hooks = [
-        (plugin, plugin.manifest.hooks.job_init or "")
+        (plugin, plugin.manifest.hooks.job_init or "", plugin.manifest.hooks.job_init_required)
         for plugin in find(roots(environ))
         if plugin.manifest.hooks is not None and plugin.manifest.hooks.job_init
     ]
@@ -499,7 +508,7 @@ def run_job_init(
         return 0
     stamps: list[dict[str, object]] = []
     began = time.monotonic()
-    for plugin, target in hooks:
+    for plugin, target, required in hooks:
         print(f"job-init[{plugin.name}]: {target}: start", file=sys.stderr, flush=True)
         mark = time.monotonic()
         try:
@@ -507,11 +516,20 @@ def run_job_init(
         except (Exception, SystemExit) as exc:  # noqa: BLE001 -- a hook must never abort the service
             seconds = time.monotonic() - mark
             print(f"job-init[{plugin.name}]: {target}: failed in {seconds:.3f} s: {exc!r}", file=sys.stderr, flush=True)
-            stamps.append({"plugin": plugin.name, "target": target, "status": "failed", "seconds": round(seconds, 3)})
+            status = "failed"
         else:
             seconds = time.monotonic() - mark
             print(f"job-init[{plugin.name}]: {target}: ok in {seconds:.3f} s", file=sys.stderr, flush=True)
-            stamps.append({"plugin": plugin.name, "target": target, "status": "ok", "seconds": round(seconds, 3)})
+            status = "ok"
+        stamps.append(
+            {
+                "plugin": plugin.name,
+                "target": target,
+                "status": status,
+                "required": required,
+                "seconds": round(seconds, 3),
+            }
+        )
     (home / JOB_INIT_STAMP).write_text(
         json.dumps(
             {
@@ -534,6 +552,8 @@ def run_job_init(
         file=sys.stderr,
         flush=True,
     )
+    if any(entry["required"] for entry in failed):
+        return JOB_INIT_REQUIRED_FAILED
     return 1 if failed else 0
 
 

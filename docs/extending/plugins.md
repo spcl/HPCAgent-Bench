@@ -323,6 +323,7 @@ in its `plugin.toml`:
 ```toml
 [hooks]
 job_init = "pkg.mod:run"                    # package.module:function, no arguments but the context
+job_init_required = false                   # true: a failure of the hook fails the launch
 ```
 
 The images' entrypoint (`containers/images/lib/launch_venv.sh`) runs it once per node and role, after the launch
@@ -338,9 +339,11 @@ argument, a context mapping:
 | `role` | `"judge"` or `"agent"` |
 | `environ` | a snapshot of the environment the entrypoint saw |
 
-Start, end, duration and status of every hook go to the job log, and a hook that fails is a log line, never a
-service that does not start. What ran is stamped beside the venv (`job-init.json`, with each hook's status and
-duration) and the plugin names are exported to the service environment as `HPCAGENT_BENCH_JOB_INIT` -- a judge or
+Start, end, duration and status of every hook go to the job log. A hook that fails is a log line and the service
+starts without it (the default, `job_init_required = false`); a plugin whose runs mean nothing without its hook (a
+profiler that must be preloaded) sets `job_init_required = true`, and its hook's failure then stops the launch on
+that node before any service starts. What ran is stamped beside the venv (`job-init.json`, with each hook's status,
+whether it was required, and duration) and the plugin names are exported to the service environment as `HPCAGENT_BENCH_JOB_INIT` -- a judge or
 agent that wants the fact in its own records reads it there.
 
 A hook may write `env.sh` at `env_file`; the entrypoint sources it into the service environment of every step of

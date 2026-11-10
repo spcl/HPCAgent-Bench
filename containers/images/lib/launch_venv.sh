@@ -177,11 +177,15 @@ assert importlib.util.find_spec('hpcagent_bench') is None, 'openhands can import
             # and later job of this pin, and the ready file below is its gate, so the hook runs once -- after the
             # venv exists and before any service starts. A profiler preload or another one-shot node setup runs
             # here; it may drop env.sh beside the venv (sourced below by every step). A failing hook is logged
-            # and left behind: it must not abort the service. Never at an image build gate: that is no job start.
+            # and left behind; one its plugin marks job_init_required (exit 3) fails the launch, before the venv
+            # is declared ready. Never at an image build gate: that is no job start.
             if [ -n "${sources}" ] && [ -z "${HPCAGENT_BENCH_LAUNCH_ROOT:-}" ]; then
                 HPCAGENT_BENCH_PLUGIN_DIRS="${dirs}" "${venv}/bin/python" -m hpcagent_agent.plugins job-init \
                     --home "${home}" --venv "${venv}" --workspace "${workspace}" --role "${role}" >&2 \
-                    || echo "launch_venv: job-init failed; continuing without it" >&2
+                    || {
+                        [ $? -ne 3 ] || { echo "launch_venv: a required job-init hook failed" >&2; exit 1; }
+                        echo "launch_venv: job-init failed; continuing without it" >&2
+                    }
             fi
             touch "${home}/ready"
             echo "launch_venv: ${venv} built in $(($(date +%s) - start)) s" >&2
