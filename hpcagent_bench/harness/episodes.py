@@ -113,6 +113,11 @@ class EpisodeRecord(pydantic.BaseModel):
     env_file: str = ""
     identity: RecordIdentity | None = None
     resources: RecordResources | None = None
+    #: The agent rootfs isolation the launch applied (``isolation.agent_rootfs``, the driver's stamp; '' = a
+    #: launch older than the key). A fact of the run, carried in the record itself: the ``episodes`` table has
+    #: no column for it yet (the schema is frozen at ``user_version`` 20), so an ``episodes.agent_rootfs``
+    #: column in a future schema is where a query would read it; until then this field is the only carrier.
+    agent_rootfs: str = ""
     tokens: Count | None = None
     output_source: str = ""
     output_delta_shape: str = ""
