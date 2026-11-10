@@ -72,8 +72,9 @@ def test_no_cap_is_recorded_as_zero_not_as_unrecorded(monkeypatch: pytest.Monkey
     assert (record["max_tokens"], record["max_output_tokens"], record["timeout_seconds"]) == (0, 0, 0)
 
 
-def driver_record(job_dir: pathlib.Path, worker: int, ledger: list[int]) -> pathlib.Path:
-    """The ``tokens.json`` the DRIVER writes for a worker whose attempts ended on the returncodes ``ledger``."""
+def driver_record(job_dir: pathlib.Path, worker: int, ledger: list[int], **stamp: object) -> pathlib.Path:
+    """The ``tokens.json`` the DRIVER writes for a worker whose attempts ended on the returncodes ``ledger``;
+    ``stamp`` is what a rerun's problem line adds."""
     worker_dir = job_dir / "agents" / "node-0" / f"problem-{worker}-worker-{worker}"
     worker_dir.mkdir(parents=True)
     for attempt, returncode in enumerate(ledger, start=1):
@@ -81,7 +82,7 @@ def driver_record(job_dir: pathlib.Path, worker: int, ledger: list[int]) -> path
             worker_dir / token_cost.ATTEMPTS_NAME, attempt, 1_000 * attempt, returncode, attempt < len(ledger), False
         )
     path = worker_dir / "tokens.json"
-    problem = {"id": worker, "kernel": f"loop_level_reasoning/{KERNEL}/{KERNEL}"}
+    problem = {"id": worker, "kernel": f"loop_level_reasoning/{KERNEL}/{KERNEL}", **stamp}
     agent_driver.write_cost_record(
         path, problem, worker, ledger[-1], 100, 3, "success", None, 0, f"setup-a.n0.p{worker}.w{worker}"
     )
@@ -137,6 +138,29 @@ def test_an_episodes_limits_reach_its_row_and_its_observation(
     assert row["episode_previous_attempt_result"] == "api_timeout"
 
 
+def test_a_reruns_launch_stamp_reaches_its_row_and_an_unstamped_episode_is_derived(tmp_path: pathlib.Path) -> None:
+    """The problem line's ``launch`` and ``previous_result`` -> record -> ``episodes`` -> observation row
+    (``stamped``). Episodes that state none are numbered in start order over the extracted rows (``derived``)."""
+    job_dir = tmp_path / str(JOB)
+    shard(job_dir)
+    driver_record(job_dir, 0, [0], launch=3, previous_result="timeout")
+    out = job_dir / "results.db"
+    merge_results.merge(job_dir, out)
+
+    with results_db.reading(out) as conn:
+        stored = dict(conn.execute("SELECT * FROM episodes WHERE label = ?", (LABEL,)).fetchone())
+    assert (stored["launch"], stored["previous_launch_result"]) == (3, "timeout")
+    (row,) = episode_rows(out)
+    earlier = row | {"job": "1", "ts_ms": 5.0, "episode_launch": "", "episode_result": "budget"}
+    later = row | {"job": "2", "ts_ms": 9.0, "episode_launch": "", "episode_previous_launch_result": ""}
+    row["ts_ms"] = 20.0
+    extract.derive_launches([row, later, earlier])
+    assert (row["episode_launch"], row["episode_previous_launch_result"]) == (3, "timeout")
+    assert row["episode_launch_source"] == "stamped"
+    assert (earlier["episode_launch"], earlier["episode_launch_source"]) == (1, "derived")
+    assert (later["episode_launch"], later["episode_previous_launch_result"]) == (2, "budget")
+
+
 def test_a_single_attempt_names_no_previous_one_and_an_unnamed_returncode_is_a_crash(tmp_path: pathlib.Path) -> None:
     single = episodes.read_record(driver_record(tmp_path / "one", 0, [0]))
     crashed = episodes.read_record(driver_record(tmp_path / "two", 0, [1, 0]))
@@ -167,7 +191,7 @@ def version_21_file(path: pathlib.Path) -> None:
     with contextlib.closing(results_db.open_db(path)) as conn:
         results_db.ensure_setup(conn, results_db.Setup("setup-a", "c", "cpu"))
         results_db.ensure_episode(conn, "setup-a", LABEL, JOB)
-        for statement in results_db.ADDED[22]:
+        for statement in (*results_db.ADDED[22], *results_db.ADDED[23]):
             conn.execute(f"ALTER TABLE episodes DROP COLUMN {statement.split()[5]}")
         conn.execute("PRAGMA user_version = 21")
         conn.commit()
@@ -181,11 +205,12 @@ def test_a_version_21_file_reads_its_limits_as_unrecorded_and_upgrades_when_writ
         assert results_db.schema_version(conn) == 21
         row = dict(conn.execute("SELECT * FROM episodes").fetchone())
     assert (row["token_limit"], row["time_limit_s"], row["previous_attempt_result"]) == (None, None, "")
+    assert (row["launch"], row["previous_launch_result"]) == (None, "")
 
     with contextlib.closing(results_db.open_db(path)) as conn:
         assert results_db.schema_version(conn) == results_db.SCHEMA_VERSION
         columns = {str(found[1]) for found in conn.execute("PRAGMA table_info(episodes)")}
-    assert {"token_limit", "output_token_limit", "time_limit_s", "token_scale", "time_scale"} <= columns
+    assert {"token_limit", "output_token_limit", "time_limit_s", "token_scale", "time_scale", "launch"} <= columns
 
 
 # --- the check: per setup, per pair, flag and strict ---
