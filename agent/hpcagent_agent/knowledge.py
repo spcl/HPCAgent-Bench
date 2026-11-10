@@ -19,6 +19,7 @@ import math
 import os
 import pathlib
 import re
+import shutil
 import sys
 import time
 import tomllib
@@ -442,33 +443,81 @@ def episode_record(base: KnowledgeBase, usage: pathlib.Path, among: int = 1) -> 
     }
 
 
-def episode_records(loaded: Sequence[KnowledgeBase], usage: pathlib.Path) -> dict[str, Any] | list[dict[str, Any]]:
+def episode_records(loaded: Sequence[KnowledgeBase], usage: pathlib.Path) -> dict[str, object] | list[object]:
     """The record block of a setup's bases: one block for one base (the shape a single-base record always had), a
     list for several."""
-    blocks = [episode_record(base, usage, len(loaded)) for base in loaded]
-    return blocks[0] if len(blocks) == 1 else blocks
+    blocks: list[dict[str, object]] = [episode_record(base, usage, len(loaded)) for base in loaded]
+    return blocks[0] if len(blocks) == 1 else list(blocks)
+
+
+#: Where staged bases sit in a setup's shared mount, one directory per base name.
+STAGED_DIR = "knowledge"
+
+
+def stage(shared: pathlib.Path, sources: Sequence[pathlib.Path]) -> list[pathlib.Path]:
+    """Copy each validated base into ``<shared>/knowledge/<name>/`` and persist its index there (the launch step;
+    the seal shows the shared mount read-only). A base that fails validation, or two of one name, raises."""
+    placed = []
+    for source in sources:
+        name = load(source.resolve()).manifest.name
+        target = shared / STAGED_DIR / name
+        if target in placed:
+            raise KnowledgeError(f"two knowledge bases are called {name!r}")
+        shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(source, target)
+        write_index(target)
+        placed.append(target)
+    return placed
+
+
+def staged(shared: pathlib.Path) -> str:
+    """The ``agent.knowledge`` value naming every base staged under ``shared``, in name order ("" for none)."""
+    root = shared / STAGED_DIR
+    found = sorted(path for path in root.iterdir() if (path / MANIFEST_NAME).is_file()) if root.is_dir() else []
+    return ":".join(str(path) for path in found)
+
+
+def export(source: pathlib.Path, target: pathlib.Path) -> bool:
+    """Copy a validated base for publication: all of it when its manifest says ``redistributable = true``, else the
+    manifest alone (name, version, licence, source and hash still say which base a run used). Returns whether the
+    documents went along."""
+    whole = load(source.resolve()).manifest.redistributable
+    if whole:
+        shutil.copytree(source, target, ignore=shutil.ignore_patterns(f"{INDEX_PREFIX}*"))
+    else:
+        target.mkdir(parents=True)
+        shutil.copy2(source / MANIFEST_NAME, target / MANIFEST_NAME)
+    return whole
+
+
+USAGE = "usage: python -m hpcagent_agent.knowledge hash|check|index <directory> | stage <shared> <directory>... | staged <shared> | export <directory> <target>"
 
 
 def main(argv: Sequence[str]) -> int:
-    if len(argv) != 2 or argv[0] not in ("hash", "check", "index"):
-        print("usage: python -m hpcagent_agent.knowledge hash|check|index <directory>", file=sys.stderr)
+    known = {"hash": 2, "check": 2, "index": 2, "staged": 2, "export": 3}
+    if not argv or (argv[0] == "stage" and len(argv) < 3) or (argv[0] != "stage" and known.get(argv[0]) != len(argv)):
+        print(USAGE, file=sys.stderr)
         return 2
     root = pathlib.Path(argv[1]).resolve()
     try:
         if argv[0] == "hash":
             print(content_hash(root))
-            return 0
-        if argv[0] == "index":
+        elif argv[0] == "index":
             print(write_index(root))
-            return 0
-        base = load(root)
+        elif argv[0] == "stage":
+            for target in stage(root, [pathlib.Path(source) for source in argv[2:]]):
+                print(target)
+        elif argv[0] == "staged":
+            print(staged(root))
+        elif argv[0] == "export":
+            whole = export(root, pathlib.Path(argv[2]))
+            print("exported with its documents" if whole else "exported the manifest only (not redistributable)")
+        else:
+            manifest, cut = (base := load(root)).manifest, len(base.passages)
+            print(f"{manifest.name} {manifest.version} ({manifest.licence}): {cut} passages, {manifest.content_hash}")
     except (KnowledgeError, OSError) as exc:
         print(f"knowledge: {exc}", file=sys.stderr)
         return 1
-    manifest = base.manifest
-    print(
-        f"{manifest.name} {manifest.version} ({manifest.licence}): {len(base.passages)} passages, {manifest.content_hash}"
-    )
     return 0
 
 

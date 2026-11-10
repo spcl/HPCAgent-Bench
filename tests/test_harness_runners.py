@@ -1661,6 +1661,14 @@ def test_an_anthropic_episode_records_one_usage_line_per_call_and_finishes(
     assert (anthropic_episode.status, end) == (0, {"reason": "finished", "turns": 3, "detail": "", "effort": "xhigh"})
 
 
+def test_an_anthropic_request_carries_client_tools_only(anthropic_episode: types.SimpleNamespace) -> None:
+    """A server-side tool (a provider's own web search or code execution) runs outside the agent's network
+    namespace: every tool of every request is one this runner executes itself, which has no ``type``."""
+    offered = [tool for _, body in anthropic_episode.requests for tool in body["tools"]]
+    assert offered
+    assert [tool["name"] for tool in offered if tool.get("type", "custom") != "custom"] == []
+
+
 def test_an_anthropic_transcript_holds_the_whole_history_the_last_request_carried(
     anthropic_episode: types.SimpleNamespace,
 ) -> None:
