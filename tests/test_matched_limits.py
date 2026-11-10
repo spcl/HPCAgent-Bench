@@ -521,10 +521,14 @@ def test_an_answer_past_the_smaller_limits_is_unsolved_when_rescored_at_them(
     assert cut.loc["b", "n_solved"] == len(KERNELS)
     assert set(cut.truncated_at) == {f"tokens={BASE.tokens},seconds={BASE.seconds}"}
     assert "truncated_at" not in as_run.columns
-    assert "2 judge rows of 1 episodes dropped, a 1; elapsed time is a lower bound for 0 of 12" in capsys.readouterr().err
+    assert (
+        "2 judge rows of 1 episodes dropped, a 1; elapsed time is a lower bound for 0 of 12" in capsys.readouterr().err
+    )
 
 
-def test_a_cut_no_row_lies_past_leaves_the_tables_as_they_were(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
+def test_a_cut_no_row_lies_past_leaves_the_tables_as_they_were(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
+) -> None:
     path = late_answer(tmp_path)
     argv = ["--observations", str(path), "--pair", "a,b", "--family", "f", "--out"]
     assert paired_setups.main([*argv, str(tmp_path / "as-run.csv")]) == 0
@@ -544,4 +548,3 @@ def test_the_smallest_limits_are_not_known_where_none_is_recorded() -> None:
     for spec, given in (("min", unrecorded), ("hours=4", found)):
         with pytest.raises(ValueError, match="tokens=<n>,seconds=<s>"):
             limits.Cut.parse(spec, given)
-

@@ -1019,7 +1019,9 @@ def main(argv: list[str]) -> int:
     if args.truncate_at is not None:
         # Data collected under unequal limits, compared at identical ones: everything below reads the rows each
         # episode had made when the cut would have stopped it.
-        recorded = limits.setup_limits(observations[observations.setup.isin(setups)]) if args.truncate_at == "min" else {}
+        recorded = (
+            limits.setup_limits(observations[observations.setup.isin(setups)]) if args.truncate_at == "min" else {}
+        )
         try:
             cut = limits.Cut.parse(args.truncate_at, recorded)
         except ValueError as refused:
