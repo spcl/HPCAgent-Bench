@@ -18,6 +18,7 @@ KERNELS = (
     "conv_standard_2d_square_input_asymmetric_kernel",
     "mlp",
     "gemm_scaling_hardtanh_gelu",
+    "conv_transpose3d_softmax_sigmoid",
 )
 
 
