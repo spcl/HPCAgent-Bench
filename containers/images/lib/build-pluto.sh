@@ -52,8 +52,10 @@ fi
 
 # cloog's isl submodule names git://repo.or.cz/isl.git, which refuses some regions (the UK, where CI
 # runners can land); the GitHub mirror holds the pinned commit.
+# Submodules are initialised only after the checkout, so their URLs come from the pinned commit's .gitmodules:
+# pluto's master moved its isl submodule to a repository that lacks the pinned isl commit.
 isl_mirror="url.https://github.com/Meinersbur/isl.git.insteadOf=git://repo.or.cz/isl.git"
-"${git_net}" -c "${isl_mirror}" clone --recursive https://github.com/bondhugula/pluto.git "${PLUTO_SRC}"
+"${git_net}" -c "${isl_mirror}" clone https://github.com/bondhugula/pluto.git "${PLUTO_SRC}"
 git -C "${PLUTO_SRC}" checkout "${PLUTO_COMMIT}"
 "${git_net}" -c "${isl_mirror}" -C "${PLUTO_SRC}" submodule update --init --recursive
 cd "${PLUTO_SRC}"
