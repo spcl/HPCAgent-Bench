@@ -135,6 +135,19 @@ openai agents, agents.mcp, agents.models.openai_chatcompletions, agents.run_conf
 optimas agents, agents.exceptions, agents.mcp, agents.models.openai_chatcompletions, agents.run_config, litellm, \
 openai, openai.types.shared, optimas.arch.base, optimas.optim.opro, optimas.wrappers.example
 EOF
+                # OpenHands pins mcp < 2 (its own project and lock, agent/harness/openhands): synced like TileLang,
+                # never with --package hpcagent-agent (mcp >= 2.3), and the checkout's agent/ on its path with a .pth,
+                # which is all its runner imports (runner_common: pydantic and hpcagent_agent.coded). The driver's MCP
+                # server runs on the driver's interpreter, so the runner is only its client.
+                if [ -f "${harness}/openhands/uv.lock" ]; then
+                    (cd "${harness}/openhands" && UV_PROJECT_ENVIRONMENT="${venv}/harness/openhands" \
+                        uv sync -q --frozen --inexact --python "/usr/bin/python${HARNESS_PYTHON}")
+                    echo "${workspace}/agent" > "$(site "${venv}/harness/openhands/bin/python")/zz-agent.pth"
+                    HOME="${home}" "${venv}/harness/openhands/bin/python" -c "import importlib.metadata, importlib.util, \
+hpcagent_agent.harness.runner_common
+assert importlib.metadata.version('mcp').split('.')[0] == '1', 'the openhands venv pins mcp < 2'
+assert importlib.util.find_spec('hpcagent_bench') is None, 'openhands can import hpcagent_bench'"
+                fi
                 cli="${venv}/harness/node"
                 mkdir -p "${cli}"
                 cp "${harness}/node/package.json" "${harness}/node/package-lock.json" "${cli}/"
