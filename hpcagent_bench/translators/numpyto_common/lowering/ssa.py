@@ -373,7 +373,10 @@ def rename_reads(stmt: ast.stmt, rename_map: dict[str, str]) -> None:
     Store-context Name of a ``name = ...`` target is left to the version-mint decision."""
     if isinstance(stmt, (ast.Assign, ast.AugAssign)):
         apply_renames(stmt.value, rename_map)
-        if isinstance(stmt, ast.AugAssign):
+        if isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name):
+            # ``x += y`` reads and writes the binding in force; its Name target carries ctx=Store.
+            stmt.target.id = rename_map.get(stmt.target.id, stmt.target.id)
+        elif isinstance(stmt, ast.AugAssign):
             apply_renames(stmt.target, rename_map)
         else:
             for tgt in stmt.targets:
