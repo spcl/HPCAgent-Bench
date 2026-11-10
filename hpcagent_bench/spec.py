@@ -1999,8 +1999,9 @@ FINGERPRINT_MANIFEST_KEYS: tuple[str, ...] = ("args", "config")
 
 
 def normalized_ast(path: pathlib.Path) -> str:
-    """``ast.dump`` of the Python module at ``path`` with every module, class and function docstring removed
-    and no source positions: two sources that differ only in docstrings, comments or layout dump equal."""
+    """``ast.unparse`` of the Python module at ``path`` with every module, class and function docstring removed:
+    two sources that differ only in docstrings, comments or layout give the same text. (Not ``ast.dump``: its text
+    changes between Python versions, ``ast.unparse``'s does not for the same tree.)"""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if (
@@ -2008,7 +2009,7 @@ def normalized_ast(path: pathlib.Path) -> str:
             and ast.get_docstring(node, clean=False) is not None
         ):
             node.body = node.body[1:]
-    return ast.dump(tree, include_attributes=False)
+    return ast.unparse(tree)
 
 
 @functools.lru_cache(maxsize=None, typed=True)
