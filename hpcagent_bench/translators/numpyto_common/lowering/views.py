@@ -339,9 +339,10 @@ def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) 
     reshape as a copy, so every statement of the view's block that stores through it is followed by the copy
     back, ``out[:] = np.reshape(outg, shape(out))`` (conv_transposed_1d lost every tap's contribution without it),
     and one that writes the base in place while the view is used later by the copy forward,
-    ``outg[:] = np.reshape(out, shape(outg))``. A statement that stores through one name while reading the other
-    is refused: no copy stands for that. Rebinding either name ends the view (``x = np.reshape(x, ...)`` rebinds
-    its own base and is no view to carry back).
+    ``outg[:] = np.reshape(out, shape(outg))``. A simple statement evaluates its right side before it stores, so
+    the copies stand for the view around it; a loop or branch that stores through one name and reads the other is
+    refused. Rebinding either name ends the view (``x = np.reshape(x, ...)`` rebinds its own base and is no view
+    to carry back).
     """
 
     def copy(dst: str, src: str, after: ast.stmt) -> ast.stmt:
@@ -366,8 +367,8 @@ def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) 
                 ):
                     break  # either name rebound: no longer this view of that array
                 stored = [n for n in (view, base) if stores_through(stmt, n)]
-                if stored and mentions(stmt, base if stored[0] == view else view):
-                    raise NotImplementedError(f"{stored[0]!r} is written by a statement that reads its reshape alias")
+                if stored and any(child_blocks_of(stmt)) and mentions(stmt, base if stored[0] == view else view):
+                    raise NotImplementedError(f"{stored[0]!r} is written in a block that reads its reshape alias")
                 if stored == [view]:
                     stmts.insert(j + 1, copy(base, view, stmt))
                     j += 1
