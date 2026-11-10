@@ -12,6 +12,8 @@ compiled must leave the comparison entirely, in both directions. A run where tha
 holding still draws a plausible-looking figure, so it is asserted here rather than eyeballed.
 """
 
+import dataclasses
+import logging
 import math
 import pathlib
 
@@ -562,6 +564,25 @@ def test_mark_pending_keeps_a_setup_not_yet_served_every_kernel(
     assert rows[setup].pending == frozenset({"k3"})
     assert set(rows[setup].ratios) == {"k1", "k2"}
     assert rows["llr40-qwen38-c-cpf-tool"].pending == frozenset()
+
+
+def test_an_incomplete_setup_is_dropped_by_name_or_kept_with_its_coverage_in_the_key(
+    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``--include-incomplete`` keeps the setup with the missing kernel pending; without it the drop is logged. A
+    row whose tokens cover fewer kernels than it served says so in its key entry."""
+    setup, frame = "llr40-oss120b-c-cpf-tool", llr40_observations
+    partial = frame[~((frame["setup"] == setup) & (frame["kernel"] == "k3"))]
+    pattern = setup_names.setup_pattern("llr40")
+    with caplog.at_level(logging.WARNING, logger=kernel_speedups.LOG.name):
+        kernel_speedups.kernel_rows(llr40_canon, partial, TAG40, (), pattern)
+    assert f"dropping {setup} (2/3 tag kernels); --include-incomplete keeps it" in caplog.text
+    kept = kernel_speedups.kernel_rows(llr40_canon, partial, TAG40, (), pattern, include_incomplete=True)
+    row = next(row for row in kept if row.framework == setup)
+    assert row.pending == frozenset({"k3"})
+    assert kernel_speedups.token_coverage(row, TAG40) == ""
+    untotalled = dataclasses.replace(row, tokens={"k1": row.tokens["k1"]})
+    assert kernel_speedups.token_coverage(untotalled, TAG40) == " (Tokens: 1 of 2 Kernels)"
 
 
 def test_the_legend_keys_pending_apart_from_the_cross(pending_canon: pd.DataFrame) -> None:
