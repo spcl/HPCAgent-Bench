@@ -376,3 +376,32 @@ def test_the_detectable_effect_survives_a_corrected_alpha_on_few_kernels() -> No
     critical = stats.t.ppf(1.0 - 0.05 / 6.0, 7)
     noncentrality = effect * math.sqrt(8) / float(np.std(logs, ddof=1))
     assert float(stats.nct.sf(critical, 7, noncentrality)) == pytest.approx(0.8, abs=1e-6)
+
+
+def test_solve_rates_are_equivalent_only_when_the_score_test_excludes_both_ends_of_the_margin() -> None:
+    """Forty kernels, none discordant, ten points of margin: Tango's score statistic at either end is
+    ``sqrt(40 * 0.1 / 0.9)`` away, one-sided p 0.0175. Discordant kernels widen it, a setup ahead by nine of
+    forty is outside the margin, the test is symmetric in the two setups, and no kernels is no test."""
+    agree = significance.rate_equivalence(significance.Discordant(0, 0), 40, margin=0.1)
+    assert agree.pvalue == pytest.approx(float(stats.norm.sf(math.sqrt(40 * 0.1 / 0.9))))
+    assert agree.method == "tost-tango-score"
+    balanced = significance.rate_equivalence(significance.Discordant(5, 5), 40, margin=0.1)
+    assert agree.pvalue < 0.05 < balanced.pvalue
+    ahead = significance.rate_equivalence(significance.Discordant(10, 1), 40, margin=0.1)
+    assert ahead.pvalue > 0.9
+    assert ahead.pvalue == significance.rate_equivalence(significance.Discordant(1, 10), 40, margin=0.1).pvalue
+    assert math.isnan(significance.rate_equivalence(significance.Discordant(0, 0), 0, margin=0.1).pvalue)
+    with pytest.raises(ValueError, match="difference of proportions"):
+        significance.rate_equivalence(significance.Discordant(0, 0), 40, margin=1.2)
+
+
+def test_repeated_episodes_split_a_log_ratios_spread_into_run_to_run_and_kernel_to_kernel() -> None:
+    """Two kernels, two episodes a side. The left cells each vary by +-1 (four squares of 1 over four degrees of
+    freedom: within variance 1), the right ones not at all; the differences of means are 0 and 4 (variance 8), of
+    which run-to-run noise explains ``1 * (1/2 + 1/2)``. Without a repeat the two cannot be told apart."""
+    within, between = significance.variance_components([[0.0, 2.0], [4.0, 6.0]], [[1.0, 1.0], [1.0, 1.0]])
+    assert (within, between) == (1.0, pytest.approx(math.sqrt(7.0)))
+    single = significance.variance_components([[0.0], [4.0]], [[1.0], [1.0]])
+    assert all(math.isnan(value) for value in single)
+    # a kernel one side has no episode for is left out
+    assert significance.variance_components([[0.0, 2.0], []], [[1.0], [1.0]])[0] == pytest.approx(math.sqrt(2.0))

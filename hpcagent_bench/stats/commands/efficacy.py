@@ -374,6 +374,15 @@ def family_stats(table: pd.DataFrame, intervention: str, languages: dict[str, st
                 "leg": pair_leg_label(pair, intervention, recorded),
                 "score_verdict": str(score["verdict"]) if score is not None else "",
                 "cost_verdict": str(cost["verdict"]) if cost is not None else "",
+                # the family CSV's three-way conclusions (paired_setups.py --equivalence), only when it has them
+                **(
+                    {
+                        name: str(leg["conclusion"]) if leg is not None else ""
+                        for name, leg in zip(efficacy_figures.CONCLUSION_COLUMNS, (score, cost), strict=True)
+                    }
+                    if "conclusion" in table.columns
+                    else {}
+                ),
                 "kernels": int(score["n_pairs"]) if score is not None else 0,
             }
         )

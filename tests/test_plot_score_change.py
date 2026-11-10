@@ -27,7 +27,7 @@ from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.commands import efficacy as efficacy_command
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 from hpcagent_bench.stats.figures.efficacy import Measure
-from hpcagent_bench.stats.significance import Finding, Leg
+from hpcagent_bench.stats.significance import Conclusion, Finding, Leg
 
 REPO = paths.ROOT
 
@@ -575,6 +575,37 @@ def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: s
             for leg in Leg
         ]
     )
+
+
+def test_an_equivalent_measure_wears_its_own_mark_only_when_the_family_csv_carries_conclusions() -> None:
+    """``paired_setups.py --equivalence`` writes a three-way conclusion per leg. The figure then marks a measure
+    that passed the equivalence test with ``=`` and explains it in the key; a significant measure keeps its
+    star. A family CSV without the column draws and explains exactly what it always did."""
+    import matplotlib.pyplot as plt
+
+    table = family_csv([SCICOMP_PAIR], Finding.NOT_SIGNIFICANT.text, Finding.SIGNIFICANT.text)
+    plain = plot.family_stats(table, "repo")
+    assert not set(efficacy_figures.CONCLUSION_COLUMNS) & set(plain.columns)
+    assert efficacy_figures.drawn_symbols(plain) == (False, True)
+    conclusions = {Leg.SPEEDUP.text: Conclusion.EQUIVALENT.text, Leg.TOKENS.text: Conclusion.DIFFERENT.text}
+    stats = plot.family_stats(table.assign(conclusion=table.leg.map(conclusions)), "repo")
+    assert stats[list(efficacy_figures.CONCLUSION_COLUMNS)].iloc[0].tolist() == list(conclusions.values())
+    assert efficacy_figures.drawn_symbols(stats) == (False, True, True, False)
+    row = dataclasses.replace(arrow_row(), model=str(stats.model.iloc[0]), leg=str(stats.leg.iloc[0]))
+    drawn = {}
+    for measure in (Measure.SPEEDUP, Measure.COST):
+        _, ax = plt.subplots()
+        efficacy_figures.draw_measure_row(ax, [row], measure, "^", efficacy_figures.axis_significance(stats))
+        drawn[measure] = [text.get_text() for text in ax.texts]
+    assert drawn == {
+        Measure.SPEEDUP: [efficacy_figures.EQUIVALENT_MARK],
+        Measure.COST: [efficacy_figures.COST_SIG_MARK],
+    }
+    labels = [handle.get_label() for handle in efficacy_figures.legend_tail(efficacy_figures.drawn_symbols(stats))]
+    assert labels[-2:] == [
+        f"{efficacy_figures.COST_SIG_MARK}  {efficacy_figures.COST_SIG_LABEL}",
+        f"{efficacy_figures.EQUIVALENT_MARK}  {efficacy_figures.EQUIVALENT_LABEL}",
+    ]
 
 
 def test_a_pairs_leg_names_the_language_and_every_packet_both_setups_carried() -> None:
