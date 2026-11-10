@@ -1,7 +1,7 @@
 ---
 name: cpf-cpu-src
 description: "Your kernel source IS DaCe's CPU canonical parallel form (CPF): C/C++ with OpenMP, already parallelized, every loop carrying a parallelism verdict you trust. Optimize from it."
-when: "you start on the kernel: its source file in the task folder is DaCe's CPU canonical parallel form (CPF), not the hand-written reference, already parallelized with OpenMP, and the comments on every loop carry a parallelism verdict you trust (`parallel`, `sequential`) or reason about (`unsure`). Read it for what each comment means, then score the file unchanged and optimize from it"
+when: "you start on the kernel: its source file in the task folder is DaCe's CPU canonical parallel form (CPF), not the hand-written reference, already parallelized with OpenMP, and the comments on every loop carry a parallelism verdict you trust (`parallel`, `sequential`) or reason about (`unknown`). Read it for what each comment means, then score the file unchanged and optimize from it"
 applies: {explicit: true, languages: [c, cpp]}
 ---
 
@@ -24,12 +24,12 @@ unchanged first to confirm it builds and is correct.
 ## What the comments mean
 
 Every loop's comment starts with its class, and its second line says `settled:` (parallel and
-sequential) or `open:` (unsure); the file's header states the same contract. An OpenMP pragma also marks a
+sequential) or `open:` (unknown); the file's header states the same contract. An OpenMP pragma also marks a
 parallel loop. A `parallel` loop is PROVEN safe to run in parallel, possibly under a guard its label states. A
 `sequential` loop is PROVEN sequential, and its label names the carried dependence and a witness: two concrete iterations (and the sizes) that touch the same element. **Trust these
 verdicts**: do not re-check a `parallel` loop, and do not expect re-scheduling (reordering, tiling,
 pragmas) to parallelize a `sequential` one: only an ALGORITHMIC change that removes the dependence can,
-for example breaking an anti dependence, privatizing, or reformulating the recurrence. Reason about dependences only for an `unsure` loop, where the analysis did not decide.
+for example breaking an anti dependence, privatizing, or reformulating the recurrence. Reason about dependences only for an `unknown` loop, where the analysis did not decide.
 
 | first line of the comment | class | what you do |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ for example breaking an anti dependence, privatizing, or reformulating the recur
 | `sequential -- pinned by an earlier pass; ...` | sequential, settled | keep the order |
 | `sequential -- wavefront diagonal (t = ..)...`, `sequential -- wavefront tile diagonal ...` | sequential, settled | keep the order |
 | `sequential -- inner tile of a wavefront [..]: the original order is kept verbatim...` | sequential, settled | keep the order |
-| `unsure -- <reason>` (`never examined for dependences` included) | unsure, open | the only loops worth reasoning about |
+| `unknown -- <reason>` (`never examined for dependences` included) | unknown, open | the only loops worth reasoning about |
 
 A line `covers the N nested loops over i, j, ...: every one of them is parallel` under a `parallel` comment
 means the comment speaks for the nested `for` loops it names, not only the first one. A line
@@ -72,7 +72,7 @@ Nothing was timed.
 ## Your job
 
 The form only replaces the file you start from; nothing reads or rewrites your edits afterwards.
-Trust the verdicts and reason only about `unsure` loops. Spend your effort on the heuristic
+Trust the verdicts and reason only about `unknown` loops. Spend your effort on the heuristic
 optimizations the pipeline applies only in their basic form, and on restructuring: cache tiling,
 fusion, vectorization, memory layout, scheduling (thread count, where to fork). Keep every parallel
 region race-free. Write your version to your own folder as `<kernel>.<ext>`; this file's speedup is a

@@ -1,7 +1,7 @@
 ---
 name: cpf-tool-gpu
 description: "The `canonical_parallel_form` tool: DaCe's GPU canonical parallel form (CPF) of this kernel, the HIP host and device units, already parallelized, every loop carrying a parallelism verdict you trust. Call it once, first, and start from it."
-when: "you are about to decide how to parallelize or optimize this kernel: call the `canonical_parallel_form` tool ONCE, before you design a scheme of your own, and start from its answer: it only sets your starting point and never reads or changes your code, so a second call returns the same form. It answers with a parallelized, parallelism-annotated HIP version of THIS kernel (host unit and device unit, kernels and launches decided) whose `parallel` and `sequential` loop verdicts you trust; only `unsure` loops need your reasoning. Nothing is inserted into your source file, and the answer is a drop-in that takes your required signature"
+when: "you are about to decide how to parallelize or optimize this kernel: call the `canonical_parallel_form` tool ONCE, before you design a scheme of your own, and start from its answer: it only sets your starting point and never reads or changes your code, so a second call returns the same form. It answers with a parallelized, parallelism-annotated HIP version of THIS kernel (host unit and device unit, kernels and launches decided) whose `parallel` and `sequential` loop verdicts you trust; only `unknown` loops need your reasoning. Nothing is inserted into your source file, and the answer is a drop-in that takes your required signature"
 applies: {explicit: true, languages: [hip]}
 ---
 
@@ -23,12 +23,12 @@ answer to a call you make, and the call changes nothing on disk.
 ## How to read the loops
 
 Every loop's comment starts with its class, and its second line says `settled:` (parallel and
-sequential) or `open:` (unsure); the file's header states the same contract. A `__global__` kernel launch also marks a
+sequential) or `open:` (unknown); the file's header states the same contract. A `__global__` kernel launch also marks a
 parallel loop. A `parallel` loop is PROVEN safe to run in parallel, possibly under a guard its label states. A
 `sequential` loop is PROVEN sequential, and its label names the carried dependence and a witness: two concrete iterations (and the sizes) that touch the same element. **Trust these
 verdicts**: do not re-check a `parallel` loop, and do not expect re-scheduling (reordering, tiling,
 pragmas) to parallelize a `sequential` one: only an ALGORITHMIC change that removes the dependence can,
-for example breaking an anti dependence, privatizing, or reformulating the recurrence. Reason about dependences only for an `unsure` loop, where the analysis did not decide.
+for example breaking an anti dependence, privatizing, or reformulating the recurrence. Reason about dependences only for an `unknown` loop, where the analysis did not decide.
 
 | first line of the comment | class | what you do |
 | --- | --- | --- |
@@ -41,7 +41,7 @@ for example breaking an anti dependence, privatizing, or reformulating the recur
 | `sequential -- pinned by an earlier pass; ...` | sequential, settled | keep the order |
 | `sequential -- wavefront diagonal (t = ..)...`, `sequential -- wavefront tile diagonal ...` | sequential, settled | keep the order (one launch per diagonal) |
 | `sequential -- inner tile of a wavefront [..]: the original order is kept verbatim...` | sequential, settled | keep the order |
-| `unsure -- <reason>` (`never examined for dependences` included) | unsure, open | the only loops worth reasoning about |
+| `unknown -- <reason>` (`never examined for dependences` included) | unknown, open | the only loops worth reasoning about |
 
 Any further lines under a class line are notes from the pass that shaped the loop (why it uses the block, an
 alternative it declined, a barrier it needs).
@@ -55,7 +55,7 @@ Other comments, and none:
 | `conflicting accumulation ... NOT parallel-reduced` | colliding writes, kept as atomics |
 | no comment | generated code inside a helper (a launcher, a block reduction's own loop) |
 
-So trust the verdicts and reason only about `unsure` loops. Spend your effort on what it applies only
+So trust the verdicts and reason only about `unknown` loops. Spend your effort on what it applies only
 in its basic form, and on restructuring: block sizes, fusing launches, staging through shared memory,
 coalescing, data layout. **The form is a floor, not a target.**
 
