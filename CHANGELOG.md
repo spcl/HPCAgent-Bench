@@ -158,6 +158,8 @@ The NestForge-issue fixes from the student's fork: MapFission, SubgraphFission, 
 TensorDot TTGT, EliminateCopyBack, LoopFusion, MoveLoopIntoMap, PromoteConstantTransients (NestForge #66, #71 to #74,
 #76, #78). The loop verdict `unsure` is now `unknown` on the CPF skill pages; the lock drops `unclecode-litellm`,
 which crawl4ai pulls in and which overwrote harbor's `litellm` package depending on install order.
+`DaceFramework.build_context(spec, offloaded)` derives the small, non-negative and positive symbols from the spec, so
+a plugin running a bench pipeline (Alloy) gets the facts the flavor itself runs with.
 
 ### Release record
 Filled in when the release is cut; nothing below is claimed until its row says so.
