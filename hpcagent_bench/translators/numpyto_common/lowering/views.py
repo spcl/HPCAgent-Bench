@@ -337,11 +337,18 @@ def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) 
 
     ``outg = np.reshape(out, shape)`` is a view in numpy: ``outg[...] += x`` writes ``out``. The emitter lowers a
     reshape as a copy, so every statement of the view's block that stores through it is followed by the copy
-    back, ``out[:] = np.reshape(outg, shape(out))`` (conv_transposed_1d lost every tap's contribution without it).
-    Two cases the copy cannot stand for a view in are refused: the storing statement itself reading or writing
-    the base, and the base written in place while the view is still used afterwards. Rebinding either name ends
-    the view (``x = np.reshape(x, ...)`` rebinds its own base and is no view to carry back).
+    back, ``out[:] = np.reshape(outg, shape(out))`` (conv_transposed_1d lost every tap's contribution without it),
+    and one that writes the base in place while the view is used later by the copy forward,
+    ``outg[:] = np.reshape(out, shape(outg))``. A statement that stores through one name while reading the other
+    is refused: no copy stands for that. Rebinding either name ends the view (``x = np.reshape(x, ...)`` rebinds
+    its own base and is no view to carry back).
     """
+
+    def copy(dst: str, src: str, after: ast.stmt) -> ast.stmt:
+        dims = ast.Tuple(elts=[ast.parse(d, mode="eval").body for d in shapes[dst]], ctx=ast.Load())
+        target = ast.Subscript(value=name_(dst), slice=ast.Slice(), ctx=ast.Store())
+        back = ast.Assign(targets=[target], value=numpy_call("reshape", [name_(src), dims]))
+        return ast.fix_missing_locations(ast.copy_location(back, after))
 
     def scan(stmts: list[ast.stmt]) -> None:
         for i, bind in enumerate(stmts):
@@ -358,20 +365,17 @@ def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) 
                     isinstance(n, ast.Name) and n.id in matched for n in stmt.targets
                 ):
                     break  # either name rebound: no longer this view of that array
-                if stores_through(stmt, view):
-                    if mentions(stmt, base):
-                        raise NotImplementedError(
-                            f"reshape view {view!r} of {base!r} is written by a statement that also uses {base!r}"
-                        )
-                    dims = ast.Tuple(elts=[ast.parse(d, mode="eval").body for d in shapes[base]], ctx=ast.Load())
-                    target = ast.Subscript(value=name_(base), slice=ast.Slice(), ctx=ast.Store())
-                    back = ast.Assign(targets=[target], value=numpy_call("reshape", [name_(view), dims]))
-                    stmts.insert(j + 1, ast.fix_missing_locations(ast.copy_location(back, stmt)))
+                stored = [n for n in (view, base) if stores_through(stmt, n)]
+                if stored and mentions(stmt, base if stored[0] == view else view):
+                    raise NotImplementedError(f"{stored[0]!r} is written by a statement that reads its reshape alias")
+                if stored == [view]:
+                    stmts.insert(j + 1, copy(base, view, stmt))
                     j += 1
-                elif stores_through(stmt, base) and any(mentions(later, view) for later in stmts[j + 1 :]):
-                    raise NotImplementedError(
-                        f"{base!r} is written in place while its reshape view {view!r} is still used: the copy is stale"
-                    )
+                elif stored == [base] and any(mentions(later, view) for later in stmts[j + 1 :]):
+                    if view not in shapes:
+                        raise NotImplementedError(f"{base!r} is written in place while its view {view!r} is used")
+                    stmts.insert(j + 1, copy(view, base, stmt))
+                    j += 1
                 j += 1
 
     if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
