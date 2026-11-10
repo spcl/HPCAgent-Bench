@@ -15,6 +15,7 @@ import sys
 from collections.abc import Mapping
 
 import pydantic
+from hpcagent_agent import env_aliases
 from hpcagent_agent.coded import Coded
 
 __all__ = [
@@ -163,7 +164,7 @@ def from_environ(environ: Mapping[str, str]) -> Service:
     nodes = environ.get("INFERENCE_NODES", "0").strip() or "0"
     if nodes != "0":
         raise SystemExit(f"a service setup starts no server; set INFERENCE_NODES=0, not {nodes}")
-    harness = environ.get("HARNESS", "").strip() or "claude"
+    harness = env_aliases.resolve("HARNESS", "", environ).strip() or "claude"
     accepted = HARNESSES_BY_API[resolved.api]
     if harness not in accepted:
         raise SystemExit(
