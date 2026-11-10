@@ -76,7 +76,13 @@ def add_call(path: pathlib.Path, episode_id: str, *, ts: int = 1, **values: obje
 
 
 def build_run_dir(
-    tmp_path: pathlib.Path, *, ranks: int = 2, agents: int = 2, drop_log: bool = False, empty_agent: bool = False
+    tmp_path: pathlib.Path,
+    *,
+    ranks: int = 2,
+    agents: int = 2,
+    drop_log: bool = False,
+    empty_agent: bool = False,
+    log_name: str = "claude.log",
 ) -> pathlib.Path:
     """A run dir shaped like RUN_DIR after a real experiment: judge shards, shared write folders, agent
     logs, and one monitor CSV. ``drop_log`` and ``empty_agent`` punch the exact holes TASK 3 wants."""
@@ -97,7 +103,7 @@ def build_run_dir(
         worker_dir = node_dir / f"problem-{worker}-worker-{worker}"
         worker_dir.mkdir(parents=True)
         if not (drop_log and worker == agents - 1):
-            (worker_dir / "claude.log").write_text("agent output\n")
+            (worker_dir / log_name).write_text("agent output\n")
 
     monitor_dir = run_dir / "monitor"
     monitor_dir.mkdir(parents=True)
@@ -111,6 +117,12 @@ def test_intact_run_passes_every_check(tmp_path: pathlib.Path, validate_run: typ
     results = validate_run.run_checks(run_dir)
     assert all(r.ok for r in results), results
     assert validate_run.main([str(run_dir)]) == 0
+
+
+def test_a_runner_harness_run_passes_on_its_own_log(tmp_path: pathlib.Path, validate_run: types.ModuleType) -> None:
+    """mini-SWE writes ``miniswe.log`` and no ``claude.log``: its logs and the judge tail still check."""
+    run_dir = build_run_dir(tmp_path, log_name="miniswe.log")
+    assert all(r.ok for r in validate_run.run_checks(run_dir)), validate_run.run_checks(run_dir)
 
 
 def test_db_shards_check_reports_per_shard_and_merged_totals(
