@@ -34,6 +34,7 @@ from hpcagent_bench.cache_files import replacing, sha256_hex
 from hpcagent_bench.categories import Residency
 from hpcagent_bench.harness import db_json, denominator, recording, results_db, scoring, timing
 from hpcagent_bench.harness.native_call import TimingProbe
+from hpcagent_bench.kernel_key import current_name
 from hpcagent_bench.results.observation_columns import (
     CANON_FIELDS,
     NUMERIC_COLUMNS,
@@ -258,7 +259,7 @@ def job_assets(job_dir: pathlib.Path, kernels: Iterable[str]) -> JobAssets:
     # a stray file can sit directly in shared/, so the glob alone is not a directory test
     for workspace in sorted(p for p in shared.glob(f"{AGENT_DIR_PREFIX}*") if p.is_dir()):
         worker = workspace.name.split("-")[-1]
-        saved.update((worker, p.stem) for p in workspace.iterdir() if p.is_file() and p.stem in known)
+        saved.update((worker, p.stem) for p in workspace.iterdir() if p.is_file() and current_name(p.stem) in known)
     return JobAssets(baselines, frozenset(saved))
 
 
@@ -436,7 +437,7 @@ def floor_override(kernel: str) -> BenchSpec | None:
     """The manifest of ``kernel`` when it narrows the bandwidth floor (``floor_bytes_fraction`` < 1), else None; only
     such a kernel's ``suspect`` is re-derived."""
     try:
-        spec = load_spec(kernel)
+        spec = load_spec(current_name(kernel))
     except (KeyError, FileNotFoundError, ValueError):
         return None
     return spec if spec.floor_bytes_fraction < 1 else None
@@ -924,7 +925,7 @@ def distinct(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def final_key(row: Mapping[str, Any]) -> FinalKey:
     """A row's :data:`FinalKey`: its :data:`RegradeKey` under its kernel's configured denominator."""
-    return (*row_key(row), denominator.for_kernel(str(row["kernel"])).text)
+    return (*row_key(row), denominator.for_kernel(current_name(str(row["kernel"]))).text)
 
 
 def row_key(row: Mapping[str, Any]) -> RegradeKey:
@@ -1311,7 +1312,7 @@ def baseline_entries(
     """The baseline files of one triple: the run's own served copy, else today's corpus file."""
     task_dir = job_dir / SHARED_DIRNAME / TASKS_DIRNAME / agent.kernel
     served = sorted(p for p in task_dir.iterdir() if p.is_file()) if task_dir.is_dir() else []
-    corpus_dir = corpus.get(agent.kernel)
+    corpus_dir = corpus.get(current_name(agent.kernel))
     if served:
         origins = [(origin, f"baseline_{origin.name}", "run_local") for origin in served]
     elif corpus_dir is not None:
@@ -1483,6 +1484,9 @@ def extract(options: Options) -> Extracted:
         print(f"platform {platform}: {len(found)} rows {counts}", file=sys.stderr)
     observations.extend(elsewhere)
 
+    # Joins above run on the recorded names (what the databases and job folders hold); the table carries today's.
+    for row in observations:
+        row["kernel"] = current_name(str(row.get("kernel") or ""))
     observations.sort(
         key=lambda r: (
             str(r.get("run_root")),
@@ -1578,6 +1582,8 @@ def export_sources(out: pathlib.Path, got: Extracted) -> None:
     for agent in sorted(grouped):
         job_dir = got.job_dirs.get((agent.run_root, agent.job), pathlib.Path(agent.job))
         indexed.extend(export_agent(out, job_dir, agent, grouped[agent], got.corpus))
+    for entry in indexed:  # the files keep the recorded name in their path; the index joins on today's
+        entry["kernel"] = current_name(str(entry["kernel"]))
     n_src = write_csv(out / "llr40_sources_index.csv", SOURCE_FIELDS, indexed)
     print(f"sources: {n_src} files -> {out / 'sources'}", file=sys.stderr)
 
