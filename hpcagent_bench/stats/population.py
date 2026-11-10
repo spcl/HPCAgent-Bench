@@ -12,7 +12,7 @@ import numbers
 import statistics
 from collections.abc import Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from hpcagent_agent.coded import Coded
 
@@ -776,8 +776,12 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)) -> "p
                 "(--setups) or re-extract with episode rows"
             )
         return pd.DataFrame(columns=empty_columns)
-    tokens = pd.to_numeric(tasks.tokens, errors="coerce")
-    crashed = pd.to_numeric(tasks[CRASHED_COLUMN], errors="coerce").fillna(0.0) if crashed_in else None
+    tokens = pd.Series(pd.to_numeric(tasks.tokens, errors="coerce"), index=tasks.index, dtype=float)
+    crashed = (
+        pd.Series(pd.to_numeric(tasks[CRASHED_COLUMN], errors="coerce"), index=tasks.index, dtype=float).fillna(0.0)
+        if crashed_in
+        else None
+    )
     if crashed is not None:
         # a task whose final attempt is unmeasured has no total: its crashed spend alone is not one (R7)
         tokens = tokens + crashed.where(tokens.notna(), 0.0)
@@ -820,10 +824,10 @@ def kernel_tokens_crashed(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)
     if episodes.empty or CRASHED_COLUMN not in episodes.columns:
         return pd.Series(dtype=float, name=CRASHED_COLUMN)
     per_setup = episodes.groupby([*by, *setup])[CRASHED_COLUMN].median()
-    return per_setup.groupby(level=list(range(len(by)))).sum() if setup else per_setup
+    return cast("pd.Series", per_setup.groupby(level=list(range(len(by)))).sum() if setup else per_setup)
 
 
-def kernel_medians(frame: "pd.DataFrame") -> dict[str, float] | None:
+def kernel_medians(frame: "pd.DataFrame") -> dict[str, float | str] | None:
     """One slice's point over its KERNELS: geomean speedup and geomean token spend, each with its 95% interval
     (withheld below ``summary.MIN_PAIRS_FOR_INTERVAL``), and the two median times (SC15 Rule 4); ``None`` without an
     answer or spend. Under ``cost.attempts = all`` the point names its convention (``cost_attempts``) and reports
@@ -838,7 +842,7 @@ def kernel_medians(frame: "pd.DataFrame") -> dict[str, float] | None:
     speed_low = math.log2(speed.low) if speed.low > 0.0 else math.nan
     speed_high = math.log2(speed.high) if speed.high > 0.0 else math.nan
     spend = summary.geomean_interval(tokens.to_numpy(dtype=float))
-    point = {
+    point: dict[str, float | str] = {
         "log2_speedup": math.log2(speed.point),
         "log2_speedup_low": speed_low,
         "log2_speedup_high": speed_high,

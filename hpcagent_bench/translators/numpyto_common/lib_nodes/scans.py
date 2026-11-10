@@ -234,7 +234,7 @@ def carried_scan(
     else:
         raise ValueError("a cumulative scan needs an operator or a combine function")
     init = [ast.Assign(targets=[ast.Name(id=carry, ctx=ast.Store())], value=a_at(const_(0))), store(const_(0))]
-    step = [ast.Assign(targets=[ast.Name(id=carry, ctx=ast.Store())], value=update), store(name_(sc))]
+    step: list[ast.stmt] = [ast.Assign(targets=[ast.Name(id=carry, ctx=ast.Store())], value=update), store(name_(sc))]
     inner: list[ast.stmt] = [*init, range_for(sc, [const_(1), const_or_name(extent)], step)]
     return wrap_for_loops([iters[i] for i in outer], [shape[i] for i in outer], inner)
 

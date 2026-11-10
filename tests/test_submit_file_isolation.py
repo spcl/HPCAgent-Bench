@@ -8,7 +8,6 @@ a subset rerun could silently rewrite a queued job's kernel list. refuse_if_queu
 exercised against a stub squeue/sacct standing in for a real PENDING job.
 """
 
-import os
 import pathlib
 import shutil
 import subprocess
@@ -181,8 +180,7 @@ def test_a_scaled_budget_is_refused_unless_extension_reruns_are_on(
 
 def test_without_the_environment_name_the_configured_default_refuses(tmp_path: pathlib.Path) -> None:
     """The key unset in the environment is read from the configuration, whose default is off."""
-    interpreter = {"PYTHONPATH": os.pathsep.join(sys.path)}
-    result = run_common(tmp_path, "scale_tokens 12000000", {"TOKEN_SCALE": "2", EXTENSION_KEY: "", **interpreter})
+    result = run_common(tmp_path, "scale_tokens 12000000", {"TOKEN_SCALE": "2", EXTENSION_KEY: ""})
     assert result.returncode == 2, result.stdout
     assert "budget-extension rerun, off by default" in result.stderr
 

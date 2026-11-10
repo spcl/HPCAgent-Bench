@@ -1,4 +1,4 @@
-# Copyright 2026 the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """The opt-in SDFG-pipeline residuals shared by the DaCe framework and the ``dace emit`` command: the

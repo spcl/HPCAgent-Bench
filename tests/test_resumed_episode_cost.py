@@ -1,4 +1,4 @@
-# Copyright 2026 the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """F18, resumed-episode cost: what a task's token cost counts when an episode crashed and resumed.
 
@@ -17,18 +17,19 @@ read back as an observations frame; the switch matrix then runs on frames of the
 import contextlib
 import json
 import pathlib
+import types
 
 import pytest
 
 pytest.importorskip("pandas")
 pytest.importorskip("numpy")
 
-import pandas as pd  # noqa: E402 -- after the graceful skip
+import pandas as pd
 
-from hpcagent_bench import config  # noqa: E402
-from hpcagent_bench.results import extract, studies  # noqa: E402
-from hpcagent_bench.stats import population  # noqa: E402
-from tests.fresh_module import module_at  # noqa: E402
+from hpcagent_bench import config
+from hpcagent_bench.results import extract, studies
+from hpcagent_bench.stats import population
+from tests.fresh_module import module_at
 
 KERNEL = "fuse_stencil_through_transient"
 JOB = 636501
@@ -46,11 +47,11 @@ STATISTICS = pathlib.Path(extract.__file__).parents[2] / "statistics"
 
 
 @pytest.fixture(name="paired_setups")
-def paired_setups_fixture():
+def paired_setups_fixture() -> types.ModuleType:
     return module_at(STATISTICS / "paired_setups.py", "paired_setups")
 
 
-def all_attempts():
+def all_attempts() -> contextlib.AbstractContextManager[None]:
     """``cost.attempts = all`` for one test (restored on exit; the default stays ``final``)."""
     return config.overridden("cost.attempts", config.CostAttempts.ALL)
 
@@ -268,8 +269,15 @@ def test_all_keeps_the_reduction_rules_of_the_final_reading() -> None:
         rerun = submissions(
             [
                 {"row_kind": "episode", "episode_id": "w0", "tokens": 400.0, "tokens_crashed": 10.0, "ts_ms": 10},
-                {"row_kind": "episode", "episode_id": "w0", "tokens": FINAL_TOKENS, "tokens_crashed": CRASHED_TOKENS,
-                 "ts_ms": 30, "job": "2", "run_root": "r2"},
+                {
+                    "row_kind": "episode",
+                    "episode_id": "w0",
+                    "tokens": FINAL_TOKENS,
+                    "tokens_crashed": CRASHED_TOKENS,
+                    "ts_ms": 30,
+                    "job": "2",
+                    "run_root": "r2",
+                },
             ]
         )
         assert population.kernel_tokens(rerun).to_dict() == {"k": ALL_TOKENS}
@@ -336,15 +344,12 @@ def paired_rows(setup: str, kernel: str, tokens: float, crashed: float, ts: int 
 
 
 def test_paired_setups_aggregates_each_mode_exactly_like_the_population_module(
-    paired_setups,
+    paired_setups: types.ModuleType,
 ) -> None:
     """One treatment episode that resumed (100 + 30 + 20) and one control that did not (100): the
     script's per-(setup, kernel) totals, its usage row and its setup row must match the population
     module's reading in BOTH modes, and say which mode they used."""
-    rows = (
-        paired_rows("treated", "k1", FINAL_TOKENS, CRASHED_TOKENS)
-        + paired_rows("control", "k1", FINAL_TOKENS, 0.0)
-    )
+    rows = paired_rows("treated", "k1", FINAL_TOKENS, CRASHED_TOKENS) + paired_rows("control", "k1", FINAL_TOKENS, 0.0)
     frame = pd.DataFrame(rows)
     setups = ["treated", "control"]
     best = paired_setups.best_by_setup_kernel(frame)
@@ -357,8 +362,7 @@ def test_paired_setups_aggregates_each_mode_exactly_like_the_population_module(
     assert "share_tokens_crashed" not in usage.columns
     assert usage.loc["treated", "tokens_crashed"] == pytest.approx(CRASHED_TOKENS)
     setup_frame = pd.DataFrame(
-        paired_setups.setup_rows(best, paired_setups.graded_rows(frame, setups), table, served,
-                                 default_tokens, usage)
+        paired_setups.setup_rows(best, paired_setups.graded_rows(frame, setups), table, served, default_tokens, usage)
     )
     assert setup_frame.cost_attempts.tolist() == ["final", "final"]
     assert setup_frame.share_tokens_crashed.isna().all()
@@ -376,8 +380,7 @@ def test_paired_setups_aggregates_each_mode_exactly_like_the_population_module(
         assert usage.loc["treated", "share_tokens_crashed"] == pytest.approx(CRASHED_TOKENS / ALL_TOKENS)
         assert usage.loc["control", "share_tokens_crashed"] == 0.0
         setup_frame = pd.DataFrame(
-            paired_setups.setup_rows(best, paired_setups.graded_rows(frame, setups), table, served,
-                                     all_tokens, usage)
+            paired_setups.setup_rows(best, paired_setups.graded_rows(frame, setups), table, served, all_tokens, usage)
         )
         assert setup_frame.cost_attempts.tolist() == ["all", "all"]
         by_setup = setup_frame.set_index("setup")
@@ -387,13 +390,12 @@ def test_paired_setups_aggregates_each_mode_exactly_like_the_population_module(
         assert by_setup.loc["control", "share_tokens_crashed"] == 0.0
 
 
-def test_the_written_tables_carry_the_mode_they_were_built_under(paired_setups, tmp_path: pathlib.Path) -> None:
+def test_the_written_tables_carry_the_mode_they_were_built_under(
+    paired_setups: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
     """End to end through ``main``: the pairs and setups CSVs record ``cost_attempts`` beside
     ``cost_model``/``kernel_policy``, and the tokens leg's rho follows the mode."""
-    rows = (
-        paired_rows("treated", "k1", FINAL_TOKENS, CRASHED_TOKENS)
-        + paired_rows("control", "k1", FINAL_TOKENS, 0.0)
-    )
+    rows = paired_rows("treated", "k1", FINAL_TOKENS, CRASHED_TOKENS) + paired_rows("control", "k1", FINAL_TOKENS, 0.0)
     path = tmp_path / "observations.csv"
     pd.DataFrame(rows).to_csv(path, index=False)
     argv = [
