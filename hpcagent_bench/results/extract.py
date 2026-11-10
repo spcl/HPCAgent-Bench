@@ -53,6 +53,7 @@ __all__ = [
     "CELL_TALLY",
     "C_LANGUAGE",
     "C_REFERENCE_FIX_MS",
+    "EPISODE_LIMIT_COLUMNS",
     "EPISODE_ROWS",
     "ERRORED",
     "FALLBACK_REASON",
@@ -587,6 +588,18 @@ ORDER BY r.id
 """
 
 
+#: ``episodes`` column -> the observation column of an episode row that carries it: the limits the episode ran
+#: under and how the attempt before its final one ended. NULL (not recorded) is a blank cell; 0 is "no cap".
+EPISODE_LIMIT_COLUMNS: dict[str, str] = {
+    "token_limit": "episode_token_limit",
+    "output_token_limit": "episode_output_token_limit",
+    "time_limit_s": "episode_time_limit_s",
+    "token_scale": "episode_token_scale",
+    "time_scale": "episode_time_scale",
+    "previous_attempt_result": "episode_previous_attempt_result",
+}
+
+
 def job_of(episode_job: object) -> str:
     """The job a row belongs to: its episode's Slurm job, ``""`` for a local run (never where the DB lies)."""
     return "" if episode_job in (None, results_db.LOCAL_JOB) else str(episode_job)
@@ -788,6 +801,7 @@ def episode_rows(
         row: dict[str, Any] = dict.fromkeys(OBSERVATION_FIELDS, "")
         row |= identity_row(db, {**dict(run), "episode_job": run["job"]}, RowKind.EPISODE)
         start = run["final_attempt_start_ms"]
+        row |= {column: blank(run[name]) for name, column in EPISODE_LIMIT_COLUMNS.items()}
         row |= {
             "kernel": run["kernel"],
             "language": run["setup_language"] or "",
@@ -800,6 +814,7 @@ def episode_rows(
             "tokens_crashed": blank(run["crashed_effective_tokens"]),
             "episode_final_attempt_start_ms": unmeasured(start),
             "episode_cancelled": "1" if run["result"] == CANCELLED_MARKER else "0",
+            "episode_result": run["result"] or "",
         }
         rows.append(row)
     return rows

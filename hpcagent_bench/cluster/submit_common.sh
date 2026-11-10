@@ -36,9 +36,26 @@ hms() { printf '%02d:%02d:%02d\n' "$(( $1 / 3600 ))" "$(( $1 % 3600 / 60 ))" "$(
 
 # BUDGET_SCALE=<N> scales a rerun's budget (the owed "budget" class). TOKEN_SCALE and TIME_SCALE
 # default to it and scale tokens and wall clock separately (4x wall clock may not fit the partition).
+# Any scale other than 1 needs budgets.extension_reruns (require_budget_extension).
 BUDGET_SCALE=${BUDGET_SCALE:-1}
 TOKEN_SCALE=${TOKEN_SCALE:-${BUDGET_SCALE}}
 TIME_SCALE=${TIME_SCALE:-${BUDGET_SCALE}}
+
+# require_budget_extension -- refuses a scale other than 1 unless budgets.extension_reruns is on
+# (docs/matched_limits.md): at the default every episode of a setup runs under the setup's own limits, so two
+# setups stay comparable. The key is read from its environment name, else from the configuration.
+require_budget_extension() {
+    [[ "${TOKEN_SCALE}" != 1 || "${TIME_SCALE}" != 1 ]] || return 0
+    local allowed="${HPCAGENT_BENCH_BUDGETS_EXTENSION_RERUNS:-}"
+    # An empty value is no value: the configuration decides (and would refuse to parse an empty one).
+    [[ -n "${allowed}" ]] || allowed=$(env -u HPCAGENT_BENCH_BUDGETS_EXTENSION_RERUNS \
+        "${HPCAGENT_BENCH_HOST_PYTHON:?source helpers/scripts/host_python.sh}" -c \
+        'from hpcagent_bench import config; print(str(config.current().budgets.extension_reruns).lower())') || return 2
+    [[ "${allowed,,}" =~ ^(true|1|yes|on)$ ]] || {
+        echo "a scaled budget (TOKEN_SCALE=${TOKEN_SCALE}, TIME_SCALE=${TIME_SCALE}) is a budget-extension rerun, off by default: set budgets.extension_reruns (HPCAGENT_BENCH_BUDGETS_EXTENSION_RERUNS=true) to allow it" >&2
+        return 2
+    }
+}
 
 # JOB_FLAGS -- the job flags parse_job_flags took from the command line, as `hpcagent-bench job options` arguments.
 JOB_FLAGS=()
@@ -82,6 +99,7 @@ parse_job_flags() {
 # partition never grants, and the job stays PENDING forever. Without a known limit nothing is clamped.
 # scale_tokens is uncapped: a token ceiling costs money, not a job that never starts.
 scale_time() {
+    require_budget_extension || return 2
     local scaled=$(( $1 * TIME_SCALE )) limit cap
     (( TIME_SCALE != 1 )) || { printf '%s\n' "${scaled}"; return 0; }
     limit=$(job_options --print max_time_hours) || return 2
@@ -95,7 +113,10 @@ scale_time() {
     fi
     printf '%s\n' "${scaled}"
 }
-scale_tokens() { printf '%s\n' "$(( $1 * TOKEN_SCALE ))"; }
+scale_tokens() {
+    require_budget_extension || return 2
+    printf '%s\n' "$(( $1 * TOKEN_SCALE ))"
+}
 
 # scaled_budget_from <base> <KEY> -> <KEY>'s value in <base> (experiments.toml), scaled. Refuses a base that
 # sets none: a scaled rerun would otherwise apply no scale at all.

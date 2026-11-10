@@ -8,6 +8,7 @@ a subset rerun could silently rewrite a queued job's kernel list. refuse_if_queu
 exercised against a stub squeue/sacct standing in for a real PENDING job.
 """
 
+import os
 import pathlib
 import shutil
 import subprocess
@@ -139,8 +140,13 @@ def test_an_empty_queue_passes_through(tmp_path: pathlib.Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+#: The opt-in a scaled budget needs (``budgets.extension_reruns``, docs/matched_limits.md).
+EXTENSION_KEY = "HPCAGENT_BENCH_BUDGETS_EXTENSION_RERUNS"
+
+
 def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """Source submit_common.sh with the given knobs and run ``script`` against it."""
+    """Source submit_common.sh with the given knobs and run ``script`` against it. Budget-extension reruns are on
+    unless ``extra_env`` says otherwise (an empty value leaves the key to the configuration)."""
     site = tmp_path / "site.env"
     site.write_text("")
     env = {
@@ -148,6 +154,7 @@ def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -
         "USER": "tester",
         "HPCAGENT_BENCH_HOST_PYTHON": sys.executable,
         "HPCAGENT_BENCH_SITE_ENV": str(site),
+        EXTENSION_KEY: "true",
         **extra_env,
     }
     return subprocess.run(
@@ -158,6 +165,32 @@ def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -
         timeout=10,
         check=False,
     )
+
+
+@pytest.mark.parametrize("scale", ["scale_tokens 12000000", "scale_time 14400"])
+@pytest.mark.parametrize("knob", ["BUDGET_SCALE", "TOKEN_SCALE", "TIME_SCALE"])
+def test_a_scaled_budget_is_refused_unless_extension_reruns_are_on(
+    tmp_path: pathlib.Path, scale: str, knob: str
+) -> None:
+    """Off by default: with any scale above 1 neither limit is computed, so no scaled env can be staged."""
+    result = run_common(tmp_path, scale, {knob: "2", EXTENSION_KEY: "false"})
+    assert result.returncode == 2, result.stdout
+    assert result.stdout == ""
+    assert "budget-extension rerun, off by default" in result.stderr
+
+
+def test_without_the_environment_name_the_configured_default_refuses(tmp_path: pathlib.Path) -> None:
+    """The key unset in the environment is read from the configuration, whose default is off."""
+    interpreter = {"PYTHONPATH": os.pathsep.join(sys.path)}
+    result = run_common(tmp_path, "scale_tokens 12000000", {"TOKEN_SCALE": "2", EXTENSION_KEY: "", **interpreter})
+    assert result.returncode == 2, result.stdout
+    assert "budget-extension rerun, off by default" in result.stderr
+
+
+def test_the_base_budget_needs_no_opt_in(tmp_path: pathlib.Path) -> None:
+    result = run_common(tmp_path, 'echo "[$(scale_tokens 12000000)][$(scale_time 14400)]"', {EXTENSION_KEY: "false"})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[12000000][14400]"
 
 
 def test_token_scale_and_time_scale_default_to_budget_scale(tmp_path: pathlib.Path) -> None:
