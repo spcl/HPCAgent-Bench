@@ -31,7 +31,7 @@ import pandas as pd
 from hpcagent_bench import packets, paths, study_tags
 from hpcagent_bench.results import studies
 from hpcagent_bench.results.observation_columns import RowKind
-from hpcagent_bench.stats import choices, cost, population, score_rule, significance
+from hpcagent_bench.stats import choices, cost, limits, population, score_rule, significance
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 from hpcagent_bench.stats.figures import marks
@@ -130,6 +130,8 @@ def compare_slice(
         "test": score.label,
         "score_p": score.pvalue,
         "cost_p": cost.pvalue,
+        # Whether both sides' episodes ran under the same recorded limits (budgets.matched_limits).
+        **limits.sides(f"{model}/{leg}", treated, control),
     }
 
 
@@ -166,7 +168,8 @@ def points(
 
 def corrected(rows: Sequence[dict[str, float | str | int]]) -> pd.DataFrame:
     """``rows`` as the stats table, with the configured correction run ONCE over the whole family."""
-    frame = pd.DataFrame(list(rows), columns=list(POINT_COLUMNS)).dropna(subset=["score", "cost"])
+    columns = dict.fromkeys([*POINT_COLUMNS, *(name for row in rows for name in row)])
+    frame = pd.DataFrame(list(rows), columns=list(columns)).dropna(subset=["score", "cost"])
     if frame.empty:
         return frame
     # Interleaved score, cost, score, cost ... so each row's pair of verdicts comes back adjacent.
@@ -375,6 +378,7 @@ def family_stats(table: pd.DataFrame, intervention: str, languages: dict[str, st
                 "score_verdict": str(score["verdict"]) if score is not None else "",
                 "cost_verdict": str(cost["verdict"]) if cost is not None else "",
                 "kernels": int(score["n_pairs"]) if score is not None else 0,
+                **({"limits_match": str(score["limits_match"])} if score is not None and "limits_match" in score else {}),
             }
         )
     tested = [value for value in table["p_adjusted"] if math.isfinite(float(value))]
@@ -475,6 +479,7 @@ def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureC
     same_card(table, card, args.pairs_csv)
     same_rule(table, args.pairs_csv)
     same_policy(table, args.pairs_csv, args.speedup_over)
+    limits.announce(lambda: limits.check_table(table, args.pairs_csv))
     frame_all = load_all(args.observations, card)
     frame = pair_frame(frame_all, pairs, args.intervention)
     if frame.empty:
@@ -650,6 +655,7 @@ def build_comparison(
         same_card(table, card, pathlib.Path(spec["pairs"]))
         same_rule(table, pathlib.Path(spec["pairs"]))
         same_policy(table, pathlib.Path(spec["pairs"]), over)
+        limits.announce(lambda: limits.check_table(table, spec["pairs"]))
         pairs = family_pairs(table)
         if not pairs:
             return None
