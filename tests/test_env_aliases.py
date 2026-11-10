@@ -1,4 +1,4 @@
-# Copyright 2026 the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The deprecated-name alias layer (agent/hpcagent_agent/env_aliases.py): one-time warning, precedence, and
 the config keys the old names still feed (hpcagent_bench/config.py LEGACY_ENV)."""
@@ -19,12 +19,14 @@ def fresh_warnings() -> None:
     env_aliases.WARNED.clear()
 
 
-def deprecation_warnings(recwarn) -> int:
+def deprecation_warnings(recwarn: pytest.WarningsRecorder) -> int:
     """How many DeprecationWarnings ``recwarn`` holds."""
     return len([warning for warning in recwarn if warning.category is DeprecationWarning])
 
 
-def test_a_deprecated_name_warns_once_and_maps(monkeypatch, recwarn) -> None:
+def test_a_deprecated_name_warns_once_and_maps(
+    monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
+) -> None:
     """The old short name still reads, warns exactly once, and the warning names the current variable."""
     monkeypatch.setenv("AGENT_EFFORT", "medium")
     assert env_aliases.resolve("AGENT_EFFORT", "xhigh") == "medium"
@@ -33,7 +35,7 @@ def test_a_deprecated_name_warns_once_and_maps(monkeypatch, recwarn) -> None:
     assert "HPCAGENT_BENCH_AGENT_EFFORT" in str(recwarn[0].message)
 
 
-def test_the_current_name_wins_silently(monkeypatch, recwarn) -> None:
+def test_the_current_name_wins_silently(monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder) -> None:
     """When both names are set, the configuration key's name decides and nothing warns."""
     monkeypatch.setenv("AGENT_EFFORT", "medium")
     monkeypatch.setenv("HPCAGENT_BENCH_AGENT_EFFORT", "low")
@@ -41,13 +43,13 @@ def test_the_current_name_wins_silently(monkeypatch, recwarn) -> None:
     assert deprecation_warnings(recwarn) == 0
 
 
-def test_a_current_name_alone_never_warns(monkeypatch, recwarn) -> None:
+def test_a_current_name_alone_never_warns(monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_AGENT_HARNESS", "tuner")
     assert env_aliases.value("HARNESS") == "tuner"
     assert deprecation_warnings(recwarn) == 0
 
 
-def test_an_unset_knob_is_no_value(monkeypatch, recwarn) -> None:
+def test_an_unset_knob_is_no_value(monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder) -> None:
     monkeypatch.delenv("AGENT_EFFORT", raising=False)
     monkeypatch.delenv("HPCAGENT_BENCH_AGENT_EFFORT", raising=False)
     assert env_aliases.value("AGENT_EFFORT") is None
@@ -55,7 +57,7 @@ def test_an_unset_knob_is_no_value(monkeypatch, recwarn) -> None:
     assert deprecation_warnings(recwarn) == 0
 
 
-def test_an_empty_value_is_not_an_unset_one(monkeypatch) -> None:
+def test_an_empty_value_is_not_an_unset_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """A setup that pins the empty effort rung (send no effort field) must keep its empty value."""
     monkeypatch.setenv("AGENT_EFFORT", "")
     assert env_aliases.resolve("AGENT_EFFORT", "xhigh") == ""
@@ -65,7 +67,10 @@ def test_the_judge_wait_prefers_the_current_name() -> None:
     """A runner's judge call outlives the CURRENT judge wait, not a stale short-name value beside it."""
     both = {"HPCAGENT_BENCH_TIMEOUTS_JUDGE_S": "10", "JUDGE_TIMEOUT_SECONDS": "1800"}
     assert runner_common.judge_call_timeout(both) == 10 + runner_common.JUDGE_CALL_MARGIN_SECONDS
-    assert runner_common.judge_call_timeout({"JUDGE_TIMEOUT_SECONDS": "1800"}) == 1800 + runner_common.JUDGE_CALL_MARGIN_SECONDS
+    assert (
+        runner_common.judge_call_timeout({"JUDGE_TIMEOUT_SECONDS": "1800"})
+        == 1800 + runner_common.JUDGE_CALL_MARGIN_SECONDS
+    )
 
 
 def test_the_runner_env_feeds_both_judge_wait_names(tmp_path: pathlib.Path) -> None:
@@ -95,7 +100,7 @@ def test_the_runner_env_feeds_both_judge_wait_names(tmp_path: pathlib.Path) -> N
     assert current["HPCAGENT_BENCH_TIMEOUTS_JUDGE_S"] == "77"
 
 
-def test_ncores_reads_the_current_name_over_the_deprecated_one(monkeypatch) -> None:
+def test_ncores_reads_the_current_name_over_the_deprecated_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """``flags.ncores`` keeps reading the deprecated name, and the configuration key's name beats it."""
     monkeypatch.setattr(flags, "physical_cores", lambda cpus: 64)
     monkeypatch.setenv("HPCAGENT_BENCH_NCORES", "64")
@@ -110,7 +115,9 @@ def test_every_deprecated_name_maps_a_live_config_key() -> None:
     assert set(config.LEGACY_ENV) == set(env_aliases.DEPRECATED)
 
 
-def test_a_legacy_value_warns_once_and_reaches_its_key(monkeypatch, recwarn) -> None:
+def test_a_legacy_value_warns_once_and_reaches_its_key(
+    monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
+) -> None:
     """``config.legacy_value`` is the reader-side last layer: the old value, one warning."""
     monkeypatch.setenv("AGENT_EFFORT", "high")
     assert config.legacy_value("agent.effort") == "high"
@@ -118,7 +125,7 @@ def test_a_legacy_value_warns_once_and_reaches_its_key(monkeypatch, recwarn) -> 
     assert deprecation_warnings(recwarn) == 1
 
 
-def test_the_config_key_beats_the_deprecated_name(monkeypatch) -> None:
+def test_the_config_key_beats_the_deprecated_name(monkeypatch: pytest.MonkeyPatch) -> None:
     """An override of the key wins over a legacy value in the environment; the alias still reads for a reader
     that found no key value."""
     monkeypatch.setenv("HPCAGENT_BENCH_NCORES", "64")

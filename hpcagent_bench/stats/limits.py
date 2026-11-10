@@ -132,7 +132,7 @@ def integers(frame: "pd.DataFrame", column: str) -> "pd.Series":
 
     if column not in frame.columns:
         return pd.Series(pd.NA, index=frame.index, dtype="Int64")
-    return pd.to_numeric(frame[column], errors="coerce").round().astype("Int64")
+    return pd.Series(pd.to_numeric(frame[column], errors="coerce"), index=frame.index).round().astype("Int64")
 
 
 def setup_limits(observations: "pd.DataFrame") -> dict[str, SetupLimits]:

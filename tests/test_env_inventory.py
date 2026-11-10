@@ -1,9 +1,12 @@
-# Copyright 2026 the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The environment-name inventory (helpers/scripts/checks/check_env_vars.py) runs on this tree and measures
 what the env cleanup keeps count of."""
 
+import pathlib
 import re
+
+import pytest
 
 from hpcagent_bench import paths
 from tests.fresh_module import module_at
@@ -12,7 +15,7 @@ SCRIPT = paths.ROOT / "helpers" / "scripts" / "checks" / "check_env_vars.py"
 COLUMNS = ["# name", "py", "sh", "first_py", "first_sh", "group"]
 
 
-def test_the_inventory_of_this_tree(tmp_path, capsys) -> None:
+def test_the_inventory_of_this_tree(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The TSV has the six columns, names the knobs the cleanup tracks with sane read counts, and its F10-scope
     totals land near the numbers the cleanup was scoped from (python 164 distinct / 127 project-specific,
     shell 462 an upper bound)."""
@@ -30,7 +33,13 @@ def test_the_inventory_of_this_tree(tmp_path, capsys) -> None:
     assert 60 <= int(run_dir[2]) <= 120, "the F10 table says RUN_DIR appears 92 times in shell"
     assert run_dir[5] == "project"
     assert table["SLURM_JOB_ID"][5] == "vendor"
-    for name in ("AGENT_EFFORT", "CLAUDE_MODEL", "JUDGE_TIMEOUT_SECONDS", "HPCAGENT_BENCH_NCORES", "HPCAGENT_BENCH_REPO"):
+    for name in (
+        "AGENT_EFFORT",
+        "CLAUDE_MODEL",
+        "JUDGE_TIMEOUT_SECONDS",
+        "HPCAGENT_BENCH_NCORES",
+        "HPCAGENT_BENCH_REPO",
+    ):
         assert 1 <= int(table[name][1]) + int(table[name][2]), f"{name} must appear in the inventory"
         assert table[name][3] or table[name][4], f"{name} must carry a first-read location"
 
@@ -38,7 +47,9 @@ def test_the_inventory_of_this_tree(tmp_path, capsys) -> None:
     scoped = re.search(r"the F10 scope\): (\d+) distinct, (\d+) project", summary)
     assert scoped is not None, f"no F10-scope totals in the summary: {summary}"
     assert 140 <= int(scoped.group(1)) <= 190, "distinct python names of hpcagent_bench/ + agent/ (the scan said 164)"
-    assert 110 <= int(scoped.group(2)) <= 145, "project-specific python names of hpcagent_bench/ + agent/ (the scan said 127)"
+    assert 110 <= int(scoped.group(2)) <= 145, (
+        "project-specific python names of hpcagent_bench/ + agent/ (the scan said 127)"
+    )
     shell = re.search(r"shell, whole tree: (\d+) distinct", summary)
     assert shell is not None
     assert 430 <= int(shell.group(1)) <= 560, "distinct ${NAME} over the tree's shell"

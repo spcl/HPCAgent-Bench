@@ -8,10 +8,10 @@ functions: the package exists only in the OpenHands venv (``agent/harness/openha
 agent package pins mcp >= 2.3 for the server), so an interpreter without it must still import this module
 and collect the tests that only build a handle."""
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import timedelta
-from typing import Any, AsyncIterator
+from typing import Any, cast
 
 __all__ = ["SERVER_KEYS", "StdioClient", "server_parameters"]
 
@@ -41,14 +41,12 @@ class StdioClient:
         return [str(self.params.command), *(str(argument) for argument in self.params.args or ())]
 
     @asynccontextmanager
-    async def connect(
-        self, read_timeout_seconds: float | timedelta | None = None
-    ) -> AsyncIterator[Any]:  # noqa: ANN401
+    async def connect(self, read_timeout_seconds: float | timedelta | None = None) -> AsyncIterator[Any]:
         """The connected ``ClientSession`` over stdio: the transport, then the session whose per-call wait
         is ``read_timeout_seconds`` (spelled per mcp generation by ``run_openhands.read_timeout``)."""
         from mcp import ClientSession
         from mcp.client.stdio import stdio_client
 
         async with stdio_client(self.params) as (read, write):
-            async with ClientSession(read, write, read_timeout_seconds=read_timeout_seconds) as session:
+            async with ClientSession(read, write, read_timeout_seconds=cast("Any", read_timeout_seconds)) as session:
                 yield session

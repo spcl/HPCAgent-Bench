@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2026 the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Inventory every environment name the tree reads, as a TSV table (F10 alpha).
 
@@ -30,11 +30,24 @@ import pathlib
 import re
 import sys
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+
+from hpcagent_bench import paths
 
 #: Directories no scan enters (vendored code, output trees, docs: the cleanup scope is code).
 SKIP_DIRS = frozenset(
-    {".git", ".cache", ".ruff_cache", ".scratch", ".venv", "__pycache__", "docs", "node_modules", "results", "third_party"}
+    {
+        ".git",
+        ".cache",
+        ".ruff_cache",
+        ".scratch",
+        ".venv",
+        "__pycache__",
+        "docs",
+        "node_modules",
+        "results",
+        "third_party",
+    }
 )
 
 #: Suffixes the shell side scans, besides extensionless files whose first line is a shell shebang.
@@ -119,7 +132,7 @@ def is_project(name: str) -> bool:
     return name not in GENERIC_NAMES and not name.startswith(VENDOR_PREFIXES)
 
 
-def files(root: pathlib.Path, wanted) -> Iterator[pathlib.Path]:
+def files(root: pathlib.Path, wanted: Callable[[pathlib.Path], bool]) -> Iterator[pathlib.Path]:
     """Every file under ``root`` ``wanted`` accepts, pruned at the directories no scan enters."""
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(name for name in dirnames if name not in SKIP_DIRS)
@@ -227,9 +240,7 @@ def inventory(roots: list[pathlib.Path]) -> tuple[Counter, Counter, dict, dict]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--root", type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[3], help="tree to scan"
-    )
+    parser.add_argument("--root", type=pathlib.Path, default=paths.ROOT, help="tree to scan")
     parser.add_argument("--out", type=pathlib.Path, default=None, help="TSV destination (default: stdout)")
     args = parser.parse_args(argv)
     root = args.root.resolve()
@@ -272,8 +283,12 @@ def main(argv: list[str] | None = None) -> int:
         " (the F10 scan said 462, an upper bound over locals)",
         file=sys.stderr,
     )
-    print(f"python reads of {prefix}* names: {sum(1 for name in py_counts if name.startswith(prefix))}", file=sys.stderr)
-    print(f"shell mentions of {prefix}* names: {sum(1 for name in sh_counts if name.startswith(prefix))}", file=sys.stderr)
+    print(
+        f"python reads of {prefix}* names: {sum(1 for name in py_counts if name.startswith(prefix))}", file=sys.stderr
+    )
+    print(
+        f"shell mentions of {prefix}* names: {sum(1 for name in sh_counts if name.startswith(prefix))}", file=sys.stderr
+    )
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(table + "\n", encoding="utf-8")

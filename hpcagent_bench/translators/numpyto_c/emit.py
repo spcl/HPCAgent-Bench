@@ -1008,7 +1008,7 @@ class CBodyEmitter(BaseEmitter):
         value = node.value
         if not (isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult)):
             return None
-        base = node.target
+        base: ast.expr = node.target
         while isinstance(base, ast.Subscript):
             base = base.value
         acc = self.name_dtype(base.id) if isinstance(base, ast.Name) else None

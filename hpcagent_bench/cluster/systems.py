@@ -360,9 +360,7 @@ def main(argv: Sequence[str]) -> int:
     resolved = resolve(args.system, vars(args), environ, pinned=pinned)
     options = {field: value for field, value in resolved.values.items() if header.get(field) != value}
     exports = {
-        EXTRAS[extra][1]: value
-        for extra, value in resolved.extras.items()
-        if extra in RESOURCE_EXTRAS and value
+        EXTRAS[extra][1]: value for extra, value in resolved.extras.items() if extra in RESOURCE_EXTRAS and value
     }
     logs = paths.scratch_dir() / "logs"
     if not args.dry_run:
@@ -400,7 +398,9 @@ def options_main(argv: Sequence[str]) -> int:
     args = parser.parse_args(list(argv))
     environ = site_environment(os.environ)
     fields = (
-        (*JOB_FIELDS, *LAYOUT_FIELDS) if args.print and any(name in LAYOUT_FIELDS for name in args.print) else JOB_FIELDS
+        (*JOB_FIELDS, *LAYOUT_FIELDS)
+        if args.print and any(name in LAYOUT_FIELDS for name in args.print)
+        else JOB_FIELDS
     )
     resolved = resolve(args.system, vars(args), environ, fields, tuple(args.require) if args.print else JOB_REQUIRED)
     if args.print:

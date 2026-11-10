@@ -209,9 +209,7 @@ def test_a_resource_extra_is_its_flag_then_its_variable_then_the_systems(
     )
 
 
-def test_repeated_print_names_print_one_value_per_line(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
+def test_repeated_print_names_print_one_value_per_line(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     """`--print` repeats: the submitter reads several values with one interpreter instead of five."""
     extra = tmp_path / "systems.yaml"
     extra.write_text("ours:\n  hardware: gfx\n")
