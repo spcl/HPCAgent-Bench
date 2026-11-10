@@ -1225,9 +1225,7 @@ def main(argv: list[str]) -> int:
     ]
 
     episodes = population.episode_logs(observations[observations.setup.isin(setups)]) if args.episodes else None
-    sensitivity = (
-        setup_aggregates(best, served, baseline, args.sensitivity_policy) if args.sensitivity_policy else None
-    )
+    sensitivity = setup_aggregates(best, served, baseline, args.sensitivity_policy) if args.sensitivity_policy else None
 
     def leg_rows(spend: dict[tuple[str, str], float]) -> list[dict[str, object]]:
         return pair_rows(
