@@ -85,7 +85,14 @@ def test_a_cluster_with_no_entry_runs_from_flags_and_the_environment_alone() -> 
         None, {"gpus_per_node": "2"}, {"SBATCH_ACCOUNT": "proj", "SBATCH_PARTITION": "gpu"}, systems.JOB_FIELDS
     )
     assert (resolved.system, resolved.values) == ("", {"partition": "gpu", "account": "proj", "gpus_per_node": "2"})
-    assert resolved.extras == {"hardware": "", "max_time_hours": ""}
+    assert resolved.extras == {
+        "hardware": "",
+        "max_time_hours": "",
+        "agent_memory_gb": "",
+        "agent_cpus": "",
+        "container_memory": "",
+        "container_cpus": "",
+    }
     assert systems.resolve(None, {}, {}).values == {}
 
 
@@ -171,6 +178,63 @@ def test_print_names_one_resolved_value_and_require_refuses_it_unset(monkeypatch
 def test_the_sbatch_command_puts_the_options_before_the_script_and_keeps_its_arguments() -> None:
     command = systems.sbatch_command("job.sbatch", {"cpus_per_task": "5", "nice": "100"}, ["a", "--aa"])
     assert command == ["sbatch", "--cpus-per-task=5", "--nice=100", "job.sbatch", "a", "--aa"]
+
+
+def test_mem_flag_reaches_sbatch(tmp_path: pathlib.Path) -> None:
+    """--mem is an sbatch option like any field: the flag beats the script's pinned --mem (services.sbatch takes the
+    whole node by default), the variable fills a script that pins none, and nothing is passed when nothing sets it."""
+    script = job_script(tmp_path, "#SBATCH --mem=0")
+    assert not [word for word in dry_run(tmp_path, script)[1] if word.startswith("--mem")], "a pin is not repeated"
+    assert "--mem=400G" in dry_run(tmp_path, "--mem", "400G", script)[1]
+    assert "--mem=32G" in dry_run(tmp_path, "--mem=32G", script)[1]
+    bare = job_script(tmp_path)
+    assert "--mem=16G" in dry_run(tmp_path, bare, HPCAGENT_BENCH_JOB_MEM="16G")[1]
+
+
+def test_a_resource_extra_is_its_flag_then_its_variable_then_the_systems(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    monkeypatch.setattr(systems, "site_environment", site_environment({}))
+    assert printed(["--print", "agent_memory_gb"]) == "\n"
+    monkeypatch.setattr(systems, "site_environment", site_environment({"AGENT_MEMORY_CAP_GB": "24"}))
+    assert printed(["--print", "agent_memory_gb"]) == "24\n"
+    monkeypatch.setattr(systems, "site_environment", site_environment({}))
+    assert printed(["--agent-memory-gb", "12", "--print", "agent_memory_gb"]) == "12\n"
+    extra = tmp_path / "systems.yaml"
+    extra.write_text("ours:\n  agent_memory_gb: 24\n  agent_cpus: 8\n  container_memory: 200G\n")
+    site = site_environment({systems.SYSTEMS_FILE: str(extra), "HPCAGENT_BENCH_SYSTEM": "ours"})
+    monkeypatch.setattr(systems, "site_environment", site)
+    assert printed(["--print", "agent_memory_gb", "--print", "agent_cpus", "--print", "container_memory"]) == (
+        "24\n8\n200G\n"
+    )
+
+
+def test_repeated_print_names_print_one_value_per_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """`--print` repeats: the submitter reads several values with one interpreter instead of five."""
+    extra = tmp_path / "systems.yaml"
+    extra.write_text("ours:\n  hardware: gfx\n")
+    site = site_environment({systems.SYSTEMS_FILE: str(extra), "HPCAGENT_BENCH_SYSTEM": "ours"})
+    monkeypatch.setattr(systems, "site_environment", site)
+    assert printed(["--print", "hardware", "--print", "mem"]).splitlines() == ["gfx", ""]
+
+
+def test_job_submit_exports_the_resolved_resource_extras(tmp_path: pathlib.Path) -> None:
+    """The four resource limits are the job's own values: `job submit` forwards every set one under its variable
+    (sbatch's --export), so a system's entry or a flag reaches the job without the submitting shell setting it."""
+    script = job_script(tmp_path)
+    command = dry_run(
+        tmp_path, "--agent-memory-gb", "24", "--agent-cpus", "8",
+        "--container-memory", "200G", "--container-cpus", "32", script,
+    )[1]  # fmt: skip
+    assert (
+        "--export=ALL,AGENT_MEMORY_CAP_GB=24,HPCAGENT_BENCH_AGENT_CPUS=8,"
+        "HPCAGENT_BENCH_CONTAINER_MEMORY=200G,HPCAGENT_BENCH_CONTAINER_CPUS=32"
+    ) in command
+    assert not [word for word in dry_run(tmp_path, script)[1] if word.startswith("--export")], (
+        "an unset limit is not exported"
+    )
 
 
 def dry_run(tmp_path: pathlib.Path, *args: str, **knobs: str) -> tuple[str, list[str]]:
@@ -281,6 +345,12 @@ if __name__ == "__main__":
     with pytest.MonkeyPatch.context() as patch:
         test_print_names_one_resolved_value_and_require_refuses_it_unset(patch)
     test_the_sbatch_command_puts_the_options_before_the_script_and_keeps_its_arguments()
+    test_mem_flag_reaches_sbatch(pathlib.Path(tempfile.mkdtemp()))
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_resource_extra_is_its_flag_then_its_variable_then_the_systems(patch, pathlib.Path(tempfile.mkdtemp()))
+    with pytest.MonkeyPatch.context() as patch:
+        test_repeated_print_names_print_one_value_per_line(patch, pathlib.Path(tempfile.mkdtemp()))
+    test_job_submit_exports_the_resolved_resource_extras(pathlib.Path(tempfile.mkdtemp()))
     test_a_script_keeps_the_fields_its_header_pins_and_the_system_fills_the_rest(pathlib.Path(tempfile.mkdtemp()))
     test_a_flag_beats_the_header_which_beats_our_variables_but_not_slurms(pathlib.Path(tempfile.mkdtemp()))
     test_a_partition_picks_the_system_of_the_cluster_that_serves_it(pathlib.Path(tempfile.mkdtemp()))

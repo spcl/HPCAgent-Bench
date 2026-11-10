@@ -51,8 +51,10 @@ job_options() {
 }
 
 # parse_job_flags "$@" -- the job flags of a submitter: --system, --account, --partition, --gpus-per-node, --hardware,
-# --time (the job's time limit, else computed from the tag) and --nice, each as `--flag value` or `--flag=value`.
-# The resolver's flags go to JOB_FLAGS, over the environment and systems.yaml; any other word is an error.
+# --mem (the job's node memory), --time (the job's time limit, else computed from the tag) and --nice, and the
+# resource limits --agent-memory-gb, --agent-cpus, --container-memory, --container-cpus, each as `--flag value` or
+# `--flag=value`. The resolver's flags go to JOB_FLAGS, over the environment and systems.yaml; any other word is an
+# error.
 parse_job_flags() {
     local flag value
     while (( $# )); do
@@ -67,9 +69,10 @@ parse_job_flags() {
         fi
         case "${flag}" in
             --system | --account | --partition | --gpus-per-node | --hardware) JOB_FLAGS+=("${flag}" "${value}") ;;
+            --mem | --agent-memory-gb | --agent-cpus | --container-memory | --container-cpus) JOB_FLAGS+=("${flag}" "${value}") ;;
             --time) TIME_LIMIT="${value}" ;;
             --nice) NICE="${value}" ;;
-            *) echo "unknown argument ${flag} (job flags: --system --account --partition --gpus-per-node --hardware --time --nice)" >&2; return 2 ;;
+            *) echo "unknown argument ${flag} (job flags: --system --account --partition --gpus-per-node --hardware --mem --agent-memory-gb --agent-cpus --container-memory --container-cpus --time --nice)" >&2; return 2 ;;
         esac
     done
 }

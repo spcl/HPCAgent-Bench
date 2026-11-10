@@ -83,8 +83,13 @@ Each field is resolved in this order, the first that sets it winning (`hpcagent_
 | cores per task | `--cpus-per-task` | `HPCAGENT_BENCH_JOB_CPUS_PER_TASK` | `cpus_per_task` |
 | GPUs per node | `--gpus-per-node` | `HPCAGENT_BENCH_JOB_GPUS_PER_NODE` | `gpus_per_node` |
 | GPUs per task | `--gpus-per-task` | `HPCAGENT_BENCH_JOB_GPUS_PER_TASK` | -- |
+| node memory | `--mem` | `HPCAGENT_BENCH_JOB_MEM` | `mem` |
 | hardware (`submit.sh` only, not an sbatch option) | `--hardware` | `HPCAGENT_BENCH_HARDWARE` | `hardware` |
 | longest partition time (`submit.sh` only) | -- (`job options --max-time-hours`) | `HPCAGENT_BENCH_MAX_TIME_HOURS` | `max_time_hours` |
+| one agent's memory (GiB) | `--agent-memory-gb` | `AGENT_MEMORY_CAP_GB` | `agent_memory_gb` |
+| one agent's CPUs | `--agent-cpus` | `HPCAGENT_BENCH_AGENT_CPUS` | `agent_cpus` |
+| container memory | `--container-memory` | `HPCAGENT_BENCH_CONTAINER_MEMORY` | `container_memory` |
+| container CPUs | `--container-cpus` | `HPCAGENT_BENCH_CONTAINER_CPUS` | `container_cpus` |
 
 The two GPU fields are one choice, and so are the two task fields: each pair comes whole from the highest source
 that sets either. The shipped systems are `beverin` (MI300A, partition `mi300`, 4 tasks x 24 cores, 4 GPUs),
@@ -105,6 +110,19 @@ missing one is an error naming its flag and its variable (`--account` / `SBATCH_
 `HPCAGENT_BENCH_JOB_GPUS_PER_NODE`). The partition may stay unset, which is the cluster's default partition. The
 hardware (`--hardware`, `HPCAGENT_BENCH_HARDWARE`, the entry's `hardware`) is not an `sbatch` option: it names
 the GPU generation whose images and serving layers the experiment uses ([below](#hardware-is-not-a-site-value)).
+
+### Resource limits
+
+`--mem` is the node memory sbatch grants the job; a job script that pins none (`services.sbatch` takes the whole
+node) is narrowed by the flag, the variable or the system's entry. The four other limits are values the job applies
+itself, each exported under the name its runtime already reads: `--agent-memory-gb` caps one agent's private memory
+(`RLIMIT_DATA`) and each of its sealed tmpfs (`AGENT_MEMORY_CAP_GB`, else a share of the node's RAM over the agents),
+`--agent-cpus` caps its CPU share, and `--container-memory` / `--container-cpus` ride the docker and podman run verbs
+(`--memory`, `--cpus`; the Container Engine sizes its containers with the EDF and a SIF has neither option). Every
+limit a submission sets is resolved once (flag, variable, system), pinned into the staged setup env under the name
+that applies it (`--mem` as `HPCAGENT_BENCH_RECORD_MEM`, the sbatch option applies it) and so recorded with the run:
+each setup's env carries it and each episode's `tokens.json` repeats it beside the identity. The results schema does
+not hold a `setups.resources` column yet; when it next grows one, it takes this JSON.
 
 ## Variables
 
