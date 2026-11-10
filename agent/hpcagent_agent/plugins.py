@@ -30,6 +30,7 @@ from typing import Literal
 import pydantic
 
 from hpcagent_agent.harness import subagents
+from hpcagent_agent.tools import registry
 
 __all__ = [
     "ENTRY_POINT_GROUP",
@@ -132,6 +133,19 @@ GATE_KEY = re.compile(r"^[a-z][a-z0-9_]*$")
 CHECK_SYMBOL = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*(:[A-Za-z_]\w*)?$")
 
 
+class Override(pydantic.BaseModel):
+    """A plugin's ``[overrides.<tool>]``: for the packets that carry the name, core tool ``<tool>`` (``submit``,
+    ``score``, ``profile``) is served as a tool that takes no code. Its call POSTs the judge path ``build`` (a
+    route of the plugin) and hands the core tool what that built (``hpcagent_agent.tools.registry.override``)."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    #: The judge path POSTed first, e.g. ``my_plugin/finalize`` or ``my_plugin/finalize?terminal=1``.
+    build: str = pydantic.Field(pattern=r"^[a-z][a-z0-9_]*(/[\w.-]+)*(\?[\w=&.-]+)?$")
+    #: What the agent reads as the tool's description and prompt bullet.
+    description: str = pydantic.Field(min_length=1)
+
+
 class Hooks(pydantic.BaseModel):
     """A plugin's ``[hooks]``: the functions the benchmark runs for it at a well-known moment.
     ``job_init`` names ``package.module:function``; the images' entrypoint runs it once per node and role, after
@@ -154,7 +168,9 @@ class Manifest(pydantic.BaseModel):
     columns) to its ``flavors.<key>`` block (``hpcagent_bench.plugins.FlavorBlock``); ``phases`` maps a phase id to
     its ``phases.<id>`` block (``hpcagent_bench.plugins.PhaseBlock``), the steps its packets order. ``openmp`` is the
     one OpenMP runtime its code links, served to the processes it starts (``hpcagent_bench.plugins.openmp_environment``).
-    ``hooks`` are the functions the benchmark runs for it at well-known moments (:class:`Hooks`)."""
+    ``hooks`` are the functions the benchmark runs for it at well-known moments (:class:`Hooks`). ``overrides`` maps
+    a core tool to its ``[overrides.<tool>]`` block (:class:`Override`). ``api`` is the version of the plugin API
+    (``hpcagent_bench.plugin_api``) its routes keep to, which ``python -m hpcagent_bench.plugins check`` enforces."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
@@ -168,6 +184,8 @@ class Manifest(pydantic.BaseModel):
     #: the spelling is all it checks; the judge that adopts a plugin's table does so through ``anticheat.replace``,
     #: where the gate keeps its slot, title and verdict and every grade still records the gate key.
     gates: dict[str, str] = pydantic.Field(default_factory=dict[str, str])
+    overrides: dict[str, Override] = pydantic.Field(default_factory=dict[str, Override])
+    api: Literal[1] | None = None
     install: Install | None = None
     ci: Checks | None = None
     hooks: Hooks | None = None
@@ -332,12 +350,19 @@ def import_package(plugin: Plugin) -> ModuleType:
 
 
 def import_tools(environ: Mapping[str, str] = os.environ) -> tuple[Plugin, ...]:
-    """Import every agent-side tool module of every plugin this process sees; each registers itself."""
+    """Import every agent-side tool module of every plugin this process sees; each registers itself. Then the
+    plugin's ``[overrides.<tool>]`` blocks register their replacements."""
     found = find(roots(environ))
     for plugin in found:
         import_package(plugin)
         for stem in plugin.modules("tools"):
             importlib.import_module(f"{plugin.package}.tools.{stem}")
+        if plugin.manifest.overrides:
+            from hpcagent_agent.tools import mcp_server  # noqa: PLC0415 -- mcp_server imports this module
+
+            mcp_server.load_core_tools()  # an override replaces a core tool, whoever imported the plugins first
+        for name, block in plugin.manifest.overrides.items():
+            registry.override(name, block.build, block.description)
     return found
 
 

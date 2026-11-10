@@ -7,7 +7,7 @@ from typing import Any, Literal, cast
 import pydantic
 
 from hpcagent_agent.tools import http_json
-from hpcagent_agent.tools.registry import Setup, Spec, tool
+from hpcagent_agent.tools.registry import Hints, Setup, Spec, tool
 
 __all__ = [
     "COUNTER_GROUPS",
@@ -218,6 +218,7 @@ def spec(setup: Setup) -> Spec:
         DESCRIPTION.format(opt_report=opt_report) + http_json.language_clause(setup.language_enforced, setup.language),
         profile_input(setup),
         prompt(setup),
+        Hints(read_only=True, idempotent=True, open_world=False),  # a preview: nothing is recorded
     )
 
 
