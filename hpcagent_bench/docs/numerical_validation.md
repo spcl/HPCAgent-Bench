@@ -67,13 +67,17 @@ not the worst-case `l` (Higham and Mary, SISC 41(5), 2019).
 
 | rule | l |
 |---|---|
-| `declared_chain` | the manifest's `chain_length:` entry for this output (sequential scans) |
+| `declared_chain` | the manifest's `chain_length:` entry for this output: the longest floating-point accumulation chain per element (a scan, a stencil's terms times its steps, a convolution's taps), required wherever the rules below would end in `largest_input_*` |
 | `probed` | the measured reduction axes (below), when shorter than every symbolic rule |
 | `contracted` | per input, the product of its size symbols absent from the output's written shape; `l` is the max over inputs. `(M,K)x(K,N)->(M,N)` gives `K`; a row sum `(M,N)->(M,)` gives `N`; elementwise gives 1 |
 | `declared_shape` | as `contracted`, but the write probe (below) was unavailable |
 | `declared_shape_data_dependent` | as `declared_shape`: two probes on different inputs wrote different sets (a filter, a compaction) |
 | `largest_input_no_shapes` | the kernel declares no symbolic shapes: largest input's element count |
 | `largest_input_ambiguous` | a kept symbol also repeats inside one input (`(N,N)x(N,N)->(N,N)`): largest input's element count |
+
+The two `largest_input_*` rules are an upper bound for an opaque kernel, up to `sqrt(N)` too wide. No kernel may reach
+them silently: `tests/test_tolerance_accumulation.py` lists the kernels that still do (solvers awaiting a declared
+length) and fails for any other.
 
 Example `chain_length` block (`tsvc_2_s1119.yaml`):
 
