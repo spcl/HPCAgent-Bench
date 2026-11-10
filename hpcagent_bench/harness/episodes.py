@@ -91,8 +91,8 @@ class RecordIdentity(pydantic.BaseModel):
 
 class RecordResources(pydantic.BaseModel):
     """The resource limits the episode ran under (the job-launch CLI's, as the staged setup env pins them; '' where
-    unset). A record of how the episode was confined, read alongside its identity -- until the results schema grows a
-    ``setups.resources`` column, this JSON is the only per-episode copy."""
+    unset). A record of how the episode was confined, read alongside its identity -- the results schema
+    (``user_version`` 22) holds no ``setups.resources`` column, so this JSON is the only per-episode copy."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
@@ -133,8 +133,8 @@ class EpisodeRecord(pydantic.BaseModel):
     resources: RecordResources | None = None
     #: The agent rootfs isolation the launch applied (``isolation.agent_rootfs``, the driver's stamp; '' = a
     #: launch older than the key). A fact of the run, carried in the record itself: the ``episodes`` table has
-    #: no column for it yet (the schema is frozen at ``user_version`` 20), so an ``episodes.agent_rootfs``
-    #: column in a future schema is where a query would read it; until then this field is the only carrier.
+    #: no column for it (``user_version`` 22 adds the episode limits only), so an ``episodes.agent_rootfs``
+    #: column in a later schema is where a query would read it; until then this field is the only carrier.
     agent_rootfs: str = ""
     #: None in a record written before the driver stated them: the limits are then not known, never assumed.
     limits: RecordLimits | None = None
