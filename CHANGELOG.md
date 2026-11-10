@@ -138,10 +138,11 @@ MapFusionVertical, ConstantPropagation and the loop lifts (LoopToReduce, ArgMaxL
 scalar specialization keep what a rewrite removes. LAPACK reads a column-major matrix as such, BLAS nodes walk a
 memlet's step, BatchedMatMul keeps its operand transposes, and CPF names LAPACKE on the link line.
 
-### dace extended `7c06b5194` -> `7aaff1cdc`
-184 commits, after the release was cut. Mostly LoopToMap, LoopToScan, MoveArrayOutOfKernel, StateFusionExtended and
+### dace extended `7c06b5194` -> `d181c006b`
+185 commits, after the release was cut. Mostly LoopToMap, LoopToScan, MoveArrayOutOfKernel, StateFusionExtended and
 ArgMaxLift refusals and fixes. InlineMultistateSDFG renames a symbol the parent would declare past a scope that binds
 the name, which NestForge's CloudSC phases need (`Symbols [...] are bound by a loop or map scope`).
+`d181c006b` adds an import whose absence broke `import dace` before Python 3.14 (the floor job).
 The Alloy plugin pin moves `d9919a8` -> `6e9f151` with it (ISA-only packet, math kernel ladder).
 
 ### Release record
