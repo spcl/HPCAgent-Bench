@@ -566,6 +566,9 @@ class LibNodeRewriter(ast.NodeTransformer):
             if target_id not in self.local_dtypes:
                 self.local_dtypes[target_id] = "int64"
             return
+        if isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name) and rhs.value.id in self.local_dtypes:
+            # A slice or gather has its base's dtype (as harvest_assign): a bf16 slice untagged reads as a gemm operand.
+            self.local_dtypes.setdefault(target_id, self.local_dtypes[rhs.value.id])
         if target_id not in self.local_dtypes and reads_complex(rhs, self.local_dtypes):
             self.local_dtypes[target_id] = "complex128"
 
