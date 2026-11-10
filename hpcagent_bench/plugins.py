@@ -7,6 +7,7 @@ agent-side folders plus installed packages
 under :data:`ENTRY_POINT_GROUP`; :func:`roots` is what a launcher exports to every role."""
 
 import argparse
+import ast
 import contextlib
 import functools
 import hashlib
@@ -412,11 +413,49 @@ def flavor_failure(key: str, block: FlavorBlock) -> str:
     return f"flavor {key!r}: optimizer {block.optimizer!r} is no FlavorOptimizer"
 
 
+def api_failure(plugin: Plugin) -> str:
+    """Why ``plugin``'s ``api`` declaration does not hold: a ``routes/`` module importing benchmark code that is not
+    the plugin API (``hpcagent_bench.plugin_api``); ``""`` when it declares none or every such import is the API's."""
+    if plugin.manifest.api is None:
+        return ""
+    for stem in plugin.modules("routes"):
+        for node in ast.walk(ast.parse((plugin.root / "routes" / f"{stem}.py").read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                imported = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                imported = [node.module]
+            else:
+                continue
+            for name in imported:
+                if name.split(".")[0] == "hpcagent_bench" and name != "hpcagent_bench.plugin_api":
+                    return (
+                        f"api {plugin.manifest.api}: routes/{stem}.py imports {name!r}, not hpcagent_bench.plugin_api"
+                    )
+    return ""
+
+
+def gate_failure(key: str, symbol: str) -> str:
+    """Why ``[gates]`` entry ``key = symbol`` could not replace a gate's check (what ``anticheat.replace`` would
+    refuse when the gates run); ``""`` when it could."""
+    from hpcagent_bench import anticheat  # deferred: the gate registry pulls the judge's harness
+
+    gate = anticheat.ANTICHEAT.entries.get(key)
+    if gate is None or gate.check is None:
+        return f"[gates]: {key!r} is no post-run gate"
+    try:
+        found = modules.resolve(symbol)
+    except (ImportError, KeyError) as exc:
+        return f"[gates] {key}: {symbol!r} does not resolve: {exc}"
+    return "" if callable(found) else f"[gates] {key}: {symbol!r} is not callable"
+
+
 def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
     """Every name ``plugin``'s manifest gives that nothing answers to: packet tools, skill pages, composed packets and
-    overlays, flavor optimizers and ``[ci]`` optimizers."""
+    overlays, flavor optimizers, ``[ci]`` optimizers, the routes its ``[overrides.<tool>]`` build from, its
+    ``[gates]`` and, under ``api``, its routes' imports."""
     from hpcagent_agent.tools import registry  # deferred: only the check reads the tools
     from hpcagent_bench import prompt_build  # noqa: PLC0415 -- prompt_build loads plugins at its own import
+    from hpcagent_bench.harness.routes import ROUTES  # noqa: PLC0415 -- only the check reads the routes
 
     failures: list[str] = []
     for key in plugin.manifest.packets:
@@ -437,6 +476,13 @@ def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
                 failures.append(f"packet {key!r}: overlay {ref!r}: {exc}")
     for key, raw in plugin.manifest.flavors.items():
         failures.append(flavor_failure(key, flavor_block(plugin, key, raw)))
+    failures += [
+        f"[overrides.{name}]: no route {route!r}"
+        for name, block in plugin.manifest.overrides.items()
+        if (route := block.build.partition("?")[0].partition("/")[0]) not in ROUTES
+    ]
+    failures += [gate_failure(key, symbol) for key, symbol in plugin.manifest.gates.items()]
+    failures.append(api_failure(plugin))
     if plugin.manifest.ci is not None:
         failures += [f"[ci]: no column {name!r}" for name in plugin.manifest.ci.optimizers if name not in FRAMEWORKS]
     return [f"plugin {plugin.name!r}: {failure}" for failure in failures if failure]
@@ -457,7 +503,11 @@ def check() -> int:
     if failed := next(filter(None, map(import_failure, found)), ""):
         print(failed)
         return 1
-    mcp_server.load_tools()
+    try:
+        mcp_server.load_tools()
+    except ValueError as exc:
+        print(exc)
+        return 1
     pages = skill_packets.shipped_pages() | {
         path.parent.name for plugin in found for path in (plugin.root / "skills").glob("*/SKILL.md")
     }
