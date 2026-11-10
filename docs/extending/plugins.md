@@ -315,6 +315,44 @@ leaves out (`.git`, `.venv`, `__pycache__`, and a top-level `build`, `dist` and 
 `[install]` root in git (`-dirty` with uncommitted changes, `-status-unknown` when git cannot tell). The launch venv's key is the same digest over the
 install roots.
 
+## Job-start hook
+
+A plugin that needs a node set up once per job -- a profiler preload, a library cache, a driver setting -- says so
+in its `plugin.toml`:
+
+```toml
+[hooks]
+job_init = "pkg.mod:run"                    # package.module:function, no arguments but the context
+```
+
+The images' entrypoint (`containers/images/lib/launch_venv.sh`) runs it once per node and role, after the launch
+venv exists and before the service starts: the hook's interpreter is the venv (`pkg.mod` may be the package the
+plugin's `[install]` puts there, or a module the plugin folder itself ships), and the function runs with one
+argument, a context mapping:
+
+| key | value |
+|---|---|
+| `plugin`, `root` | the plugin's name and folder |
+| `workspace`, `venv`, `home` | the checkout the venv synced, the venv, its node-local home |
+| `env_file` | where the hook may write `env.sh` (see below) |
+| `role` | `"judge"` or `"agent"` |
+| `environ` | a snapshot of the environment the entrypoint saw |
+
+Start, end, duration and status of every hook go to the job log, and a hook that fails is a log line, never a
+service that does not start. What ran is stamped beside the venv (`job-init.json`, with each hook's status and
+duration) and the plugin names are exported to the service environment as `HPCAGENT_BENCH_JOB_INIT` -- a judge or
+agent that wants the fact in its own records reads it there.
+
+A hook may write `env.sh` at `env_file`; the entrypoint sources it into the service environment of every step of
+the node, ahead of the launch's own exports. The precedence is: a step's own assignments win over the hook's
+`env.sh`, which wins over the image's and an EDF's `[env]`; the launch's own exports (`VIRTUAL_ENV`, `PATH`,
+`HPCAGENT_BENCH_IMAGE_PYTHON`, the TileLang site) are re-exported after it, so a hook can prepend to `PATH` but
+cannot point the service away from the venv.
+
+The hook runs inside the venv build's once-per-node gate, so a job that lands on a node whose venv (of the same
+pins) already exists does not run it again -- the environment the earlier hook left is what it joins. A changed
+plugin changes the venv's key, which is a fresh home and a fresh run of the hook.
+
 ## OpenMP runtime
 
 A process maps one OpenMP runtime. A plugin whose code links LLVM's says so in its `plugin.toml`:

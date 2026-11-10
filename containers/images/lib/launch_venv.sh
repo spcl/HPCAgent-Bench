@@ -101,8 +101,8 @@ if [ ! -f "${home}/ready" ]; then
             # The ENTRYPOINT sees the image's environment and an EDF's [env], never the step's
             # HPCAGENT_BENCH_PLUGIN_DIRS: the plugin folders come from the mounts. ${plugins}/<name> is a plugin folder,
             # or its [install] root holding the plugin folder named <name> (container_runtime.sh plugin_entries).
-            if [ -n "${sources}" ]; then
-                dirs=""
+            dirs=""
+            if [ -d "${plugins}" ]; then
                 for mounted in "${plugins}"/*/; do
                     mounted="${mounted%/}"
                     name="$(basename "${mounted}")"
@@ -111,6 +111,8 @@ if [ ! -f "${home}/ready" ]; then
                         -not -path '*/.git/*' -printf '%d %h\n' | sort -n | head -n 1 | cut -d' ' -f2-)"
                     [ -n "${folder}" ] && dirs="${dirs:+${dirs}:}${folder}"
                 done
+            fi
+            if [ -n "${sources}" ]; then
                 HPCAGENT_BENCH_PLUGIN_DIRS="${dirs}" "${venv}/bin/python" -m hpcagent_agent.plugins install \
                     --role "${role}" --python "${venv}/bin/python" >&2
             fi
@@ -158,6 +160,16 @@ EOF
                 chmod +x "${venv}/bin/tilelang-python"
                 site "${tilelang}/bin/python" > "${home}/tilelang.site"
             fi
+            # The plugins' [hooks].job_init, once per node and role: this home is node state shared by every step
+            # and later job of this pin, and the ready file below is its gate, so the hook runs once -- after the
+            # venv exists and before any service starts. A profiler preload or another one-shot node setup runs
+            # here; it may drop env.sh beside the venv (sourced below by every step). A failing hook is logged
+            # and left behind: it must not abort the service. Never at an image build gate: that is no job start.
+            if [ -n "${sources}" ] && [ -z "${HPCAGENT_BENCH_LAUNCH_ROOT:-}" ]; then
+                HPCAGENT_BENCH_PLUGIN_DIRS="${dirs}" "${venv}/bin/python" -m hpcagent_agent.plugins job-init \
+                    --home "${home}" --venv "${venv}" --workspace "${workspace}" --role "${role}" >&2 \
+                    || echo "launch_venv: job-init failed; continuing without it" >&2
+            fi
             touch "${home}/ready"
             echo "launch_venv: ${venv} built in $(($(date +%s) - start)) s" >&2
             # Venvs of other pins nobody used for a day hold RAM: drop them, and the cache of their wheels when no other
@@ -177,6 +189,12 @@ if [ "${role}" = agent ]; then
     rm -rf "$("${venv}/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')/relayout/corpus"
 fi
 # A python submission naming python_env "tilelang" is graded on that venv's packages (hpcagent_bench/harness/python_envs.py).
+# A [hooks].job_init hook may have dropped env.sh beside the venv (its context names the path): source it into the
+# service environment ahead of the launch's own exports, so it wins over the image's and an EDF's [env], but can
+# neither clobber the venv (VIRTUAL_ENV, PATH, HPCAGENT_BENCH_IMAGE_PYTHON, the TileLang site) nor survive the
+# exec'd command's own assignments. What ran is stamped beside it; the service environment carries the names.
+[ ! -f "${home}/env.sh" ] || . "${home}/env.sh"
+[ ! -f "${home}/job-init.plugins" ] || export HPCAGENT_BENCH_JOB_INIT="$(cat "${home}/job-init.plugins")"
 [ ! -f "${home}/tilelang.site" ] || export HPCAGENT_BENCH_TILELANG_SITE="$(cat "${home}/tilelang.site")"
 export VIRTUAL_ENV="${venv}" PATH="${venv}/bin:${PATH}" HPCAGENT_BENCH_IMAGE_PYTHON="${venv}/bin/python3"
 exec "$@"
