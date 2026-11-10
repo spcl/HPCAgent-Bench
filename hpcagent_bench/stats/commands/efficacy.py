@@ -377,6 +377,15 @@ def family_stats(table: pd.DataFrame, intervention: str, languages: dict[str, st
                 "leg": pair_leg_label(pair, intervention, recorded),
                 "score_verdict": str(score["verdict"]) if score is not None else "",
                 "cost_verdict": str(cost["verdict"]) if cost is not None else "",
+                # the family CSV's three-way conclusions (paired_setups.py --equivalence), only when it has them
+                **(
+                    {
+                        name: str(leg["conclusion"]) if leg is not None else ""
+                        for name, leg in zip(efficacy_figures.CONCLUSION_COLUMNS, (score, cost), strict=True)
+                    }
+                    if "conclusion" in table.columns
+                    else {}
+                ),
                 "kernels": int(score["n_pairs"]) if score is not None else 0,
                 **(
                     {"limits_match": str(score["limits_match"])}
@@ -486,6 +495,8 @@ def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureC
     same_rule(table, args.pairs_csv)
     same_policy(table, args.pairs_csv, args.speedup_over)
     limits.announce(lambda: limits.check_table(table, args.pairs_csv))
+    if args.equivalence and "conclusion" not in table.columns:
+        raise SystemExit(f"{args.pairs_csv} has no conclusion column; build it with paired_setups.py --equivalence")
     frame_all = load_all(args.observations, card)
     frame = pair_frame(frame_all, pairs, args.intervention)
     if frame.empty:
@@ -702,6 +713,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=
         "a family CSV from statistics/paired_setups.py. Its setup_a,setup_b rows ARE the pairs and "
         "its corrected verdicts ARE the stars, so the figure and the paper's table cannot disagree",
+    )  # fmt: skip
+    parser.add_argument(
+        "--equivalence",
+        action="store_true",
+        help=
+        "require the family CSV's three-way conclusions (paired_setups.py --equivalence), which mark an "
+        "equivalent measure with '='. Only with --pairs-csv: no other route runs an equivalence test",
     )  # fmt: skip
     parser.add_argument(
         "--intervention",
@@ -954,6 +972,11 @@ def figure_from_treatments(
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if args.equivalence and args.pairs_csv is None:
+        raise SystemExit(
+            "--equivalence needs --pairs-csv: the equivalence test is run once, by statistics/paired_setups.py "
+            "--equivalence, and the figure reads its conclusions from that family CSV"
+        )
     if args.table is None:
         args.table = args.out.with_suffix(".csv")
     significance.configured()  # an unknown test name stops here, before any data is read

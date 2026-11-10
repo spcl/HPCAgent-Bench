@@ -8,7 +8,9 @@ intersected.
 ``--equivalence`` appends, per leg, a TOST equivalence test at a ratio margin fixed in advance, the minimum
 detectable effect and a three-way conclusion (different, equivalent, inconclusive), so a non-significant row is
 never read as "no effect"; ``--task-set`` appends the populations behind every ratio and flags or refuses a pair
-whose two setups did not run the same kernels. Without either option the tables are unchanged.
+whose two setups did not run the same kernels; ``--episodes`` appends the episodes behind every leg and, where a
+kernel was run more than once, the run-to-run and kernel-to-kernel spread of its ratio. Without these options the
+tables are unchanged.
 
     python3 paired_setups.py --observations scored.db --observations blind.db \\
         --pair llr40-oss120b-c,llrblind-oss120b-c \\
@@ -21,6 +23,7 @@ import math
 import pathlib
 import sys
 import warnings
+from collections.abc import Sequence
 from typing import NamedTuple
 
 import pandas as pd
@@ -115,6 +118,9 @@ POPULATION_COLUMNS = (
     "n_both_tokens",
     # rho_R = solved by setup_a / solved by setup_b, both counted over the kernels both ran (n_both_run)
     "rho_r",
+    # coverage_p adjusted over the family's pairs (one per pair, its own family, statistics.correction);
+    # coverage_p itself stays the raw value
+    "coverage_p_adjusted",
     # which of the counts above this leg's rho is over (its size is n_pairs): both-solved, both-run (an
     # unsolved kernel at 1x; --policy served) or both-tokens
     "rho_population",
@@ -138,10 +144,30 @@ EQUIVALENCE_COLUMNS = (
     "mde_ratio_corrected",
     # different (verdict is significant) | equivalent (equivalence_p_adjusted < 0.05) | inconclusive
     "conclusion",
-    # the same reading of rho_R: coverage_p adjusted over the family's pairs; no equivalence test exists for a
-    # solve-rate ratio here, so this is different or inconclusive, never equivalent
-    "coverage_p_adjusted",
+    # the same reading of rho_R (coverage_p_adjusted is among the population columns): a TOST of the difference of
+    # the two solve rates over n_both_run against +-coverage_equivalence_margin (a difference of proportions;
+    # Tango score test), adjusted over the pairs as its own family. Without a margin
+    # (statistics.equivalence_margin_rate, --equivalence-margin-rate) that test is not run and the conclusion
+    # is different or inconclusive, never equivalent
+    "coverage_equivalence_margin",
+    "coverage_equivalence_p",
+    "coverage_equivalence_p_adjusted",
     "coverage_conclusion",
+)
+
+#: Appended last under ``--episodes``: the episodes that are the evidence behind a leg.
+EPISODE_COLUMNS = (
+    # how a kernel's slots were reduced (statistics.repeats); it matters only where repeats_min is above 1
+    "repeat_rule",
+    # each setup's episodes with a value on the leg's kernels (an answer for speedup, a token total for tokens),
+    # and the fewest any setup has on one of them: 1 means no kernel-level repeat backs the leg
+    "episodes_a",
+    "episodes_b",
+    "repeats_min",
+    # standard deviations of the log ratio's two sources (significance.variance_components): one setup's
+    # run-to-run spread on one kernel, and the kernel-to-kernel spread of the ratio; blank without a repeat
+    "sigma_within",
+    "sigma_between",
 )
 
 
@@ -286,6 +312,19 @@ IMPACT_LEG_COLUMNS = {
     "p_adjusted": "p_adjusted",
     "verdict": "verdict",
 }
+#: Appended under ``--sensitivity-policy``: the speedup leg's ratio over the OTHER kernel population, for the
+#: reader to see what the choice of ``--policy`` does. DESCRIPTIVE: no p value, no verdict and no member of the
+#: family, so no adjusted p of the table moves. Blank on the tokens leg, which no policy touches.
+SENSITIVITY_COLUMNS = (
+    "sensitivity_policy",
+    "sensitivity_n_pairs",
+    "sensitivity_rho",
+    "sensitivity_ci_low",
+    "sensitivity_ci_high",
+)
+
+#: The same, appended to the impact table when the pairs table carries them (``--equivalence``).
+IMPACT_EQUIVALENCE_COLUMNS = {"conclusion": "conclusion", "mde": "mde_ratio"}
 
 #: Counts, written as integers and blank when missing (spec N3); every other number is float64 (N2).
 COUNT_COLUMNS = frozenset(
@@ -322,6 +361,10 @@ COUNT_COLUMNS = frozenset(
         "n_only_run_b",
         "n_both_solved",
         "n_both_tokens",
+        "episodes_a",
+        "episodes_b",
+        "repeats_min",
+        "sensitivity_n_pairs",
         "limits_unrecorded_episodes",
         "extended_episodes",
         "n_extended_a",
@@ -337,7 +380,9 @@ def with_integer_counts(frame: pd.DataFrame) -> pd.DataFrame:
 
 def impact_rows(pairs: list[tuple[str, str]], setup_frame: pd.DataFrame, pair_frame: pd.DataFrame) -> pd.DataFrame:
     """Spec section 10: one row per setup, each control once, in the order ``pairs`` first names them. A
-    treatment row carries its ``--pair TREATMENT,CONTROL`` legs, oriented treatment / control."""
+    treatment row carries its ``--pair TREATMENT,CONTROL`` legs, oriented treatment / control, with each leg's
+    conclusion and minimum detectable ratio appended when ``pair_frame`` has them."""
+    leg_columns = IMPACT_LEG_COLUMNS | (IMPACT_EQUIVALENCE_COLUMNS if "conclusion" in pair_frame.columns else {})
     order: list[tuple[str, str]] = []
     controls: set[str] = set()
     for treatment, control in pairs:
@@ -362,14 +407,20 @@ def impact_rows(pairs: list[tuple[str, str]], setup_frame: pd.DataFrame, pair_fr
                 (pair_frame.setup_a == setup) & (pair_frame.setup_b == control) & (pair_frame.leg == leg.text)
             ]
             found = match.iloc[0] if control and not match.empty else None
-            for suffix, source in IMPACT_LEG_COLUMNS.items():
+            for suffix, source in leg_columns.items():
                 row[f"{prefix}_{suffix}"] = found[source] if found is not None else math.nan
             if found is not None and "limits_match" in pair_frame.columns:
                 row["limits_match"] = found["limits_match"]
         rows.append(row)
     reported = "limits_match" in pair_frame.columns
+    added = [
+        f"{prefix}_{suffix}"
+        for prefix in IMPACT_LEGS.values()
+        for suffix in IMPACT_EQUIVALENCE_COLUMNS
+        if suffix in leg_columns
+    ]
     return pd.DataFrame(rows).reindex(
-        columns=[name for name in IMPACT_COLUMNS if reported or name not in IMPACT_LIMIT_COLUMNS]
+        columns=[*(name for name in IMPACT_COLUMNS if reported or name not in IMPACT_LIMIT_COLUMNS), *added]
     )
 
 
@@ -418,6 +469,20 @@ def tokens_by_setup_kernel(observations: pd.DataFrame) -> dict[tuple[str, str], 
     (:func:`~hpcagent_bench.stats.population.kernel_tokens`); ``calls.tokens`` is never a cost here."""
     totals = population.kernel_tokens(observations, ("setup", "kernel"))
     return {(str(setup), str(kernel)): float(spend) for (setup, kernel), spend in totals.items()}
+
+
+def episode_columns(setups: tuple[str, str], kernels: Sequence[str], logs: population.EpisodeLogs) -> dict[str, object]:
+    """:data:`EPISODE_COLUMNS` of one leg over its ``kernels``."""
+    left, right = ([logs.get((setup, kernel), ()) for kernel in kernels] for setup in setups)
+    within, between = significance.variance_components(left, right)
+    return {
+        "episodes_a": sum(map(len, left)),
+        "episodes_b": sum(map(len, right)),
+        # a kernel a setup failed (--policy served) has no episode value and is not a repeat count
+        "repeats_min": min((len(cell) for cell in (*left, *right) if cell), default=0),
+        "sigma_within": within,
+        "sigma_between": between,
+    }
 
 
 def setup_aggregates(
@@ -500,13 +565,19 @@ def pair_rows(
     *,
     populations: bool = False,
     equivalence_margin: float | None = None,
+    rate_margin: float | None = None,
+    episodes: population.LegLogs | None = None,
+    sensitivity: dict[str, population.SetupAggregate] | None = None,
 ) -> list[dict[str, object]]:
     """One row per leg per pair, with the family's corrected verdicts already applied.
 
     ``served`` is each setup's served kernels (:func:`served_by_setup`), the ``K`` the tokens leg is
     checked against; without it every setup was served ``tag``. ``populations`` adds
     :data:`POPULATION_COLUMNS`; an ``equivalence_margin`` (a ratio above 1) adds both those and
-    :data:`EQUIVALENCE_COLUMNS`. Neither changes any other value of a row."""
+    :data:`EQUIVALENCE_COLUMNS` (the solve-rate equivalence only with a ``rate_margin``); ``episodes``
+    (:func:`~hpcagent_bench.stats.population.episode_logs`) adds :data:`EPISODE_COLUMNS`; ``sensitivity`` (the
+    setups' aggregates under the other kernel policy) adds :data:`SENSITIVITY_COLUMNS`. None of them changes
+    any other value of a row."""
     populations = populations or equivalence_margin is not None
     rows: list[dict[str, object]] = []
     differences: list[tuple[float, ...]] = []
@@ -547,7 +618,19 @@ def pair_rows(
                 "n_both_tokens": len(both_priced),
                 "rho_r": solved_a / solved_b if solved_b else math.nan,
             }
+        if equivalence_margin is not None:
+            discordant = significance.Discordant(gap.n_only_left, gap.n_only_right)
+            head |= {
+                "coverage_equivalence_margin": math.nan if rate_margin is None else rate_margin,
+                "coverage_equivalence_p": math.nan
+                if rate_margin is None
+                else significance.rate_equivalence(discordant, len(both_ran), margin=rate_margin).pvalue,
+            }
         legs = [(significance.Leg.SPEEDUP, score_leg(left, right))]
+        leg_kernels = {
+            significance.Leg.SPEEDUP: population.common_kernels([left, right]),
+            significance.Leg.TOKENS: shared_token_kernels(setup_a, setup_b, tokens),
+        }
         cost = cost_leg(setup_a, setup_b, tokens)
         if cost is not None:
             legs.append((significance.Leg.TOKENS, cost))
@@ -557,6 +640,12 @@ def pair_rows(
                 {
                     **head,
                     **({"rho_population": leg_population(leg, left.policy)} if populations else {}),
+                    **(episode_columns((setup_a, setup_b), leg_kernels[leg], episodes[leg.text]) if episodes else {}),
+                    **(
+                        sensitivity_columns(sensitivity[setup_a], sensitivity[setup_b])
+                        if sensitivity and leg == significance.Leg.SPEEDUP
+                        else {}
+                    ),
                     "leg": leg.text,
                     "n_pairs": n_pairs,
                     "n_tested": change.n,
@@ -576,9 +665,27 @@ def pair_rows(
         row["correction"] = verdict.correction
         row["p_adjusted"] = verdict.adjusted
         row["verdict"] = verdict.finding.text
+    if populations:
+        # one coverage p per PAIR (its leg rows repeat it), in the order the family declared the pairs
+        coverage_p = {(str(row["setup_a"]), str(row["setup_b"])): float(row["coverage_p"]) for row in rows}
+        adjusted = dict(zip(coverage_p, significance.correct(list(coverage_p.values())), strict=True))
+        for row in rows:
+            row["coverage_p_adjusted"] = adjusted[(str(row["setup_a"]), str(row["setup_b"]))]
     if equivalence_margin is not None:
         add_equivalence(rows, differences, equivalence_margin)
     return rows
+
+
+def sensitivity_columns(left: population.SetupAggregate, right: population.SetupAggregate) -> dict[str, object]:
+    """:data:`SENSITIVITY_COLUMNS` of one pair: its speedup ratio and interval over the other policy's kernels."""
+    change = score_leg(left, right).change
+    return {
+        "sensitivity_policy": left.policy.text,
+        "sensitivity_n_pairs": len(population.common_kernels([left, right])),
+        "sensitivity_rho": math.exp(change.estimate),
+        "sensitivity_ci_low": math.exp(change.low) if math.isfinite(change.low) else math.nan,
+        "sensitivity_ci_high": math.exp(change.high) if math.isfinite(change.high) else math.nan,
+    }
 
 
 def leg_population(leg: significance.Leg, policy: population.KernelPolicy) -> str:
@@ -591,19 +698,19 @@ def leg_population(leg: significance.Leg, policy: population.KernelPolicy) -> st
 def add_equivalence(rows: list[dict[str, object]], differences: list[tuple[float, ...]], margin: float) -> None:
     """:data:`EQUIVALENCE_COLUMNS` on every leg row of one family, in place.
 
-    The equivalence p values are corrected as their own family (one per tested leg) and the coverage p values
-    as a third (one per pair), each with the configured correction, so the three kinds of claim a table can
-    make are each controlled at 0.05. ``conclusion`` reads ``different`` exactly where ``verdict`` reads
-    significant."""
+    The equivalence p values are corrected as their own family (one per tested leg), the coverage p values as a
+    third and the solve-rate equivalence p values, where run, as a fourth (one per pair each), all
+    with the configured correction, so every kind of claim a table can make has its false-discovery rate
+    controlled at 0.05 (Benjamini-Hochberg) on its own.
+    ``conclusion`` reads ``different`` exactly where ``verdict`` reads significant."""
     tests = [significance.equivalence(logs, margin=margin) for logs in differences]
     family = significance.conclusions([float(row["p_value"]) for row in rows], [test.pvalue for test in tests])
     tested = sum(1 for row in rows if math.isfinite(float(row["p_value"])))
     power = config.current().statistics.detectable_power
-    # one coverage p per PAIR (its leg rows repeat it), in the order the family declared the pairs
-    coverage_p = {(str(row["setup_a"]), str(row["setup_b"])): float(row["coverage_p"]) for row in rows}
-    coverage = dict(zip(coverage_p, significance.verdicts(list(coverage_p.values())), strict=True))
+    rate_p = {(str(row["setup_a"]), str(row["setup_b"])): float(row["coverage_equivalence_p"]) for row in rows}
+    rate_adjusted = dict(zip(rate_p, significance.correct(list(rate_p.values())), strict=True))
     for row, logs, test, (conclusion, adjusted) in zip(rows, differences, tests, family, strict=True):
-        solved = coverage[(str(row["setup_a"]), str(row["setup_b"]))]
+        pair = (str(row["setup_a"]), str(row["setup_b"]))
         row["equivalence_margin"] = margin
         row["equivalence_p"] = test.pvalue
         row["equivalence_ci_low"] = math.exp(test.low) if math.isfinite(test.low) else math.nan
@@ -617,10 +724,12 @@ def add_equivalence(rows: list[dict[str, object]], differences: list[tuple[float
             else math.nan
         )
         row["conclusion"] = conclusion.text
-        row["coverage_p_adjusted"] = solved.adjusted
+        row["coverage_equivalence_p_adjusted"] = rate_adjusted[pair]
         row["coverage_conclusion"] = (
             significance.Conclusion.DIFFERENT
-            if solved.finding == significance.Finding.SIGNIFICANT
+            if float(row["coverage_p_adjusted"]) < summary.DEFAULT_ALPHA
+            else significance.Conclusion.EQUIVALENT
+            if rate_adjusted[pair] < summary.DEFAULT_ALPHA
             else significance.Conclusion.INCONCLUSIVE
         ).text
 
@@ -951,6 +1060,29 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "states the cost with and without crashed attempts (needs cost.attempts = final, the default)",
     )
     ap.add_argument(
+        "--equivalence-margin-rate",
+        type=float,
+        default=None,
+        metavar="DIFFERENCE",
+        help="the margin of --equivalence for the solve rates, a difference of proportions in (0, 1) (default: "
+        "statistics.equivalence_margin_rate; unset, no solve-rate equivalence test is run); choose it before "
+        "looking at the data",
+    )
+    ap.add_argument(
+        "--sensitivity-policy",
+        default=None,
+        type=population.KernelPolicy.parse,
+        metavar="|".join(population.KernelPolicy.texts()),
+        help="append to each speedup leg its ratio, interval and paired n over this OTHER kernel population, as "
+        "description only: no test, no p value, and no adjusted p of the table changes",
+    )
+    ap.add_argument(
+        "--episodes",
+        action="store_true",
+        help="append to the pair table, per leg: each setup's episodes behind it, the fewest on any one kernel, "
+        "and the run-to-run and kernel-to-kernel standard deviations of the log ratio (blank without repeats)",
+    )
+    ap.add_argument(
         "--task-set",
         default=TaskSet.INTERSECT,
         type=TaskSet.parse,
@@ -996,6 +1128,15 @@ def main(argv: list[str]) -> int:
         margin = config.current().statistics.equivalence_margin
     if margin is not None and not (math.isfinite(margin) and margin > 1.0):
         raise SystemExit(f"--equivalence-margin is a ratio above 1 (1.2 reads [1/1.2, 1.2]), got {margin!r}")
+    if args.equivalence_margin_rate is not None and not args.equivalence:
+        raise SystemExit("--equivalence-margin-rate only applies with --equivalence")
+    rate_margin = args.equivalence_margin_rate
+    if args.equivalence and rate_margin is None:
+        rate_margin = config.current().statistics.equivalence_margin_rate
+    if rate_margin is not None and not 0.0 < rate_margin < 1.0:
+        raise SystemExit(f"--equivalence-margin-rate is a difference of proportions in (0, 1), got {rate_margin!r}")
+    if args.sensitivity_policy == args.policy:
+        raise SystemExit(f"--sensitivity-policy must name the policy --policy does not ({args.policy.text})")
     pairs = [parse_pair(spec) for spec in args.pair]
     setups = sorted({setup for pair in pairs for setup in pair})
 
@@ -1077,11 +1218,30 @@ def main(argv: list[str]) -> int:
         *(name for name in PAIR_COLUMNS if limits_reported or name not in limits.PAIR_COLUMNS),
         *(POPULATION_COLUMNS if populations else ()),
         *(EQUIVALENCE_COLUMNS if args.equivalence else ()),
+        *(EPISODE_COLUMNS if args.episodes else ()),
+        # a table reduced by another rule than the published one always names it
+        *(("repeat_rule",) if not args.episodes and population.repeat_rule() is not config.Repeats.MEDIAN_ANY else ()),
+        *(SENSITIVITY_COLUMNS if args.sensitivity_policy else ()),
     ]
+
+    episodes = population.episode_logs(observations[observations.setup.isin(setups)]) if args.episodes else None
+    sensitivity = (
+        setup_aggregates(best, served, baseline, args.sensitivity_policy) if args.sensitivity_policy else None
+    )
 
     def leg_rows(spend: dict[tuple[str, str], float]) -> list[dict[str, object]]:
         return pair_rows(
-            pairs, table, spend, tag_kernels, args.family, served, populations=populations, equivalence_margin=margin
+            pairs,
+            table,
+            spend,
+            tag_kernels,
+            args.family,
+            served,
+            populations=populations,
+            equivalence_margin=margin,
+            rate_margin=rate_margin,
+            episodes=episodes,
+            sensitivity=sensitivity,
         )
 
     rows = leg_rows(tokens)
@@ -1106,6 +1266,7 @@ def main(argv: list[str]) -> int:
             score_rule=score_rule.SCORE_RULE,
             kernel_policy=args.policy.text,
             cost_attempts=attempts,
+            repeat_rule=population.repeat_rule().text,
         )
         .reindex(columns=pair_columns)
     )
