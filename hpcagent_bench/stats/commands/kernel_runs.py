@@ -34,7 +34,7 @@ __all__ = [
 ]
 
 
-@dataclasses.dataclass(kw_only=True)
+@dataclasses.dataclass(kw_only=True, slots=True)
 class Options:
     """What ``hpcagent-bench plot kernel-runs`` takes: one field per flag (``--allow-owed`` is ``allow_owed``), at
     the flag's default. :func:`plot` draws from it, on the command line and from Python alike."""
