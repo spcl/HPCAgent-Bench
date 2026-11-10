@@ -5,12 +5,18 @@
 test and correction. The speedup leg pairs solved kernels, the tokens leg kernels with token totals: never
 intersected.
 
+``--equivalence`` appends, per leg, a TOST equivalence test at a ratio margin fixed in advance, the minimum
+detectable effect and a three-way conclusion (different, equivalent, inconclusive), so a non-significant row is
+never read as "no effect"; ``--task-set`` appends the populations behind every ratio and flags or refuses a pair
+whose two setups did not run the same kernels. Without either option the tables are unchanged.
+
     python3 paired_setups.py --observations scored.db --observations blind.db \\
         --pair llr40-oss120b-c,llrblind-oss120b-c \\
         --family blind-vs-scored --out blind.csv
 """
 
 import argparse
+import enum
 import math
 import pathlib
 import sys
@@ -18,6 +24,7 @@ import warnings
 from typing import NamedTuple
 
 import pandas as pd
+from hpcagent_agent.coded import Coded
 
 from hpcagent_bench import config, study_tags
 from hpcagent_bench.results import studies
@@ -85,6 +92,68 @@ PAIR_COLUMNS = (
     "p_adjusted",
     "verdict",
 )
+
+#: Appended to :data:`PAIR_COLUMNS` under ``--equivalence`` or ``--task-set``: the populations behind the three
+#: ratios, so a reader never has to infer which n a ratio is over.
+POPULATION_COLUMNS = (
+    # kernels of the declared tag (--tag-file, else every kernel the input names)
+    "n_roster",
+    # kernels each setup RAN (any graded answer, rejected attempt or judge call), and the ones both ran
+    "n_run_a",
+    "n_run_b",
+    "n_both_run",
+    "n_only_run_a",
+    "n_only_run_b",
+    # whether both setups ran exactly the same kernels
+    "same_task_set",
+    # of the kernels both ran: solved by both, and with a positive token total on both sides (a kernel a setup
+    # never ran has no token total)
+    "n_both_solved",
+    "n_both_tokens",
+    # rho_R = solved by setup_a / solved by setup_b, both counted over the kernels both ran (n_both_run)
+    "rho_r",
+    # which of the counts above this leg's rho is over (its size is n_pairs): both-solved, both-run (an
+    # unsolved kernel at 1x; --policy served) or both-tokens
+    "rho_population",
+)
+
+#: Appended after :data:`POPULATION_COLUMNS` under ``--equivalence``.
+EQUIVALENCE_COLUMNS = (
+    # the ratio margin the equivalence test is against: equivalent means inside [1 / margin, margin]
+    "equivalence_margin",
+    # TOST with the paired test of the row's ``test`` column, its 1 - 2 alpha interval (ratio scale), and the p
+    # adjusted over the family's equivalence tests (their own family, same correction as p_adjusted)
+    "equivalence_p",
+    "equivalence_ci_low",
+    "equivalence_ci_high",
+    "equivalence_p_adjusted",
+    # the smallest true ratio (above 1; its reciprocal below) a paired t test on this leg's log ratios detects
+    # with probability ``mde_power`` at two-sided alpha 0.05, and at alpha / (tests in the family), the
+    # strictest threshold the correction can apply
+    "mde_power",
+    "mde_ratio",
+    "mde_ratio_corrected",
+    # different (verdict is significant) | equivalent (equivalence_p_adjusted < 0.05) | inconclusive
+    "conclusion",
+    # the same reading of rho_R: coverage_p adjusted over the family's pairs; no equivalence test exists for a
+    # solve-rate ratio here, so this is different or inconclusive, never equivalent
+    "coverage_p_adjusted",
+    "coverage_conclusion",
+)
+
+
+class TaskSet(Coded):
+    """What ``--task-set`` does with a pair whose two setups did not run the same kernels."""
+
+    SEPARATOR = enum.nonmember("-")
+
+    #: Pair over the kernels both ran and say nothing (the tables as they always were).
+    INTERSECT = enum.auto()
+    #: The same numbers, with :data:`POPULATION_COLUMNS` appended and one note per unequal pair.
+    FLAG = enum.auto()
+    #: Stop, naming the kernels only one setup ran.
+    REFUSE = enum.auto()
+
 
 SETUP_COLUMNS = (
     "setup",
@@ -233,6 +302,14 @@ COUNT_COLUMNS = frozenset(
         "tokens_crashed",
         "speedup_n",
         "token_n",
+        "n_roster",
+        "n_run_a",
+        "n_run_b",
+        "n_both_run",
+        "n_only_run_a",
+        "n_only_run_b",
+        "n_both_solved",
+        "n_both_tokens",
     }
 )
 
@@ -340,11 +417,13 @@ class Leg(NamedTuple):
     change: significance.Result
     n_pairs: int
     signs: summary.Signs
+    #: The per-kernel log ratios the test was taken over, kept for the equivalence test of the same leg.
+    differences: tuple[float, ...] = ()
 
 
 def paired_leg(differences: list[float], n_pairs: int) -> Leg:
     """``differences`` through the configured paired test."""
-    return Leg(significance.paired(differences), n_pairs, summary.signs(differences))
+    return Leg(significance.paired(differences), n_pairs, summary.signs(differences), tuple(differences))
 
 
 def score_leg(left: population.SetupAggregate, right: population.SetupAggregate) -> Leg:
@@ -397,12 +476,19 @@ def pair_rows(
     tag_kernels: list[str],
     family: str,
     served: dict[str, frozenset[str]] | None = None,
+    *,
+    populations: bool = False,
+    equivalence_margin: float | None = None,
 ) -> list[dict[str, object]]:
     """One row per leg per pair, with the family's corrected verdicts already applied.
 
     ``served`` is each setup's served kernels (:func:`served_by_setup`), the ``K`` the tokens leg is
-    checked against; without it every setup was served ``tag``."""
+    checked against; without it every setup was served ``tag``. ``populations`` adds
+    :data:`POPULATION_COLUMNS`; an ``equivalence_margin`` (a ratio above 1) adds both those and
+    :data:`EQUIVALENCE_COLUMNS`. Neither changes any other value of a row."""
+    populations = populations or equivalence_margin is not None
     rows: list[dict[str, object]] = []
+    differences: list[tuple[float, ...]] = []
     for setup_a, setup_b in pairs:
         left, right = table[setup_a], table[setup_b]
         kernels_a, kernels_b = ((served or {}).get(setup, frozenset(tag_kernels)) for setup in (setup_a, setup_b))
@@ -425,14 +511,31 @@ def pair_rows(
             "coverage_test": coverage.label,
             "coverage_p": coverage.pvalue,
         }
+        if populations:
+            both_priced = shared_token_kernels(setup_a, setup_b, tokens)
+            solved_a, solved_b = gap.n_both + gap.n_only_left, gap.n_both + gap.n_only_right
+            head |= {
+                "n_roster": len(tag_kernels),
+                "n_run_a": len(kernels_a),
+                "n_run_b": len(kernels_b),
+                "n_both_run": len(both_ran),
+                "n_only_run_a": len(kernels_a - kernels_b),
+                "n_only_run_b": len(kernels_b - kernels_a),
+                "same_task_set": kernels_a == kernels_b,
+                "n_both_solved": gap.n_both,
+                "n_both_tokens": len(both_priced),
+                "rho_r": solved_a / solved_b if solved_b else math.nan,
+            }
         legs = [(significance.Leg.SPEEDUP, score_leg(left, right))]
         cost = cost_leg(setup_a, setup_b, tokens)
         if cost is not None:
             legs.append((significance.Leg.TOKENS, cost))
-        for leg, (change, n_pairs, signs) in legs:
+        for leg, (change, n_pairs, signs, logs) in legs:
+            differences.append(logs)
             rows.append(
                 {
                     **head,
+                    **({"rho_population": leg_population(leg, left.policy)} if populations else {}),
                     "leg": leg.text,
                     "n_pairs": n_pairs,
                     "n_tested": change.n,
@@ -452,7 +555,69 @@ def pair_rows(
         row["correction"] = verdict.correction
         row["p_adjusted"] = verdict.adjusted
         row["verdict"] = verdict.finding.text
+    if equivalence_margin is not None:
+        add_equivalence(rows, differences, equivalence_margin)
     return rows
+
+
+def leg_population(leg: significance.Leg, policy: population.KernelPolicy) -> str:
+    """Which :data:`POPULATION_COLUMNS` count a leg's ratio is over."""
+    if leg == significance.Leg.TOKENS:
+        return "both-tokens"
+    return "both-solved" if policy == population.KernelPolicy.SOLVED else "both-run"
+
+
+def add_equivalence(rows: list[dict[str, object]], differences: list[tuple[float, ...]], margin: float) -> None:
+    """:data:`EQUIVALENCE_COLUMNS` on every leg row of one family, in place.
+
+    The equivalence p values are corrected as their own family (one per tested leg) and the coverage p values
+    as a third (one per pair), each with the configured correction, so the three kinds of claim a table can
+    make are each controlled at 0.05. ``conclusion`` reads ``different`` exactly where ``verdict`` reads
+    significant."""
+    tests = [significance.equivalence(logs, margin=margin) for logs in differences]
+    family = significance.conclusions([float(row["p_value"]) for row in rows], [test.pvalue for test in tests])
+    tested = sum(1 for row in rows if math.isfinite(float(row["p_value"])))
+    power = config.current().statistics.detectable_power
+    # one coverage p per PAIR (its leg rows repeat it), in the order the family declared the pairs
+    coverage_p = {(str(row["setup_a"]), str(row["setup_b"])): float(row["coverage_p"]) for row in rows}
+    coverage = dict(zip(coverage_p, significance.verdicts(list(coverage_p.values())), strict=True))
+    for row, logs, test, (conclusion, adjusted) in zip(rows, differences, tests, family, strict=True):
+        solved = coverage[(str(row["setup_a"]), str(row["setup_b"]))]
+        row["equivalence_margin"] = margin
+        row["equivalence_p"] = test.pvalue
+        row["equivalence_ci_low"] = math.exp(test.low) if math.isfinite(test.low) else math.nan
+        row["equivalence_ci_high"] = math.exp(test.high) if math.isfinite(test.high) else math.nan
+        row["equivalence_p_adjusted"] = adjusted
+        row["mde_power"] = power
+        row["mde_ratio"] = math.exp(significance.detectable(logs, power=power))
+        row["mde_ratio_corrected"] = (
+            math.exp(significance.detectable(logs, alpha=summary.DEFAULT_ALPHA / tested, power=power))
+            if tested
+            else math.nan
+        )
+        row["conclusion"] = conclusion.text
+        row["coverage_p_adjusted"] = solved.adjusted
+        row["coverage_conclusion"] = (
+            significance.Conclusion.DIFFERENT
+            if solved.finding == significance.Finding.SIGNIFICANT
+            else significance.Conclusion.INCONCLUSIVE
+        ).text
+
+
+def unequal_task_sets(pairs: list[tuple[str, str]], served: dict[str, frozenset[str]]) -> list[str]:
+    """One line per pair whose two setups did not run the same kernels, naming how many each ran alone and the
+    first few; empty when every pair is matched."""
+    notes: list[str] = []
+    for setup_a, setup_b in pairs:
+        ran_a, ran_b = served.get(setup_a, frozenset()), served.get(setup_b, frozenset())
+        if ran_a == ran_b:
+            continue
+        only_a, only_b = sorted(ran_a - ran_b), sorted(ran_b - ran_a)
+        notes.append(
+            f"{setup_a},{setup_b} ran different kernels ({len(ran_a & ran_b)} shared): "
+            f"only {setup_a} {len(only_a)} {only_a[:5]}; only {setup_b} {len(only_b)} {only_b[:5]}"
+        )
+    return notes
 
 
 def episode_submitted(graded: pd.DataFrame) -> pd.DataFrame:
@@ -735,6 +900,29 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "(every kernel, a failure at 1.0)",
     )
     ap.add_argument(
+        "--equivalence",
+        action="store_true",
+        help="append to the pair table, per leg: a TOST equivalence test of rho against [1/margin, margin] with "
+        "the configured paired test, the minimum detectable effect, and a conclusion that is different, "
+        "equivalent or inconclusive (a non-significant leg is inconclusive unless the equivalence test passes)",
+    )
+    ap.add_argument(
+        "--equivalence-margin",
+        type=float,
+        default=None,
+        metavar="RATIO",
+        help="the ratio margin of --equivalence, above 1 (default: statistics.equivalence_margin); choose it "
+        "before looking at the data",
+    )
+    ap.add_argument(
+        "--task-set",
+        default=TaskSet.INTERSECT,
+        type=TaskSet.parse,
+        metavar="|".join(TaskSet.texts()),
+        help="a pair whose two setups did not run the same kernels: intersect (pair over the kernels both ran; "
+        "the default), flag (the same, with the population columns appended and a note) or refuse (stop)",
+    )
+    ap.add_argument(
         "--impact-out",
         type=pathlib.Path,
         default=None,
@@ -765,6 +953,13 @@ def setup_language(observations: pd.DataFrame, setup: str) -> str:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     significance.configured()  # an unknown test name stops here, before any data is read
+    if args.equivalence_margin is not None and not args.equivalence:
+        raise SystemExit("--equivalence-margin only applies with --equivalence")
+    margin = args.equivalence_margin if args.equivalence else None
+    if args.equivalence and margin is None:
+        margin = config.current().statistics.equivalence_margin
+    if margin is not None and not (math.isfinite(margin) and margin > 1.0):
+        raise SystemExit(f"--equivalence-margin is a ratio above 1 (1.2 reads [1/1.2, 1.2]), got {margin!r}")
     pairs = [parse_pair(spec) for spec in args.pair]
     setups = sorted({setup for pair in pairs for setup in pair})
 
@@ -804,6 +999,13 @@ def main(argv: list[str]) -> int:
     if unanswered:
         raise SystemExit(f"no graded answer for {unanswered}")
 
+    if args.task_set != TaskSet.INTERSECT:
+        unequal = unequal_task_sets(pairs, served)
+        if unequal and args.task_set == TaskSet.REFUSE:
+            raise SystemExit("--task-set refuse: " + "; ".join(unequal))
+        for note in unequal:
+            print(f"note: {note}", file=sys.stderr)
+
     tokens = tokens_by_setup_kernel(observations)
     usage = episode_usage(observations[observations.setup.isin(setups)])
     no_submit = no_submit_rate_by_setup(graded)
@@ -813,15 +1015,32 @@ def main(argv: list[str]) -> int:
         .assign(score_rule=score_rule.SCORE_RULE)
         .reindex(columns=list(SETUP_COLUMNS))
     )
+    populations = args.equivalence or args.task_set != TaskSet.INTERSECT
+    pair_columns = [
+        *PAIR_COLUMNS,
+        *(POPULATION_COLUMNS if populations else ()),
+        *(EQUIVALENCE_COLUMNS if args.equivalence else ()),
+    ]
     pair_frame = (
-        pd.DataFrame(pair_rows(pairs, table, tokens, tag_kernels, args.family, served))
+        pd.DataFrame(
+            pair_rows(
+                pairs,
+                table,
+                tokens,
+                tag_kernels,
+                args.family,
+                served,
+                populations=populations,
+                equivalence_margin=margin,
+            )
+        )
         .assign(
             cost_model=card.key,
             score_rule=score_rule.SCORE_RULE,
             kernel_policy=args.policy.text,
             cost_attempts=population.cost_attempts().text,
         )
-        .reindex(columns=list(PAIR_COLUMNS))
+        .reindex(columns=pair_columns)
     )
     # spec N1: the tables keep full float64; only the printed copy is rounded
     print(setup_frame.round(4).to_string(index=False))

@@ -202,6 +202,15 @@ Call sites: paired tests in `statistics/paired_setups.py` (`score_leg`, `cost_le
 test in `paired_setups.pair_rows` (`coverage_p`); the correction once per `paired_setups.py` invocation and per
 efficacy panel; the grading test inside `timing.reduce_mannwhitney_delta`.
 
+**Equivalence and detectable effects.** `significance.equivalence(log_ratios, margin=)` is a TOST built on
+whichever paired test is configured: the log ratios are shifted to each end of `[-ln m, +ln m]`, the paired
+test's two-sided p there is halved on the side the estimate lies (its complement on the other), and the larger
+of the two is the equivalence p. `significance.detectable(log_ratios, alpha=, power=)` is the minimum detectable
+effect of a paired t test with the observed spread and n (noncentral t). `significance.conclusions` corrects
+difference and equivalence p values as two families and returns `different`, `equivalent` or `inconclusive`.
+`statistics.equivalence_margin` (1.2) and `statistics.detectable_power` (0.8) are their defaults; only
+`paired_setups.py --equivalence` calls them ([statistics/README.md](../statistics/README.md)).
+
 **Switching and registering.** Set the key (`statistics.paired_test: median-sign` or
 `HPCAGENT_BENCH_STATISTICS_PAIRED_TEST`) and re-run; an unknown name stops the run listing what is registered. A
 test is a decorated function returning `significance.Result(estimate, statistic, pvalue, low, high, n, method)`:

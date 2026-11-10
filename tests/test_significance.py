@@ -246,3 +246,133 @@ if __name__ == "__main__":
     test_the_final_grade_keeps_its_timing_test_and_its_stamp()
     with pytest.MonkeyPatch.context() as patch:
         test_a_protocol_cannot_declare_an_unregistered_timing_test(patch)
+
+
+def null_logs(step: float, pairs: int = 5) -> list[float]:
+    """Per-kernel log ratios whose mean is exactly 0: ``pairs`` up and ``pairs`` down by the same ``step``."""
+    return [step, -step] * pairs
+
+
+def test_a_tight_null_is_equivalent_with_the_exact_one_sided_sign_flip_p() -> None:
+    """Ten ratios within 1% of 1 against a 20% margin: shifted to either end of the margin every value keeps one
+    sign, so only the identity of the 2**10 sign vectors reaches the observed mean and each one-sided p is
+    1/1024, by hand."""
+    tested = significance.equivalence(null_logs(0.01), margin=1.2)
+    assert tested.pvalue == 1.0 / 2**10
+    assert tested.margin == pytest.approx(math.log(1.2))
+    assert -tested.margin < tested.low < 0.0 < tested.high < tested.margin
+    assert (tested.method, tested.name, tested.n) == ("tost-sign-flip-exact", "sign-flip", 10)
+    ((conclusion, adjusted),) = significance.conclusions([significance.paired(null_logs(0.01)).pvalue], [tested.pvalue])
+    assert conclusion == significance.Conclusion.EQUIVALENT
+    assert adjusted == tested.pvalue
+
+
+def test_a_wide_null_is_inconclusive_not_equivalent() -> None:
+    """The same mean of exactly 0 with a spread of e per kernel: not significantly different, and nowhere near
+    inside the margin, which is the case a bare "not significant" hides."""
+    logs = null_logs(1.0)
+    difference, tested = significance.paired(logs), significance.equivalence(logs, margin=1.2)
+    assert difference.pvalue == 1.0
+    assert tested.pvalue > 0.05
+    assert tested.low < -tested.margin
+    assert tested.high > tested.margin
+    ((conclusion, _),) = significance.conclusions([difference.pvalue], [tested.pvalue])
+    assert conclusion == significance.Conclusion.INCONCLUSIVE
+
+
+def test_a_doubling_is_different_and_its_equivalence_p_says_outside() -> None:
+    logs = [math.log(2.0) + step for step in null_logs(0.05)]
+    difference, tested = significance.paired(logs), significance.equivalence(logs, margin=1.2)
+    assert difference.pvalue == 2.0 / 2**10
+    # outside the upper end: that side's one-sided p is the complement of the smallest two-sided half
+    assert tested.pvalue == 1.0 - 1.0 / 2**10
+    ((conclusion, _),) = significance.conclusions([difference.pvalue], [tested.pvalue])
+    assert conclusion == significance.Conclusion.DIFFERENT
+
+
+def test_a_small_but_certain_change_inside_the_margin_stays_different() -> None:
+    """A 5% change measured to within 1% is both significant and inside a 20% margin; the conclusion names the
+    difference and the equivalence p still travels beside it."""
+    logs = [math.log(1.05) + step for step in null_logs(0.01)]
+    tested = significance.equivalence(logs, margin=1.2)
+    assert tested.pvalue < 0.05
+    ((conclusion, adjusted),) = significance.conclusions([significance.paired(logs).pvalue], [tested.pvalue])
+    assert conclusion == significance.Conclusion.DIFFERENT
+    assert adjusted == tested.pvalue
+
+
+@pytest.mark.parametrize("spread", [0.2, 0.3, 0.4, 0.5])
+def test_equivalence_passes_exactly_when_the_90_percent_interval_is_inside_the_margin(spread: float) -> None:
+    """TOST at alpha and the 1 - 2 alpha interval of the same paired test are one statement."""
+    for seed in range(6):
+        logs = np.random.default_rng(seed).normal(0.05, spread, 10)
+        tested = significance.equivalence(logs, margin=1.2)
+        inside = -tested.margin < tested.low and tested.high < tested.margin
+        assert inside == (tested.pvalue < 0.05)
+
+
+def test_the_margin_is_configured_and_must_be_a_ratio_above_one() -> None:
+    logs = null_logs(0.1)
+    assert significance.equivalence(logs).margin == pytest.approx(math.log(1.2))
+    with config.overridden("statistics.equivalence_margin", 1.5):
+        assert significance.equivalence(logs).margin == pytest.approx(math.log(1.5))
+    # a wider margin can only make the same data easier to call equivalent
+    assert significance.equivalence(logs, margin=1.5).pvalue <= significance.equivalence(logs, margin=1.1).pvalue
+    for margin in (1.0, 0.8, math.nan):
+        with pytest.raises(ValueError, match="ratio above 1"):
+            significance.equivalence(logs, margin=margin)
+
+
+@pytest.mark.parametrize(
+    ("logs", "method"), [([0.0, 0.1, -0.1], "underpowered"), ([0.0] * 8, "degenerate"), ([], "degenerate")]
+)
+def test_an_untested_comparison_has_no_equivalence_p_and_stays_inconclusive(logs: list[float], method: str) -> None:
+    """Too few pairs or no spread is no test, and no test is never evidence of equivalence -- not even eight
+    ratios of exactly 1."""
+    tested = significance.equivalence(logs, margin=1.2)
+    assert math.isnan(tested.pvalue)
+    assert tested.method == method
+    assert math.isnan(significance.detectable(logs))
+    ((conclusion, adjusted),) = significance.conclusions([math.nan], [tested.pvalue])
+    assert conclusion == significance.Conclusion.INCONCLUSIVE
+    assert math.isnan(adjusted)
+
+
+def test_difference_and_equivalence_are_corrected_as_two_families() -> None:
+    """Three comparisons: Benjamini-Hochberg over the three difference p values and, separately, over the two
+    equivalence p values that exist. By hand: differences (0.01, 0.5, 0.9) -> (0.03, 0.75, 0.9); equivalences
+    (0.9, 0.03, nan) -> (0.9, 0.06, nan), so the middle one, which would pass alone, does not pass in its family."""
+    reached = significance.conclusions([0.01, 0.5, 0.9], [0.9, 0.03, math.nan])
+    assert [conclusion.text for conclusion, _ in reached] == ["different", "inconclusive", "inconclusive"]
+    assert [adjusted for _, adjusted in reached][:2] == pytest.approx([0.9, 0.06])
+    assert significance.conclusions([0.5], [0.03])[0][0] == significance.Conclusion.EQUIVALENT
+
+
+def test_the_minimum_detectable_effect_has_the_stated_power() -> None:
+    """Sixteen kernels with unit spread: the effect returned is found by a two-sided paired t test at 0.05 in 80%
+    of 40000 simulated experiments (binomial standard error 0.002), and it scales with the spread."""
+    logs = np.random.default_rng(0).normal(0.0, 1.0, 16)
+    spread = float(np.std(logs, ddof=1))
+    effect = significance.detectable(logs, power=0.8)
+    # the standardized effect for n = 16, alpha 0.05, power 0.8 from the noncentral t distribution
+    assert effect / spread == pytest.approx(0.7497, abs=5e-4)
+    draws = np.random.default_rng(1).normal(effect, spread, size=(40_000, 16))
+    rejected = stats.ttest_1samp(draws, 0.0, axis=1).pvalue < 0.05
+    assert float(np.mean(rejected)) == pytest.approx(0.8, abs=0.01)
+    assert significance.detectable(3.0 * logs, power=0.8) == pytest.approx(3.0 * effect)
+    # more power or a stricter alpha needs a larger effect; the default power is the configured one
+    assert significance.detectable(logs, power=0.9) > effect
+    assert significance.detectable(logs, alpha=0.05 / 4, power=0.8) > effect
+    assert significance.detectable(logs) == effect == pytest.approx(significance.detectable(logs, power=0.8))
+    with pytest.raises(ValueError, match="alpha < power"):
+        significance.detectable(logs, power=0.01)
+
+
+def test_the_detectable_effect_survives_a_corrected_alpha_on_few_kernels() -> None:
+    """Eight kernels at alpha 0.05 / 3: the root search passes through effects where scipy's noncentral t has
+    no finite far tail, and the answer must still be the effect with 80% power."""
+    logs = null_logs(0.3, pairs=4)
+    effect = significance.detectable(logs, alpha=0.05 / 3.0, power=0.8)
+    critical = stats.t.ppf(1.0 - 0.05 / 6.0, 7)
+    noncentrality = effect * math.sqrt(8) / float(np.std(logs, ddof=1))
+    assert float(stats.nct.sf(critical, 7, noncentrality)) == pytest.approx(0.8, abs=1e-6)

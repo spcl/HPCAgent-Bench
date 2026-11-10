@@ -19,7 +19,7 @@ from collections.abc import Generator, Iterator, Mapping
 from typing import Annotated, Any, ClassVar, Union, get_args, get_origin
 
 import yaml
-from annotated_types import Ge, Gt, Le
+from annotated_types import Ge, Gt, Le, Lt
 from hpcagent_agent import env_aliases
 from hpcagent_agent.coded import Coded
 from pydantic import (
@@ -401,13 +401,16 @@ class Measurement(Section):
 
 
 class Statistics(Section):
-    """``statistics``: reporting tests (stats/significance.py); each value is a registered name."""
+    """``statistics``: reporting tests (stats/significance.py), each a registered name, and the two numbers of the
+    equivalence report (ratio margin, power of the minimum detectable effect)."""
 
     paired_test: str
     proportion_test: str
     paired_proportion_test: str
     correction: str
     two_sample_test: str
+    equivalence_margin: Annotated[float, Gt(1)]
+    detectable_power: Annotated[float, Gt(0), Lt(1)]
 
 
 class Cost(Section):
