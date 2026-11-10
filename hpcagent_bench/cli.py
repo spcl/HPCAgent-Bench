@@ -736,12 +736,14 @@ def cmd_dace_emit(args: argparse.Namespace) -> int:
             pipeline=args.pipeline,
             datatype=args.datatype,
             options=options,
+            frame=args.frame,
         )
     except DaceEmitUnavailable as exc:
         print(f"dace emit: {exc}", file=sys.stderr)
         return 2
     except DaceEmitError as exc:
-        print(f"dace emit: {exc}", file=sys.stderr)
+        # One line: DaCe's messages span several, and a caller reads the last (autogen.emit_device).
+        print(f"dace emit: {' '.join(str(exc).split())}", file=sys.stderr)
         return 1
     for path in written:
         print(path)
@@ -1283,6 +1285,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="prune transient descriptors nothing references any more, after simplify; "
         f"also {DACE_REMOVE_TRANSIENTS_ENV}=1",
+    )
+    de.add_argument(
+        "--frame",
+        action="store_true",
+        default=False,
+        help="for cuda/hip: write the units a dace_gpu_* column compiles (they include DaCe's runtime headers) "
+        "instead of the self-contained host and device pair with its build line",
     )
     de.set_defaults(func=cmd_dace_emit)
 

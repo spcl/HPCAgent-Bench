@@ -29,12 +29,26 @@ Four ranks per node fit at XL: `sizing.XL_BYTE_CEILING` caps a working set at 12
 is an `RLIMIT_DATA` limit, not a reservation; the judge's references are capped separately by
 `sizing.reference_memory_gb` (`limits.reference_node_fraction` of the rank's share of node RAM).
 
-### Inspecting what a DaCe column compiles
+### CUDA and HIP through DaCe
 
-`hpcagent-bench dace emit KERNEL [--target cuda|hip|cpu] [--pipeline NAME] [-o DIR]` runs one SDFG
-pipeline (default `parallel_gpu` for `cuda`/`hip`, `parallel_cpu` for `cpu` -- the pipeline the
-`dace_gpu_parallel` column scores) and writes the generated kernel/module sources to disk for
-inspection. Code generation only: nothing is compiled, so it works on a GPU-less login node.
+`dace_gpu_parallel` is the pipeline for "NumPy to a GPU, automatically": NumPy reference, SDFG, `simplify`,
+`ParallelizeLoops`, state fusion, map fusion and collapse, GPU offload (`pipeline_parallel` in
+`frameworks/dace_framework.py`), built for HIP on ROCm and for CUDA elsewhere. As a column it is timed and
+checked against the NumPy reference like every other:
+`hpcagent-bench run-framework --kernels jacobi_2d --framework dace_gpu_parallel`.
+
+`hpcagent-bench dace emit KERNEL --target cuda|hip [--pipeline NAME] [-o DIR]` writes what that pipeline
+generates as source you can read, build and submit: `<kernel>_<pipeline>.cpp` (the host unit, whose entry is
+the kernel's C ABI symbol and which takes device pointers), `<kernel>_<pipeline>.cu` or `.hip` (the kernels)
+and `<kernel>_<pipeline>.build` (the commands that build the two into one shared library, the workspace bytes
+and the libraries a submission names). The pair includes no DaCe header. Nothing is compiled, so the command
+runs on a GPU-less node; the offload architecture in the build line is the emitting host's. A kernel the
+pipeline or the renderer cannot lower exits 1 and names the construct. `--frame` writes the units the column
+itself compiles (they include DaCe's runtime), as `--target cpu` always does; `-d` applies to those.
+
+`autogen.ensure_native(key, Language.HIP)` (or `CUDA`) files the same pair and build file in the kernel's
+`cpp_backend/` as `<kernel>_fp64_dace.*` under the autogen marker, and raises naming the kernel and the
+construct when it cannot be lowered.
 
 Two opt-in residuals ride along, OFF by default (the measured pipelines are unchanged): `--maximal`
 repeats the (FuseMaps, MapCollapse, StateFusionExtended) round until the SDFG's hash is stable
