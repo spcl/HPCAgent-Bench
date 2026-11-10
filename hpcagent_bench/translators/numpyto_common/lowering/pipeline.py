@@ -99,8 +99,8 @@ from hpcagent_bench.translators.numpyto_common.lowering.views import (
     EllipsisExpander,
     PadImplicitTrailingSlices,
     fold_slice_view_aliases,
-    write_back_reshape_views,
     fold_subarray_aliases,
+    write_back_reshape_views,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.whole_array import WholeArrayAssignRewriter
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
