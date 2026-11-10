@@ -736,6 +736,7 @@ def cmd_dace_emit(args: argparse.Namespace) -> int:
             pipeline=args.pipeline,
             datatype=args.datatype,
             options=options,
+            frame=args.frame,
         )
     except DaceEmitUnavailable as exc:
         print(f"dace emit: {exc}", file=sys.stderr)
@@ -1283,6 +1284,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="prune transient descriptors nothing references any more, after simplify; "
         f"also {DACE_REMOVE_TRANSIENTS_ENV}=1",
+    )
+    de.add_argument(
+        "--frame",
+        action="store_true",
+        default=False,
+        help="for cuda/hip: write the units a dace_gpu_* column compiles (they include DaCe's runtime headers) "
+        "instead of the self-contained host and device pair with its build line",
     )
     de.set_defaults(func=cmd_dace_emit)
 
