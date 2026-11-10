@@ -443,11 +443,11 @@ def episode_record(base: KnowledgeBase, usage: pathlib.Path, among: int = 1) -> 
     }
 
 
-def episode_records(loaded: Sequence[KnowledgeBase], usage: pathlib.Path) -> dict[str, Any] | list[dict[str, Any]]:
+def episode_records(loaded: Sequence[KnowledgeBase], usage: pathlib.Path) -> dict[str, object] | list[object]:
     """The record block of a setup's bases: one block for one base (the shape a single-base record always had), a
     list for several."""
-    blocks = [episode_record(base, usage, len(loaded)) for base in loaded]
-    return blocks[0] if len(blocks) == 1 else blocks
+    blocks: list[dict[str, object]] = [episode_record(base, usage, len(loaded)) for base in loaded]
+    return blocks[0] if len(blocks) == 1 else list(blocks)
 
 
 #: Where staged bases sit in a setup's shared mount, one directory per base name.
