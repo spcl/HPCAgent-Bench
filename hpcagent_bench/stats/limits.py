@@ -319,10 +319,10 @@ class Cut(NamedTuple):
         records (0, no cap, is no limit). Raises ``ValueError`` on anything else, and on ``min`` when an episode
         records no limits (the smallest is then not known)."""
         if spec != "min":
-            fields = dict(part.partition("=")[::2] for part in spec.split(","))
+            fields = {name: value for name, _, value in (part.partition("=") for part in spec.split(","))}
             if not fields or not set(fields) <= set(cls._fields):
                 raise ValueError(f"expected min or tokens=<n>,seconds=<s>, got {spec!r}")
-            return cls(**{name: int(value) for name, value in fields.items()})
+            return cls(*(int(fields[name]) if name in fields else None for name in cls._fields))
         if any(limits.unrecorded or not limits.counts for limits in by_setup.values()):
             raise ValueError("min needs every episode's recorded limits; name the cut: tokens=<n>,seconds=<s>")
         recorded = [limits for found in by_setup.values() for limits in found.counts]
@@ -344,28 +344,38 @@ def truncated(observations: "pd.DataFrame", cut: Cut) -> tuple["pd.DataFrame", s
     import pandas as pd
 
     keys = ["setup", *population.EPISODE_KEY]
-    episode = observations.loc[:, keys].astype(str).groupby(keys, sort=False).ngroup()
     kind = observations["row_kind"].astype(str)
-    judge = kind.isin([RowKind.CALL.text, RowKind.SUBMISSION.text, RowKind.ATTEMPT.text])
-    ts = pd.to_numeric(observations["ts_ms"], errors="coerce")
-    stated = ts.where(kind == RowKind.EPISODE.text).groupby(episode).transform("min")
-    late = pd.Series(False, index=observations.index)
+    calls = kind == RowKind.CALL.text
+    rows = pd.DataFrame(
+        {
+            "episode": observations.loc[:, keys].astype(str).groupby(keys, sort=False).ngroup(),
+            "ts": pd.Series(
+                pd.to_numeric(observations["ts_ms"], errors="coerce"), index=observations.index, dtype=float
+            ),
+            "verdict": ~calls,
+            "judge": kind.isin([RowKind.CALL.text, RowKind.SUBMISSION.text, RowKind.ATTEMPT.text]),
+            "relaunched": integers(observations, "episode_attempts").gt(1).fillna(False).astype(bool),
+            "setup": observations["setup"].astype(str),
+        }
+    )
+    rows["stated"] = rows.ts.where(kind == RowKind.EPISODE.text).groupby(rows.episode).transform("min")
+    rows["late"] = False
     if cut.seconds is not None:
-        start = stated.fillna(ts.where(judge).groupby(episode).transform("min"))
-        late |= judge & (ts - start > cut.seconds * 1000)
+        start = rows.stated.fillna(rows.ts.where(rows.judge).groupby(rows.episode).transform("min"))
+        rows["late"] = rows.judge & (rows.ts - start > cut.seconds * 1000)
     if cut.tokens is not None:
-        calls = kind == RowKind.CALL.text
-        spent = pd.to_numeric(observations["tokens"], errors="coerce").where(calls)
-        # in time order, a call before the verdict of its own grade (they share one ts_ms)
-        ordered = pd.DataFrame({"episode": episode, "ts": ts, "verdict": ~calls, "spent": spent}).sort_values(
-            ["episode", "ts", "verdict"], kind="stable"
+        tokens = pd.Series(
+            pd.to_numeric(observations["tokens"], errors="coerce"), index=observations.index, dtype=float
         )
-        late |= judge & (ordered.groupby("episode").spent.ffill().reindex(observations.index) > cut.tokens)
-    cut_episodes = episode[late].groupby(observations["setup"].astype(str)).nunique()
-    note = f"truncated at {cut.text()}: {int(late.sum())} judge rows of {episode[late].nunique()} episodes dropped"
-    note += "".join(f", {setup} {count}" for setup, count in cut_episodes.items())
+        # in time order, a call before the verdict of its own grade (they share one ts_ms)
+        ordered = rows.assign(spent=tokens.where(calls)).sort_values(["episode", "ts", "verdict"], kind="stable")
+        rows["late"] |= rows.judge & (ordered.groupby("episode").spent.ffill().reindex(rows.index) > cut.tokens)
+    cut_rows = rows.loc[rows.late]
+    note = f"truncated at {cut.text()}: {len(cut_rows)} judge rows of {cut_rows.episode.nunique()} episodes dropped"
+    note += "".join(f", {setup} {count}" for setup, count in cut_rows.groupby("setup").episode.nunique().items())
     if cut.seconds is not None:
-        relaunched = integers(observations, "episode_attempts").gt(1).fillna(False).groupby(episode).transform("any")
-        bounded = episode[judge & (stated.isna() | relaunched)].nunique()
-        note += f"; elapsed time is a lower bound for {bounded} of {episode[judge].nunique()} episodes"
-    return observations.loc[~late], note
+        rows["bounded"] = rows.stated.isna() | rows.groupby("episode").relaunched.transform("any")
+        judged = rows.loc[rows.judge]
+        bounded = judged.loc[judged.bounded].episode.nunique()
+        note += f"; elapsed time is a lower bound for {bounded} of {judged.episode.nunique()} episodes"
+    return observations.loc[~rows.late], note

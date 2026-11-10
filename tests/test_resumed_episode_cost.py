@@ -434,7 +434,9 @@ def test_the_written_tables_carry_the_mode_they_were_built_under(
         assert float(pairs[pairs.leg == "tokens"].rho.iloc[0]) < final_rho
 
 
-def test_one_table_states_the_cost_with_and_without_the_crashed_attempts(paired_setups, tmp_path: pathlib.Path) -> None:
+def test_one_table_states_the_cost_with_and_without_the_crashed_attempts(
+    paired_setups: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
     """``--all-attempts-leg``: the table of the default run, plus per pair the tokens row the same run writes
     under ``cost.attempts = all``, named ``tokens_all_attempts`` and stamped with its reading."""
     rows = [
