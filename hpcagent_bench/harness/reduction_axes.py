@@ -216,7 +216,7 @@ def probe_cancellation(
                     if not finite.any():
                         continue
                     scale = float(np.max(np.abs(b[finite])))
-                    moved = float(np.max(np.abs(a[finite].astype(np.float64) - b[finite].astype(np.float64))))
+                    moved = float(np.max(np.abs(a[finite].astype(np.complex128) - b[finite].astype(np.complex128))))
                 if scale > 0:
                     kappa[name] = max(kappa.get(name, 1.0), moved / (PROBE_DELTA * scale))
     return {name: max(1.0, value) for name, value in kappa.items() if name not in failed}

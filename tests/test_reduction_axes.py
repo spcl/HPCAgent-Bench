@@ -138,12 +138,18 @@ def test_kappa_is_one_without_cancellation() -> None:
     assert kappa["out"] == pytest.approx(1.0, abs=0.2)
 
 
-def test_kappa_measures_a_mean_removal() -> None:
+@pytest.mark.parametrize("unit", [1.0, 1j])
+def test_kappa_measures_a_mean_removal(unit: complex) -> None:
     """covariance's centred ``data = data - mean(data, axis=0)``: values around 10 with spread 1 cancel to O(1), so
-    the terms are ~10x the result (F25: probed l without the factor failed covariance at M)."""
+    the terms are ~10x the result (F25: probed l without the factor failed covariance at M). ``unit = 1j``: the
+    same cancellation in the imaginary part of a complex output counts too."""
     rng = np.random.default_rng(2)
     data = {"X": 10.0 + rng.uniform(-1, 1, (64, 16))}
-    kappa = reduction_axes.probe_cancellation(("out",), ("X",), data, lambda d: {"out": d["X"] - d["X"].mean(axis=0)})
+
+    def centred(d: dict) -> dict:
+        return {"out": unit * (d["X"] - d["X"].mean(axis=0))}
+
+    kappa = reduction_axes.probe_cancellation(("out",), ("X",), data, centred)
     assert kappa["out"] > 5.0
     assert probed_length({"X": [64.0, 1.0]}, data, kappa["out"]) >= 64 * 25
 
