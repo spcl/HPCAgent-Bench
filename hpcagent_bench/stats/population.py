@@ -94,6 +94,7 @@ __all__ = [
     "ran_rows",
     "ratio",
     "refused_attempts",
+    "repeat_rule",
     "run_states",
     "scored_answers",
     "select_setups",
@@ -576,20 +577,39 @@ def episode_logs(frame: "pd.DataFrame", order: Sequence[str] = SUBMISSION_ORDER)
     }
 
 
+def repeat_rule() -> "config.Repeats":
+    """The configured ``statistics.repeats``: how a kernel's slots reduce to one answer."""
+    return config.current().statistics.repeats
+
+
 def setup_kernel_answers(frame: "pd.DataFrame", order: Sequence[str] = SUBMISSION_ORDER) -> "pd.DataFrame":
     """One row per ``(setup, benchmark)``: the setup's FINAL answer on that kernel.
 
     The answered slots (:func:`answered_episodes`), then the median slot's row (lower middle for an even
-    count). ``speedup`` is the median; every other field, timings and source included, is that one run's."""
+    count). ``speedup`` is the median; every other field, timings and source included, is that one run's.
+    Under ``statistics.repeats = log-median-majority`` a kernel answered in half its slots or fewer is left
+    out, and the median is taken over the log speedups; with one slot per kernel both rules are the same."""
     episodes = answered_episodes(frame, order)
     if episodes.empty:
         return episodes
     group = ["setup", "kernel"]
+    if repeat_rule() is config.Repeats.LOG_MEDIAN_MAJORITY:
+        runs = latest_episodes(frame)
+        slots = runs.groupby(group)[SLOT_COLUMN].nunique() if SLOT_COLUMN in runs.columns else None
+        answered = episodes.groupby(group).speedup.transform("size").to_numpy()
+        ran = 1 if slots is None else episodes.set_index(group).index.map(slots).to_numpy()
+        episodes = episodes.loc[2 * answered > ran]
+        if episodes.empty:
+            return episodes
+        logs = episodes.assign(speedup=episodes.speedup.astype(float).map(math.log))
+        medians = logs.groupby(group, as_index=False).speedup.median()
+        medians["speedup"] = medians.speedup.map(math.exp)
+    else:
+        medians = episodes.groupby(group, as_index=False).speedup.median()
     ordered = episodes.sort_values([*group, "speedup"], kind="stable")
     position = ordered.groupby(group).cumcount()
     size = ordered.groupby(group).speedup.transform("size")
     carriers = ordered.loc[position == (size - 1) // 2].drop(columns=["speedup"])
-    medians = ordered.groupby(group, as_index=False).speedup.median()
     return carriers.merge(medians, on=group)
 
 

@@ -462,7 +462,8 @@ def conclusions(
     """Per comparison of one declared family, in input order: its :class:`Conclusion` and its adjusted
     equivalence p. The difference p values and the equivalence p values are corrected as TWO families by the
     same correction ``test`` (default ``statistics.correction``): a family of m comparisons makes m difference
-    claims and m equivalence claims, and each kind is controlled at ``alpha`` on its own. A non-finite p is a
+    claims and m equivalence claims, and each kind has its false-discovery rate controlled at ``alpha``
+    (Benjamini-Hochberg under the default correction) on its own. A non-finite p is a
     test never performed and supports neither claim."""
     different = correct(difference_p, test=test)
     equivalent = correct(equivalence_p, test=test)

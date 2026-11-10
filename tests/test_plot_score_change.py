@@ -608,6 +608,13 @@ def test_an_equivalent_measure_wears_its_own_mark_only_when_the_family_csv_carri
     ]
 
 
+def test_equivalence_is_refused_on_a_route_that_has_no_family_csv() -> None:
+    """The equivalence test runs once, in ``paired_setups.py``; a figure that tests its own pairs cannot claim
+    it, and says where it comes from."""
+    with pytest.raises(SystemExit, match="--pairs-csv"):
+        plot.main(["--equivalence", "--experiment", "llr40"])
+
+
 def test_a_pairs_leg_names_the_language_and_every_packet_both_setups_carried() -> None:
     """llrblind runs C and C with the skill pages against their own scored setups, so a leg label of
     the language alone would draw two different setups as one."""
