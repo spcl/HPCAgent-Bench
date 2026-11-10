@@ -15,7 +15,7 @@ import sys
 from collections.abc import Mapping
 
 import pydantic
-from hpcagent_agent import env_aliases
+from hpcagent_agent import env_aliases, network_policy
 from hpcagent_agent.coded import Coded
 
 __all__ = [
@@ -35,6 +35,7 @@ __all__ = [
     "TunerProvenance",
     "Source",
     "check_free",
+    "check_network",
     "claude_key_variable",
     "from_environ",
     "launcher_env",
@@ -264,6 +265,18 @@ def check_free(service: Service, timeout: float = 30.0) -> None:
         raise SystemExit(f"{FREE_ONLY_KEY}=1 and {reason}; refusing to launch")
 
 
+def check_network(service: Service, environ: Mapping[str, str]) -> None:
+    """Refuse the launch when the setup's agent network policy cannot reach ``service`` (``agent.network`` ``none``
+    or ``allowlist`` and an ``https://`` base URL): the agents would have no model. Asked on the batch host before
+    any node is used, so the job ends with the reason and the line that overrides it."""
+    try:
+        reason = network_policy.unrelayable([service.base_url], environ)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if reason is not None:
+        raise SystemExit(f"{reason} Refusing to launch.")
+
+
 def shell_block(exported: Mapping[str, str]) -> str:
     """``exported`` as :func:`shlex.quote`-d assignments for the launcher to eval."""
     return "\n".join(f"{key}={shlex.quote(value)}" for key, value in exported.items())
@@ -346,10 +359,17 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help=f"when the setup sets {FREE_ONLY_KEY}=1, fail unless its model is free",
     )
+    parser.add_argument(
+        "--check-network",
+        action="store_true",
+        help="fail when a service setup's agent network policy cannot reach its endpoint",
+    )
     parser.add_argument("--record", type=pathlib.Path, help="write the run's inference provenance into this directory")
     args = parser.parse_args(argv)
     if args.check_free and os.environ.get(FREE_ONLY_KEY, "").strip() == "1":
         check_free(from_environ(os.environ))
+    if args.check_network and source(os.environ) is Source.SERVICE:
+        check_network(from_environ(os.environ), os.environ)
     if args.record is not None:
         record(args.record, os.environ)
     if args.export:

@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Run ONE agent worker in a namespace that shows it its own material and nothing else: stage 1 (this module, root
 in a user namespace) builds the view with mount(2) via ctypes, stage 2 restores the real uid and drops capabilities.
-Read-only remounts carry the locked mount flags (else EPERM). Standard library only."""
+Read-only remounts carry the locked mount flags (else EPERM). Under an isolating network policy stage 1 also starts
+the allowlist's relay (:mod:`net_relay`) in the worker's new network namespace. Standard library only."""
 
 import argparse
 import ctypes
@@ -13,6 +14,8 @@ import pathlib
 import sys
 from collections.abc import Callable, Sequence
 from typing import NamedTuple
+
+from hpcagent_agent.driver import net_relay
 
 __all__ = [
     "HOME_NAME",
@@ -385,6 +388,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--gid", type=int, required=True)
     parser.add_argument("--cpus", default="", help="comma-separated CPU list for the worker's affinity")
     parser.add_argument("--tmpfs-bytes", type=int, default=0, help="size of each tmpfs (0: the kernel's default)")
+    parser.add_argument(
+        "--net-dir", default="", help="the relay sockets' directory; given exactly when the namespace is isolated"
+    )
+    parser.add_argument("--net-endpoints", type=int, default=0, help="how many endpoints --net-dir relays")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by the worker's argv")
     return parser.parse_args(list(argv))
 
@@ -420,6 +427,8 @@ def main(argv: Sequence[str]) -> int:
     args = parse_args(argv)
     if os.geteuid() != 0:
         raise SystemExit("seal_worker: not root in the namespace -- start it under `unshare -r -m -p -f`")
+    if int(args.net_endpoints) and not str(args.net_dir):
+        raise SystemExit("seal_worker: --net-endpoints needs --net-dir")
     workdir = str(args.workdir)
     layout = Layout(
         workdir=workdir,
@@ -440,6 +449,12 @@ def main(argv: Sequence[str]) -> int:
     except SealError as exc:
         raise SystemExit(f"seal_worker: {exc}") from exc
     set_affinity(str(args.cpus))
+    if str(args.net_dir):
+        # After the view: the sockets live in the workdir, which only now sits at its own path again.
+        try:
+            net_relay.serve_inside(str(args.net_dir), int(args.net_endpoints))
+        except OSError as exc:
+            raise SystemExit(f"seal_worker: cannot open the network allowlist under {args.net_dir!r}: {exc}") from exc
     os.chdir(layout.agent_dir)
     environment = dict(os.environ)
     environment["HOME"] = f"{workdir}/{HOME_NAME}"

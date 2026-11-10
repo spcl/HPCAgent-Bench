@@ -85,6 +85,7 @@ PINNED_PACKETS = (
     "distributed-amd",
     "dist-rccl-amd",
     "web-search",
+    "knowledge",
     "autokernel",
 )
 

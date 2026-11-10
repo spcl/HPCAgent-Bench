@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One declaration per tool: ``@tool(spec=Spec(...))`` on a module's ``run()`` registers it for the MCP server, the CLI
 and the prompt's tool list. A :class:`Spec` may be a function of the :class:`Setup` (nothing decided at import); core
-tools are always served (preview tools not in blind mode), others only when the setup's packet carries them."""
+tools are always served (preview tools not in blind mode), others only when the setup's packet carries them; a tool
+that reaches outside the benchmark's own services (``Hints.open_world``) is served only under ``agent.network: open``."""
 
 import dataclasses
 import functools
@@ -17,7 +18,7 @@ import pydantic.json_schema
 import pydantic_core
 from pydantic.json_schema import JsonSchemaValue
 
-from hpcagent_agent import submission_mode
+from hpcagent_agent import network_policy, submission_mode
 from hpcagent_agent.tools import http_json
 
 __all__ = [
@@ -34,12 +35,15 @@ __all__ = [
     "Setup",
     "Spec",
     "Tool",
+    "entry_for",
     "offered",
+    "reaches_outside",
     "schema_of",
     "served",
     "tool",
     "validated",
     "wire_form",
+    "withheld",
 ]
 
 #: A tool's body: the call's arguments in, the JSON answer the model reads out.
@@ -69,6 +73,8 @@ class Setup:
     skill_pages: frozenset[str]
     #: The environment the setup was read from, for a tool's own switches (a plugin's included).
     environ: Mapping[str, str]
+    #: The setup's network policy: an isolating one withholds every open-world tool.
+    network: network_policy.AgentNetwork = network_policy.AgentNetwork.NONE
 
     @classmethod
     def read(cls, environ: Mapping[str, str] = os.environ) -> "Setup":
@@ -84,6 +90,7 @@ class Setup:
             preview_served=submission_mode.current(dict(environ)).preview_served,
             skill_pages=frozenset(page.stem for page in skill_dir.glob("*.md")) if skill_dir.is_dir() else frozenset(),
             environ=types.MappingProxyType(dict(environ)),
+            network=network_policy.current(environ),
         )
 
     @property
@@ -102,7 +109,8 @@ class Hints:
     destructive: bool | None = None
     #: A second identical call changes nothing more.
     idempotent: bool | None = None
-    #: Reaches outside the benchmark's own services.
+    #: Reaches outside the benchmark's own services (the web, a remote index). Such a tool is withheld from every
+    #: setup whose network policy isolates the agent, whatever its packet carries.
     open_world: bool | None = None
 
     def annotations(self) -> dict[str, bool]:
@@ -252,6 +260,28 @@ def offered(entry: Tool, setup: Setup) -> bool:
     return not entry.preview or setup.preview_served
 
 
+def entry_for(name: str, setup: Setup) -> Tool:
+    """The tool ``setup`` knows as ``name``: a plugin's override where its packet carries it."""
+    return OVERRIDES[name] if name in OVERRIDES and name in setup.packet_tools else REGISTRY[name]
+
+
+def reaches_outside(entry: Tool, setup: Setup) -> bool:
+    """Whether ``entry`` declares itself open-world and ``setup``'s network policy isolates the agent."""
+    return setup.network.isolated and bool(entry.spec_for(setup).hints.open_world)
+
+
+def withheld(setup: Setup) -> tuple[str, ...]:
+    """The tools ``setup`` would be served but for its network policy, sorted: what the episode record names, so a
+    setup whose packet carries a web tool is never mistaken for one that used it."""
+    return tuple(
+        sorted(
+            name
+            for name in REGISTRY
+            if offered(entry_for(name, setup), setup) and reaches_outside(entry_for(name, setup), setup)
+        )
+    )
+
+
 def served(setup: Setup, order: tuple[str, ...] = ()) -> dict[str, Served]:
     """Every tool ``setup`` is served, ``order`` first; a packet tool no module registers is refused."""
     if unknown := sorted(setup.packet_tools - REGISTRY.keys()):
@@ -259,8 +289,8 @@ def served(setup: Setup, order: tuple[str, ...] = ()) -> dict[str, Served]:
     names = (*(name for name in order if name in REGISTRY), *(name for name in REGISTRY if name not in order))
     tools: dict[str, Served] = {}
     for name in names:
-        entry = OVERRIDES[name] if name in OVERRIDES and name in setup.packet_tools else REGISTRY[name]
-        if not offered(entry, setup):
+        entry = entry_for(name, setup)
+        if not offered(entry, setup) or reaches_outside(entry, setup):
             continue
         spec = entry.spec_for(setup)
         tools[name] = Served(
