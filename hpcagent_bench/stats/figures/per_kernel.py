@@ -948,7 +948,10 @@ def fit_canvas(
     floor = min_text_pt(type_, type_.annotation_pt)
     if plotstyle.crowded_at(fig, [axes[-1]], floor):
         # A rotated name folded on two lines is two lines wide: too wide for its column even at the floor.
-        axes[-1].set_xticklabels([label.get_text().replace("\n", " ") for label in axes[-1].get_xticklabels()])
+        # textwrap folds after a hyphen (keeping it) or at a space (dropping it): undo each as it was made.
+        axes[-1].set_xticklabels(
+            [label.get_text().replace("-\n", "-").replace("\n", " ") for label in axes[-1].get_xticklabels()]
+        )
     plotstyle.shrink_crowded_ticks(fig, [axes[-1]], type_.annotation_pt, floor)
     names = plotstyle.below_protrusion_in(fig, axes[-1])
     above = [plotstyle.above_protrusion_in(fig, ax) for ax in axes]
