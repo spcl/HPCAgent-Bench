@@ -98,7 +98,7 @@ def test_add_grade_stores_the_request_canonically(tmp_path: pathlib.Path) -> Non
     requests are equal text."""
     sent = {
         '{"operations":[{"to":"fp32","array":"u","action":"cast"}]}': (
-            '{"operations": [{"action": "cast", "array": "u", "to": "fp32"}]}'
+            '{"operations": [{"action": "cast", "array": "u", "to": "fp32"}], "v": 1}'
         ),
         "null": "",
         "{}": "",

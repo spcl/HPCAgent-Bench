@@ -177,3 +177,11 @@ short = "search"
 name = "Knowledge Base"
 tools = ["knowledge_search", "knowledge_read"]
 short = "KB"
+
+[packets.requests-check]
+# The `requests_check` tool: the judge's free, unrecorded `POST /requests/check` (what a `requests` object resolves
+# to, or why it is refused). Opt-in, so no measured setup's tool list changes; useful with a `requests` preset that
+# allows layouts, casts or formats.
+name = "Requests Check"
+tools = ["requests_check"]
+short = "req-check"

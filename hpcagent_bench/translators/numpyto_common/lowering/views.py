@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Iterator, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_call, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import is_scalar_axis, slice_axes
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
@@ -35,6 +35,7 @@ __all__ = [
     "reject_view_writes_between_bind_and_use",
     "subarray_alias_candidates",
     "view_alias_candidates",
+    "write_back_reshape_views",
 ]
 
 
@@ -302,6 +303,76 @@ def names_written_in(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
             elif isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store) and isinstance(n.value, ast.Name):
                 out.add(n.value.id)
     return out
+
+
+def reshape_view_of(stmt: ast.stmt) -> tuple[str, str] | None:
+    """``(view, base)`` when ``stmt`` is ``view = np.reshape(base, ...)`` of a bare array name, else None."""
+    if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+        return None
+    call = stmt.value
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "reshape"):
+        return None
+    if not (isinstance(call.func.value, ast.Name) and call.func.value.id == "np" and call.args):
+        return None
+    base = call.args[0]
+    return (stmt.targets[0].id, base.id) if isinstance(base, ast.Name) else None
+
+
+def stores_through(stmt: ast.stmt, name: str) -> bool:
+    """Whether ``stmt`` writes array ``name`` in place: a subscript store or an augmented assignment to it."""
+    return any(
+        (isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store) and isinstance(n.value, ast.Name))
+        and n.value.id == name
+        or (isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name) and n.target.id == name)
+        for n in walk_nodes(stmt)
+    )
+
+
+def mentions(stmt: ast.stmt, name: str) -> bool:
+    return any(isinstance(n, ast.Name) and n.id == name for n in walk_nodes(stmt))
+
+
+def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) -> None:
+    """Carry stores through a reshape view back to the array it views.
+
+    ``outg = np.reshape(out, shape)`` is a view in numpy: ``outg[...] += x`` writes ``out``. The emitter lowers a
+    reshape as a copy, so every statement of the view's block that stores through it is followed by the copy
+    back, ``out[:] = np.reshape(outg, shape(out))`` (conv_transposed_1d lost every tap's contribution without it).
+    Two cases the copy cannot stand for a view in are refused: the storing statement itself reading or writing
+    the base, and the base written while the view is still used afterwards.
+    """
+
+    def scan(stmts: list[ast.stmt]) -> None:
+        for i, bind in enumerate(stmts):
+            for block in child_blocks_of(bind):
+                scan(block)
+            matched = reshape_view_of(bind)
+            if matched is None or matched[1] not in shapes:
+                continue
+            view, base = matched
+            j = i + 1
+            while j < len(stmts):
+                stmt = stmts[j]
+                if isinstance(stmt, ast.Assign) and any(isinstance(t, ast.Name) and t.id == view for t in stmt.targets):
+                    break  # rebound: no longer this view
+                if stores_through(stmt, view):
+                    if mentions(stmt, base):
+                        raise NotImplementedError(
+                            f"reshape view {view!r} of {base!r} is written by a statement that also uses {base!r}"
+                        )
+                    dims = ast.Tuple(elts=[ast.parse(d, mode="eval").body for d in shapes[base]], ctx=ast.Load())
+                    target = ast.Subscript(value=name_(base), slice=ast.Slice(), ctx=ast.Store())
+                    back = ast.Assign(targets=[target], value=numpy_call("reshape", [name_(view), dims]))
+                    stmts.insert(j + 1, ast.fix_missing_locations(ast.copy_location(back, stmt)))
+                    j += 1
+                elif base in names_written_in([stmt]) and any(mentions(later, view) for later in stmts[j + 1 :]):
+                    raise NotImplementedError(
+                        f"{base!r} is written while its reshape view {view!r} is still used: the view would be stale"
+                    )
+                j += 1
+
+    if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+        scan(tree.body)
 
 
 def reject_view_writes_between_bind_and_use(
