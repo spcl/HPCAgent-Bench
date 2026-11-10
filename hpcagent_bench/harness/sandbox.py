@@ -55,6 +55,7 @@ __all__ = [
     "agent_root",
     "episode_folder",
     "finalize_build",
+    "flat_layout_refusal",
     "framework_version",
     "imported_modules",
     "inside_any",
@@ -125,10 +126,28 @@ def episode_folder(episode_id: str | None) -> pathlib.Path | None:
     return folder
 
 
+def flat_layout_refusal() -> str:
+    """Why a run whose agents write the shared root itself is refused here, or "" (``grading.require_agent_folders``
+    with build tokens off): the seal hides agent folders, and cannot tell an agent's file in the root from an
+    operator's."""
+    grading = config.current().grading
+    if not grading.require_agent_folders or grading.allow_agent_build_tokens:
+        return ""
+    return (
+        "grading.require_agent_folders is on and grading.allow_agent_build_tokens is off: this judge serves only a "
+        f"run with per-agent folders (RUN_DIR holding {AGENT_FOLDERS_LOG}); set grading.require_agent_folders false "
+        "to grade agent files from the shared root itself"
+    )
+
+
 def agent_root(episode_id: str | None) -> pathlib.Path:
     """The folder ``episode_id`` writes and the judge reads its files and libraries from: its own folder in a
-    per-agent-folder run, else the shared root. Resolve it once per request; it re-reads the folder log."""
-    return episode_folder(episode_id) or pathlib.Path(shared_dir())
+    per-agent-folder run, else the shared root (``ValueError`` under :func:`flat_layout_refusal`). Resolve it once
+    per request; it re-reads the folder log."""
+    folder = episode_folder(episode_id)
+    if folder is None and flat_layout_refusal():
+        raise ValueError(flat_layout_refusal())
+    return folder or pathlib.Path(shared_dir())
 
 
 def library_dirs(root: pathlib.Path) -> list[pathlib.Path]:
