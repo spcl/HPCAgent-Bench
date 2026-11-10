@@ -126,7 +126,7 @@ def test_the_verdict_and_alternative_spellings_are_the_stored_ones() -> None:
     """A verdict column of a stats table and scipy's ``alternative`` read these spellings; they must not move."""
     assert significance.Finding.texts() == ("significant", "not-significant", "underpowered")
     assert significance.Side.texts() == ("less", "greater", "two-sided")
-    assert significance.Leg.texts() == ("speedup", "tokens")
+    assert significance.Leg.texts() == ("speedup", "tokens", "tokens_all_attempts")
 
 
 def test_two_identical_samples_carry_no_difference() -> None:
