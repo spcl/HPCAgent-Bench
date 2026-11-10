@@ -484,3 +484,62 @@ def test_off_writes_the_tables_without_the_limits_columns_and_notes_nothing(
     pd.testing.assert_frame_equal(pairs, flagged_pairs.drop(columns=list(limits.PAIR_COLUMNS)))
     pd.testing.assert_frame_equal(setups, flagged_setups.drop(columns=list(limits.SETUP_COLUMNS)))
     assert limits.check([("a", "b")], {}) == []
+
+
+# --- existing data at identical limits: re-scored, not rerun ---
+
+
+def late_answer(tmp_path: pathlib.Path) -> pathlib.Path:
+    """The fixture of :func:`observations` under unequal limits, where the treated setup's answer to ``k1`` came
+    after 3 M tokens and five hours: past the control's 12 M / 4 h wall clock, inside its own 24 M / 8 h."""
+    path = observations(tmp_path, DOUBLE, scale=2)
+    frame = pd.read_csv(path)
+    start = 1_000_000
+    frame.loc[frame.row_kind == "episode", "ts_ms"] = start
+    frame.loc[frame.row_kind == "submission", "ts_ms"] = start + 3_600_000
+    late = (frame.setup == "a") & (frame.kernel == "k1") & (frame.row_kind == "submission")
+    frame.loc[late, "ts_ms"] = start + 5 * 3_600_000
+    calls = frame[frame.row_kind == "submission"].assign(row_kind="call", speedup="", tokens=3_000_000.0)
+    pd.concat([frame, calls], ignore_index=True).to_csv(path, index=False)
+    return path
+
+
+def test_an_answer_past_the_smaller_limits_is_unsolved_when_rescored_at_them(
+    paired_setups: ModuleType, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--truncate-at min`` re-scores both setups at the smaller recorded limits (12 M tokens, 4 h): the treated
+    setup loses the one answer it gave after them, and both tables state the cut."""
+    path = late_answer(tmp_path)
+    argv = ["--observations", str(path), "--pair", "a,b", "--family", "f", "--setups-out"]
+    assert paired_setups.main([*argv, str(tmp_path / "as-run.csv")]) == 0
+    capsys.readouterr()
+    assert paired_setups.main([*argv, str(tmp_path / "cut.csv"), "--truncate-at", "min"]) == 0
+    as_run, cut = (pd.read_csv(tmp_path / name).set_index("setup") for name in ("as-run.csv", "cut.csv"))
+    assert (as_run.loc["a", "n_solved"], cut.loc["a", "n_solved"]) == (len(KERNELS), len(KERNELS) - 1)
+    assert cut.loc["b", "n_solved"] == len(KERNELS)
+    assert set(cut.truncated_at) == {f"tokens={BASE.tokens},seconds={BASE.seconds}"}
+    assert "truncated_at" not in as_run.columns
+    assert "2 judge rows of 1 episodes dropped, a 1; elapsed time is a lower bound for 0 of 12" in capsys.readouterr().err
+
+
+def test_a_cut_no_row_lies_past_leaves_the_tables_as_they_were(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
+    path = late_answer(tmp_path)
+    argv = ["--observations", str(path), "--pair", "a,b", "--family", "f", "--out"]
+    assert paired_setups.main([*argv, str(tmp_path / "as-run.csv")]) == 0
+    assert paired_setups.main([*argv, str(tmp_path / "cut.csv"), "--truncate-at", "tokens=3000000,seconds=28800"]) == 0
+    cut = pd.read_csv(tmp_path / "cut.csv")
+    pd.testing.assert_frame_equal(cut.drop(columns="truncated_at"), pd.read_csv(tmp_path / "as-run.csv"))
+    # one token less and every answer (each made at 3 M tokens) lies past the cut; the episodes stay, unsolved
+    kept, _ = limits.truncated(pd.read_csv(path), limits.Cut(tokens=2_999_999))
+    assert kept.row_kind.value_counts().to_dict() == {"episode": 2 * len(KERNELS)}
+
+
+def test_the_smallest_limits_are_not_known_where_none_is_recorded() -> None:
+    found = limits.setup_limits(pd.DataFrame(setup_rows("a", [DOUBLE]) + setup_rows("b", [BASE])))
+    assert limits.Cut.parse("min", found) == limits.Cut(BASE.tokens, BASE.seconds)
+    assert limits.Cut.parse("seconds=14400", {}) == limits.Cut(seconds=14_400)
+    unrecorded = limits.setup_limits(pd.DataFrame(setup_rows("a", [None]) + setup_rows("b", [BASE])))
+    for spec, given in (("min", unrecorded), ("hours=4", found)):
+        with pytest.raises(ValueError, match="tokens=<n>,seconds=<s>"):
+            limits.Cut.parse(spec, given)
+
