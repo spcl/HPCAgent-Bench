@@ -24,7 +24,6 @@ NPBENCH_KERNELS = (
     "cavity_flow",
     "channel_flow",
     "cholesky",
-    "cholesky_lapack",
     "compute",
     "contour_integral",
     "conv2d",
