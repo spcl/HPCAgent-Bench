@@ -21,6 +21,7 @@ from hpcagent_bench.harness import episodes, results_db
 from hpcagent_bench.results import extract
 from hpcagent_bench.stats import limits, population, reliability
 from tests.fresh_module import module_at
+from tests import results_seed
 from tests.results_seed import STAMP as GRADE_STAMP
 
 KERNEL = "fuse_stencil_through_transient"
@@ -191,10 +192,8 @@ def version_21_file(path: pathlib.Path) -> None:
     with contextlib.closing(results_db.open_db(path)) as conn:
         results_db.ensure_setup(conn, results_db.Setup("setup-a", "c", "cpu"))
         results_db.ensure_episode(conn, "setup-a", LABEL, JOB)
-        for statement in (*results_db.ADDED[22], *results_db.ADDED[23], *results_db.ADDED[24]):
-            conn.execute(f"ALTER TABLE {statement.split()[2]} DROP COLUMN {statement.split()[5]}")
-        conn.execute("PRAGMA user_version = 21")
         conn.commit()
+    results_seed.as_version(path, 21)
 
 
 def test_a_version_21_file_reads_its_limits_as_unrecorded_and_upgrades_when_written(tmp_path: pathlib.Path) -> None:
