@@ -214,7 +214,8 @@ def read_record(path: pathlib.Path) -> EpisodeRecord | None:
 
 def episode_values(record: EpisodeRecord, cancelled: bool = False) -> dict[str, results_db.Value]:
     """The ``episodes`` columns a record fills: how it ended, token counts, kernel, relaunches, final start, the
-    limits it ran under, how the attempt before the final one ended and how the launch confined it."""
+    limits it ran under, how the attempt before the final one ended, how the launch confined it and what the agent
+    could reach (:func:`intervention_values`)."""
     result = record.result or (ENDED_BY.get(record.returncode) if record.returncode is not None else None)
     if cancelled:
         result = CANCELLED_MARKER
@@ -251,13 +252,6 @@ def episode_values(record: EpisodeRecord, cancelled: bool = False) -> dict[str, 
     }
 
 
-#: The ``episodes`` columns of the network and knowledge blocks. They are filled only in a database that has them
-#: (:func:`fill`): the schema that adds them is not this module's to bump (reports/F32-schema-request.md).
-INTERVENTION_COLUMNS = frozenset(
-    {"network_policy", "network_enforcement", "knowledge", "knowledge_calls", "knowledge_chars"}
-)
-
-
 def intervention_values(record: EpisodeRecord) -> dict[str, results_db.Value]:
     """What the agent could reach, as columns: the policy and its enforcement, and each knowledge base as
     ``<name>@<version>#<first 12 hex of its hash>`` (several joined by ``+``) with the retrieval volume."""
@@ -273,12 +267,7 @@ def intervention_values(record: EpisodeRecord) -> dict[str, results_db.Value]:
 
 def fill(conn: sqlite3.Connection, episode_id: int, values: Mapping[str, results_db.Value]) -> None:
     """Set the episode columns of run ``episode_id`` (the record is their one source)."""
-    present = {str(row[1]) for row in conn.execute("PRAGMA table_info(episodes)")}
-    columns = [
-        name
-        for name, value in values.items()
-        if value is not None and (name not in INTERVENTION_COLUMNS or name in present)
-    ]
+    columns = [name for name, value in values.items() if value is not None]
     if columns:
         assignments = ", ".join(f"{name} = ?" for name in columns)
         conn.execute(
