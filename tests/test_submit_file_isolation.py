@@ -227,6 +227,35 @@ def test_scale_time_clamps_to_the_partition_limit_minus_staging(tmp_path: pathli
     assert result.stdout.strip() == "72000"  # 20h, not 115200 (32h)
 
 
+def test_a_clamped_scale_says_so(tmp_path: pathlib.Path) -> None:
+    """The clamp is stated where a dry run shows it: the wall clock runs at less than the scale asked for."""
+    knobs = {"TIME_SCALE": "4", "STAGING_HOURS": "3", "HPCAGENT_BENCH_MAX_TIME_HOURS": "23"}
+    assert "capped to 72000 s" in run_common(tmp_path, "scale_time 28800", knobs).stderr
+    assert run_common(tmp_path, "scale_time 14400", knobs).stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("limit", "walltime", "note"),
+    [("23", "23:00:00", "need --time 43:00:00, past the 23 h time limit: capped to 23:00:00"), ("", "43:00:00", "")],
+)
+def test_the_job_time_is_capped_at_the_partition_limit(
+    tmp_path: pathlib.Path, limit: str, walltime: str, note: str
+) -> None:
+    """Two 20 h batches (40 kernels, 20 agents) plus staging are 43 h; sbatch refuses a --time past the partition's
+    limit, so the job asks for the limit and the cap is stated. Without a known limit nothing is capped."""
+    env = tmp_path / "setup.env"
+    env.write_text("AGENT_TIMEOUT_SECONDS=72000\nAGENTS_PER_NODE=20\nAGENT_NODES=1\n")
+    result = run_common(
+        tmp_path,
+        f". {CLUSTER_DIR / 'setup_nodes.sh'}\njob_walltime {env} 40",
+        {"STAGING_HOURS": "3", "HPCAGENT_BENCH_MAX_TIME_HOURS": limit},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == walltime
+    assert note in result.stderr
+    assert bool(result.stderr) == bool(note)
+
+
 def test_scale_time_is_never_clamped_without_a_known_limit(tmp_path: pathlib.Path) -> None:
     """A generic cluster names no partition limit (no code default exists): the scaled time is the answer."""
     result = run_common(tmp_path, "scale_time 28800", {"TIME_SCALE": "4", "STAGING_HOURS": "3"})
