@@ -191,8 +191,8 @@ def version_21_file(path: pathlib.Path) -> None:
     with contextlib.closing(results_db.open_db(path)) as conn:
         results_db.ensure_setup(conn, results_db.Setup("setup-a", "c", "cpu"))
         results_db.ensure_episode(conn, "setup-a", LABEL, JOB)
-        for statement in (*results_db.ADDED[22], *results_db.ADDED[23]):
-            conn.execute(f"ALTER TABLE episodes DROP COLUMN {statement.split()[5]}")
+        for statement in (*results_db.ADDED[22], *results_db.ADDED[23], *results_db.ADDED[24]):
+            conn.execute(f"ALTER TABLE {statement.split()[2]} DROP COLUMN {statement.split()[5]}")
         conn.execute("PRAGMA user_version = 21")
         conn.commit()
 
@@ -206,11 +206,13 @@ def test_a_version_21_file_reads_its_limits_as_unrecorded_and_upgrades_when_writ
         row = dict(conn.execute("SELECT * FROM episodes").fetchone())
     assert (row["token_limit"], row["time_limit_s"], row["previous_attempt_result"]) == (None, None, "")
     assert (row["launch"], row["previous_launch_result"]) == (None, "")
+    assert (row["resources"], row["agent_rootfs"]) == ("", "")
 
     with contextlib.closing(results_db.open_db(path)) as conn:
         assert results_db.schema_version(conn) == results_db.SCHEMA_VERSION
         columns = {str(found[1]) for found in conn.execute("PRAGMA table_info(episodes)")}
     assert {"token_limit", "output_token_limit", "time_limit_s", "token_scale", "time_scale", "launch"} <= columns
+    assert {"resources", "agent_rootfs"} <= columns
 
 
 # --- the check: per setup, per pair, flag and strict ---

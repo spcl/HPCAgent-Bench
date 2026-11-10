@@ -1477,9 +1477,9 @@ def agent_rootfs_mode() -> str:
         return value
     if value:
         return value  # not a spelling the launch would have accepted: recorded verbatim, for the diagnosis
-    # Nothing recorded: writable on the exec runtimes (today's behaviour), read-only on the CE, whose
+    # Unset is the default: writable on the exec runtimes and outside a container, read-only on the CE, whose
     # agent EDF is read-only unconditionally (cluster/container_runtime.sh derived_edf).
-    return "read-only" if os.environ.get("CONTAINER_RUNTIME", "").strip() == "ce" else ""
+    return "read-only" if os.environ.get("CONTAINER_RUNTIME", "").strip() == "ce" else "writable"
 
 
 #: The setup identity tokens.json carries, each from ``HPCAGENT_BENCH_RECORD_<KEY>``; '' when unset.

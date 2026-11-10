@@ -47,8 +47,8 @@ def test_a_file_older_than_the_library_column_reads_as_no_library(tmp_path: path
     with contextlib.closing(results_db.open_db(path)) as conn:
         conn.execute("ALTER TABLE grades DROP COLUMN library")
         conn.execute("ALTER TABLE grades DROP COLUMN gates")
-        for added in (*results_db.ADDED[22], *results_db.ADDED[23]):  # nor the episode limits
-            conn.execute(f"ALTER TABLE episodes DROP COLUMN {added.split()[5]}")
+        for added in (*results_db.ADDED[22], *results_db.ADDED[23], *results_db.ADDED[24]):  # nor the episode limits
+            conn.execute(f"ALTER TABLE {added.split()[2]} DROP COLUMN {added.split()[5]}")
         conn.execute("PRAGMA user_version = 19")
         conn.commit()
     with results_db.reading(path, finished=True) as conn:
