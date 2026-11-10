@@ -432,5 +432,38 @@ def test_the_written_tables_carry_the_mode_they_were_built_under(paired_setups, 
         assert float(pairs[pairs.leg == "tokens"].rho.iloc[0]) < final_rho
 
 
+def test_one_table_states_the_cost_with_and_without_the_crashed_attempts(paired_setups, tmp_path: pathlib.Path) -> None:
+    """``--all-attempts-leg``: the table of the default run, plus per pair the tokens row the same run writes
+    under ``cost.attempts = all``, named ``tokens_all_attempts`` and stamped with its reading."""
+    rows = [
+        row
+        for index in range(6)
+        for row in (
+            paired_rows("treated", f"k{index}", FINAL_TOKENS, CRASHED_TOKENS * index)
+            + paired_rows("control", f"k{index}", FINAL_TOKENS, 0.0)
+        )
+    ]
+    path = tmp_path / "observations.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    argv = ["--observations", str(path), "--pair", "treated,control", "--family", "f", "--out"]
+
+    def table(name: str, *flags: str) -> pd.DataFrame:
+        assert paired_setups.main([*argv, str(tmp_path / name), *flags]) == 0
+        return pd.read_csv(tmp_path / name)
+
+    final, both = table("final.csv"), table("both.csv", "--all-attempts-leg")
+    with all_attempts():
+        every = table("all.csv")
+        with pytest.raises(SystemExit, match="already counts every attempt"):
+            paired_setups.main([*argv, str(tmp_path / "refused.csv"), "--all-attempts-leg"])
+
+    assert both.leg.tolist() == ["speedup", "tokens", "tokens_all_attempts"]
+    assert both.cost_attempts.tolist() == ["final", "final", "all"]
+    pd.testing.assert_frame_equal(both.iloc[:2], final)
+    added = both.iloc[2].drop("leg")
+    pd.testing.assert_series_equal(added, every[every.leg == "tokens"].iloc[0].drop("leg"), check_names=False)
+    assert added.rho < final[final.leg == "tokens"].rho.iloc[0]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

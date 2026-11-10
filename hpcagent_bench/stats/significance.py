@@ -250,7 +250,12 @@ class Leg(Coded):
     (``statistics/paired_setups.py``)."""
 
     SPEEDUP = enum.auto()
+    #: Token cost under the configured ``cost.attempts``.
     TOKENS = enum.auto()
+    #: Token cost with the crashed attempts' spend added in, beside a ``tokens`` leg that counts the final attempt
+    #: alone (``paired_setups.py --all-attempts-leg``): the ``tokens`` leg of the same run under
+    #: ``cost.attempts = all``.
+    TOKENS_ALL_ATTEMPTS = enum.auto()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
