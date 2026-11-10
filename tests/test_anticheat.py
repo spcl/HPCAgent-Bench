@@ -35,6 +35,7 @@ PINNED_GATES = (
     "independent_verify",
     "sanitizers",
     "final_grade",
+    "foreign_library",
 )
 
 
