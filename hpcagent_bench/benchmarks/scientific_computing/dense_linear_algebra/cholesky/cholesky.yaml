@@ -17,3 +17,6 @@ parameters:
     N: 6720
 args:
   A: {shape: "(N, N)", out: true}
+chain_length:
+  # A[i, j] subtracts one product per column k < j: at most N terms
+  A: N

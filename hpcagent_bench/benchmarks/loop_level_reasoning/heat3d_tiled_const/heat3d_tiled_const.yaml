@@ -15,3 +15,6 @@ parameters:
 args:
   a: (LEN_3D,LEN_3D,LEN_3D)
   b: {shape: "(LEN_3D,LEN_3D,LEN_3D)", out: true}
+chain_length:
+  # one sweep: each point is one 10-term stencil sum
+  b: 10
