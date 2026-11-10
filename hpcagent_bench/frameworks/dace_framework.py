@@ -41,6 +41,7 @@ from hpcagent_bench.cpf.cache import CACHE_ENV as CPF_CACHE_ENV
 from hpcagent_bench.cpf.cache import Target
 from hpcagent_bench.frameworks import Benchmark, Framework
 from hpcagent_bench.frameworks import utilities as util
+from hpcagent_bench.frameworks.dace_options import MAXIMAL_FUSION_CAP, from_env, iterate_to_fixpoint
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.frameworks.framework import (
     MS_PER_S,
@@ -400,6 +401,14 @@ class PipelineContext:
     #: Run on the offloaded program before ``finalize_for_target`` tiles its device maps by their blocks: a tuner
     #: sets each map's ``gpu_block_size`` here. GPU pipelines only.
     offloaded: Callable[[dace.SDFG], None] | None = None
+    #: Repeat the (FuseMaps, MapCollapse, StateFusionExtended) round until ``hash_sdfg`` is stable (capped at
+    #: :data:`~hpcagent_bench.frameworks.dace_options.MAXIMAL_FUSION_CAP`) instead of the fixed
+    #: :data:`PARALLEL_FUSION_ROUNDS` rounds of (FuseMaps, MapCollapse). The ``parallel`` pipelines only; OFF.
+    maximal: bool = False
+    #: Prune transient descriptors nothing references any more, right after ``simplify`` (the fork's
+    #: PruneUnreferencedTransients; absent on a tree without the canonicalize package). The ``parallel``
+    #: pipelines only; OFF.
+    remove_transients: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,11 +424,26 @@ class SdfgPipeline:
     config: tuple[tuple[tuple[str, ...], str | bool], ...] = ()
 
 
+def _fusion_round(sdfg: dace.SDFG) -> object:
+    """One maximal-fusion round -- FuseMaps, MapCollapse, StateFusionExtended, the three stages that feed each
+    other -- returning ``hash_sdfg()`` for :func:`~hpcagent_bench.frameworks.dace_options.iterate_to_fixpoint`."""
+    from dace.transformation.dataflow import MapCollapse
+    from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
+    from dace.transformation.passes.fuse_maps import FuseMaps
+
+    FuseMaps().apply_pass(sdfg, {})
+    sdfg.apply_transformations_repeated([MapCollapse])
+    sdfg.apply_transformations_repeated(StateFusionExtended)
+    return sdfg.hash_sdfg()
+
+
 def pipeline_parallel(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
     """The parallelization pipeline, CPU or GPU, following CloudSC's stage list (minus its Fortran-specific steps).
 
     ``UniqueLoopIterators`` matters for correctness (shared iterator names make ``LoopToMap`` refuse merged
-    siblings); on GPU the offload runs last."""
+    siblings); on GPU the offload runs last. Two residuals are opt-in via the context (default OFF, so the
+    measured pipeline is unchanged): ``remove_transients`` prunes unreferenced transient descriptors after
+    ``simplify``, and ``maximal`` repeats the fusion round until the SDFG's hash is stable."""
     from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
     from dace.transformation.pass_pipeline import Pipeline
     from dace.transformation.passes.fuse_maps import FuseMaps
@@ -436,13 +460,21 @@ def pipeline_parallel(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
     # ScalarFission needs its analysis pass; the Pipeline resolves depends_on() first.
     Pipeline([ScalarFission()]).apply_pass(sdfg, {})
     sdfg.simplify()
+    if ctx.remove_transients:
+        from dace.transformation.passes.canonicalize.prune_unreferenced_transients import PruneUnreferencedTransients
+
+        PruneUnreferencedTransients().apply_pass(sdfg, {})
     sdfg.apply_transformations_repeated(StateFusionExtended)
     ParallelizeLoops().apply_pass(sdfg, {})
     sdfg.apply_transformations_repeated(StateFusionExtended)
-    for _ in range(PARALLEL_FUSION_ROUNDS):
-        # FuseMaps: vertical and horizontal (maps sharing only an input) fusion to a fixed point.
-        FuseMaps().apply_pass(sdfg, {})
-        sdfg.apply_transformations_repeated([MapCollapse])
+    if ctx.maximal:
+        # Fusion to a fixed point: a round that leaves the hash where the previous round left it ends the loop.
+        iterate_to_fixpoint(lambda: _fusion_round(sdfg), sdfg.hash_sdfg, cap=MAXIMAL_FUSION_CAP)
+    else:
+        for _ in range(PARALLEL_FUSION_ROUNDS):
+            # FuseMaps: vertical and horizontal (maps sharing only an input) fusion to a fixed point.
+            FuseMaps().apply_pass(sdfg, {})
+            sdfg.apply_transformations_repeated([MapCollapse])
     if ctx.device is dace_dtypes.DeviceType.GPU:
         from dace.transformation.passes.canonicalize.finalize import offload_to_gpu
 
@@ -739,9 +771,18 @@ class DaceFramework(Framework):
         positive: frozenset[str] = frozenset(),
     ) -> PipelineContext:
         """Bundle the module-level DaCe handles the pipelines refer to, and the kernel's ``small``, ``nonnegative``
-        and ``positive`` symbols, into one record."""
+        and ``positive`` symbols, into one record; the opt-in residuals come from the environment
+        (:func:`~hpcagent_bench.frameworks.dace_options.from_env`), off unless named."""
         device = dace_dtypes.DeviceType.GPU if self.column.arch is Arch.GPU else dace_dtypes.DeviceType.CPU
-        return PipelineContext(device=device, small=small, nonnegative=nonnegative, positive=positive)
+        options = from_env()
+        return PipelineContext(
+            device=device,
+            small=small,
+            nonnegative=nonnegative,
+            positive=positive,
+            maximal=options.maximal,
+            remove_transients=options.remove_transients,
+        )
 
     def device_tag(self) -> str:
         """The cache filename discriminator for the target device (``cpu`` / ``gpu``)."""
