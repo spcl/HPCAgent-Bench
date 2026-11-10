@@ -339,7 +339,8 @@ def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) 
     reshape as a copy, so every statement of the view's block that stores through it is followed by the copy
     back, ``out[:] = np.reshape(outg, shape(out))`` (conv_transposed_1d lost every tap's contribution without it).
     Two cases the copy cannot stand for a view in are refused: the storing statement itself reading or writing
-    the base, and the base written while the view is still used afterwards.
+    the base, and the base written in place while the view is still used afterwards. Rebinding either name ends
+    the view (``x = np.reshape(x, ...)`` rebinds its own base and is no view to carry back).
     """
 
     def scan(stmts: list[ast.stmt]) -> None:
@@ -347,14 +348,16 @@ def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) 
             for block in child_blocks_of(bind):
                 scan(block)
             matched = reshape_view_of(bind)
-            if matched is None or matched[1] not in shapes:
+            if matched is None or matched[1] not in shapes or matched[0] == matched[1]:
                 continue
             view, base = matched
             j = i + 1
             while j < len(stmts):
                 stmt = stmts[j]
-                if isinstance(stmt, ast.Assign) and any(isinstance(t, ast.Name) and t.id == view for t in stmt.targets):
-                    break  # rebound: no longer this view
+                if isinstance(stmt, ast.Assign) and any(
+                    isinstance(n, ast.Name) and n.id in matched for n in stmt.targets
+                ):
+                    break  # either name rebound: no longer this view of that array
                 if stores_through(stmt, view):
                     if mentions(stmt, base):
                         raise NotImplementedError(
@@ -365,9 +368,9 @@ def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) 
                     back = ast.Assign(targets=[target], value=numpy_call("reshape", [name_(view), dims]))
                     stmts.insert(j + 1, ast.fix_missing_locations(ast.copy_location(back, stmt)))
                     j += 1
-                elif base in names_written_in([stmt]) and any(mentions(later, view) for later in stmts[j + 1 :]):
+                elif stores_through(stmt, base) and any(mentions(later, view) for later in stmts[j + 1 :]):
                     raise NotImplementedError(
-                        f"{base!r} is written while its reshape view {view!r} is still used: the view would be stale"
+                        f"{base!r} is written in place while its reshape view {view!r} is still used: the copy is stale"
                     )
                 j += 1
 
