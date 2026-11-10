@@ -88,7 +88,9 @@ Three things can run an agent again; they are recorded differently.
 `hpcagent-bench owed run --token-scale/--time-scale` above 1, `--max-tokens` / `--timeout-seconds` above the
 recorded budget, and `BUDGET_SCALE` / `TOKEN_SCALE` / `TIME_SCALE` above 1 in `submit.sh` are refused before
 anything is staged, so an episode stopped by its limit stays stopped and every episode of a setup runs under one
-budget. With the key on (`HPCAGENT_BENCH_BUDGETS_EXTENSION_RERUNS=true`), each extended episode records its
+budget. The launch env of a budget-extension rerun holds its scaled limits, so `owed run` from such a job is an
+extension too: it is refused the same way unless `--max-tokens` / `--timeout-seconds` name the setup's own budget
+again, and when allowed it records the product of the scales. With the key on (`HPCAGENT_BENCH_BUDGETS_EXTENSION_RERUNS=true`), each extended episode records its
 scales, every comparison counts them per setup (`extended_episodes`, `n_extended_a`, `n_extended_b`), and a
 setup that mixes extended and unextended episodes reads as `differ`.
 

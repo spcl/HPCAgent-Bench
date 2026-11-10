@@ -378,7 +378,11 @@ def family_stats(table: pd.DataFrame, intervention: str, languages: dict[str, st
                 "score_verdict": str(score["verdict"]) if score is not None else "",
                 "cost_verdict": str(cost["verdict"]) if cost is not None else "",
                 "kernels": int(score["n_pairs"]) if score is not None else 0,
-                **({"limits_match": str(score["limits_match"])} if score is not None and "limits_match" in score else {}),
+                **(
+                    {"limits_match": str(score["limits_match"])}
+                    if score is not None and "limits_match" in score
+                    else {}
+                ),
             }
         )
     # the family the verdicts were corrected in: not a tokens_all_attempts leg, which is tested in its own
