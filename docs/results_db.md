@@ -134,7 +134,8 @@ and the operations relayout defines) is stored twice, from one validated `reques
 
 - `grades.requests`: the request as relayout's pydantic models write it (`Requests.recorded_json`, keys
   sorted, whatever spelling the caller passed), `''` for an agent call that asked for nothing.
-  `results_db.requests_of_row` reads it back.
+  `results_db.requests_of_row` reads it back. It carries the stamp `"v"` (the recorded shape's version; a row
+  without one is version 0).
 - `grade_requests`: one row per entry, in request order (`position` 0, 1, ...): one per `startup.load`
   library, the `startup.grid`, then every operation as it runs. `results_db.requests_from_rows` rebuilds
   the request from them; both reads give back the request as granted (under `requests.grid: task` the
