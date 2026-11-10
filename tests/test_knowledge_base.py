@@ -279,13 +279,13 @@ def test_the_driver_takes_a_base_and_its_packet_together_or_not_at_all(
     driver: ModuleType, base_dir: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A base no tool serves, or tools with no base, would put an intervention in the record the agent never had."""
-    assert driver.setup_knowledge() is None
+    assert driver.setup_knowledge() == ()
     monkeypatch.setenv(knowledge.KEY, str(base_dir))
     with pytest.raises(SystemExit, match="lacks `knowledge`"):
         driver.setup_knowledge()
     monkeypatch.setenv(registry.PACKET_TOOLS_ENV, KB_TOOLS[registry.PACKET_TOOLS_ENV])
     driver.tool_registry.cache_clear()
-    assert driver.setup_knowledge().manifest.name == "sample-isa"
+    assert [base.manifest.name for base in driver.setup_knowledge()] == ["sample-isa"]
     monkeypatch.delenv(knowledge.KEY)
     with pytest.raises(SystemExit, match=r"agent\.knowledge"):
         driver.setup_knowledge()
@@ -316,7 +316,7 @@ def test_the_episode_record_names_the_base_and_the_ingest_model_reads_it(
         10,
         1,
         "success",
-        interventions=driver.episode_interventions(network, knowledge.load(base_dir), workdir),
+        interventions=driver.episode_interventions(network, [knowledge.load(base_dir)], workdir),
     )
     record = episodes.read_record(workdir / "tokens.json")
     assert record is not None, "the ingest model refuses the record the driver writes"
@@ -342,3 +342,58 @@ def test_the_command_line_prints_the_hash_and_checks_a_base(
     knowledge.load.cache_clear()
     assert knowledge.main(["check", str(base_dir)]) == 1
     assert knowledge.main(["stage", str(base_dir)]) == 2
+
+
+def test_a_setup_with_two_bases_searches_both_and_records_each(
+    driver: ModuleType, base_dir: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``agent.knowledge`` names several directories: a search covers all of them and every hit names its base, a
+    read must say which base, and the record lists each base with its own retrieval volume."""
+    guide = tmp_path / "guide"
+    guide.mkdir()
+    (guide / "tuning.md").write_text("# Tuning\nPrefer mad.lo over a separate multiply and add.\n", encoding="utf-8")
+    manifest = {"name": "guide", "version": "2", "licence": "CC0-1.0", "source": "test"}
+    lines = [f"{key} = {json.dumps(value)}" for key, value in manifest.items()]
+    lines.append(f"content_hash = {json.dumps(knowledge.content_hash(guide))}")
+    (guide / knowledge.MANIFEST_NAME).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    usage = tmp_path / "usage.jsonl"
+    monkeypatch.setenv(knowledge.KEY, f"{base_dir}:{guide}")
+    monkeypatch.setenv(knowledge.USAGE_ENV, str(usage))
+
+    found = knowledge_search.run({"query": "mad.lo", "limit": 5})
+    assert found["knowledge_bases"] == {"sample-isa": "1.0", "guide": "2"}
+    assert {hit["knowledge_base"] for hit in found["hits"]} == {"sample-isa", "guide"}
+    only = knowledge_search.run({"query": "mad.lo", "knowledge_base": "guide"})
+    assert {hit["knowledge_base"] for hit in only["hits"]} == {"guide"}
+    assert knowledge_read.run({"document": "tuning.md"})["ok"] is False, "two bases: the read must name one"
+    page = knowledge_read.run({"document": "tuning.md", "knowledge_base": "guide"})
+    assert "Prefer mad.lo" in page["text"]
+    assert knowledge_search.run({"query": "x", "knowledge_base": "absent"})["ok"] is False
+
+    blocks = knowledge.episode_records(knowledge.bases(), usage)
+    assert [block["name"] for block in blocks] == ["sample-isa", "guide"]
+    assert [block["calls"] for block in blocks] == [1, 3]
+    record = episodes.EpisodeRecord.model_validate({"knowledge": blocks})
+    assert [base.identity.split("#")[0] for base in record.knowledge_bases()] == ["sample-isa@1.0", "guide@2"]
+    values = episodes.intervention_values(record)
+    assert values["knowledge"] == "+".join(base.identity for base in record.knowledge_bases())
+    assert values["knowledge_calls"] == 4
+    monkeypatch.setenv(knowledge.KEY, f"{base_dir},{base_dir}")
+    with pytest.raises(knowledge.KnowledgeError, match="called the same"):
+        knowledge.bases()
+
+
+def test_a_persisted_index_gives_the_same_answers_and_is_not_part_of_the_hash(base_dir: pathlib.Path) -> None:
+    """``knowledge index`` stores the term counts beside the base; loading reads them instead of tokenising, the
+    hash and every search result stay what they were, and an index of another hash is ignored."""
+    before = knowledge.search(knowledge.load(base_dir), "mad.lo multiply", 5)
+    stated = knowledge.load(base_dir).manifest.content_hash
+    assert knowledge.main(["index", str(base_dir)]) == 0
+    path = knowledge.index_path(base_dir, stated)
+    assert path.is_file()
+    assert knowledge.content_hash(base_dir) == stated
+    knowledge.load.cache_clear()
+    indexed = knowledge.load(base_dir)
+    assert knowledge.stored_counts(base_dir, stated, len(indexed.passages))
+    assert knowledge.search(indexed, "mad.lo multiply", 5) == before
+    assert knowledge.stored_counts(base_dir, "sha256:" + "0" * 64, len(indexed.passages)) == ()

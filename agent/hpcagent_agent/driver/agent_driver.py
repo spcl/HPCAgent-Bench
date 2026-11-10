@@ -1978,6 +1978,11 @@ def open_worker_network(workdir: pathlib.Path, services: Mapping[str, str]) -> W
     if not policy.isolated:
         return WorkerNetwork(policy, network_policy.Enforcement.OFF, dict(services), (), None, {})
     if not sealed_run(workdir):
+        if network_policy.unsealed(os.environ) is network_policy.Unsealed.REFUSE:
+            raise SystemExit(
+                f"agent_driver: {network_policy.KEY}={policy.text} cannot be enforced on an unsealed run (no RUN_DIR) "
+                f"and {network_policy.UNSEALED_KEY}=refuse; run sealed, or set {network_policy.KEY}=open"
+            )
         return WorkerNetwork(policy, network_policy.Enforcement.TOOLS, dict(services), (), None, {})
     try:
         named = {name: net_relay.endpoint_of(url).text for name, url in services.items()}
@@ -2028,19 +2033,19 @@ def refuse_unreachable_services(urls: Sequence[str]) -> None:
 KNOWLEDGE_TOOLS = frozenset({"knowledge_search", "knowledge_read"})
 
 
-def setup_knowledge() -> knowledge.KnowledgeBase | None:
-    """The setup's validated knowledge base, None without one. A base the tools cannot serve, or tools with no base,
+def setup_knowledge() -> tuple[knowledge.KnowledgeBase, ...]:
+    """The setup's validated knowledge bases, none without one. A base the tools cannot serve, or tools with no base,
     ends the driver: the record would name an intervention the agent never had."""
     try:
-        base = knowledge.configured(os.environ)
+        loaded = knowledge.bases(os.environ)
     except knowledge.KnowledgeError as exc:
         raise SystemExit(f"agent_driver: {knowledge.KEY}: {exc}") from exc
     served = KNOWLEDGE_TOOLS & set(tool_registry()["served_tools"])
-    if base is not None and served != KNOWLEDGE_TOOLS:
+    if loaded and served != KNOWLEDGE_TOOLS:
         raise SystemExit(f"agent_driver: {knowledge.KEY} names a knowledge base but the packet lacks `knowledge`")
-    if base is None and served:
+    if not loaded and served:
         raise SystemExit(f"agent_driver: the `knowledge` packet needs {knowledge.KEY} (agent.knowledge)")
-    return base
+    return loaded
 
 
 class McpUnavailable(RuntimeError):
@@ -2926,13 +2931,13 @@ def counter_notes(turns: int, mcp_attempts: int, crash_attempts: int, subtype: s
 
 
 def episode_interventions(
-    network: WorkerNetwork, base: knowledge.KnowledgeBase | None, workdir: pathlib.Path
+    network: WorkerNetwork, bases: Sequence[knowledge.KnowledgeBase], workdir: pathlib.Path
 ) -> dict[str, object]:
     """The record blocks naming what this episode's agent could reach: always its network, its knowledge base when
     the setup has one."""
     blocks: dict[str, object] = {"agent_network": network.record()}
-    if base is not None:
-        blocks["knowledge"] = knowledge.episode_record(base, workdir / KNOWLEDGE_USAGE_NAME)
+    if bases:
+        blocks["knowledge"] = knowledge.episode_records(bases, workdir / KNOWLEDGE_USAGE_NAME)
     return blocks
 
 
@@ -3013,7 +3018,7 @@ def run_agent(
     if "proxy" in network.urls:
         environment["ANTHROPIC_BASE_URL"] = network.urls["proxy"]
     environment.update(network.env)
-    if knowledge_base is not None:
+    if knowledge_base:
         environment[knowledge.USAGE_ENV] = str((workdir / KNOWLEDGE_USAGE_NAME).absolute())
     # Claude-only: the watchdog parses claude's stream-json shape.
     dead_stream_threshold = dead_stream_threshold_seconds(environment) if harness.name == harnesses.CLAUDE else 0.0
