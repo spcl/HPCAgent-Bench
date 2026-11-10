@@ -12,6 +12,8 @@ import sqlite3
 import threading
 import time
 
+import pytest
+
 from hpcagent_bench import paths
 from hpcagent_bench.results import extract as ox
 from hpcagent_bench.harness import results_db
@@ -122,3 +124,32 @@ def test_threads_opening_a_new_file_together_all_find_the_whole_schema(tmp_path:
 
     with concurrent.futures.ThreadPoolExecutor(8) as pool:
         assert set(pool.map(first_open, range(8))) == {results_db.SCHEMA_VERSION}
+
+
+def table_columns(conn: sqlite3.Connection) -> dict[str, list[tuple]]:
+    """Name, type, NOT NULL, default and key position of every ``grades`` and ``episodes`` column, in order."""
+    return {
+        table: [tuple(row)[1:] for row in conn.execute(f"PRAGMA table_info({table})")] for table in ("grades", "episodes")
+    }
+
+
+@pytest.mark.parametrize("version", [22, 23])
+def test_a_version_22_or_23_file_upgrades_to_the_columns_of_a_new_file(tmp_path: pathlib.Path, version: int) -> None:
+    """Opening an older file for writing applies :data:`results_db.ADDED`: its ``grades`` and ``episodes`` then have
+    the columns of a file created now, in the same order and declaration, and its rows read the new ones as not
+    recorded."""
+    path = tmp_path / "results.db"
+    results_seed.score(path, "setup.n0.p1.w1", "gemm", 1, 4.0, source="int x;")
+    with contextlib.closing(results_db.open_db(path)) as conn:
+        fresh = table_columns(conn)
+        for added in range(version + 1, results_db.SCHEMA_VERSION + 1):
+            for statement in results_db.ADDED[added]:
+                conn.execute(f"ALTER TABLE {statement.split()[2]} DROP COLUMN {statement.split()[5]}")
+        conn.execute(f"PRAGMA user_version = {version}")
+        conn.commit()
+
+    with contextlib.closing(results_db.open_db(path)) as conn:
+        assert results_db.schema_version(conn) == results_db.SCHEMA_VERSION
+        assert table_columns(conn) == fresh
+        switches = conn.execute("SELECT precision_override, score_info, relative_atol, strict_small FROM grades")
+        assert [tuple(row) for row in switches] == [("", None, None, None)]
