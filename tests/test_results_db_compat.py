@@ -46,6 +46,7 @@ def test_a_file_older_than_the_library_column_reads_as_no_library(tmp_path: path
     results_seed.score(path, "setup.n0.p1.w1", "gemm", 1, 4.0, source="int x;")
     with contextlib.closing(results_db.open_db(path)) as conn:
         conn.execute("ALTER TABLE grades DROP COLUMN library")
+        conn.execute("ALTER TABLE grades DROP COLUMN gates")
         conn.execute("PRAGMA user_version = 19")
         conn.commit()
     with results_db.reading(path, finished=True) as conn:
