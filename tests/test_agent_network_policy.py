@@ -62,7 +62,13 @@ def judge_fixture() -> Iterator[str]:
 
 @pytest.fixture(name="driver")
 def driver_fixture(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    for name in (network_policy.KEY, network_policy.ALLOW_ENV, registry.PACKET_TOOLS_ENV, "RUN_DIR"):
+    for name in (
+        network_policy.KEY,
+        network_policy.ALLOW_ENV,
+        network_policy.UNSEALED_KEY,
+        registry.PACKET_TOOLS_ENV,
+        "RUN_DIR",
+    ):
         monkeypatch.delenv(name, raising=False)
     return fresh("agent_driver")
 
@@ -208,6 +214,18 @@ def test_an_open_or_unsealed_worker_keeps_its_urls_and_the_record_says_how_far_t
     assert opened.enforcement is Enforcement.OFF
     assert (opened.urls, opened.relayed) == (services, None)
     assert opened.record()["policy"] == "open"
+
+
+def test_an_unsealed_run_under_an_isolating_policy_is_refused_when_the_setup_says_so(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """``agent.network_unsealed: refuse``: no worker starts where no namespace enforces ``none``; ``open`` is
+    unaffected, and the default (``tools``) is the earlier behaviour, covered above."""
+    monkeypatch.setenv(network_policy.UNSEALED_KEY, "refuse")
+    with pytest.raises(SystemExit, match="cannot be enforced on an unsealed run"):
+        driver.open_worker_network(tmp_path, {"judge": "http://n0:8800"})
+    monkeypatch.setenv(network_policy.KEY, "open")
+    assert driver.open_worker_network(tmp_path, {"judge": "http://n0:8800"}).enforcement is Enforcement.OFF
 
 
 def test_a_sealed_worker_dials_the_relay_and_the_relay_reaches_only_the_allowlist(

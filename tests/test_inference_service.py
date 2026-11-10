@@ -499,6 +499,8 @@ def test_every_example_setup_resolves_when_its_key_is_set(service: types.ModuleT
     resolved = service.from_environ(setup)
     assert resolved.tier
     assert SECRET not in service.shell_block(service.launcher_env(resolved))
+    # A hosted example launches as shipped: its https endpoint passes the agent-network check.
+    service.check_network(resolved, setup)
 
 
 def test_a_service_setup_never_leaks_its_key_into_the_staged_setup_env() -> None:

@@ -143,6 +143,11 @@ class KnowledgeRecord(pydantic.BaseModel):
     calls: Count = 0
     returned_chars: Count = 0
 
+    @property
+    def identity(self) -> str:
+        """``<name>@<version>#<first 12 hex of the content hash>``: what a setup or an episode row names."""
+        return f"{self.name}@{self.version}#{self.content_hash.removeprefix('sha256:')[:12]}"
+
 
 class EpisodeRecord(pydantic.BaseModel):
     """``tokens.json`` as the driver writes it: every key named, an unknown one refused."""
@@ -189,7 +194,14 @@ class EpisodeRecord(pydantic.BaseModel):
     tokens_effective_crashed: Count | None = None
     #: What the agent could reach; None on a record written before these blocks existed.
     agent_network: NetworkRecord | None = None
-    knowledge: KnowledgeRecord | None = None
+    #: One base, or a list when the setup names several (``agent.knowledge`` as a list).
+    knowledge: KnowledgeRecord | tuple[KnowledgeRecord, ...] | None = None
+
+    def knowledge_bases(self) -> tuple[KnowledgeRecord, ...]:
+        """The record's knowledge bases, none to many."""
+        if self.knowledge is None:
+            return ()
+        return (self.knowledge,) if isinstance(self.knowledge, KnowledgeRecord) else self.knowledge
 
 
 def read_record(path: pathlib.Path) -> EpisodeRecord | None:
@@ -235,12 +247,38 @@ def episode_values(record: EpisodeRecord, cancelled: bool = False) -> dict[str, 
         "kernel": kernel_stem(record.kernel or "") or None,
         "relaunches": max(record.attempts - 1, 0),
         "final_attempt_start_ms": record.final_attempt_start_ms or None,
+        **intervention_values(record),
+    }
+
+
+#: The ``episodes`` columns of the network and knowledge blocks. They are filled only in a database that has them
+#: (:func:`fill`): the schema that adds them is not this module's to bump (reports/F32-schema-request.md).
+INTERVENTION_COLUMNS = frozenset(
+    {"network_policy", "network_enforcement", "knowledge", "knowledge_calls", "knowledge_chars"}
+)
+
+
+def intervention_values(record: EpisodeRecord) -> dict[str, results_db.Value]:
+    """What the agent could reach, as columns: the policy and its enforcement, and each knowledge base as
+    ``<name>@<version>#<first 12 hex of its hash>`` (several joined by ``+``) with the retrieval volume."""
+    network, bases = record.agent_network, record.knowledge_bases()
+    return {
+        "network_policy": network.policy if network else None,
+        "network_enforcement": network.enforcement if network else None,
+        "knowledge": "+".join(base.identity for base in bases) or None,
+        "knowledge_calls": sum(base.calls for base in bases) if bases else None,
+        "knowledge_chars": sum(base.returned_chars for base in bases) if bases else None,
     }
 
 
 def fill(conn: sqlite3.Connection, episode_id: int, values: Mapping[str, results_db.Value]) -> None:
     """Set the episode columns of run ``episode_id`` (the record is their one source)."""
-    columns = [name for name, value in values.items() if value is not None]
+    present = {str(row[1]) for row in conn.execute("PRAGMA table_info(episodes)")}
+    columns = [
+        name
+        for name, value in values.items()
+        if value is not None and (name not in INTERVENTION_COLUMNS or name in present)
+    ]
     if columns:
         assignments = ", ".join(f"{name} = ?" for name in columns)
         conn.execute(

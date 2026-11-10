@@ -28,6 +28,9 @@ class KnowledgeReadInput(pydantic.BaseModel):
         le=knowledge.MAX_READ_LINES,
         description=f"How many lines to return (default {knowledge.PASSAGE_LINES}).",
     )
+    knowledge_base: str | None = pydantic.Field(
+        None, description="The base the document is in, as the hit named it; needed only when the run has several."
+    )
 
 
 PROMPT = "- `knowledge_read` -- read a line range of a document `knowledge_search` named."
@@ -39,13 +42,20 @@ PROMPT = "- `knowledge_read` -- read a line range of a document `knowledge_searc
 )
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     try:
-        base = knowledge.configured()
-        if base is None:
+        loaded = knowledge.bases()
+        if not loaded:
             return {"ok": False, "error": "this run has no knowledge base; stop calling this tool"}
+        picked = knowledge.chosen(loaded, payload.get("knowledge_base"))
+        if len(picked) != 1:
+            names = [base.manifest.name for base in loaded]
+            return {"ok": False, "error": f"this run has several knowledge bases; pass knowledge_base, one of {names}"}
         answer = knowledge.read(
-            base, payload["document"], payload.get("first_line") or 1, payload.get("lines") or knowledge.PASSAGE_LINES
+            picked[0],
+            payload["document"],
+            payload.get("first_line") or 1,
+            payload.get("lines") or knowledge.PASSAGE_LINES,
         )
     except knowledge.KnowledgeError as exc:
         return {"ok": False, "error": str(exc)}
-    knowledge.log_usage("knowledge_read", len(answer["text"]))
+    knowledge.log_usage("knowledge_read", len(answer["text"]), base=picked[0].manifest.name)
     return {"ok": True, **answer}
