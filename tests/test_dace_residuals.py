@@ -223,12 +223,16 @@ def test_the_cli_dispatches_emit_and_prints_the_written_paths(
     assert kwargs["options"] == DacePipelineOptions(maximal=True, remove_transients=False)
 
 
-def test_the_cli_maps_the_emitter_exceptions_to_exit_codes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_cli_maps_the_emitter_exceptions_to_exit_codes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     calls: list[object] = []
     stub_emit(monkeypatch, calls, behave=dace_emit.DaceEmitUnavailable("dace is not importable (ImportError)"))
     assert main(["dace", "emit", JACOBI]) == 2, "a missing dace is a skip, not a failure"
-    stub_emit(monkeypatch, calls, behave=dace_emit.DaceEmitError("parallel_gpu on k: AttributeError: x"))
+    stub_emit(monkeypatch, calls, behave=dace_emit.DaceEmitError("parallel_gpu on k: Invalid: x\nsaved in /tmp/s"))
+    capsys.readouterr()
     assert main(["dace", "emit", JACOBI]) == 1
+    assert capsys.readouterr().err == "dace emit: parallel_gpu on k: Invalid: x saved in /tmp/s\n"
 
 
 def test_the_cli_flags_or_with_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:

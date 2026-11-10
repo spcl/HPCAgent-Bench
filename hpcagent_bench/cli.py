@@ -742,7 +742,8 @@ def cmd_dace_emit(args: argparse.Namespace) -> int:
         print(f"dace emit: {exc}", file=sys.stderr)
         return 2
     except DaceEmitError as exc:
-        print(f"dace emit: {exc}", file=sys.stderr)
+        # One line: DaCe's messages span several, and a caller reads the last (autogen.emit_device).
+        print(f"dace emit: {' '.join(str(exc).split())}", file=sys.stderr)
         return 1
     for path in written:
         print(path)
