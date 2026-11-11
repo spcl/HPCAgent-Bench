@@ -1,14 +1,14 @@
 # Adding an agentic framework (agent harness)
 
 An agent harness runs the model's tool loop for one cluster agent, next to `claude`, `miniswe`,
-`optimas`, `anthropic` and `openai` in `agent/hpcagent_agent/driver/agent_driver.py`. The in-process `Agent` API is the other
+`openhands`, `optimas`, `anthropic` and `openai` in `agent/hpcagent_agent/driver/harnesses.py`. The in-process `Agent` API is the other
 route: [writing_an_agent.md](../writing_an_agent.md). Run commands from the repo root.
 
 | File | Change |
 |---|---|
 | `agent/hpcagent_agent/harness/run_<name>.py` | the runner |
 | `agent/pyproject.toml` | a `harness-<name>` dependency group, locked in `uv.lock` |
-| `agent/hpcagent_agent/driver/harnesses.py` | the name in `HARNESSES`, a `<name>_command`, a `RUNNERS` entry |
+| `agent/hpcagent_agent/driver/harnesses.py` | a `<name>_command` and a `RUNNERS` entry (`HARNESSES` is `(CLAUDE, *RUNNERS)`) |
 | `containers/images/lib/launch_venv.sh` | a line in the harness table: the name and every module its runner imports |
 | `hpcagent_bench/cluster/record_identity.sh`, `hpcagent_bench/models.py` | the name in the `case`, and `HARNESSES.add("<name>", "<display name>")` after the existing harnesses ([registry.md](registry.md)) |
 | `tests/test_harness_pins.py` (`PYTHON_HARNESSES`), `tests/test_harness_dispatch.py` (`expected_runner_argv`) | the new harness |
@@ -23,7 +23,7 @@ The driver owns wall clock, token cap, submission marker and crash relaunch. The
 workdir `W`, logs to `W/<name>.log` and writes two records.
 
 - **argv** (parsed by `runner_common.parse_args`): `--workdir W --prompt W/prompt.txt --base-url
-  <replica>/v1 --model <served name> --usage W/usage.jsonl`, optional `--max-output-tokens`,
+  <replica>/v1 --model <served name> --usage W/usage.jsonl`, optional `--cwd`, `--max-output-tokens`,
   `--reasoning-effort`, `--compaction-trigger`, `--request-timeout`, and `--mcp-config W/mcp.json`
   for an MCP harness.
 - **env**: `JUDGE_URL`, `JUDGE_RANK`, `KERNEL`, `LANGUAGE`, `HPCAGENT_BENCH_EPISODE_ID`, `OPENAI_API_KEY`,
@@ -100,20 +100,19 @@ turn off the framework's own step, cost and iteration limits.
 
 ```python
 # agent/hpcagent_agent/driver/harnesses.py
-HARNESSES = (CLAUDE, "miniswe", "optimas", "anthropic", "openai", "myagent")
 RUNNERS = {..., "myagent": runner("myagent", myagent_command, miniswe_env)}
+HARNESSES = (CLAUDE, *RUNNERS)  # unchanged: derived from RUNNERS
 ```
 
 Write `myagent_command` like `miniswe_command`, whose `interpreter("myagent")` is the venv `launch_venv.sh` builds
 inside the launch venv. Pick the env function by tool access: `runner_env` or `miniswe_env`
-(`hpcagent-bench-tool` first on `PATH`). A name in
-`HARNESSES` but not `RUNNERS` raises `KeyError` in every worker.
+(`hpcagent-bench-tool` first on `PATH`).
 
 Tool access and prompt:
 
 - **Shell** (`miniswe`): `hpcagent-bench-tool <tool> '<json>'`; exit 0 result, 1 `ok: false`, 2 usage
   error. Prompt overlay `harness-cli`.
-- **MCP** (`optimas`, `anthropic`, `openai`): `W/mcp.json` starts `tools/mcp_server.py`;
+- **MCP** (`optimas`, `anthropic`, `openai`): `W/mcp.json` starts `agent/hpcagent_agent/tools/mcp_server.py`;
   overlay the entry's `env` on the full environment and set `cwd` to the workdir, as
   `runner_common.mcp_servers` does. They add `runner_common.SHELL_TOOL` and read the `harness-native` overlay.
 
@@ -127,6 +126,6 @@ runner script is bound from the checkout at launch and a new pin needs no image 
 ```bash
 python -m pytest --maxfail=10 tests/test_harness_dispatch.py tests/test_harness_runners.py \
   tests/test_harness_identity.py tests/test_harness_pins.py
-(cd hpcagent_bench/cluster && python -c 'import harnesses; print(harnesses.HARNESSES, sorted(harnesses.RUNNERS))')
+(cd agent && python -c 'from hpcagent_agent.driver import harnesses; print(harnesses.HARNESSES, sorted(harnesses.RUNNERS))')
 (cd agent/hpcagent_agent/harness && python -c 'import run_myagent')
 ```

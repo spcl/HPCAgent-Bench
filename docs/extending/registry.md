@@ -5,7 +5,7 @@ module that owns the kind. An entry is a typed value: a frozen dataclass that va
 (`ModelEntry`, `PacketDef`, `Column`, `anticheat.Gate`), or a display name (`str`) for kinds that are only a name.
 
 ```python
-MODELS.add("qwen38", ModelEntry("Qwen3.8-27B", "Qwen/Qwen3.8-27B-FP8"))
+MODELS.add("qwen38", ModelEntry("Qwen3.8-27B", "Qwen/Qwen3.8-27B"))
 HARNESSES.add("claude", "Claude Code")
 ```
 

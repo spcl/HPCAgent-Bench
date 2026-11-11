@@ -18,7 +18,7 @@ EDF `hpcagent-bench-sglang-mi300-latest`. Port 8000 on rank 0 only, served name
 --host 0.0.0.0 --port 8000 --attention-backend aiter`. The env adds:
 
 ```
---trust-remote-code --language-only --watchdog-timeout 1800
+--trust-remote-code --attention-backend aiter --language-only --watchdog-timeout 1800
 --kv-cache-dtype fp8_e4m3 --page-size 64 --context-length 262144
 --mem-fraction-static 0.55 --max-running-requests 24 --cuda-graph-max-bs-decode 24
 --enable-metrics --pre-warm-nccl

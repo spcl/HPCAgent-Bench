@@ -40,7 +40,7 @@ of the CSCS Alps MI300A partition, the reference setup of this repository's expe
 |---|---|
 | `experiments/site-<name>.env`, loaded by `helpers/scripts/site_env.sh` | this cluster's values: account, partition, fast storage, node exclusions, the host interpreter |
 | `helpers/scripts/cache_env.sh` | every cache and work directory, from `SCRATCH` and `FAST_SCRATCH` |
-| `helpers/scripts/host_python.sh` | the host-side interpreter (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.10 |
+| `helpers/scripts/host_python.sh` | the host-side interpreter (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.12 |
 | each image's EDF | the interpreter of every step inside it (`HPCAGENT_BENCH_IMAGE_PYTHON`) and `PYTHONHASHSEED=0` |
 | `hpcagent_bench/cluster/env.sh` | the checkout, `PYTHONHASHSEED=0`, the OpenMP launch environment; sources the two scripts above |
 | `pyproject.toml` (`[tool.uv.sources] dace`) | the dace commit a release installs, bakes and runs ([below](#dace)) |
@@ -74,15 +74,15 @@ Each field is resolved in this order, the first that sets it winning (`hpcagent_
 | Field | Flag | Variable | `systems.yaml` key |
 |---|---|---|---|
 | partition | `--partition` | `SBATCH_PARTITION` | `partition` |
-| account | `--account` | `SBATCH_ACCOUNT` | -- |
-| nodes | `--nodes` | `HPCAGENT_BENCH_JOB_NODES` | -- |
-| time limit | `--time` | `HPCAGENT_BENCH_JOB_TIME` | -- |
-| nice | `--nice` | `HPCAGENT_BENCH_NICE` (default 100) | -- |
-| tasks | `--ntasks` | `HPCAGENT_BENCH_JOB_NTASKS` | -- |
+| account | `--account` | `SBATCH_ACCOUNT` | `account` |
+| nodes | `--nodes` | `HPCAGENT_BENCH_JOB_NODES` | `nodes` |
+| time limit | `--time` | `HPCAGENT_BENCH_JOB_TIME` | `time` |
+| nice | `--nice` | `HPCAGENT_BENCH_NICE` (default 100) | `nice` |
+| tasks | `--ntasks` | `HPCAGENT_BENCH_JOB_NTASKS` | `ntasks` |
 | tasks per node | `--ntasks-per-node` | `HPCAGENT_BENCH_JOB_NTASKS_PER_NODE` | `ntasks_per_node` |
 | cores per task | `--cpus-per-task` | `HPCAGENT_BENCH_JOB_CPUS_PER_TASK` | `cpus_per_task` |
 | GPUs per node | `--gpus-per-node` | `HPCAGENT_BENCH_JOB_GPUS_PER_NODE` | `gpus_per_node` |
-| GPUs per task | `--gpus-per-task` | `HPCAGENT_BENCH_JOB_GPUS_PER_TASK` | -- |
+| GPUs per task | `--gpus-per-task` | `HPCAGENT_BENCH_JOB_GPUS_PER_TASK` | `gpus_per_task` |
 | node memory | `--mem` | `HPCAGENT_BENCH_JOB_MEM` | `mem` |
 | hardware (`submit.sh` only, not an sbatch option) | `--hardware` | `HPCAGENT_BENCH_HARDWARE` | `hardware` |
 | longest partition time (`submit.sh` only) | -- (`job options --max-time-hours`) | `HPCAGENT_BENCH_MAX_TIME_HOURS` | `max_time_hours` |
@@ -92,13 +92,13 @@ Each field is resolved in this order, the first that sets it winning (`hpcagent_
 | container CPUs | `--container-cpus` | `HPCAGENT_BENCH_CONTAINER_CPUS` | `container_cpus` |
 
 The two GPU fields are one choice, and so are the two task fields: each pair comes whole from the highest source
-that sets either. The shipped systems are `beverin` (MI300A, partition `mi300`, 4 tasks x 24 cores, 4 GPUs),
-`beverin-mi200` (partition `mi200`, 4 tasks x 16 cores, 8 GPUs) and `daint.alps` (GH200, partition `normal`,
-4 tasks x 72 cores, 4 GPUs). A script that pins its shape keeps it (`build_and_verify.sbatch` stays one task of
+that sets either. The shipped systems are `beverin` (MI300A, partition `mi300`, 1 task x 96 cores, 4 GPUs),
+`beverin-mi200` (partition `mi200`, 1 task x 64 cores, 8 GPUs) and `daint.alps` (GH200, partition `normal`,
+1 task x 288 cores, 4 GPUs); a helper job splits its task into one grading slot per NUMA domain. A script that pins its shape keeps it (`build_and_verify.sbatch` stays one task of
 96 cores); one that pins nothing gets the system's. The system is `--system`, else
 `HPCAGENT_BENCH_SYSTEM`, else the entry whose `cluster` is `SLURM_CLUSTER_NAME`, else none: a cluster with no entry
 runs from flags and the environment alone. Without `--system`, a partition picks the entry of the same cluster that
-serves it (`--partition mi200` on Beverin is `beverin-mi200`: 8 GPUs, 16 cores per task). A new machine is a file of
+serves it (`--partition mi200` on Beverin is `beverin-mi200`: 8 GPUs, 64 cores per task). A new machine is a file of
 the same shape named by `HPCAGENT_BENCH_SYSTEMS_FILE` (its entries add to or replace the shipped ones). An image build or verify job runs on its role's `images.env` partition, as if
 its header named it, unless `--system` names a machine ([containers/README.md](../containers/README.md#amd-beverin)).
 
@@ -253,4 +253,4 @@ prefix (`HPCAGENT_BENCH_JUDGE_URLS`, `HPCAGENT_BENCH_MPI_GANG_*`, ...) are liste
 Two cross-key rules are part of the model: `requests.precisions` is non-empty exactly when `requests.allow` has
 `cast`, and `mpi.grade_distributed` true puts `distribute` into the resolved `requests.allow`
 ([requests_api.md](requests_api.md), section 0). An experiment sets the `requests.*` keys only through a
-requests preset (`experiments/experiments.toml` `requests:`, `[requests.<preset>]`).
+requests preset (`requests = "<preset>"` of an `[experiment.<name>]` in `experiments/experiments.toml`, `[requests.<preset>]`).

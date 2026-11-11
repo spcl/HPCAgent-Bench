@@ -16,7 +16,7 @@ One registry tag per image, in `docker.io/spcleth/hpcagent-bench` (`containers/i
 | `agent-nvidia-x86_64-latest`, `judge-nvidia-x86_64-latest` | `judge-agent-cuda` built on x86_64 | x86-64-v3; sm_75 to sm_120 | CUDA 13.4.1 | `hpcagent-bench-{agent,judge}-nvidia-x86_64-latest` |
 | `agent-cpu-<arch>-latest`, `judge-cpu-<arch>-latest` | `judge-agent-cpu` | x86-64-v3 or armv8.2-a | none | `hpcagent-bench-{agent,judge}-cpu-<arch>-latest` |
 | `verifier-{amd,nvidia,nvidia-x86_64,cpu-<arch>}-latest` | `verifier` | the judge's | the judge's | none: Harbor pulls it ([why](hf_dataset_and_harbor.md#harbor-adapter)) |
-| `sglang-mi300-latest` | `sglang` | gfx942 | ROCm | `hpcagent-bench-sglang-mi300-latest` |
+| `sglang-mi300-latest` | `sglang` | gfx942, gfx90a | ROCm | `hpcagent-bench-sglang-mi300-latest` |
 | `vllm-amd-latest` | `vllm` | gfx90a, gfx942, gfx950 | ROCm | `hpcagent-bench-vllm-{mi300,mi200}-latest` |
 | `vllm-gh200-latest` | `vllm-cuda` | aarch64 only | CUDA 12.9 (vLLM v0.28.0) | `hpcagent-bench-vllm-gh200-latest` |
 
@@ -30,7 +30,7 @@ Get an image and its EDF (the EDFs mount `$SCRATCH`, so run this on the cluster 
 
 ```bash
 sbatch containers/images/registry.sbatch pull judge-agent-amd        # a role of images.env
-containers/images/install_edfs.sh                                     # amd rows; CE_PLATFORM=gh200 | cpu for the others
+containers/images/install_edfs.sh                                     # the node's platform; CE_PLATFORM=amd | gh200 | nvidia-x86 | cpu names one
 ls ~/.edf/
 ```
 
@@ -58,8 +58,8 @@ JUDGE_EDF=~/.edf/hpcagent-bench-judge-cpu-x86_64-latest.toml \
   hpcagent-bench job submit --nodes 1 hpcagent_bench/cluster/prepare.sbatch --tag llr40 --language c
 ```
 
-Experiments (`submit.sh`) run on the hardware that has layers, `mi300` (the base) and `mi200`; under the
+Experiments (`submit.sh`) run on the hardware that has layers, `mi300` (the base), `mi200` and `gh200`; under the
 Container Engine `submit.sh` refuses a run with no hardware or with a hardware that has no
-`[hardware.<hardware>]`. GH200 and x86 NVIDIA nodes run the helper jobs and the CLI with their
+`[hardware.<hardware>]`. x86 NVIDIA nodes run the helper jobs and the CLI with their
 own EDFs; [containers/README.md](../containers/README.md#nvidia-gh200-daint) shows a Daint job using a Beverin
 inference endpoint.

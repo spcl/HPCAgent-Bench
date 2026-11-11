@@ -8,8 +8,8 @@ and in `docs/serving/<tag>.md`; copy them from there.
 
 | File | Change |
 |---|---|
-| `[model.<tag>]` | serving block (extends `[common]`) |
-| `experiments/experiments.toml` `<experiment>.models.<tag>` | effort ladder, context and engine args (a model with a layer renders in any experiment; add an entry only for what differs) |
+| `experiments/experiments.toml` `[model.<tag>]` | serving block (`extends` names its layers: `replicas`, `sglang`, `pp`, `service`) |
+| `experiments/experiments.toml` `[experiment.<experiment>.models.<tag>]` | effort ladder, context and engine args (a model with a layer renders in any experiment; add an entry only for what differs) |
 | `hpcagent_bench/models.py` | `MODELS.add("<tag>", ModelEntry("<display name>", "org/Name"))`, after the existing models; see [registry.md](registry.md) |
 | `docs/serving/<tag>.md` | the measurements behind the recipe |
 
@@ -20,32 +20,30 @@ and in `docs/serving/<tag>.md`; copy them from there.
 layout. Success prints `WEIGHTS READY`.
 
 ```bash
-MODELS="org/Name" sbatch containers/inference/fetch_weights.sbatch
+MODELS="org/Name" INFERENCE_CE_ENV=<edf name> sbatch containers/inference/fetch_weights.sbatch
 ```
 
 **2. Write the env files.** Copy the pair with the same engine and node shape (`qwen38`, `oss120b`:
-one node; `kimi27sglang`, `glm53`: four nodes in `pp` mode). From `[model.qwen38]` and
-`experiments.toml` `experiment.models.qwen38`, trimmed:
+one node; `kimi27sglang`, `glm53`: four nodes in `pp` mode). From `[model.qwen38]` with its layers resolved and
+`experiments.toml` `[experiment.experiment.models.qwen38]`, trimmed:
 
 ```bash
-# [model.qwen38]
-INFERENCE_NODES=1
-INFERENCE_MODE=replicas
+# [model.qwen38], extends = ["replicas", "sglang"]
+INFERENCE_NODES=1                    # layer.replicas
+INFERENCE_MODE=replicas              # layer.replicas
 INFERENCE_CE_ENV=hpcagent-bench-sglang-mi300-latest
-INFERENCE_ENGINE=sglang
-VLLM_MODEL=Qwen/Qwen3.8-27B-FP8
-VLLM_SERVED_MODEL=hpcagent-bench-vllm
-HPCAGENT_BENCH_OPTIMIZER=Qwen/Qwen3.8-27B-FP8
+INFERENCE_ENGINE=sglang              # layer.sglang
+VLLM_MODEL=Qwen/Qwen3.8-27B
+VLLM_SERVED_MODEL=hpcagent-bench-vllm   # layer.served
+HPCAGENT_BENCH_OPTIMIZER=Qwen/Qwen3.8-27B
 ```
 
-```yaml
+```toml
 # experiments.toml
-experiment:
-  models:
-    qwen38:
-      EFFORT_LADDER: '"low medium xhigh"'
-      CONTEXT_LENGTH: 262144
-      SGLANG_EXTRA_ARGS: '"--chat-template ${HPCAGENT_BENCH_REPO}/containers/inference/chat-template-qwen38.jinja --context-length 262144 --mem-fraction-static 0.306 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"'
+[experiment.experiment.models.qwen38]
+EFFORT_LADDER = '"low medium xhigh"'
+CONTEXT_LENGTH = 262144
+SGLANG_EXTRA_ARGS = '"--chat-template ${HPCAGENT_BENCH_REPO}/containers/inference/chat-template-qwen38.jinja --context-length 262144 --mem-fraction-static 0.306 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"'
 ```
 
 | Key | Meaning |
@@ -60,8 +58,8 @@ experiment:
 | `EFFORT_LADDER` | rungs this server accepts, lowest first (`agent/hpcagent_agent/driver/effort.py`); empty for no ladder |
 | `CONTEXT_LENGTH` | served window; harnesses derive compaction from it ([token_accounting.md](../token_accounting.md#context-compaction)) |
 
-Files such as a chat template sit in `experiments/` and are named through `${SCRIPT_DIR}`, which
-`run_cluster.sh` mounts into the inference container.
+Files such as a chat template sit in `containers/inference/` and are named through `${HPCAGENT_BENCH_REPO}`
+(the checkout `run_cluster.sh` exports), as the qwen38 entry above does.
 
 **3. Serve it alone.**
 
@@ -91,8 +89,8 @@ python -m pytest --maxfail=10 tests/test_display_names.py tests/test_palette.py 
 | File | Change |
 |---|---|
 | `containers/images/<engine>/` | `Dockerfile`, `image.sh`, `edf.toml.in` (copy `sglang/`) |
-| `containers/images/images.env` | `INFERENCE_<ENGINE>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_REPO`, `_TAG` |
-| `containers/images/install_edfs.sh` | render the new EDF beside the sglang one |
+| `containers/images/images.env` | a `CE_IMAGE_TABLE` row; its prefix `INFERENCE_<ENGINE>` derives `_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_CANDIDATE`, `_TAG` |
+| `containers/images/install_edfs.sh` | no edit: it renders the EDF of every `images.env` row of the platform |
 | `hpcagent_bench/cluster/run_cluster.sh` `run_vllm_node` | a `command=(...)` branch on `INFERENCE_ENGINE`, run with the image's `HPCAGENT_BENCH_IMAGE_PYTHON` |
 
 `edf.toml.in` keeps the `PLACEHOLDER.sqsh` image line, a multi-line `mounts = [` block, absolute

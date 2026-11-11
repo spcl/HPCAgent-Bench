@@ -31,7 +31,7 @@ contrast, serves every interface without a key ([`README.md`](README.md)). Contr
 
 | `PRESET` | Hardware | Engine | EDF | Weights | Default `LEGS` | Serve with |
 |---|---|---|---|---|---|---|
-| `mi300` | 4x MI300A | SGLang | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B-FP8` | `tp4:0.306` | `tp4:0.306` |
+| `mi300` | 4x MI300A | SGLang | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B` | `tp4:0.306` | `tp4:0.306` |
 | `mi200` | 8x MI250X, 64 GiB each | vLLM 0.28 | `hpcagent-bench-vllm-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | `tp8:0.85` | `tp8:0.85` |
 
 Both serve a 262144-token context and 128 running requests with the qwen3 reasoning and qwen3_coder
@@ -113,7 +113,7 @@ PRESET=mi300 MODE=serve DRY_RUN=1 bash "$L"                                   # 
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PRESET` | required | `mi300` |
+| `PRESET` | required | `mi300` or `mi200` |
 | `MODE` | `smoke` | `smoke`: start, check (401/200, tool gate, load probe) and stop each leg. `serve`: first leg only, held until the job ends |
 | `ACCESS` | `tunnel` | `tunnel` or `alps` |
 | `LEGS` | per preset | `tp<N>:<mem-fraction-static>` entries, N up to the node's GPUs; entry i listens on `API_PORT + i` |
