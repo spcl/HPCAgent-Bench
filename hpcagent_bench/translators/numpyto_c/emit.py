@@ -1039,9 +1039,9 @@ class CBodyEmitter(BaseEmitter):
         if isinstance(node, ast.Constant):
             return self.emit_constant(node.value)
         if isinstance(node, ast.Name):
-            # A size-1 array read bare in a value expression is its sole element: emit x[0], not the pointer x.
+            # A size-1 or 0-d array read bare in a value expression is its sole element: emit x[0], not the pointer x.
             shape = self.array_shapes.get(node.id)
-            access = f"{node.id}[0]" if (shape and all(str(s) == "1" for s in shape)) else node.id
+            access = f"{node.id}[0]" if (shape is not None and all(str(s) == "1" for s in shape)) else node.id
             return self.promote_name_read(node, access)
         if isinstance(node, ast.UnaryOp):
             return self.emit_unaryop(node)
