@@ -8,8 +8,11 @@ tagged frame :mod:`hpcagent_bench.stats.figures.efficacy` draws from.
 Significance is corrected once per figure: :func:`points` tests every (model, leg) on both axes with the
 configured paired test (``statistics.paired_test``, sign-flip by default,
 :func:`hpcagent_bench.stats.significance.paired`), the p values are adjusted across the whole family by the
-configured correction (``statistics.correction``, Benjamini-Hochberg by default), and the star is gated on
-the adjusted value. The stats table names both in its ``test`` and ``correction`` columns.
+configured correction (``statistics.correction``, Benjamini-Hochberg by default) over the families
+``statistics.correction_family`` defines, and the star is gated on the adjusted value. Under
+``statistics.equivalence`` (the default) each measure also gets its TOST equivalence test, minimum detectable effect
+and three-way conclusion; an equivalent one wears ``=``. The stats table names the tests in its ``test`` and
+``correction`` columns, and ``<table>.settings.json`` beside it records every setting behind it.
 
 The per-kernel view (every kernel, compilers and setups) is ``hpcagent_bench/stats/commands/kernel_speedups.py``.
 
@@ -28,6 +31,7 @@ from collections.abc import Sequence
 import numpy as np
 import pandas as pd
 
+from hpcagent_bench import config as bench_config
 from hpcagent_bench import packets, paths, study_tags
 from hpcagent_bench.results import studies
 from hpcagent_bench.results.observation_columns import RowKind
@@ -72,6 +76,7 @@ __all__ = [
     "safe_pairs_table",
     "same_card",
     "same_policy",
+    "same_protocol",
     "same_rule",
     "setup_languages",
     "shared_spelling",
@@ -114,7 +119,6 @@ class Options:
     mark: marks.Mark = marks.Mark.SCATTER
     cost_model: str = cost.DEFAULT_COST_MODEL
     cost_models: pathlib.Path | None = None
-    equivalence: bool = False
 
     @property
     def table_path(self) -> pathlib.Path:
@@ -157,6 +161,19 @@ def compare_slice(
     log_score = np.log((paired.treated_speedup / paired.control_speedup).to_numpy(dtype=float)[timed])
     log_cost = np.log((paired.treated_tokens / paired.control_tokens).to_numpy(dtype=float))
     score, cost = significance.paired(log_score), significance.paired(log_cost)
+    statistics = bench_config.current().statistics
+    equivalence = (
+        {
+            f"{name}_{column}": value
+            for name, logs in (("score", log_score), ("cost", log_cost))
+            for column, value in (
+                ("equivalence_p", significance.equivalence(logs).pvalue),
+                ("mde", math.exp(significance.detectable(logs))),
+            )
+        }
+        if statistics.equivalence
+        else {}
+    )
     return {
         "model": model,
         "language": language,
@@ -168,8 +185,10 @@ def compare_slice(
         "test": score.label,
         "score_p": score.pvalue,
         "cost_p": cost.pvalue,
-        # Whether both sides' episodes ran under the same recorded limits (budgets.matched_limits).
+        **equivalence,
+        # Whether both sides' episodes ran under the same recorded limits and ran the same kernels (budgets.*).
         **limits.sides(f"{model}/{leg}", treated, control),
+        **limits.task_sides(f"{model}/{leg}", treated, control),
     }
 
 
@@ -212,7 +231,20 @@ def corrected(rows: Sequence[dict[str, float | str | int]]) -> pd.DataFrame:
         return frame
     # Interleaved score, cost, score, cost ... so each row's pair of verdicts comes back adjacent.
     family = [float(value) for pair in zip(frame["score_p"], frame["cost_p"], strict=True) for value in pair]
-    verdicts = significance.verdicts(family)
+    legs = [significance.Leg.SPEEDUP, significance.Leg.TOKENS] * len(frame)
+    verdicts = significance.scoped(legs, family, significance.verdicts)
+    if "score_equivalence_p" in frame.columns:
+        same = [float(v) for pair in zip(frame.score_equivalence_p, frame.cost_equivalence_p, strict=True) for v in pair]
+        found: dict[int, significance.Conclusion] = {}
+        for indices in significance.families(legs):
+            outcomes = significance.conclusions([family[i] for i in indices], [same[i] for i in indices])
+            found.update((i, outcome[0]) for i, outcome in zip(indices, outcomes, strict=True))
+        frame = frame.assign(
+            **{
+                name: [found[2 * row + offset].text for row in range(len(frame))]
+                for offset, name in enumerate(efficacy_figures.CONCLUSION_COLUMNS)
+            }
+        )
     return frame.assign(
         score_p_adjusted=[v.adjusted for v in verdicts[0::2]],
         cost_p_adjusted=[v.adjusted for v in verdicts[1::2]],
@@ -390,6 +422,18 @@ def same_policy(table: pd.DataFrame, source: pathlib.Path, over: population.Kern
         )
 
 
+def same_protocol(table: pd.DataFrame, source: pathlib.Path) -> None:
+    """The family CSV's pairs under ``budgets.matched_limits`` and ``budgets.matched_tasks`` (the verdicts it
+    states), and, under ``statistics.equivalence``, refuse one without its three-way conclusions."""
+    limits.announce(lambda: limits.check_table(table, source))
+    limits.announce(lambda: limits.check_task_table(table, source))
+    if bench_config.current().statistics.equivalence and "conclusion" not in table.columns:
+        raise SystemExit(
+            f"{source} has no conclusion column; rebuild it with statistics/paired_setups.py, or set "
+            "statistics.equivalence false"
+        )
+
+
 def family_pairs(table: pd.DataFrame) -> list[tuple[str, str]]:
     """Every ``(treatment, control)`` the family CSV names, in the order it declared them."""
     seen: dict[tuple[str, str], None] = {}
@@ -415,7 +459,8 @@ def family_stats(table: pd.DataFrame, intervention: str, languages: dict[str, st
                 "leg": pair_leg_label(pair, intervention, recorded),
                 "score_verdict": str(score["verdict"]) if score is not None else "",
                 "cost_verdict": str(cost["verdict"]) if cost is not None else "",
-                # the family CSV's three-way conclusions (paired_setups.py --equivalence), only when it has them
+                # the family CSV's three-way conclusions (statistics.equivalence; same_protocol refuses a CSV
+                # without them while it is on)
                 **(
                     {
                         name: str(leg["conclusion"]) if leg is not None else ""
@@ -530,9 +575,7 @@ def figure_from_pairs(args: Options, source: pathlib.Path, config: efficacy_figu
     same_card(table, card, source)
     same_rule(table, source)
     same_policy(table, source, args.speedup_over)
-    limits.announce(lambda: limits.check_table(table, source))
-    if args.equivalence and "conclusion" not in table.columns:
-        raise SystemExit(f"{source} has no conclusion column; build it with paired_setups.py --equivalence")
+    same_protocol(table, source)
     frame_all = load_all(args.observations, card)
     frame = pair_frame(frame_all, pairs, args.intervention)
     if frame.empty:
@@ -709,7 +752,7 @@ def build_comparison(
         same_card(table, card, pathlib.Path(spec["pairs"]))
         same_rule(table, pathlib.Path(spec["pairs"]))
         same_policy(table, pathlib.Path(spec["pairs"]), over)
-        limits.announce(lambda: limits.check_table(table, spec["pairs"]))
+        same_protocol(table, pathlib.Path(spec["pairs"]))
         pairs = family_pairs(table)
         if not pairs:
             return None
@@ -750,13 +793,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=
         "a family CSV from statistics/paired_setups.py. Its setup_a,setup_b rows ARE the pairs and "
         "its corrected verdicts ARE the stars, so the figure and the paper's table cannot disagree",
-    )  # fmt: skip
-    parser.add_argument(
-        "--equivalence",
-        action="store_true",
-        help=
-        "require the family CSV's three-way conclusions (paired_setups.py --equivalence), which mark an "
-        "equivalent measure with '='. Only with --pairs-csv: no other route runs an equivalence test",
     )  # fmt: skip
     parser.add_argument(
         "--intervention",
@@ -1037,11 +1073,6 @@ def plot(args: Options) -> pathlib.Path:
     ``pairs_csv``, else ``experiment`` with each ``treatment``."""
     if not args.observations:
         raise SystemExit("pass at least one observations file")
-    if args.equivalence and args.pairs_csv is None:
-        raise SystemExit(
-            "--equivalence needs --pairs-csv: the equivalence test is run once, by statistics/paired_setups.py "
-            "--equivalence, and the figure reads its conclusions from that family CSV"
-        )
     unused = unused_flags(args)
     if unused:
         route = "--comparison" if args.comparison else "--pairs-csv" if args.pairs_csv is not None else "--experiment"
@@ -1051,10 +1082,20 @@ def plot(args: Options) -> pathlib.Path:
     row_width = ROW_WIDTHS[args.row_width]
     config = figure_config(args, row_width)
     if args.comparison:
-        return figure_from_comparisons(args, config, card, row_width)
-    if args.pairs_csv is not None:
-        return figure_from_pairs(args, args.pairs_csv, config)
-    return figure_from_treatments(args, config, card, row_width)
+        figure = figure_from_comparisons(args, config, card, row_width)
+    elif args.pairs_csv is not None:
+        figure = figure_from_pairs(args, args.pairs_csv, config)
+    else:
+        figure = figure_from_treatments(args, config, card, row_width)
+    significance.write_settings(
+        args.table_path,
+        producer="hpcagent-bench plot efficacy",
+        cost_model=dataclasses.asdict(card),
+        score_rule=score_rule.SCORE_RULE,
+        kernel_policy=args.speedup_over.text,
+        pairs_csv=str(args.pairs_csv) if args.pairs_csv is not None else None,
+    )
+    return figure
 
 
 def main(argv: list[str] | None = None) -> None:

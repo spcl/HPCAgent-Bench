@@ -203,7 +203,7 @@ JOINT_SIG_LABEL: str = "Significant"
 SIG_MEASURE_NAMES: tuple[str, ...] = ("Speedup", "Cost")
 
 
-#: The stats table's conclusion per measure (``statistics/paired_setups.py --equivalence``), absent otherwise.
+#: The stats table's conclusion per measure (``statistics/paired_setups.py`` under ``statistics.equivalence``), absent otherwise.
 CONCLUSION_COLUMNS: tuple[str, str] = ("score_conclusion", "cost_conclusion")
 
 

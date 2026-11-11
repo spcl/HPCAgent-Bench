@@ -19,6 +19,7 @@ from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 
+from hpcagent_bench import config as bench_config
 from hpcagent_bench import paths
 from hpcagent_bench.results import studies
 from hpcagent_bench.stats import cost, palette, population, score_rule, summary
@@ -577,13 +578,15 @@ def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: s
 
 
 def test_an_equivalent_measure_wears_its_own_mark_only_when_the_family_csv_carries_conclusions() -> None:
-    """``paired_setups.py --equivalence`` writes a three-way conclusion per leg. The figure then marks a measure
-    that passed the equivalence test with ``=`` and explains it in the key; a significant measure keeps its
-    star. A family CSV without the column draws and explains exactly what it always did."""
+    """``paired_setups.py`` writes a three-way conclusion per leg (``statistics.equivalence``). The figure then marks
+    a measure that passed the equivalence test with ``=`` and explains it in the key; a significant measure keeps
+    its star. With ``statistics.equivalence`` false a family CSV without the column draws and explains exactly what
+    it always did."""
     import matplotlib.pyplot as plt
 
     table = family_csv([SCICOMP_PAIR], Finding.NOT_SIGNIFICANT.text, Finding.SIGNIFICANT.text)
-    plain = plot.family_stats(table, "repo")
+    with bench_config.overridden("statistics.equivalence", False):
+        plain = plot.family_stats(table, "repo")
     assert not set(efficacy_figures.CONCLUSION_COLUMNS) & set(plain.columns)
     assert efficacy_figures.drawn_symbols(plain) == (False, True)
     conclusions = {Leg.SPEEDUP.text: Conclusion.EQUIVALENT.text, Leg.TOKENS.text: Conclusion.DIFFERENT.text}
@@ -605,13 +608,6 @@ def test_an_equivalent_measure_wears_its_own_mark_only_when_the_family_csv_carri
         f"{efficacy_figures.COST_SIG_MARK}  {efficacy_figures.COST_SIG_LABEL}",
         f"{efficacy_figures.EQUIVALENT_MARK}  {efficacy_figures.EQUIVALENT_LABEL}",
     ]
-
-
-def test_equivalence_is_refused_on_a_route_that_has_no_family_csv() -> None:
-    """The equivalence test runs once, in ``paired_setups.py``; a figure that tests its own pairs cannot claim
-    it, and says where it comes from."""
-    with pytest.raises(SystemExit, match="--pairs-csv"):
-        plot.main(["observations.db", "--equivalence", "--experiment", "llr40"])
 
 
 def test_a_pairs_leg_names_the_language_and_every_packet_both_setups_carried() -> None:
