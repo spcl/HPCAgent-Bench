@@ -611,7 +611,7 @@ def test_equivalence_is_refused_on_a_route_that_has_no_family_csv() -> None:
     """The equivalence test runs once, in ``paired_setups.py``; a figure that tests its own pairs cannot claim
     it, and says where it comes from."""
     with pytest.raises(SystemExit, match="--pairs-csv"):
-        plot.main(["--equivalence", "--experiment", "llr40"])
+        plot.main(["observations.db", "--equivalence", "--experiment", "llr40"])
 
 
 def test_a_pairs_leg_names_the_language_and_every_packet_both_setups_carried() -> None:
