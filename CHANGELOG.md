@@ -167,6 +167,11 @@ a C-packed operand (a strided TTGT window used to transpose wrong). User plugins
 bool symbols bound), Alloy `de16d5a` (`alloy_none`, the default rendering through the same judge, the baseline arm of
 the Alloy pilot). `results_db.open_db` sets a new file up one thread at a time (SQLite's WAL switch does not wait).
 
+### dace extended `d79d22e72` -> `45df10b00`
+z3 no longer aborts an xdist worker: a term finalized on another thread while z3 runs is released later instead of
+concurrently. Main merged (`node(i)` caches positions; reordering and copying a graph now drop that cache), and the
+greedy-enumerator memory bound compares the least of three runs.
+
 ### dace extended `e4328d547` -> `d79d22e72`
 The canon tip merge (a block made a root no longer reports dominators above it), the offload's host-call rule judging
 a MatMul by what it specializes to (a Gemm- or Dot-shaped product inside a map is a kernel again), and MapFission
