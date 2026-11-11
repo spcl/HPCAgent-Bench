@@ -432,9 +432,7 @@ def family_stats(table: pd.DataFrame, intervention: str, languages: dict[str, st
                 ),
             }
         )
-    # the family the verdicts were corrected in: not a tokens_all_attempts leg, which is tested in its own
-    drawn = table["leg"] != significance.Leg.TOKENS_ALL_ATTEMPTS.text
-    tested = [value for value in table.loc[drawn, "p_adjusted"] if math.isfinite(float(value))]
+    tested = [value for value in table["p_adjusted"] if math.isfinite(float(value))]
     # the tests that produced the CSV's p values, carried beside the verdicts drawn from them
     named = {column: str(table[column].iloc[0]) for column in ("test", "correction") if column in table and len(table)}
     return pd.DataFrame(rows).assign(family_size=len(tested), **named)
