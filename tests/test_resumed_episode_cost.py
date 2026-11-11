@@ -3,7 +3,7 @@
 """F18, token cost by cause (docs/token_accounting.md, "Cause of an attempt").
 
 An episode's cost is every token the agent spent on its own account; tokens lost to infrastructure are not
-charged. The driver records each attempt's cause (``agent``, ``limit``, ``infra``, ``unclassified``;
+charged. The driver records each attempt's cause (``agent``, ``limit``, ``infra``; ``unclassified`` on older ledgers;
 tests/test_agent_driver_crash_resume.py covers the driver side); the episode row carries the final attempt's
 ``cause`` and the void earlier attempts' ``void_effective_tokens``, and ``population.slot_tokens`` costs a run slot
 from its launches' causes. One test per row of the rule, the cost tables, and a database from before causes.
@@ -35,8 +35,8 @@ JOB = 636501
 LABEL = "setup-a.n0.p0.w0"
 START_MS = 1_789_000_000_000
 
-#: The final attempt spent 100; an earlier attempt the cost counts (an unclassified crash relaunched fresh) 50; an
-#: earlier attempt lost to infrastructure 30, never in the cost.
+#: The final attempt spent 100; an earlier attempt the cost counts (an older ledger's unclassified crash relaunched
+#: fresh) 50; an earlier attempt lost to infrastructure 30, never in the cost.
 FINAL_TOKENS = 100
 CRASHED_TOKENS = 50
 VOID_TOKENS = 30

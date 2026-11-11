@@ -3,8 +3,10 @@
 """Which tag kernels (runs: kernel x slot) a setup still owes, and the job that reruns them.
 
 ``owed collect`` reads every job directory under the run roots: a run is delivered when a job graded it (not as a
-``score_error`` or ``adhoc`` grade); otherwise it is owed as ``budget`` (the agent hit its own cap) or ``infra``, and
-as ``task`` when a final grade found its task changed since. ``owed run`` reruns one setup's owed runs from its last
+``score_error`` or ``adhoc`` grade) or when its latest episode ended by the agent's own cause without a judge fault
+after it (``agent``, or ``limit`` while ``budgets.extension_reruns`` is off: an unsolved task); otherwise it is owed as
+``budget`` (the agent hit its own cap, extension reruns on) or ``infra``, and as ``task`` when a final grade found its
+task changed since. ``owed run`` reruns one setup's owed runs from its last
 launch env and filtered problems via ``submit_common.sh`` (``--token-scale``/``--time-scale`` as ``submit.sh``).
 """
 
@@ -22,7 +24,7 @@ from collections.abc import Iterable, Sequence
 from typing import NamedTuple
 
 from hpcagent_agent.coded import Coded
-from hpcagent_agent.driver.agent_driver import CANCELLED_MARKER, RC_TIMEOUT, RC_TOKEN_BUDGET
+from hpcagent_agent.driver.agent_driver import CANCELLED_MARKER, RC_TIMEOUT, RC_TOKEN_BUDGET, AttemptCause
 
 from hpcagent_bench import config, tags
 from hpcagent_bench.cluster import merge_results
@@ -49,6 +51,8 @@ __all__ = [
     "db_rows",
     "delivered",
     "delivered_at",
+    "episode_class",
+    "faulted_at",
     "designed_runs",
     "job_setup",
     "latest_classes",
@@ -201,9 +205,36 @@ def task_changed(dbs: Iterable[pathlib.Path], setup: str) -> dict[Run, int]:
     return changed
 
 
-def latest_classes(job_dirs: Iterable[pathlib.Path]) -> dict[Run, OwedClass]:
-    """run -> the class of its latest episode (``final_attempt_start_ms``, else the file's mtime)."""
-    latest: dict[Run, tuple[int, OwedClass]] = {}
+def faulted_at(job_dir: pathlib.Path) -> dict[Run, int]:
+    """Every run ``job_dir`` has a grade for that a judge fault or an operator void marked, with the ``ts_ms`` of
+    the newest such grade."""
+    voided = " or ".join("g.reason like ?" for _ in RERUN_PREFIXES)
+    rows = shard_rows(
+        job_dir,
+        "select g.kernel, r.slot, max(g.ts_ms) from grades g join episodes r on r.id = g.episode_id "
+        f"where r.label != ? and (g.reason = ? or {voided}) group by g.kernel, r.slot",
+        (ADHOC_EPISODE_ID, HARNESS_FAULT_REASON, *(f"{prefix}%" for prefix in RERUN_PREFIXES)),
+    )
+    return {Run(str(kernel), int(str(slot))): int(str(ts)) for kernel, slot, ts in rows}
+
+
+def episode_class(cause: str, returncode: int | None, cancelled: bool) -> OwedClass | None:
+    """How an undelivered episode is owed, None when it owes nothing: the agent's own end and a limit are an
+    unsolved task (a limit is owed as ``budget`` only for an extension rerun), infrastructure is owed. A record
+    from before causes (``cause`` blank) reads by its returncode, as before."""
+    if cancelled:
+        return OwedClass.INFRA
+    if cause == AttemptCause.AGENT.text:
+        return None
+    if cause == AttemptCause.LIMIT.text or (not cause and returncode in BUDGET_RETURNCODES):
+        return OwedClass.BUDGET if not cause or config.current().budgets.extension_reruns else None
+    return OwedClass.INFRA
+
+
+def latest_classes(job_dirs: Iterable[pathlib.Path]) -> dict[Run, tuple[int, OwedClass | None]]:
+    """run -> the start (``final_attempt_start_ms``, else the file's mtime) and :func:`episode_class` of its latest
+    episode."""
+    latest: dict[Run, tuple[int, OwedClass | None]] = {}
     for job_dir in job_dirs:
         for path in job_dir.glob(episodes.RECORD_GLOB):
             record = episodes.read_record(path)
@@ -212,10 +243,10 @@ def latest_classes(job_dirs: Iterable[pathlib.Path]) -> dict[Run, OwedClass]:
                 continue
             run = Run(kernel, slot_of(record.episode_id))
             order = record.final_attempt_start_ms or int(path.stat().st_mtime * 1000)
-            budget = record.returncode in BUDGET_RETURNCODES and not (path.parent / CANCELLED_MARKER).exists()
             if run not in latest or order >= latest[run][0]:
-                latest[run] = (order, OwedClass.BUDGET if budget else OwedClass.INFRA)
-    return {run: entry[1] for run, entry in latest.items()}
+                cancelled = (path.parent / CANCELLED_MARKER).exists()
+                latest[run] = (order, episode_class(record.cause, record.returncode, cancelled))
+    return latest
 
 
 #: ``previous_result`` of a launch whose episode left no record (its job ended before the driver wrote one).
@@ -253,12 +284,16 @@ def designed_runs(jobs: Sequence[Job], tag_kernels: Sequence[str]) -> list[Run]:
 
 
 def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Path] = ()) -> dict[Run, OwedClass]:
-    """Every run of ``runs`` the identity owes, in order, with its class: undelivered (``infra`` if never started),
-    or not delivered after a task-changed final grade (``task``)."""
+    """Every run of ``runs`` the identity owes, in order, with its class: undelivered and not ended by the agent
+    (``infra`` if never started or a judge fault came after its latest episode started), or not delivered after a
+    task-changed final grade (``task``)."""
     done: dict[Run, int] = {}
+    faults: dict[Run, int] = {}
     for job in jobs:
         for run, ts in delivered_at(job.path).items():
             done[run] = max(done.get(run, ts), ts)
+        for run, ts in faulted_at(job.path).items():
+            faults[run] = max(faults.get(run, ts), ts)
     shards = [shard for job in jobs for shard in merge_results.judge_shards(job.path)]
     changed = task_changed([*shards, *regrades], jobs[0].setup) if jobs else {}
     classes = latest_classes(job.path for job in jobs)
@@ -267,7 +302,11 @@ def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Pa
         if run in changed and done.get(run, changed[run]) <= changed[run]:
             result[run] = OwedClass.TASK
         elif run not in done:
-            result[run] = classes.get(run, OwedClass.INFRA)
+            start, owed_class = classes.get(run, (0, OwedClass.INFRA))
+            if owed_class is None and faults.get(run, -1) >= start:
+                owed_class = OwedClass.INFRA
+            if owed_class is not None:
+                result[run] = owed_class
     return result
 
 
