@@ -77,6 +77,7 @@ is no reader of another layout.
 | `reference_scaling_points` | reference curve point (the torch.distributed baseline) | `(source, kernel, mode, ranks, repeat, ts_ms)` |
 | `canon` | one baseline-sweep measurement: a column's median time for a kernel, with its hardware and when it was written (`ts_ms`) | `(run, column, kernel, preset, datatype)` |
 | `baseline_timings` | one baseline race the judge timed (`harness/baseline_db.py`): the references raced for one input pair's denominator, their `best` and per-repeat `samples` (ns), leader and winner; a cache, not a grade. Created on demand, so a file from before it holds none | `(kernel, preset, datatype, shape, draw, validity, node, image, kinds, compiler, threads, repeat, warmup)` |
+| `plugin_records` | one plugin's own record of a `/submit` grade: the `plugin_records/<plugin>.json` its tuner or routes left in the episode's folder, as JSON `data` under the plugin's `schema_version`, at most 256 KiB, never interpreted ([plugins.md](extending/plugins.md#a-plugins-record-of-an-episode); read back with `stats.plugin_records.load`). Created on demand, so a file from before it holds none | `(grade, plugin)` |
 
 The view `grades_flat` joins every grade to its episode and setup.
 
