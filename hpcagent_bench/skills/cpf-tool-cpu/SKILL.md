@@ -39,7 +39,7 @@ verdict is a proof: spend no reasoning re-deriving it.
 | `sequential -- carried: <access> (witness: <two iterations>[, <sizes>])` | proven: the two iterations touch the same element, so no pragma on this loop is correct. Its second line says what would lift the order: an algorithmic change (break an anti dependence, privatize, rewrite the recurrence as a scan or reduction) or, when it names one, a skew with the parallel nest inside |
 | `sequential -- pinned by an earlier pass; ...` | kept in order on purpose |
 | `sequential -- wavefront diagonal ...`, `sequential -- wavefront tile diagonal ...`, `sequential -- inner tile of a wavefront ...` | the axes of a skewed nest that carry its dependences; the unskewed nest is the alternative the comment names |
-| `unsure -- <reason>` (`never examined for dependences` included) | not decided, so run in order. The only loops whose dependences are worth your reasoning; the reason names the access to settle |
+| `unknown -- <reason>` (`never examined for dependences` included) | not decided, so run in order. The only loops whose dependences are worth your reasoning; the reason names the access to settle |
 
 A verdict speaks for the loop as written:
 
