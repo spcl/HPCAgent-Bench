@@ -236,9 +236,9 @@ test is chosen by name in the configuration (`statistics.*`); what each answers 
 regrade: [measurement_statistics.md](measurement_statistics.md#the-test-registry).
 
 **Token cost.** `C^w = w_in T_in + w_cache T_cache + w_out T_out`, counted from the transcript, never from engine
-cache counters. By default (`cost.attempts: all`) a task's cost is its final attempt plus the crashed attempts'
-spend (`tokens_crashed`); `final` is the opt-in reading that prices the final attempt only (T2), and the paper's
-published numbers used it. The components and the cards (`billed` by default,
+cache counters. A task's cost is every token the agent spent on its own account: its final attempt plus the
+earlier attempts the cost counts (`tokens_crashed`); what infrastructure lost (`tokens_void`) is reported beside
+it, never added. The causes, the components and the cards (`billed` by default,
 `effective`, `total`, `api-priced`) are defined in [token_accounting.md](token_accounting.md).
 
 ## 3. Data model
@@ -442,7 +442,7 @@ can mark the placeholder.
 | term | definition | code |
 |---|---|---|
 | components | `fresh_input`, `cached_input`, `output` of the final attempt, from the transcript under a perfect-prefix fold | `agent/hpcagent_agent/driver/token_cost.py` |
-| episode token total | the final attempt's cost (`tokens`); earlier attempts go to `tokens_crashed`, added in under the default `cost.attempts: all` and left out under the opt-in `final` (the paper's published numbers) | T2, `population.episode_tokens` |
+| episode token total | the final attempt's cost (`tokens`) plus the earlier attempts the cost counts (`tokens_crashed`); those lost to infrastructure go to `tokens_void`, never added ([token_accounting.md](token_accounting.md#cause-of-an-attempt)) | T2, `population.episode_tokens`, `population.slot_tokens` |
 | `tokens_billed` | raw usage-field sum; recorded, never reported as cost | `agent/hpcagent_agent/driver/agent_driver.py` |
 
 - T1. Every token number (paired legs, setup tables, figures) prices the components with one card
@@ -450,10 +450,11 @@ can mark the placeholder.
   priced with another.
 - T2. An episode's transcripts are `claude.attempt<N>.log` plus `claude.log` (or a runner's usage files)
   in its worker directory `agents/node-<n>/problem-<id>-worker-<w>/`. The last is the episode's `tokens`;
-  the earlier ones sum into `tokens_crashed`, which the default `cost.attempts: all` adds to the cost.
+  the earlier ones sum, by the cause the attempt ledger records for each, into `tokens_crashed` (added to the
+  cost) or `tokens_void` (infrastructure; reported beside it).
 - T3. The driver writes each episode's numbers to `tokens.json` at episode end: its `episode_id`, `kernel`,
-  `tokens_effective`, the three components, `attempts`, `tokens_effective_crashed`,
-  `final_attempt_start_ms` (last `attempts.jsonl` `start_ms`) and how it ended. The job's merge folds
+  `tokens_effective`, the three components, `attempts`, `tokens_effective_crashed`, `tokens_effective_void`,
+  `cause`, `final_attempt_start_ms` (last `attempts.jsonl` `start_ms`) and how it ended. The job's merge folds
   every record into its episode's `episodes` row (`episodes.ingest`), and extraction writes one
   `row_kind = episode` row per episode from it: `tokens` (effective), the components, `episode_attempts`,
   `tokens_crashed`, `episode_final_attempt_start_ms`, `episode_cancelled` and `ts_ms` (the final attempt's

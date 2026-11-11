@@ -610,25 +610,26 @@ def test_every_pair_excluded_raises_rather_than_writing_an_empty_table(
         paired_setups.main(["--observations", str(path), "--pair", "a,b", "--family", "f"])
 
 
-def test_usage_reports_how_many_tasks_were_relaunched_and_what_the_crashes_spent(
+def test_usage_reports_how_many_tasks_were_relaunched_and_what_infrastructure_lost(
     paired_setups: ModuleType,
 ) -> None:
-    """A token cost is the FINAL attempt's (T2), so a reader needs the relaunch rate beside it to
-    see where that rule bit. The crashed attempts' spend is carried separately and never added in."""
+    """A reader needs the relaunch rate beside a token cost, and what the attempts lost to infrastructure spent
+    (``tokens_void``), which is carried separately with its share of everything spent and never added in."""
     rows = [
         *episode("a", "k1", 2.0, 100.0, job="j1"),
         *episode("a", "k2", 2.0, 100.0, job="j1"),
         *episode("a", "k3", 2.0, 100.0, job="j1"),
         *episode("a", "k4", 2.0, 100.0, job="j1"),
     ]
-    for task_row, attempts, crashed in zip(rows[2::3], (1, 2, 3, 1), (0, 40, 90, 0), strict=True):
-        task_row |= {"episode_attempts": attempts, "tokens_crashed": crashed}
+    for task_row, attempts, void in zip(rows[2::3], (1, 2, 3, 1), (0, 40, 90, 0), strict=True):
+        task_row |= {"episode_attempts": attempts, "tokens_void": void}
     usage = paired_setups.episode_usage(frame(rows)).loc["a"]
     assert usage.tasks == 4
     assert usage.attempts_per_episode == pytest.approx(1.75)
     assert usage.relaunched_episodes == 2
     assert usage.share_relaunched == pytest.approx(0.5)
-    assert usage.tokens_crashed == pytest.approx(130.0)
+    assert usage.tokens_void == pytest.approx(130.0)
+    assert usage.share_tokens_void == pytest.approx(130.0 / (4 * 100.0 + 130.0))
 
 
 def test_the_impact_table_carries_the_relaunch_rate_beside_every_token_ratio(

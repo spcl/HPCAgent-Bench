@@ -124,6 +124,7 @@ __all__ = [
     "RC_TOKEN_BUDGET",
     "RECORD_DEVICE_DEFAULT",
     "RELAUNCH_KEEPS",
+    "RELAUNCH_UNCLASSIFIED_CRASHES",
     "RESOLVED_SUFFIX",
     "RESOURCE_ENV",
     "RESULT_TAIL_BYTES",
@@ -141,6 +142,7 @@ __all__ = [
     "TRUE_FLAG_SPELLINGS",
     "UNREMINDED_PAGES",
     "AgentState",
+    "AttemptCause",
     "AggregateState",
     "LlmMode",
     "McpUnavailable",
@@ -161,6 +163,7 @@ __all__ = [
     "allocate_agent_folder",
     "api_timeout",
     "append_attempt",
+    "attempt_cause",
     "approve_api_key",
     "as_block",
     "as_entries",
@@ -252,6 +255,7 @@ __all__ = [
     "read_setup_overlay",
     "refuse_unreachable_services",
     "recorded_scale",
+    "relaunches_fresh",
     "remove_entries",
     "render_prompt",
     "report_aggregate_throughput",
@@ -626,7 +630,8 @@ if AGENT_START_CONCURRENCY < 1:
 
 #: Attempts to launch an agent that CRASHES (died without our caps and without a closing result event). A timeout is
 #: not a crash: relaunching it would grant a second budget its peers never had. A claude agent resumes its own session
-#: in its own workspace (``Harness.resume_point``); only one with nothing to resume from starts over.
+#: in its own workspace (``Harness.resume_point``); only one with nothing to resume from starts over, and only when
+#: the crash's cause allows it (:func:`relaunches_fresh`).
 AGENT_CRASH_ATTEMPTS = int(os.environ.get("AGENT_CRASH_ATTEMPTS", "3"))
 #: Most crashes are a reply that outgrew the reply cap inside one tool call (a whole file in one heredoc), which the
 #: server ends without a stop reason; a resume told only "the connection dropped" repeats the same call.
@@ -1234,6 +1239,49 @@ RC_AGENT_FAULT = 1
 #: Episode ends that are results, not faults. An API timeout or an output-cap abort still counts as a failure.
 CLEAN_ENDS = frozenset({0, RC_SUBMITTED, RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT, RC_MODEL_ERROR})
 
+
+class AttemptCause(Coded):
+    """What ended one attempt, which decides whether its tokens are the agent's cost (docs/token_accounting.md,
+    "Cause of an attempt"); decided by :func:`attempt_cause`, recorded per ledger line as ``cause``."""
+
+    #: The agent's own end (an answer, a build failure, giving up, a malformed request, a full context): counted,
+    #: never relaunched fresh.
+    AGENT = enum.auto()
+    #: Its wall clock or token cap: counted.
+    LIMIT = enum.auto()
+    #: Lost to infrastructure (the transport lost a request, the MCP server never connected): void, not in the cost,
+    #: relaunched fresh.
+    INFRA = enum.auto()
+    #: An end the driver cannot attribute (see :data:`RELAUNCH_UNCLASSIFIED_CRASHES`): counted, as before causes.
+    UNCLASSIFIED = enum.auto()
+
+
+#: Whether a CRASH whose cause is :attr:`AttemptCause.UNCLASSIFIED` (an output-cap abort, or a nonzero exit with no
+#: closing record) is relaunched fresh, as every crash was before causes were recorded. Awaits a user decision:
+#: either cause may be the agent's or the infrastructure's, and the driver cannot tell which.
+RELAUNCH_UNCLASSIFIED_CRASHES = True
+
+
+def attempt_cause(returncode: int, closing: Closing) -> AttemptCause:
+    """The cause of the leg that ended with ``returncode`` (after the watchers' verdicts) and ``closing``."""
+    if returncode in (RC_TIMEOUT, RC_TOKEN_BUDGET):
+        return AttemptCause.LIMIT
+    if returncode in (RC_SUBMITTED, RC_CONTEXT) or closing.context_overflow:
+        return AttemptCause.AGENT
+    if returncode in (RC_API_TIMEOUT, RC_MCP_UNAVAILABLE) or closing.api_timeout:
+        return AttemptCause.INFRA
+    if closing.model_error or (returncode == 0 and not closing.output_cap):
+        return AttemptCause.AGENT
+    # The output cap, a crash with no closing record, and an error result no mark names (an engine's 5xx or 429
+    # the client reported, a runner's unmapped exception).
+    return AttemptCause.UNCLASSIFIED
+
+
+def relaunches_fresh(cause: AttemptCause) -> bool:
+    """Whether a crashed attempt of ``cause`` may be relaunched from an empty context and workspace."""
+    return cause is AttemptCause.INFRA or (cause is AttemptCause.UNCLASSIFIED and RELAUNCH_UNCLASSIFIED_CRASHES)
+
+
 #: The served refusal of an over-long prompt: the substring vLLM's and SGLang's messages share.
 CONTEXT_OVERFLOW_MARK = "maximum context length"
 
@@ -1457,7 +1505,8 @@ def transcript_turns(log: pathlib.Path) -> int:
 def task_token_totals(workdir: pathlib.Path) -> token_cost.EpisodeTotals:
     """This task's token totals via ``token_cost.episode_totals`` (zero/None when unreadable); never raises.
 
-    The first pair is the FINAL attempt's; the ``_crashed`` pair is what earlier attempts spent."""
+    The first pair is the FINAL attempt's; the ``_crashed`` pair is what earlier attempts spent that the cost counts,
+    ``tokens_effective_void`` what those lost to infrastructure spent."""
     try:
         return token_cost.episode_totals(workdir)
     except Exception:  # noqa: BLE001 -- bookkeeping never fails a run
@@ -1537,7 +1586,13 @@ RELAUNCH_KEEPS: frozenset[str] = frozenset(
 
 
 def append_attempt(
-    path: pathlib.Path, attempt: int, start_ms: int, returncode: int, crashed_attempt: bool, cleared: bool
+    path: pathlib.Path,
+    attempt: int,
+    start_ms: int,
+    returncode: int,
+    crashed_attempt: bool,
+    cleared: bool,
+    cause: AttemptCause,
 ) -> None:
     """Append one attempt's ledger line. Never raises: bookkeeping cannot fail a run."""
     line = {
@@ -1547,6 +1602,7 @@ def append_attempt(
         "returncode": returncode,
         "crashed": crashed_attempt,
         "cleared": cleared,
+        "cause": cause.text,
     }
     try:
         with path.open("a", encoding="utf-8") as handle:
@@ -1641,6 +1697,8 @@ def cost_record_fields(transcript: pathlib.Path, worker_dir: pathlib.Path) -> di
     fields["tokens_billed"] = totals.tokens_billed
     fields["tokens_effective_crashed"] = totals.tokens_effective_crashed
     fields["tokens_billed_crashed"] = totals.tokens_billed_crashed
+    fields["tokens_effective_void"] = totals.tokens_effective_void
+    fields["cause"] = totals.cause
     fields["final_attempt_start_ms"] = final_attempt_start_of(worker_dir)
     return fields
 
@@ -3069,6 +3127,7 @@ def run_agent(
                 process = start_runner(command, agent_dir, environment, log, cpus, memory_bytes)
             if process is None:
                 returncode, attempt_crashed, relaunching = RC_MCP_UNAVAILABLE, False, False
+                cause = AttemptCause.INFRA
             else:
                 while True:
                     # Per leg: an ended leg's verdict, or a watcher of it still asleep, is not this leg's.
@@ -3088,6 +3147,7 @@ def run_agent(
                             "\nagent_driver: ended after its single submission (exited before the watcher saw it)\n"
                         )
                         returncode, attempt_crashed = RC_SUBMITTED, False
+                    cause = attempt_cause(returncode, harness.closing(workdir))
                     # A crash resumes its own session in this workspace and log, so its tokens keep counting.
                     resuming = attempt_crashed and crash_attempts < AGENT_CRASH_ATTEMPTS and not spent
                     session = harness.resume_point(workdir) if resuming else ""
@@ -3131,11 +3191,13 @@ def run_agent(
                         nudge_turns -= leg_turns
                         break
                     if resuming:
-                        append_attempt(attempts_path, crash_attempts, attempt_start_ms, returncode, True, False)
+                        append_attempt(attempts_path, crash_attempts, attempt_start_ms, returncode, True, False, cause)
                         crash_attempts += 1
                     else:
                         nudges += 1
-                relaunching = bool(attempt_crashed and crash_attempts < AGENT_CRASH_ATTEMPTS and not spent)
+                relaunching = bool(
+                    attempt_crashed and relaunches_fresh(cause) and crash_attempts < AGENT_CRASH_ATTEMPTS and not spent
+                )
                 note_relaunch(
                     log,
                     returncode,
@@ -3144,7 +3206,7 @@ def run_agent(
                     relaunching=relaunching,
                 )
         # The ledger line goes down with the log closed, so the next reader of the directory finds it.
-        append_attempt(attempts_path, crash_attempts, attempt_start_ms, returncode, attempt_crashed, relaunching)
+        append_attempt(attempts_path, crash_attempts, attempt_start_ms, returncode, attempt_crashed, relaunching, cause)
         if not relaunching:
             break
         set_aside_crash(harness, workdir, crash_attempts)

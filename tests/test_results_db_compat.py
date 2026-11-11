@@ -128,8 +128,8 @@ def table_columns(conn: sqlite3.Connection) -> dict[str, list[tuple]]:
     }
 
 
-@pytest.mark.parametrize("version", [22, 23])
-def test_a_version_22_or_23_file_upgrades_to_the_columns_of_a_new_file(tmp_path: pathlib.Path, version: int) -> None:
+@pytest.mark.parametrize("version", [22, 23, 24])
+def test_a_version_22_to_24_file_upgrades_to_the_columns_of_a_new_file(tmp_path: pathlib.Path, version: int) -> None:
     """Opening an older file for writing applies :data:`results_db.ADDED`: its ``grades`` and ``episodes`` then have
     the columns of a file created now, in the same order and declaration, and its rows read the new ones as not
     recorded."""

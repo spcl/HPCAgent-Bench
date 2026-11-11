@@ -50,6 +50,7 @@ __all__ = [
     "USAGE_FIELDS",
     "USAGE_JSONL_SOURCE",
     "USAGE_NAME",
+    "VOID_CAUSE",
     "AttemptTotals",
     "CostRow",
     "EpisodeTotals",
@@ -136,8 +137,12 @@ USAGE_FIELDS = (*INPUT_FIELDS, "output_tokens")
 ATTEMPT_MARKER = re.compile(r"\.attempt(\d+)\.")
 
 #: The driver's attempt ledger in a worker directory, one JSON line per attempt (T5): when each
-#: attempt ran, how it ended, and whether the driver wiped the agent's state after it.
+#: attempt ran, how it ended, its cause, and whether the driver wiped the agent's state after it.
 ATTEMPTS_NAME = "attempts.jsonl"
+
+#: The ledger ``cause`` of an attempt lost to infrastructure (``agent_driver.AttemptCause.INFRA``): its tokens are
+#: void, never in the cost. Any other cause, or none (a ledger from before causes), counts.
+VOID_CAUSE = "infra"
 
 
 def transcripts(run_dir: pathlib.Path) -> Iterator[pathlib.Path]:
@@ -784,8 +789,9 @@ def attempt_transcripts(worker_dir: pathlib.Path) -> list[pathlib.Path]:
 class EpisodeTotals(NamedTuple):
     """T2: one task's token totals, read off the attempts in its worker directory.
 
-    ``tokens_effective``/``tokens_billed`` are the FINAL attempt's, which is what the task cost
-    under T2; the two ``_crashed`` fields hold what the attempts before it spent, and
+    ``tokens_effective``/``tokens_billed`` are the FINAL attempt's; the two ``_crashed`` fields hold what the
+    attempts before it spent that the cost counts, ``tokens_effective_void`` what those lost to infrastructure
+    spent (:data:`VOID_CAUSE`), ``cause`` how the final attempt ended (``""`` when the ledger does not say), and
     ``final_attempt_start_ms`` is when it began (:func:`final_attempt_start`).
     """
 
@@ -799,6 +805,8 @@ class EpisodeTotals(NamedTuple):
     tokens_fresh_input: int | None = None
     tokens_cached_input: int | None = None
     tokens_output: int | None = None
+    tokens_effective_void: int = 0
+    cause: str = ""
 
 
 class AttemptTotals(NamedTuple):
@@ -876,31 +884,37 @@ def final_attempt_start(worker_dir: pathlib.Path, logs: list[pathlib.Path]) -> i
 
 
 def episode_totals(worker_dir: pathlib.Path) -> EpisodeTotals:
-    """The TASK TOKEN TOTAL (T2) of one task: its FINAL attempt, and what the earlier ones spent.
+    """The TASK TOKEN TOTAL (T2) of one task: its FINAL attempt, and what the earlier ones spent, by cause.
 
     A resumed crash stays in one transcript (T5), so its legs are one attempt here, counted once. Only a fresh
-    relaunch leaves ``.attemptN`` transcripts: it hands the next attempt an empty context and workspace, so an
-    earlier attempt contributed no part of the answer that was graded -- it is spend, reported as ``_crashed``
-    beside the total and never added to it.
+    relaunch leaves ``.attemptN`` transcripts, each ended by the ledger line that cleared the workspace after it:
+    one whose ``cause`` is :data:`VOID_CAUSE` is void (``tokens_effective_void``), any other counts (``_crashed``).
 
     A worker directory with no transcript at all was never entered -- not a zero-token task -- so it
     reports ``attempts=0`` and ``None`` totals rather than 0.
     """
     logs = attempt_transcripts(worker_dir)
+    ledger = attempt_ledger(worker_dir)
+    cause = str(ledger[-1].get("cause") or "") if ledger else ""
     if not logs:
-        return EpisodeTotals(0, None, None, 0, 0, 0)
+        return EpisodeTotals(0, None, None, 0, 0, 0, cause=cause)
     per_attempt = [attempt_totals(log) for log in logs]
     final = per_attempt[-1]
+    cleared = [block.get("cause") for block in ledger if block.get("cleared") is True]
+    void = [index < len(cleared) and cleared[index] == VOID_CAUSE for index in range(len(logs) - 1)]
+    counted = [attempt for attempt, lost in zip(per_attempt, void, strict=False) if not lost]
     return EpisodeTotals(
         attempts=len(logs),
         tokens_effective=final.effective,
         tokens_billed=final.billed,
-        tokens_effective_crashed=sum(attempt.effective for attempt in per_attempt[:-1]),
-        tokens_billed_crashed=sum(attempt.billed for attempt in per_attempt[:-1]),
+        tokens_effective_crashed=sum(attempt.effective for attempt in counted),
+        tokens_billed_crashed=sum(attempt.billed for attempt in counted),
         final_attempt_start_ms=final_attempt_start(worker_dir, logs),
         tokens_fresh_input=final.fresh_input,
         tokens_cached_input=final.cached_input,
         tokens_output=final.output,
+        tokens_effective_void=sum(attempt.effective for attempt, lost in zip(per_attempt, void, strict=False) if lost),
+        cause=cause,
     )
 
 
