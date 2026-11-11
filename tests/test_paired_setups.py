@@ -13,6 +13,7 @@ launcher derives it from the rank layout, so a reduction keyed on ``episode_id``
 one replicate. They must come out as two episodes whose MAXIMUM stands.
 """
 
+import json
 import math
 import pathlib
 from types import ModuleType
@@ -21,7 +22,7 @@ import pandas as pd
 import pytest
 
 from hpcagent_bench import config, paths
-from hpcagent_bench.stats import population, summary
+from hpcagent_bench.stats import population, significance, summary
 from tests.fresh_module import module_at
 
 CLUSTER_DIR = paths.ROOT / "hpcagent_bench" / "cluster"
@@ -39,6 +40,21 @@ def load_study_module(name: str, folder: pathlib.Path = CLUSTER_DIR) -> ModuleTy
 @pytest.fixture(name="paired_setups")
 def paired_setups_fixture() -> ModuleType:
     return load_study_module("paired_setups", STATISTICS)
+
+
+@pytest.fixture(autouse=True)
+def unrecorded_limits_are_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The synthetic observations here record no episode limits, so they are read as a database from before the
+    limits were recorded is: ``budgets.matched_limits`` flag (strict refuses unrecorded limits)."""
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
+
+
+@pytest.fixture(name="plain")
+def plain_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pair table without the protocol's default columns (``statistics.equivalence`` false,
+    ``budgets.matched_tasks`` off), for a test of other columns."""
+    monkeypatch.setenv("HPCAGENT_BENCH_STATISTICS_EQUIVALENCE", "false")
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "off")
 
 
 def graded(
@@ -276,7 +292,7 @@ def impact_table(paired_setups: ModuleType, tmp_path: pathlib.Path) -> pd.DataFr
 
 
 def test_the_impact_table_has_one_row_per_setup_with_the_ratio_on_the_treatment_row(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path, plain: None
 ) -> None:
     """Spec section 10: every setup once, the control carrying no ratio, the treatment carrying
     the paper's rho on both legs -- speedup treatment/control 3/2, cost control/treated 100/50 = 2
@@ -564,9 +580,11 @@ def test_a_pair_with_an_incomplete_setup_is_dropped_by_default(
 
 
 def test_include_incomplete_keeps_a_pair_missing_tag_coverage(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The flag is the escape hatch: the same short setup, and the pair survives."""
+    """The flag is the escape hatch: the same short setup, and the pair survives (paired over the kernels both
+    ran, which ``budgets.matched_tasks`` flag allows and its default strict refuses)."""
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "flag")
     rows: list[dict[str, object]] = []
     for kernel in ("k1", "k2", "k3"):
         rows += episode("a", kernel, 2.0, 100.0)
@@ -1040,11 +1058,9 @@ def test_a_non_significant_leg_is_equivalent_only_when_the_equivalence_test_pass
 ) -> None:
     """Both nulls read ``not-significant`` in the verdict column; only the tight one is shown to lie inside the
     20% margin, the wide one is inconclusive, and the doubling is different. Each one-sided sign-flip p over
-    eight kernels is at least 1/256, here adjusted over the three tested speedup legs."""
+    eight kernels is at least 1/256, here adjusted over the three tested speedup legs. All of it by default."""
     out = tmp_path / "pairs.csv"
-    paired_setups.main(
-        ["--observations", str(equivalence_study(tmp_path)), *EQUIVALENCE_PAIRS, "--equivalence", "--out", str(out)]
-    )
+    paired_setups.main(["--observations", str(equivalence_study(tmp_path)), *EQUIVALENCE_PAIRS, "--out", str(out)])
     table = pd.read_csv(out)
     assert list(table.columns) == [
         *paired_setups.PAIR_COLUMNS,
@@ -1079,44 +1095,65 @@ def test_a_non_significant_leg_is_equivalent_only_when_the_equivalence_test_pass
     assert (table.rho_r == 1.0).all()
 
 
-def test_the_margin_is_an_argument_and_a_tighter_one_withdraws_the_claim(
+def test_the_equivalence_p_values_are_corrected_per_leg_or_pooled_as_the_family_is(
     paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """1% noise is inside 20% but not inside 0.5%."""
+    """``statistics.correction_family`` groups the equivalence tests as it groups the difference tests: each leg's
+    p values adjusted on their own under ``family-leg`` (the default), speed and tokens pooled under ``family``."""
+    rows: list[dict[str, object]] = []
+    for index, kernel in enumerate(KERNELS):
+        sign = 1.0 if index % 2 == 0 else -1.0
+        rows += episode("b", kernel, 2.0, 100.0)
+        rows += episode("n", kernel, 2.0 * math.exp(sign * 0.01), 100.0 * math.exp(sign * 0.02))
+        rows += episode("w", kernel, 2.0 * math.exp(sign * 1.0), 100.0 * math.exp(sign * 0.5))
+    study = observations(rows, tmp_path)
+    out = tmp_path / "pairs.csv"
+    arguments = ["--observations", str(study), "--pair", "n,b", "--pair", "w,b", "--family", "f", "--out", str(out)]
+
+    def adjusted(table: pd.DataFrame, legs: tuple[str, ...]) -> tuple[list[float], list[float]]:
+        tested = table[table.leg.isin(legs)]
+        return list(tested.equivalence_p_adjusted), significance.correct(list(tested.equivalence_p))
+
+    paired_setups.main(arguments)
+    table = pd.read_csv(out)
+    assert table.loc[table.leg.isin(("speedup", "tokens")), "equivalence_p"].notna().all()
+    for leg in ("speedup", "tokens"):
+        got, want = adjusted(table, (leg,))
+        assert got == pytest.approx(want)
+    with config.overridden("statistics.correction_family", "family"):
+        paired_setups.main(arguments)
+    got, want = adjusted(pd.read_csv(out), ("speedup", "tokens"))
+    assert got == pytest.approx(want)
+
+
+def test_the_margin_is_a_setting_and_a_tighter_one_withdraws_the_claim(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """1% noise is inside 20% but not inside 0.5% (``statistics.equivalence_margin``), and the sidecar names it."""
     out = tmp_path / "pairs.csv"
     arguments = ["--observations", str(equivalence_study(tmp_path)), *EQUIVALENCE_PAIRS, "--out", str(out)]
-    paired_setups.main([*arguments, "--equivalence", "--equivalence-margin", "1.005"])
+    with config.overridden("statistics.equivalence_margin", 1.005):
+        paired_setups.main(arguments)
     speed = pd.read_csv(out).query("leg == 'speedup'").set_index("setup_a")
     assert (speed.equivalence_margin == 1.005).all()
     assert speed.conclusion.to_dict() == {"n": "inconclusive", "w": "inconclusive", "d": "different"}
-    with pytest.raises(SystemExit, match="only applies with --equivalence"):
-        paired_setups.main([*arguments, "--equivalence-margin", "1.2"])
-    with pytest.raises(SystemExit, match="ratio above 1"):
-        paired_setups.main([*arguments, "--equivalence", "--equivalence-margin", "0.8"])
+    assert json.loads(out.with_suffix(".settings.json").read_text())["statistics"]["equivalence_margin"] == 1.005
 
 
-def test_the_new_columns_are_appended_and_every_default_column_keeps_its_bytes(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
+def test_the_protocol_columns_are_appended_and_every_other_column_keeps_its_bytes(
+    paired_setups: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without the options the pair table has exactly the columns it always had; with them each line starts with
-    the bytes of the default line, so a reader of the old columns reads the same table."""
+    """With ``statistics.equivalence`` false and ``budgets.matched_tasks`` off the pair table has exactly the columns
+    it always had; under the defaults each line starts with the bytes of that line, so a reader of the old columns
+    reads the same table."""
     plain, extended, setups_plain, setups_extended = (
         tmp_path / name for name in ("p.csv", "e.csv", "sp.csv", "se.csv")
     )
     arguments = ["--observations", str(equivalence_study(tmp_path)), *EQUIVALENCE_PAIRS]
+    paired_setups.main([*arguments, "--out", str(extended), "--setups-out", str(setups_extended)])
+    monkeypatch.setenv("HPCAGENT_BENCH_STATISTICS_EQUIVALENCE", "false")
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "off")
     paired_setups.main([*arguments, "--out", str(plain), "--setups-out", str(setups_plain)])
-    paired_setups.main(
-        [
-            *arguments,
-            "--equivalence",
-            "--task-set",
-            "flag",
-            "--out",
-            str(extended),
-            "--setups-out",
-            str(setups_extended),
-        ]
-    )
     before, after = plain.read_text().splitlines(), extended.read_text().splitlines()
     assert before[0].split(",") == list(paired_setups.PAIR_COLUMNS)
     assert len(before) == len(after) == 7
@@ -1130,37 +1167,39 @@ def test_solve_rates_are_called_equivalent_only_against_a_stated_margin(
 ) -> None:
     """Every setup solved all eight kernels. Without a margin that supports no claim; against thirty points the
     score test's one-sided p is ``Phi(-sqrt(8 * 0.3 / 0.7))`` = 0.032 for each of the three pairs (so the same
-    after Benjamini-Hochberg) and the rates are equivalent; against ten points eight kernels cannot show it."""
+    after Benjamini-Hochberg) and the rates are equivalent; against ten points (the default) eight kernels cannot
+    show it."""
     out = tmp_path / "pairs.csv"
     arguments = ["--observations", str(equivalence_study(tmp_path)), *EQUIVALENCE_PAIRS, "--out", str(out)]
-    paired_setups.main([*arguments, "--equivalence"])
+    with config.overridden("statistics.equivalence_margin_rate", None):
+        paired_setups.main(arguments)
     table = pd.read_csv(out)
     assert table.coverage_equivalence_margin.isna().all()
     assert table.coverage_equivalence_p.isna().all()
-    paired_setups.main([*arguments, "--equivalence", "--equivalence-margin-rate", "0.3"])
+    with config.overridden("statistics.equivalence_margin_rate", 0.3):
+        paired_setups.main(arguments)
     table = pd.read_csv(out)
     assert (table.coverage_equivalence_margin == 0.3).all()
     expected = 0.5 * math.erfc(math.sqrt(8 * 0.3 / 0.7) / math.sqrt(2.0))
     assert table.coverage_equivalence_p.tolist() == pytest.approx([expected] * 6)
     assert table.coverage_equivalence_p_adjusted.tolist() == pytest.approx([expected] * 6)
     assert set(table.coverage_conclusion) == {"equivalent"}
-    paired_setups.main([*arguments, "--equivalence", "--equivalence-margin-rate", "0.1"])
-    assert set(pd.read_csv(out).coverage_conclusion) == {"inconclusive"}
-    with pytest.raises(SystemExit, match="only applies with --equivalence"):
-        paired_setups.main([*arguments, "--equivalence-margin-rate", "0.1"])
-    with pytest.raises(SystemExit, match="difference of proportions"):
-        paired_setups.main([*arguments, "--equivalence", "--equivalence-margin-rate", "1.2"])
+    paired_setups.main(arguments)
+    table = pd.read_csv(out)
+    assert (table.coverage_equivalence_margin == 0.1).all()
+    assert set(table.coverage_conclusion) == {"inconclusive"}
 
 
 def test_the_impact_table_states_each_legs_conclusion_only_under_equivalence(
     paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """The default impact table keeps its columns; under ``--equivalence`` a treatment row also says what each
-    leg supports and the smallest ratio it could have detected, and a control row leaves them blank."""
+    """Under ``statistics.equivalence`` (the default) a treatment row also says what each leg supports and the
+    smallest ratio it could have detected, and a control row leaves them blank; false keeps the old columns."""
     plain, extended = tmp_path / "plain.csv", tmp_path / "extended.csv"
     arguments = ["--observations", str(equivalence_study(tmp_path)), *EQUIVALENCE_PAIRS]
-    paired_setups.main([*arguments, "--impact-out", str(plain)])
-    paired_setups.main([*arguments, "--equivalence", "--impact-out", str(extended)])
+    with config.overridden("statistics.equivalence", False):
+        paired_setups.main([*arguments, "--impact-out", str(plain)])
+    paired_setups.main([*arguments, "--impact-out", str(extended)])
     assert plain.read_text().splitlines()[0].split(",") == list(paired_setups.IMPACT_COLUMNS)
     added = ["speedup_conclusion", "speedup_mde", "token_conclusion", "token_mde"]
     table = pd.read_csv(extended)
@@ -1196,7 +1235,7 @@ def repeats_study(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 def test_the_episode_columns_count_the_episodes_and_split_the_spread_of_a_repeated_leg(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path, plain: None
 ) -> None:
     """Sixteen episodes a side, two on every kernel. Every cell's two logs sit 0.1 either side of their mean:
     within variance 0.01 * 2 * 16 / 16 = 0.02. The per-kernel differences of means are ``ln 2 +- 0.3``
@@ -1235,7 +1274,7 @@ def test_one_episode_per_kernel_is_stated_and_has_no_run_to_run_spread(
 
 
 def test_the_other_policys_ratio_is_reported_beside_the_leg_without_joining_the_family(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path, plain: None
 ) -> None:
     """``a`` failed k7 and k8, which ``b`` solved at 2x; on the six kernels both solved ``a`` is 2x faster. The
     default leg is over those six. ``--sensitivity-policy served`` adds the ratio over all eight, a failure at
@@ -1266,7 +1305,7 @@ def test_the_other_policys_ratio_is_reported_beside_the_leg_without_joining_the_
 
 
 def test_a_kernel_solved_in_a_minority_of_its_slots_is_solved_only_under_the_any_slot_rule(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path, plain: None
 ) -> None:
     """Three agents per kernel. On k1 only one of ``a``'s three answered; on k2 two did, at 2x and 8x. The
     published rule (``median-any``) counts both kernels solved and takes the median of the answers (5x on k2);
@@ -1324,10 +1363,13 @@ def unmatched_study(tmp_path: pathlib.Path) -> pathlib.Path:
     return observations(rows, tmp_path)
 
 
-def test_the_population_columns_name_the_n_behind_each_ratio(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
+def test_the_population_columns_name_the_n_behind_each_ratio(
+    paired_setups: ModuleType, tmp_path: pathlib.Path, plain: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     out = tmp_path / "pairs.csv"
     arguments = ["--observations", str(unmatched_study(tmp_path)), "--pair", "a,b", "--family", "f"]
-    paired_setups.main([*arguments, "--include-incomplete", "--task-set", "flag", "--out", str(out)])
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "flag")
+    paired_setups.main([*arguments, "--include-incomplete", "--out", str(out)])
     table = pd.read_csv(out)
     assert list(table.columns) == [*paired_setups.PAIR_COLUMNS, *paired_setups.POPULATION_COLUMNS]
     counts = ["n_roster", "n_run_a", "n_run_b", "n_both_run", "n_only_run_a", "n_only_run_b"]
@@ -1343,7 +1385,7 @@ def test_the_population_columns_name_the_n_behind_each_ratio(paired_setups: Modu
 
 
 def test_an_unsolved_kernel_is_out_of_the_speed_ratio_and_in_the_cost_ratio(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both setups ran all eight kernels; ``a`` failed two of them after spending tokens. The default speedup
     leg is over the six both solved (the failures are not entered at 1x), the cost leg over all eight, and
@@ -1363,7 +1405,7 @@ def test_an_unsolved_kernel_is_out_of_the_speed_ratio_and_in_the_cost_ratio(
         "--out",
         str(out),
     ]
-    paired_setups.main([*arguments, "--task-set", "refuse"])
+    paired_setups.main(arguments)  # budgets.matched_tasks strict: the same kernels, so not refused
     legs = pd.read_csv(out).set_index("leg")
     assert legs.same_task_set.all()
     assert legs.n_both_run.tolist() == [8, 8]
@@ -1372,7 +1414,8 @@ def test_an_unsolved_kernel_is_out_of_the_speed_ratio_and_in_the_cost_ratio(
     assert legs.rho_population.to_dict() == {"speedup": "both-solved", "tokens": "both-tokens"}
     assert legs.n_pairs.to_dict() == {"speedup": 6, "tokens": 8}
     assert legs.loc["speedup", "rho"] == pytest.approx(2.0)
-    paired_setups.main([*arguments, "--task-set", "flag", "--policy", "served"])
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "flag")
+    paired_setups.main([*arguments, "--policy", "served"])
     served = pd.read_csv(out).set_index("leg")
     assert served.loc["speedup", "rho_population"] == "both-run"
     assert served.loc["speedup", "n_pairs"] == 8
@@ -1380,8 +1423,11 @@ def test_an_unsolved_kernel_is_out_of_the_speed_ratio_and_in_the_cost_ratio(
     assert served.loc["speedup", "rho"] == pytest.approx(2.0**0.5)
 
 
-def test_unmatched_task_sets_are_silent_by_default_flagged_or_refused(
-    paired_setups: ModuleType, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+def test_unmatched_task_sets_are_refused_by_default_flagged_or_unchecked(
+    paired_setups: ModuleType,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     arguments = [
         "--observations",
@@ -1392,9 +1438,11 @@ def test_unmatched_task_sets_are_silent_by_default_flagged_or_refused(
         "f",
         "--include-incomplete",
     ]
+    with pytest.raises(SystemExit, match=r"matched_tasks = strict refuses .*\na,b ran different kernels \(6 shared\)"):
+        paired_setups.main(arguments)
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "flag")
+    paired_setups.main(arguments)
+    assert "note: a,b ran different kernels (6 shared): only a 1 ['k7']; only b 1 ['k8']" in capsys.readouterr().err
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "off")
     paired_setups.main(arguments)
     assert "ran different kernels" not in capsys.readouterr().err
-    paired_setups.main([*arguments, "--task-set", "flag"])
-    assert "note: a,b ran different kernels (6 shared): only a 1 ['k7']; only b 1 ['k8']" in capsys.readouterr().err
-    with pytest.raises(SystemExit, match=r"--task-set refuse: a,b ran different kernels \(6 shared\)"):
-        paired_setups.main([*arguments, "--task-set", "refuse"])

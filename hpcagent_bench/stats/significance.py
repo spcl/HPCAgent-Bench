@@ -7,7 +7,9 @@ this)."""
 
 import dataclasses
 import enum
+import json
 import math
+import pathlib
 import types
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -48,6 +50,8 @@ __all__ = [
     "correction",
     "detectable",
     "equivalence",
+    "families",
+    "level",
     "named",
     "paired",
     "paired_proportion",
@@ -56,11 +60,15 @@ __all__ = [
     "proportion",
     "proportion_test",
     "rate_equivalence",
+    "scoped",
+    "settings",
+    "settings_mismatch",
     "timing",
     "timing_test",
     "two_sample",
     "variance_components",
     "verdicts",
+    "write_settings",
 ]
 
 
@@ -193,19 +201,96 @@ def configured() -> Configured:
     )
 
 
+def level(alpha: float | None = None) -> float:
+    """``alpha``, else ``statistics.alpha``: the level every reported test is read at."""
+    from hpcagent_bench.stats import summary
+
+    return summary.default_alpha() if alpha is None else alpha
+
+
+def families(legs: Sequence[object]) -> list[list[int]]:
+    """The indices of each correction family among tests labelled by ``legs``, as ``statistics.correction_family``
+    defines them: one family of every test (``family``), or one per leg (``family-leg``), in first-seen order."""
+    each_leg = config.current().statistics.correction_family is config.CorrectionFamily.FAMILY_LEG
+    groups: dict[object, list[int]] = {}
+    for index, leg in enumerate(legs):
+        groups.setdefault(leg if each_leg else None, []).append(index)
+    return list(groups.values())
+
+
+def scoped[T](legs: Sequence[object], values: Sequence[float], adjust: Callable[[list[float]], list[T]]) -> list[T]:
+    """``adjust`` (a correction over one family's values) run once per family of :func:`families`, results in
+    input order."""
+    out: dict[int, T] = {}
+    for indices in families(legs):
+        out.update(zip(indices, adjust([values[i] for i in indices]), strict=True))
+    return [out[index] for index in range(len(values))]
+
+
+def settings(**used: object) -> dict[str, object]:
+    """Every setting a paired comparison's tables rest on: the ``statistics`` and ``budgets`` keys, each
+    configured test's registered name and version, the equivalence test's interval, and ``used`` (the caller's
+    own: cost card, kernel policy, score rule)."""
+    current = config.current()
+    tests = configured()
+    alpha = current.statistics.alpha
+    return {
+        "statistics": current.statistics.model_dump(mode="json"),
+        "budgets": current.budgets.model_dump(mode="json"),
+        "tests": {
+            "paired": f"{tests.paired.name} v{tests.paired.version}",
+            "proportion": f"{tests.proportion.name} v{tests.proportion.version}",
+            "paired_proportion": f"{tests.paired_proportion.name} v{tests.paired_proportion.version}",
+            "correction": f"{tests.correction.name} v{tests.correction.version}",
+            "two_sample": f"{tests.two_sample.name} v{tests.two_sample.version}",
+        },
+        "interval_level": 1.0 - alpha,
+        "equivalence_interval_level": 1.0 - 2.0 * alpha,
+        "detectable_effect": "two-sided paired t at alpha, noncentral t (significance.detectable)",
+        **used,
+    }
+
+
+def settings_mismatch(table: pathlib.Path) -> list[str]:
+    """How the ``statistics`` and ``budgets`` sections the sidecar of ``table`` records (:func:`write_settings`) differ
+    from the current ones, one line per key; ``["no <sidecar>"]`` when it has none."""
+    sidecar = table.with_suffix(".settings.json")
+    if not sidecar.is_file():
+        return [f"no {sidecar.name}"]
+    stated = json.loads(sidecar.read_text(encoding="utf-8"))
+    now = config.current()
+    current = {"statistics": now.statistics.model_dump(mode="json"), "budgets": now.budgets.model_dump(mode="json")}
+    return [
+        f"{section}.{key}: {stated.get(section, {}).get(key)!r} there, {value!r} here"
+        for section in ("statistics", "budgets")
+        for key, value in current[section].items()
+        if stated.get(section, {}).get(key) != value
+    ]
+
+
+def write_settings(table: pathlib.Path, **used: object) -> pathlib.Path:
+    """:func:`settings` as ``<table stem>.settings.json`` beside ``table``; returns its path."""
+    sidecar = table.with_suffix(".settings.json")
+    sidecar.write_text(json.dumps(settings(**used), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return sidecar
+
+
 def stamped[F](entry: Registered[F], result: Result) -> Result:
     """``result`` carrying ``entry``'s name and version."""
     return dataclasses.replace(result, name=entry.name, version=entry.version)
 
 
-def paired(log_ratios: "Sequence[float] | FloatArray", *, alpha: float = 0.05, test: str | None = None) -> Result:
-    """The paired comparison of per-kernel ``log_ratios`` under ``test`` (default: the configured one).
-    Non-finite entries are dropped first: they are missing kernels, not changes."""
+def paired(
+    log_ratios: "Sequence[float] | FloatArray", *, alpha: float | None = None, test: str | None = None
+) -> Result:
+    """The paired comparison of per-kernel ``log_ratios`` under ``test`` (default: the configured one), its interval
+    at ``1 - alpha`` (default ``statistics.alpha``). Non-finite entries are dropped first: they are missing
+    kernels, not changes."""
     import numpy as np  # heavy dependency deferred: see the module docstring
 
     entry = named(PAIRED_TESTS, test) if test is not None else configured().paired
     x = np.asarray(log_ratios, dtype=np.float64)
-    return stamped(entry, entry.run(x[np.isfinite(x)], alpha))
+    return stamped(entry, entry.run(x[np.isfinite(x)], level(alpha)))
 
 
 def proportion(left: SolveCount, right: SolveCount, *, test: str | None = None) -> Result:
@@ -265,10 +350,12 @@ class Verdict:
     correction: str
 
 
-def verdicts(pvalues: Sequence[float], *, alpha: float = 0.05, test: str | None = None) -> list[Verdict]:
-    """The verdicts of one declared family, in input order, at ``alpha`` after the correction ``test`` (default:
-    ``statistics.correction``). A non-finite p does not enter the family and reads :attr:`Finding.UNDERPOWERED`."""
+def verdicts(pvalues: Sequence[float], *, alpha: float | None = None, test: str | None = None) -> list[Verdict]:
+    """The verdicts of one declared family, in input order, at ``alpha`` (default ``statistics.alpha``) after the
+    correction ``test`` (default: ``statistics.correction``). A non-finite p does not enter the family and reads
+    :attr:`Finding.UNDERPOWERED`."""
     entry = named(CORRECTIONS, test) if test is not None else configured().correction
+    alpha = level(alpha)
     return [
         Verdict(
             value,
@@ -313,7 +400,7 @@ def equivalence(
     log_ratios: "Sequence[float] | FloatArray",
     *,
     margin: float | None = None,
-    alpha: float = 0.05,
+    alpha: float | None = None,
     test: str | None = None,
 ) -> Equivalence:
     """Is the geomean ratio inside ``[1 / margin, margin]``? TOST on per-kernel ``log_ratios`` with the paired
@@ -322,9 +409,11 @@ def equivalence(
 
     ``margin`` is a RATIO above 1 (default ``statistics.equivalence_margin``) and must be fixed before the data
     are seen. Non-finite entries are dropped first, as :func:`paired` does. A refused paired test (too few
-    pairs, no spread) gives no equivalence p: an untested comparison stays inconclusive."""
+    pairs, no spread) gives no equivalence p: an untested comparison stays inconclusive. ``alpha`` (default
+    ``statistics.alpha``) is each one-sided test's level, so the interval reported is ``1 - 2 alpha`` (90%)."""
     import numpy as np  # heavy dependency deferred: see the module docstring
 
+    alpha = level(alpha)
     ratio = config.current().statistics.equivalence_margin if margin is None else margin
     if not math.isfinite(ratio) or ratio <= 1.0:
         raise ValueError(f"an equivalence margin is a ratio above 1 (1.2 reads [1/1.2, 1.2]); got {ratio!r}")
@@ -396,11 +485,9 @@ def variance_components(left: Sequence[Sequence[float]], right: Sequence[Sequenc
     return math.sqrt(within), math.sqrt(max(0.0, observed - noise))
 
 
-#: The power a minimum detectable effect is stated at when ``statistics.detectable_power`` is not consulted.
-DEFAULT_POWER: float = 0.8
-
-
-def detectable(log_ratios: "Sequence[float] | FloatArray", *, alpha: float = 0.05, power: float | None = None) -> float:
+def detectable(
+    log_ratios: "Sequence[float] | FloatArray", *, alpha: float | None = None, power: float | None = None
+) -> float:
     """The minimum detectable effect, as a LOG ratio above 0: the true mean log ratio a two-sided paired t test
     at ``alpha`` on this many kernels with this observed spread finds with probability ``power`` (default
     ``statistics.detectable_power``), from the noncentral t distribution. The t test stands in for the
@@ -412,6 +499,7 @@ def detectable(log_ratios: "Sequence[float] | FloatArray", *, alpha: float = 0.0
     from hpcagent_bench.stats.summary import MIN_PAIRS_FOR_INTERVAL
 
     wanted = config.current().statistics.detectable_power if power is None else power
+    alpha = level(alpha)
     if not 0.0 < alpha < 1.0 or not alpha < wanted < 1.0:
         raise ValueError(f"need 0 < alpha < power < 1; got alpha {alpha!r}, power {wanted!r}")
     x = np.asarray(log_ratios, dtype=np.float64)
@@ -456,14 +544,19 @@ class Conclusion(Coded):
 
 
 def conclusions(
-    difference_p: Sequence[float], equivalence_p: Sequence[float], *, alpha: float = 0.05, test: str | None = None
+    difference_p: Sequence[float],
+    equivalence_p: Sequence[float],
+    *,
+    alpha: float | None = None,
+    test: str | None = None,
 ) -> list[tuple[Conclusion, float]]:
     """Per comparison of one declared family, in input order: its :class:`Conclusion` and its adjusted
     equivalence p. The difference p values and the equivalence p values are corrected as TWO families by the
     same correction ``test`` (default ``statistics.correction``): a family of m comparisons makes m difference
     claims and m equivalence claims, and each kind has its false-discovery rate controlled at ``alpha``
     (Benjamini-Hochberg under the default correction) on its own. A non-finite p is a
-    test never performed and supports neither claim."""
+    test never performed and supports neither claim. ``alpha`` defaults to ``statistics.alpha``."""
+    alpha = level(alpha)
     different = correct(difference_p, test=test)
     equivalent = correct(equivalence_p, test=test)
     out: list[tuple[Conclusion, float]] = []

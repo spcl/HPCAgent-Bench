@@ -35,7 +35,7 @@ __all__ = [
     "any_significance",
     "axis_significance",
     "drawn_symbols",
-    "family_size",
+    "family_sizes",
     "interval_note",
     "leg_labels",
     "per_kernel_ci",
@@ -203,7 +203,7 @@ JOINT_SIG_LABEL: str = "Significant"
 SIG_MEASURE_NAMES: tuple[str, ...] = ("Speedup", "Cost")
 
 
-#: The stats table's conclusion per measure (``statistics/paired_setups.py --equivalence``), absent otherwise.
+#: The stats table's conclusion per measure (``statistics/paired_setups.py`` under ``statistics.equivalence``), absent otherwise.
 CONCLUSION_COLUMNS: tuple[str, str] = ("score_conclusion", "cost_conclusion")
 
 
@@ -223,11 +223,12 @@ def axis_significance(stats: pd.DataFrame) -> dict[tuple[str, str], Significance
     return flags
 
 
-def family_size(stats: pd.DataFrame) -> int:
-    """How many tests the figure's marks were corrected over; 0 when the table carries none."""
-    if stats.empty or "family_size" not in stats:
-        return 0
-    return int(stats.family_size.iloc[0])
+def family_sizes(stats: pd.DataFrame) -> tuple[int, int]:
+    """How many tests the figure's speed and cost marks were each corrected over (``statistics.correction_family``:
+    the same pooled count, or each leg's own); 0 when the table carries none."""
+    if stats.empty or "score_family_size" not in stats:
+        return 0, 0
+    return int(stats.score_family_size.iloc[0]), int(stats.cost_family_size.iloc[0])
 
 
 def interval_note(statistic: str) -> str:

@@ -33,10 +33,10 @@ BASE = limits.Limits(tokens=12_000_000, output_tokens=1_000_000, seconds=14_400)
 DOUBLE = limits.Limits(tokens=24_000_000, output_tokens=1_000_000, seconds=28_800)
 
 
-def test_budget_extension_reruns_are_off_and_a_mismatch_is_flagged_by_default() -> None:
+def test_budget_extension_reruns_are_off_and_a_mismatch_is_refused_by_default() -> None:
     budgets = config.current().budgets
     assert budgets.extension_reruns is False
-    assert budgets.matched_limits is config.MatchedLimits.FLAG
+    assert budgets.matched_limits is budgets.matched_tasks is config.MatchedLimits.STRICT
     assert config.MatchedLimits.texts() == ("off", "flag", "strict")
 
 
@@ -255,7 +255,8 @@ def test_a_setup_under_twice_the_budget_differs_and_the_note_names_both() -> Non
     """The harness case: one setup's episodes ran under 24M tokens and 8 h, the other's under 12M and 4 h."""
     found = limits.setup_limits(pd.DataFrame(setup_rows("a", [DOUBLE, DOUBLE]) + setup_rows("b", [BASE, BASE])))
     assert limits.compare(found["a"], found["b"]) is limits.LimitsMatch.DIFFER
-    (note,) = limits.check([("a", "b")], found)
+    with config.overridden("budgets.matched_limits", "flag"):
+        (note,) = limits.check([("a", "b")], found)
     assert "limits differ" in note
     assert DOUBLE.text() in note
     assert BASE.text() in note
@@ -317,6 +318,7 @@ def test_a_figures_two_sides_are_checked_as_one_pair(
 ) -> None:
     """The efficacy figure's control and treated rows (``efficacy.compare_slice``): flagged in its stats row and
     on stderr, refused under strict, untouched under off."""
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     treated, control = pd.DataFrame(setup_rows("a", [DOUBLE, DOUBLE])), pd.DataFrame(setup_rows("b", [BASE, BASE]))
     assert limits.sides("qwen/C", treated, control) == {"limits_match": "differ"}
     assert "note: pair qwen/C treated,qwen/C control -- limits differ" in capsys.readouterr().err
@@ -328,9 +330,43 @@ def test_a_figures_two_sides_are_checked_as_one_pair(
     assert limits.sides("qwen/C", treated, control) == {}
 
 
+def test_a_pair_whose_setups_ran_different_kernels_is_refused_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``budgets.matched_tasks``: strict (default) refuses naming the kernels only one setup ran, flag notes them,
+    off makes no check; a pairs table is read on its ``same_task_set`` column."""
+    served = {"a": {"k1", "k2", "k3"}, "b": {"k1", "k2", "k4"}, "c": {"k1", "k2", "k3"}}
+    assert limits.check_tasks([("a", "c")], served) == []
+    with pytest.raises(limits.MismatchedTasksError, match=r"only a 1 \['k3'\]; only b 1 \['k4'\]"):
+        limits.check_tasks([("a", "b")], served)
+    table = pd.DataFrame({"setup_a": ["a", "a"], "setup_b": ["b", "c"], "same_task_set": [False, True]})
+    with pytest.raises(limits.MismatchedTasksError, match="a,b ran different kernels"):
+        limits.check_task_table(table, "pairs.csv")
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "flag")
+    (note,) = limits.check_tasks([("a", "b"), ("a", "c")], served)
+    assert note.startswith("a,b ran different kernels (2 shared)")
+    assert limits.check_task_table(table, "pairs.csv") == ["a,b ran different kernels (pairs.csv)"]
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "off")
+    assert limits.check_tasks([("a", "b")], served) == []
+    assert limits.check_task_table(table, "pairs.csv") == []
+
+
+def test_a_pairs_csv_states_its_kernels_identical_only_with_a_true_cell(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read back from CSV, ``same_task_set`` is bool, or text and NaN where a cell is blank: a blank or ``False``
+    cell does not show the kernels identical."""
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "flag")
+    path = tmp_path / "pairs.csv"
+    path.write_text("setup_a,setup_b,same_task_set\na,b,True\nc,b,False\nd,b,\n", encoding="utf-8")
+    notes = limits.check_task_table(pd.read_csv(path), "pairs.csv")
+    assert notes == ["c,b ran different kernels (pairs.csv)", "d,b ran different kernels (pairs.csv)"]
+    path.write_text("setup_a,setup_b,same_task_set\na,b,True\nc,b,True\n", encoding="utf-8")
+    assert limits.check_task_table(pd.read_csv(path), "pairs.csv") == []
+
+
 def test_a_pairs_table_is_checked_on_the_verdicts_it_states(monkeypatch: pytest.MonkeyPatch) -> None:
     """A figure drawn from a pairs CSV: one note per pair the table does not call identical, and a table that
     states no verdict shows nothing; strict refuses both."""
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     table = pd.DataFrame({"setup_a": ["a", "a", "c"], "setup_b": ["b", "b", "b"], "leg": ["s", "t", "s"]})
     stated = table.assign(limits_match=["differ", "differ", "identical"])
     assert limits.check_table(stated, "pairs.csv") == ["pair a,b -- limits differ (pairs.csv)"]
@@ -353,12 +389,33 @@ def test_the_repeat_run_comparison_states_and_enforces_its_limits(monkeypatch: p
             "speedup": [2.0, 3.0, 1.5, 2.5],
         }
     )
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     found = limits.setup_limits(pd.DataFrame(setup_rows("a", [DOUBLE]) + setup_rows("b", [BASE])))
     assert [row.limits_match for row in reliability.compare_setups(runs, "a", "b", found)] == ["differ"]
     assert [row.limits_match for row in reliability.compare_setups(runs, "a", "b")] == [""]
     monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "strict")
     with pytest.raises(limits.MismatchedLimitsError, match="limits differ"):
         reliability.compare_setups(runs, "a", "b", found)
+
+
+def test_the_repeat_run_comparison_compares_only_setups_that_ran_the_same_kernels(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``budgets.matched_tasks`` in ``reliability.compare_setups``: strict (default) stops when the two setups ran
+    different kernels, flag notes it and compares the kernels both ran."""
+    runs = pd.DataFrame(
+        {
+            "setup": ["a", "a", "b", "b", "a"],
+            "kernel": ["k0", "k0", "k0", "k0", "k1"],
+            population.RUN_STATE_COLUMN: [population.RunState.SOLVED] * 5,
+            "speedup": [2.0, 3.0, 1.5, 2.5, 4.0],
+        }
+    )
+    with pytest.raises(SystemExit, match=r"matched_tasks = strict refuses .*\na,b ran different kernels"):
+        reliability.compare_setups(runs, "a", "b")
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "flag")
+    assert [row.kernel for row in reliability.compare_setups(runs, "a", "b")] == ["k0"]
+    assert "note: a,b ran different kernels (1 shared): only a 1 ['k1']" in capsys.readouterr().err
 
 
 # --- the paired comparison states it ---
@@ -428,8 +485,12 @@ def test_every_pair_row_states_that_its_limits_are_identical(paired_setups: Modu
 
 
 def test_a_pair_under_unequal_limits_is_flagged_and_its_extended_episodes_counted(
-    paired_setups: ModuleType, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+    paired_setups: ModuleType,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     pairs, setups = tables(paired_setups, observations(tmp_path, DOUBLE, scale=2), tmp_path)
     assert set(pairs.limits_match) == {"differ"}
     assert (set(pairs.limits_a), set(pairs.limits_b)) == ({DOUBLE.text()}, {BASE.text()})
@@ -441,6 +502,7 @@ def test_a_pair_under_unequal_limits_is_flagged_and_its_extended_episodes_counte
 def test_the_impact_table_states_each_setups_limits_and_the_pairs_verdict(
     paired_setups: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     argv = ["--observations", str(observations(tmp_path, DOUBLE, scale=2)), "--pair", "a,b", "--family", "f"]
     assert paired_setups.main([*argv, "--impact-out", str(tmp_path / "impact.csv")]) == 0
     impact = pd.read_csv(tmp_path / "impact.csv").set_index("setup")
@@ -452,9 +514,15 @@ def test_the_impact_table_states_each_setups_limits_and_the_pairs_verdict(
     assert not set(pd.read_csv(tmp_path / "impact.csv").columns) & set(paired_setups.IMPACT_LIMIT_COLUMNS)
 
 
-def test_observations_without_limits_read_as_unrecorded(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
+def test_observations_without_limits_read_as_unrecorded(
+    paired_setups: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A database from before the limits were recorded is read with ``flag`` (``strict`` refuses it)."""
     path = observations(tmp_path, BASE)
     pd.read_csv(path).drop(columns=[*limits.LIMIT_COLUMNS, *limits.SCALE_COLUMNS]).to_csv(path, index=False)
+    with pytest.raises(SystemExit, match="strict refuses"):
+        tables(paired_setups, path, tmp_path)
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     pairs, setups = tables(paired_setups, path, tmp_path)
     assert set(pairs.limits_match) == {"unrecorded"}
     assert setups.loc["a", "limits_unrecorded_episodes"] == len(KERNELS)
@@ -480,6 +548,7 @@ def test_off_writes_the_tables_without_the_limits_columns_and_notes_nothing(
 ) -> None:
     """``off`` is the table of a release without the limits: the flagged table is that one plus the limits
     columns, so every other cell is the same and the unequal pair goes unnoted."""
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     path = observations(tmp_path, DOUBLE, scale=2)
     flagged_pairs, flagged_setups = tables(paired_setups, path, tmp_path)
     capsys.readouterr()
@@ -512,10 +581,14 @@ def late_answer(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 def test_an_answer_past_the_smaller_limits_is_unsolved_when_rescored_at_them(
-    paired_setups: ModuleType, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+    paired_setups: ModuleType,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``--truncate-at min`` re-scores both setups at the smaller recorded limits (12 M tokens, 4 h): the treated
     setup loses the one answer it gave after them, and both tables state the cut."""
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     path = late_answer(tmp_path)
     argv = ["--observations", str(path), "--pair", "a,b", "--family", "f", "--setups-out"]
     assert paired_setups.main([*argv, str(tmp_path / "as-run.csv")]) == 0
@@ -532,8 +605,9 @@ def test_an_answer_past_the_smaller_limits_is_unsolved_when_rescored_at_them(
 
 
 def test_a_cut_no_row_lies_past_leaves_the_tables_as_they_were(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     path = late_answer(tmp_path)
     argv = ["--observations", str(path), "--pair", "a,b", "--family", "f", "--out"]
     assert paired_setups.main([*argv, str(tmp_path / "as-run.csv")]) == 0

@@ -156,7 +156,7 @@ def test_paired_geomean_interval_excludes_no_change_exactly_when_its_test_reject
     whose interval crosses 1x, or an interval clear of 1x without a star."""
     change = sign_flip(np.random.default_rng(11).normal(shift, 0.5, 25))
     clear_of_zero = change.low > 0.0 or change.high < 0.0
-    assert clear_of_zero == (change.pvalue < summary.DEFAULT_ALPHA), (change.low, change.high, change.pvalue)
+    assert clear_of_zero == (change.pvalue < summary.default_alpha()), (change.low, change.high, change.pvalue)
 
 
 def test_paired_geomean_keeps_the_kernels_that_did_not_change() -> None:

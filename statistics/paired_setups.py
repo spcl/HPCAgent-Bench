@@ -5,12 +5,13 @@
 test and correction. The speedup leg pairs solved kernels, the tokens leg kernels with token totals: never
 intersected.
 
-``--equivalence`` appends, per leg, a TOST equivalence test at a ratio margin fixed in advance, the minimum
-detectable effect and a three-way conclusion (different, equivalent, inconclusive), so a non-significant row is
-never read as "no effect"; ``--task-set`` appends the populations behind every ratio and flags or refuses a pair
-whose two setups did not run the same kernels; ``--episodes`` appends the episodes behind every leg and, where a
-kernel was run more than once, the run-to-run and kernel-to-kernel spread of its ratio. Without these options the
-tables are unchanged.
+By default (``statistics.equivalence``) every leg also carries a TOST equivalence test at a ratio margin fixed in
+advance, the minimum detectable effect and a three-way conclusion (different, equivalent, inconclusive), so a
+non-significant row is never read as "no effect"; ``budgets.matched_tasks`` checks that both setups of a pair ran
+the same kernels and ``budgets.matched_limits`` that they ran under the same limits (strict by default: refused
+otherwise). ``--episodes`` appends the episodes behind every leg and, where a kernel was run more than once, the
+run-to-run and kernel-to-kernel spread of its ratio. Every table written has a ``<table>.settings.json`` sidecar
+naming the settings that produced it (``significance.settings``).
 
     python3 paired_setups.py --observations scored.db --observations blind.db \\
         --pair llr40-oss120b-c,llrblind-oss120b-c \\
@@ -18,7 +19,8 @@ tables are unchanged.
 """
 
 import argparse
-import enum
+import dataclasses
+import hashlib
 import math
 import pathlib
 import sys
@@ -27,8 +29,6 @@ from collections.abc import Sequence
 from typing import NamedTuple
 
 import pandas as pd
-from hpcagent_agent.coded import Coded
-
 from hpcagent_bench import config, study_tags
 from hpcagent_bench.results import studies
 from hpcagent_bench.results.observation_columns import RowKind
@@ -96,7 +96,7 @@ PAIR_COLUMNS = (
     *limits.PAIR_COLUMNS,
 )
 
-#: Appended to :data:`PAIR_COLUMNS` under ``--equivalence`` or ``--task-set``: the populations behind the three
+#: Appended to :data:`PAIR_COLUMNS` under ``statistics.equivalence`` or ``budgets.matched_tasks``: the populations behind the three
 #: ratios, so a reader never has to infer which n a ratio is over.
 POPULATION_COLUMNS = (
     # kernels of the declared tag (--tag-file, else every kernel the input names)
@@ -123,7 +123,7 @@ POPULATION_COLUMNS = (
     "rho_population",
 )
 
-#: Appended after :data:`POPULATION_COLUMNS` under ``--equivalence``.
+#: Appended after :data:`POPULATION_COLUMNS` under ``statistics.equivalence`` (the default).
 EQUIVALENCE_COLUMNS = (
     # the ratio margin the equivalence test is against: equivalent means inside [1 / margin, margin]
     "equivalence_margin",
@@ -134,17 +134,17 @@ EQUIVALENCE_COLUMNS = (
     "equivalence_ci_high",
     "equivalence_p_adjusted",
     # the smallest true ratio (above 1; its reciprocal below) a paired t test on this leg's log ratios detects
-    # with probability ``mde_power`` at two-sided alpha 0.05, and at alpha / (tests in the family), the
-    # strictest threshold the correction can apply
+    # with probability ``mde_power`` at two-sided statistics.alpha, and at alpha / (tests in its correction
+    # family), the strictest threshold the correction can apply
     "mde_power",
     "mde_ratio",
     "mde_ratio_corrected",
-    # different (verdict is significant) | equivalent (equivalence_p_adjusted < 0.05) | inconclusive
+    # different (verdict is significant) | equivalent (equivalence_p_adjusted < statistics.alpha) | inconclusive
     "conclusion",
     # the same reading of rho_R (coverage_p_adjusted is among the population columns): a TOST of the difference of
     # the two solve rates over n_both_run against +-coverage_equivalence_margin (a difference of proportions;
     # Tango score test), adjusted over the pairs as its own family. Without a margin
-    # (statistics.equivalence_margin_rate, --equivalence-margin-rate) that test is not run and the conclusion
+    # (statistics.equivalence_margin_rate null) that test is not run and the conclusion
     # is different or inconclusive, never equivalent
     "coverage_equivalence_margin",
     "coverage_equivalence_p",
@@ -166,19 +166,6 @@ EPISODE_COLUMNS = (
     "sigma_within",
     "sigma_between",
 )
-
-
-class TaskSet(Coded):
-    """What ``--task-set`` does with a pair whose two setups did not run the same kernels."""
-
-    SEPARATOR = enum.nonmember("-")
-
-    #: Pair over the kernels both ran and say nothing (the tables as they always were).
-    INTERSECT = enum.auto()
-    #: The same numbers, with :data:`POPULATION_COLUMNS` appended and one note per unequal pair.
-    FLAG = enum.auto()
-    #: Stop, naming the kernels only one setup ran.
-    REFUSE = enum.auto()
 
 
 SETUP_COLUMNS = (
@@ -317,7 +304,7 @@ SENSITIVITY_COLUMNS = (
     "sensitivity_ci_high",
 )
 
-#: The same, appended to the impact table when the pairs table carries them (``--equivalence``).
+#: The same, appended to the impact table when the pairs table carries them (``statistics.equivalence``).
 IMPACT_EQUIVALENCE_COLUMNS = {"conclusion": "conclusion", "mde": "mde_ratio"}
 
 #: Counts, written as integers and blank when missing (spec N3); every other number is float64 (N2).
@@ -654,7 +641,9 @@ def pair_rows(
                     "p_value": tested_p(change),
                 }
             )
-    family = significance.verdicts([float(row["p_value"]) for row in rows])
+    family = significance.scoped(
+        [row["leg"] for row in rows], [float(row["p_value"]) for row in rows], significance.verdicts
+    )
     for row, verdict in zip(rows, family, strict=True):
         row["correction"] = verdict.correction
         row["p_adjusted"] = verdict.adjusted
@@ -692,18 +681,27 @@ def leg_population(leg: significance.Leg, policy: population.KernelPolicy) -> st
 def add_equivalence(rows: list[dict[str, object]], differences: list[tuple[float, ...]], margin: float) -> None:
     """:data:`EQUIVALENCE_COLUMNS` on every leg row of one family, in place.
 
-    The equivalence p values are corrected as their own family (one per tested leg), the coverage p values as a
-    third and the solve-rate equivalence p values, where run, as a fourth (one per pair each), all
-    with the configured correction, so every kind of claim a table can make has its false-discovery rate
-    controlled at 0.05 (Benjamini-Hochberg) on its own.
-    ``conclusion`` reads ``different`` exactly where ``verdict`` reads significant."""
+    The equivalence p values are corrected as their own families beside the difference tests' (one per tested
+    leg, grouped as ``statistics.correction_family`` groups the difference tests), the coverage p values as a
+    third and the solve-rate equivalence p values, where run, as a fourth (one per pair each), all with the
+    configured correction, so every kind of claim a table can make has its false-discovery rate controlled at
+    ``statistics.alpha`` (Benjamini-Hochberg) on its own. ``conclusion`` reads ``different`` exactly where
+    ``verdict`` reads significant."""
+    alpha = significance.level()
     tests = [significance.equivalence(logs, margin=margin) for logs in differences]
-    family = significance.conclusions([float(row["p_value"]) for row in rows], [test.pvalue for test in tests])
-    tested = sum(1 for row in rows if math.isfinite(float(row["p_value"])))
+    family: list[tuple[significance.Conclusion, float]] = [(significance.Conclusion.INCONCLUSIVE, math.nan)] * len(rows)
+    tested = [0] * len(rows)
+    for indices in significance.families([row["leg"] for row in rows]):
+        found = significance.conclusions(
+            [float(rows[i]["p_value"]) for i in indices], [tests[i].pvalue for i in indices]
+        )
+        size = sum(1 for i in indices if math.isfinite(float(rows[i]["p_value"])))
+        for i, outcome in zip(indices, found, strict=True):
+            family[i], tested[i] = outcome, size
     power = config.current().statistics.detectable_power
     rate_p = {(str(row["setup_a"]), str(row["setup_b"])): float(row["coverage_equivalence_p"]) for row in rows}
     rate_adjusted = dict(zip(rate_p, significance.correct(list(rate_p.values())), strict=True))
-    for row, logs, test, (conclusion, adjusted) in zip(rows, differences, tests, family, strict=True):
+    for row, logs, test, (conclusion, adjusted), size in zip(rows, differences, tests, family, tested, strict=True):
         pair = (str(row["setup_a"]), str(row["setup_b"]))
         row["equivalence_margin"] = margin
         row["equivalence_p"] = test.pvalue
@@ -713,35 +711,17 @@ def add_equivalence(rows: list[dict[str, object]], differences: list[tuple[float
         row["mde_power"] = power
         row["mde_ratio"] = math.exp(significance.detectable(logs, power=power))
         row["mde_ratio_corrected"] = (
-            math.exp(significance.detectable(logs, alpha=summary.DEFAULT_ALPHA / tested, power=power))
-            if tested
-            else math.nan
+            math.exp(significance.detectable(logs, alpha=alpha / size, power=power)) if size else math.nan
         )
         row["conclusion"] = conclusion.text
         row["coverage_equivalence_p_adjusted"] = rate_adjusted[pair]
         row["coverage_conclusion"] = (
             significance.Conclusion.DIFFERENT
-            if float(row["coverage_p_adjusted"]) < summary.DEFAULT_ALPHA
+            if float(row["coverage_p_adjusted"]) < alpha
             else significance.Conclusion.EQUIVALENT
-            if rate_adjusted[pair] < summary.DEFAULT_ALPHA
+            if rate_adjusted[pair] < alpha
             else significance.Conclusion.INCONCLUSIVE
         ).text
-
-
-def unequal_task_sets(pairs: list[tuple[str, str]], served: dict[str, frozenset[str]]) -> list[str]:
-    """One line per pair whose two setups did not run the same kernels, naming how many each ran alone and the
-    first few; empty when every pair is matched."""
-    notes: list[str] = []
-    for setup_a, setup_b in pairs:
-        ran_a, ran_b = served.get(setup_a, frozenset()), served.get(setup_b, frozenset())
-        if ran_a == ran_b:
-            continue
-        only_a, only_b = sorted(ran_a - ran_b), sorted(ran_b - ran_a)
-        notes.append(
-            f"{setup_a},{setup_b} ran different kernels ({len(ran_a & ran_b)} shared): "
-            f"only {setup_a} {len(only_a)} {only_a[:5]}; only {setup_b} {len(only_b)} {only_b[:5]}"
-        )
-    return notes
 
 
 def episode_submitted(graded: pd.DataFrame) -> pd.DataFrame:
@@ -1003,36 +983,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "(every kernel, a failure at 1.0)",
     )
     ap.add_argument(
-        "--equivalence",
-        action="store_true",
-        help="append to the pair table, per leg: a TOST equivalence test of rho against [1/margin, margin] with "
-        "the configured paired test, the minimum detectable effect, and a conclusion that is different, "
-        "equivalent or inconclusive (a non-significant leg is inconclusive unless the equivalence test passes)",
-    )
-    ap.add_argument(
-        "--equivalence-margin",
-        type=float,
-        default=None,
-        metavar="RATIO",
-        help="the ratio margin of --equivalence, above 1 (default: statistics.equivalence_margin); choose it "
-        "before looking at the data",
-    )
-    ap.add_argument(
         "--truncate-at",
         default=None,
         metavar="min|tokens=N,seconds=S",
         help="re-score the recorded episodes at these limits without a rerun: every judge row an episode made "
         "past them is dropped, so an episode whose answer came later is unsolved (docs/matched_limits.md). min: "
         "the smallest limits the setups' episodes record. Both tables then state the cut in truncated_at",
-    )
-    ap.add_argument(
-        "--equivalence-margin-rate",
-        type=float,
-        default=None,
-        metavar="DIFFERENCE",
-        help="the margin of --equivalence for the solve rates, a difference of proportions in (0, 1) (default: "
-        "statistics.equivalence_margin_rate; unset, no solve-rate equivalence test is run); choose it before "
-        "looking at the data",
     )
     ap.add_argument(
         "--sensitivity-policy",
@@ -1047,14 +1003,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="append to the pair table, per leg: each setup's episodes behind it, the fewest on any one kernel, "
         "and the run-to-run and kernel-to-kernel standard deviations of the log ratio (blank without repeats)",
-    )
-    ap.add_argument(
-        "--task-set",
-        default=TaskSet.INTERSECT,
-        type=TaskSet.parse,
-        metavar="|".join(TaskSet.texts()),
-        help="a pair whose two setups did not run the same kernels: intersect (pair over the kernels both ran; "
-        "the default), flag (the same, with the population columns appended and a note) or refuse (stop)",
     )
     ap.add_argument(
         "--impact-out",
@@ -1084,23 +1032,23 @@ def setup_language(observations: pd.DataFrame, setup: str) -> str:
     return str(recorded.mode().iloc[0]) if not recorded.empty else ""
 
 
+#: Observation files up to this size are hashed into the settings sidecar; a larger one is named by size alone.
+HASHED_INPUT_BYTES = 256 << 20
+
+
+def observation_input(path: pathlib.Path) -> dict[str, object]:
+    """One observations file as the settings sidecar names it: path, size and, when cheap, its sha256."""
+    size = path.stat().st_size
+    digest = hashlib.sha256(path.read_bytes()).hexdigest() if size <= HASHED_INPUT_BYTES else None
+    return {"path": str(path.resolve()), "bytes": size, "sha256": digest}
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     significance.configured()  # an unknown test name stops here, before any data is read
-    if args.equivalence_margin is not None and not args.equivalence:
-        raise SystemExit("--equivalence-margin only applies with --equivalence")
-    margin = args.equivalence_margin if args.equivalence else None
-    if args.equivalence and margin is None:
-        margin = config.current().statistics.equivalence_margin
-    if margin is not None and not (math.isfinite(margin) and margin > 1.0):
-        raise SystemExit(f"--equivalence-margin is a ratio above 1 (1.2 reads [1/1.2, 1.2]), got {margin!r}")
-    if args.equivalence_margin_rate is not None and not args.equivalence:
-        raise SystemExit("--equivalence-margin-rate only applies with --equivalence")
-    rate_margin = args.equivalence_margin_rate
-    if args.equivalence and rate_margin is None:
-        rate_margin = config.current().statistics.equivalence_margin_rate
-    if rate_margin is not None and not 0.0 < rate_margin < 1.0:
-        raise SystemExit(f"--equivalence-margin-rate is a difference of proportions in (0, 1), got {rate_margin!r}")
+    statistics = config.current().statistics
+    margin = statistics.equivalence_margin if statistics.equivalence else None
+    rate_margin = statistics.equivalence_margin_rate
     if args.sensitivity_policy == args.policy:
         raise SystemExit(f"--sensitivity-policy must name the policy --policy does not ({args.policy.text})")
     pairs = [parse_pair(spec) for spec in args.pair]
@@ -1155,12 +1103,10 @@ def main(argv: list[str]) -> int:
     if unanswered:
         raise SystemExit(f"no graded answer for {unanswered}")
 
-    if args.task_set != TaskSet.INTERSECT:
-        unequal = unequal_task_sets(pairs, served)
-        if unequal and args.task_set == TaskSet.REFUSE:
-            raise SystemExit("--task-set refuse: " + "; ".join(unequal))
-        for note in unequal:
-            print(f"note: {note}", file=sys.stderr)
+    # Both setups of a pair must run the same kernels (budgets.matched_tasks): strict refuses a pair that did not,
+    # flag notes it and pairs over the kernels both ran.
+    tasks_checked = limits.tasks_mode() is not config.MatchedLimits.OFF
+    limits.announce(lambda: limits.check_tasks(pairs, served))
 
     tokens = tokens_by_setup_kernel(observations)
     usage = episode_usage(observations[observations.setup.isin(setups)])
@@ -1179,11 +1125,11 @@ def main(argv: list[str]) -> int:
     )
     if limits_reported:
         setup_frame = limits.setup_columns(setup_frame, episode_limits)
-    populations = args.equivalence or args.task_set != TaskSet.INTERSECT
+    populations = margin is not None or tasks_checked
     pair_columns = [
         *(name for name in PAIR_COLUMNS if limits_reported or name not in limits.PAIR_COLUMNS),
         *(POPULATION_COLUMNS if populations else ()),
-        *(EQUIVALENCE_COLUMNS if args.equivalence else ()),
+        *(EQUIVALENCE_COLUMNS if margin is not None else ()),
         *(EPISODE_COLUMNS if args.episodes else ()),
         # a table reduced by another rule than the published one always names it
         *(("repeat_rule",) if not args.episodes and population.repeat_rule() is not config.Repeats.MEDIAN_ANY else ()),
@@ -1224,12 +1170,30 @@ def main(argv: list[str]) -> int:
     print(setup_frame.round(4).to_string(index=False))
     print()
     print(pair_frame.round(4).to_string(index=False))
-    if args.setups_out is not None:
-        with_integer_counts(setup_frame).to_csv(args.setups_out, index=False)
-    if args.out is not None:
-        with_integer_counts(pair_frame).to_csv(args.out, index=False)
-    if args.impact_out is not None:
-        with_integer_counts(impact_rows(pairs, setup_frame, pair_frame)).to_csv(args.impact_out, index=False)
+    used = {
+        "producer": "statistics/paired_setups.py",
+        "family": args.family,
+        "cost_model": dataclasses.asdict(card),
+        "score_rule": score_rule.SCORE_RULE,
+        "kernel_policy": args.policy.text,
+        "truncated_at": cut.text() if cut is not None else None,
+        "baseline": args.baseline,
+        "tag_file": str(args.tag_file) if args.tag_file is not None else None,
+        "include_incomplete": args.include_incomplete,
+        "sensitivity_policy": args.sensitivity_policy.text if args.sensitivity_policy else None,
+        "episodes": args.episodes,
+        "iteration_counts": list(args.iteration_counts),
+        "observations": [observation_input(path) for path in args.observations],
+    }
+    tables = {
+        args.setups_out: lambda: setup_frame,
+        args.out: lambda: pair_frame,
+        args.impact_out: lambda: impact_rows(pairs, setup_frame, pair_frame),
+    }
+    for path, frame in tables.items():
+        if path is not None:
+            with_integer_counts(frame()).to_csv(path, index=False)
+            significance.write_settings(path, **used)
     return 0
 
 

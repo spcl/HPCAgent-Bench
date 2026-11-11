@@ -8,7 +8,8 @@ the comparison reads. The driver records the limits it enforced with each episod
 ``output_token_limit``, ``time_limit_s``, and the scales a budget-extension rerun applied); the extractor carries
 them on the episode row. :func:`setup_limits` reduces them per setup over the episodes an aggregate reads
 (``population.latest_episodes``), :func:`compare` gives a pair its :class:`LimitsMatch`, and :func:`check` applies
-``budgets.matched_limits``: ``flag`` reports, ``strict`` refuses, ``off`` makes no check and adds no column.
+``budgets.matched_limits``: ``flag`` reports, ``strict`` refuses, ``off`` makes no check and adds no column. The same
+module checks the task set (``budgets.matched_tasks``, :func:`check_tasks`): both setups ran the same kernels.
 Every path that compares two setups applies it: the pair tables (``statistics/paired_setups.py``), the efficacy
 figures (:func:`sides` for a control and a treated side, :func:`check_table` for a pairs table that states its own
 verdicts) and the repeat-run comparison (``reliability.compare_setups``). ``docs/matched_limits.md`` states the
@@ -22,7 +23,7 @@ delivered when the smaller budget would have stopped it.
 import collections
 import enum
 import sys
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -44,10 +45,13 @@ __all__ = [
     "Limits",
     "LimitsMatch",
     "MismatchedLimitsError",
+    "MismatchedTasksError",
     "SetupLimits",
     "announce",
     "check",
     "check_table",
+    "check_task_table",
+    "check_tasks",
     "compare",
     "mode",
     "pair_columns",
@@ -55,6 +59,8 @@ __all__ = [
     "setup_columns",
     "setup_limits",
     "sides",
+    "task_sides",
+    "tasks_mode",
     "truncated",
 ]
 
@@ -233,6 +239,59 @@ def check_table(table: "pd.DataFrame", source: object) -> list[str]:
     )
 
 
+class MismatchedTasksError(MismatchedLimitsError):
+    """A comparison ``budgets.matched_tasks = strict`` refuses: its two setups did not run the same kernels."""
+
+
+def tasks_mode() -> config.MatchedLimits:
+    """``budgets.matched_tasks``: what :func:`check_tasks` does with a pair whose setups ran different kernels."""
+    return config.current().budgets.matched_tasks
+
+
+def check_tasks(pairs: Iterable[tuple[str, str]], served: Mapping[str, Collection[str]]) -> list[str]:
+    """One note per pair whose two setups did not run the same kernels (``served``: each setup's kernels), naming
+    how many each ran alone and the first few. ``budgets.matched_tasks = strict`` raises
+    :class:`MismatchedTasksError` with those notes instead; ``off`` makes no check."""
+    if tasks_mode() is config.MatchedLimits.OFF:
+        return []
+    notes: list[str] = []
+    for setup_a, setup_b in pairs:
+        ran_a, ran_b = frozenset(served.get(setup_a, ())), frozenset(served.get(setup_b, ()))
+        if ran_a == ran_b:
+            continue
+        only_a, only_b = sorted(ran_a - ran_b), sorted(ran_b - ran_a)
+        notes.append(
+            f"{setup_a},{setup_b} ran different kernels ({len(ran_a & ran_b)} shared): "
+            f"only {setup_a} {len(only_a)} {only_a[:5]}; only {setup_b} {len(only_b)} {only_b[:5]}"
+        )
+    if notes and tasks_mode() is config.MatchedLimits.STRICT:
+        raise MismatchedTasksError(
+            "budgets.matched_tasks = strict refuses a comparison whose setups ran different kernels:\n"
+            + "\n".join(notes)
+        )
+    return notes
+
+
+def check_task_table(table: "pd.DataFrame", source: object) -> list[str]:
+    """:func:`check_tasks` for a pairs table that states its own ``same_task_set``; a table without the column
+    shows nothing about its pairs' kernels, which is noted."""
+    if tasks_mode() is config.MatchedLimits.OFF:
+        return []
+    if "same_task_set" not in table.columns:
+        return [f"{source} states no same_task_set: its pairs' kernels are not shown identical"]
+    # A CSV round-trip reads the column as bool, or as text and NaN where a cell is blank: only a true value shows
+    # the kernels identical (astype(bool) would read "False" and NaN as true).
+    shown = table["same_task_set"].map(lambda value: str(value).strip().lower() in ("true", "1", "1.0"))
+    unequal = table.loc[~shown, ["setup_a", "setup_b"]].drop_duplicates()
+    notes = [f"{a},{b} ran different kernels ({source})" for a, b in unequal.itertuples(index=False, name=None)]
+    if notes and tasks_mode() is config.MatchedLimits.STRICT:
+        raise MismatchedTasksError(
+            "budgets.matched_tasks = strict refuses a comparison whose setups ran different kernels:\n"
+            + "\n".join(notes)
+        )
+    return notes
+
+
 def announce(found: Callable[[], list[str]]) -> None:
     """A command line's check: every note ``found()`` returns on stderr, its refusal as ``SystemExit``."""
     try:
@@ -269,6 +328,19 @@ def sides(label: str, treated: "pd.DataFrame", control: "pd.DataFrame") -> dict[
     by_side = {f"{label} treated": pooled(treated), f"{label} control": pooled(control)}
     announce(lambda: check([(f"{label} treated", f"{label} control")], by_side))
     return {"limits_match": compare(*by_side.values()).text}
+
+
+def task_sides(label: str, treated: "pd.DataFrame", control: "pd.DataFrame") -> dict[str, bool]:
+    """:func:`check_tasks` of one comparison given as its two sides' rows (the kernels each has a record for):
+    ``{"same_task_set": ...}`` for its table row, after :func:`announce`; ``{}`` under ``off``."""
+    if tasks_mode() is config.MatchedLimits.OFF:
+        return {}
+    served = {
+        f"{label} {side}": frozenset(rows["kernel"].dropna().astype(str))
+        for side, rows in (("treated", treated), ("control", control))
+    }
+    announce(lambda: check_tasks([(f"{label} treated", f"{label} control")], served))
+    return {"same_task_set": len(set(served.values())) == 1}
 
 
 def extended_count(limits: SetupLimits) -> int | None:
