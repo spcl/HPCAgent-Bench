@@ -161,6 +161,12 @@ which crawl4ai pulls in and which overwrote harbor's `litellm` package depending
 `DaceFramework.build_context(spec, offloaded)` derives the small, non-negative and positive symbols from the spec, so
 a plugin running a bench pipeline (Alloy) gets the facts the flavor itself runs with.
 
+### dace extended `c6dc4b695` -> `e4328d547`
+GPU offload and tile-layer fixes (work-8d's stack), the LiftEinsum ordering test (NestForge #82), and HPTT taking only
+a C-packed operand (a strided TTGT window used to transpose wrong). User plugins: NestForge `3fa4311` (PR #62 merged,
+bool symbols bound), Alloy `de16d5a` (`alloy_none`, the default rendering through the same judge, the baseline arm of
+the Alloy pilot). `results_db.open_db` sets a new file up one thread at a time (SQLite's WAL switch does not wait).
+
 ### Release record
 Filled in when the release is cut; nothing below is claimed until its row says so.
 
