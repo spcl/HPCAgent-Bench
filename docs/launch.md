@@ -50,6 +50,18 @@ itself compiles (they include DaCe's runtime), as `--target cpu` always does; `-
 `cpp_backend/` as `<kernel>_fp64_dace.*` under the autogen marker, and raises naming the kernel and the
 construct when it cannot be lowered.
 
+An agent on a `cuda` or `hip` setup is given generated GPU code to start from in one of two ways:
+
+| option | what is staged in the agent's folder | checked before the run |
+|---|---|---|
+| `references.gpu_starting_code: true` (`HPCAGENT_BENCH_REFERENCES_GPU_STARTING_CODE=1` in the setup's env; default `false`) | beside the C reference, `<module>_reference_gpu.cpp`, `.hip` or `.cu` and `.build`: the `parallel_gpu` pair above, as `autogen.ensure_native` renders it | no: a kernel the pipeline cannot lower is named on stderr and keeps the C reference alone |
+| the `cpf-src` packet ([extending/packets.md](extending/packets.md)) | in place of the C reference, `<module>_reference.cpp` and `.hip` or `.cu`: the canonical parallel form for the device, with its loop hints and task text | yes: every form is built and graded by the judge, and the setup is refused while one is unverified |
+
+Without either, such a setup starts from the C CPU reference ([prompts.md](prompts.md#cluster-prompt)), as every
+recorded one did. `pytest -m judge_image tests/test_dace_residuals.py` grades HIP pairs on a GPU node; this
+repository's CI and clusters have no CUDA toolkit, so a CUDA pair is emitted there and compiled only where `nvcc`
+exists (`-m nvcc`).
+
 Two opt-in residuals ride along, OFF by default (the measured pipelines are unchanged): `--maximal`
 repeats the (FuseMaps, MapCollapse, StateFusionExtended) round until the SDFG's hash is stable
 (cap 8) instead of the fixed two rounds, and `--remove-transients` prunes transient descriptors

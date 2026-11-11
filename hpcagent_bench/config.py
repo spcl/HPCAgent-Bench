@@ -465,6 +465,7 @@ class References(Section):
 
     prefer_committed: bool
     generated_cache_dir: str
+    gpu_starting_code: bool
 
 
 class Cache(Section):
