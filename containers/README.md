@@ -100,15 +100,10 @@ ONE image and ONE registry tag, `<thing>-latest`, per thing we run. An AMD image
 which renders that partition's arch for run-time JIT builds. Rows with a `-` directory are such
 EDF-only views of another row's image.
 
-| image (tag) | build directory | CPU / GPU targets | EDFs |
-|---|---|---|---|
-| `agent-amd-latest`, `judge-amd-latest` | `judge-agent-amd` (targets `agent`, `judge`) | x86-64-v3; gfx90a, gfx942, gfx950 | `hpcagent-bench-{agent,judge}-{mi300,mi200}-<flavor>`, `judge-{mi300,mi200}-mlscale-<flavor>` |
-| `sglang-mi300-latest` | `sglang` | gfx942 (the upstream base is MI300-only) | `hpcagent-bench-sglang-mi300-latest` |
-| `vllm-amd-latest` | `vllm` | gfx90a, gfx942, gfx950 | `hpcagent-bench-vllm-{mi300,mi200}-latest` |
-| `agent-nvidia-latest`, `judge-nvidia-latest` | `judge-agent-cuda` (targets `agent`, `judge`) | armv8.2-a; sm_80, sm_90, sm_100, sm_120 | `hpcagent-bench-{agent,judge}-gh200-<flavor>` |
-| `vllm-gh200-latest` | `vllm-cuda` | aarch64; the official build | `hpcagent-bench-vllm-gh200-latest` |
-| `agent-cpu-<arch>-latest`, `judge-cpu-<arch>-latest` | `judge-agent-cpu` (targets `agent`, `judge`) | x86-64-v3 or armv8.2-a | `hpcagent-bench-{agent,judge}-cpu-<arch>-<flavor>` |
-| `verifier-{amd,nvidia,nvidia-x86_64,cpu-<arch>}-latest` | `verifier` (one commit over the platform's judge, for Harbor) | the judge's | none |
+The table of images (tag, build directory, CPU and GPU targets, toolkit, EDF) is in
+[docs/containers.md](../docs/containers.md#the-images). Each `judge-agent-*` directory builds two targets, `agent`
+and `judge`; `verifier` is one commit over the platform's judge, for Harbor. The agent and judge EDFs exist per
+`<flavor>` (`latest`, `native`), and the AMD judge also has `judge-{mi300,mi200}-mlscale-<flavor>`.
 
 CPU targets: [download or build natively](#getting-the-images-download-default-or-build-natively).
 
