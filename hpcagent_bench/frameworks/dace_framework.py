@@ -221,6 +221,10 @@ def pin_host_compiler(family: str | None = None) -> str | None:
     args = " ".join(tok for tok in baseline.split() if tok not in DACE_SUPPLIED_FLAGS)
     if dace.Config.get("compiler", "cpu", "args") != args:
         dace.Config.set("compiler", "cpu", "args", value=args)
+    # The stub's rpaths (the driver's own runtime directory) as DT_RUNPATH, as in every graded build's link.
+    dtags = languages.new_dtags_flag(languages.compiler_block(block))
+    if dace.Config.get("compiler", "linker", "args") != dtags:
+        dace.Config.set("compiler", "linker", "args", value=dtags)
     return block
 
 
