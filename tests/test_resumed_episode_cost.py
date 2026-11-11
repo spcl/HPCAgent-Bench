@@ -6,8 +6,8 @@ Since v0.4.0 a crashed episode resumes in place, and the driver bills every atte
 (``token_cost.episode_totals`` sums the earlier ones into ``tokens_effective_crashed``; the results DB
 carries them in ``episodes.crashed_effective_tokens``, extracted as the task row's ``tokens_crashed``).
 The cost aggregation read the task row's ``tokens`` alone -- the FINAL attempt's -- so a resumed
-episode was under-costed. ``cost.attempts`` picks the reading: ``final`` (the default, every number
-the paper tag published; that tag relaunched episodes empty, so it is unaffected) or ``all``.
+episode was under-costed. ``cost.attempts`` picks the reading: ``all`` (the default) or ``final`` (the
+reading the paper's published numbers used).
 
 THE FIXTURE IS THE PRODUCTION SHAPE end to end once (sqlite): a driver record with two crashed
 attempts (30 + 20 tokens, summed upstream into one field), merged into a results DB, extracted, and
@@ -52,24 +52,29 @@ def paired_setups_fixture() -> types.ModuleType:
 
 
 def all_attempts() -> contextlib.AbstractContextManager[None]:
-    """``cost.attempts = all`` for one test (restored on exit; the default stays ``final``)."""
+    """``cost.attempts = all`` for one test, whatever the environment says (restored on exit)."""
     return config.overridden("cost.attempts", config.CostAttempts.ALL)
+
+
+def final_attempt() -> contextlib.AbstractContextManager[None]:
+    """``cost.attempts = final`` for one test (restored on exit; the default is ``all``)."""
+    return config.overridden("cost.attempts", config.CostAttempts.FINAL)
 
 
 # -- the config surface -------------------------------------------------------
 
 
-def test_the_switch_reads_final_by_default_and_spells_its_two_modes() -> None:
-    """Default = today's behaviour, so no existing number moves; the spellings are what config.yaml,
+def test_the_switch_reads_all_by_default_and_spells_its_two_modes() -> None:
+    """The default counts every attempt, what an answer cost; the spellings are what config.yaml,
     the environment and a recorded ``cost_attempts`` column carry."""
-    assert population.cost_attempts() is config.CostAttempts.FINAL
+    assert population.cost_attempts() is config.CostAttempts.ALL
     assert config.CostAttempts.texts() == ("final", "all")
-    assert config.default_value("cost.attempts") is config.CostAttempts.FINAL
+    assert config.default_value("cost.attempts") is config.CostAttempts.ALL
 
 
 def test_the_environment_overlay_flips_the_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(config.env_name("cost.attempts"), "all")
-    assert population.cost_attempts() is config.CostAttempts.ALL
+    monkeypatch.setenv(config.env_name("cost.attempts"), "final")
+    assert population.cost_attempts() is config.CostAttempts.FINAL
 
 
 # -- the sqlite fixture: the production path ----------------------------------
@@ -174,9 +179,10 @@ def test_the_extracted_task_row_keeps_the_two_conventions_apart(task_frame: pd.D
     assert row["tokens"] == FINAL_TOKENS
     assert row["tokens_crashed"] == CRASHED_TOKENS
 
-    default = population.episode_tokens(task_frame)
-    assert default.tokens.tolist() == [FINAL_TOKENS]
-    assert population.CRASHED_COLUMN not in default.columns
+    with final_attempt():
+        default = population.episode_tokens(task_frame)
+        assert default.tokens.tolist() == [FINAL_TOKENS]
+        assert population.CRASHED_COLUMN not in default.columns
     with all_attempts():
         merged = population.episode_tokens(task_frame)
         assert merged.tokens.tolist() == [ALL_TOKENS]
@@ -232,18 +238,19 @@ def episode_frame(tokens: float = FINAL_TOKENS, crashed: object = CRASHED_TOKENS
     )
 
 
-def test_default_counts_the_final_attempt_only() -> None:
+def test_final_counts_the_final_attempt_only() -> None:
     """``cost.attempts = final``: the task row's ``tokens`` stands alone, and no crashed column or
     marking appears -- byte-for-byte today's outputs."""
-    frame = episode_frame()
-    episodes = population.episode_tokens(frame)
-    assert episodes.tokens.tolist() == [FINAL_TOKENS]
-    assert population.CRASHED_COLUMN not in episodes.columns
-    assert population.CRASHED_SHARE_COLUMN not in episodes.columns
-    assert population.kernel_tokens(frame).to_dict() == {"k": FINAL_TOKENS}
-    point = population.kernel_medians(frame)
-    assert point is not None and point["tokens"] == pytest.approx(FINAL_TOKENS)
-    assert "cost_attempts" not in point
+    with final_attempt():
+        frame = episode_frame()
+        episodes = population.episode_tokens(frame)
+        assert episodes.tokens.tolist() == [FINAL_TOKENS]
+        assert population.CRASHED_COLUMN not in episodes.columns
+        assert population.CRASHED_SHARE_COLUMN not in episodes.columns
+        assert population.kernel_tokens(frame).to_dict() == {"k": FINAL_TOKENS}
+        point = population.kernel_medians(frame)
+        assert point is not None and point["tokens"] == pytest.approx(FINAL_TOKENS)
+        assert "cost_attempts" not in point
 
 
 def test_all_adds_every_crashed_attempt_in_and_marks_the_point() -> None:
@@ -356,17 +363,20 @@ def test_paired_setups_aggregates_each_mode_exactly_like_the_population_module(
     served = paired_setups.served_by_setup(frame)
     table = paired_setups.setup_aggregates(best, served, "numba")
 
-    default_tokens = paired_setups.tokens_by_setup_kernel(frame)
-    assert default_tokens == {("treated", "k1"): float(FINAL_TOKENS), ("control", "k1"): float(FINAL_TOKENS)}
-    usage = paired_setups.episode_usage(frame)
-    assert "share_tokens_crashed" not in usage.columns
-    assert usage.loc["treated", "tokens_crashed"] == pytest.approx(CRASHED_TOKENS)
-    setup_frame = pd.DataFrame(
-        paired_setups.setup_rows(best, paired_setups.graded_rows(frame, setups), table, served, default_tokens, usage)
-    )
-    assert setup_frame.cost_attempts.tolist() == ["final", "final"]
-    assert setup_frame.share_tokens_crashed.isna().all()
-    assert setup_frame.gm_tokens.tolist() == [pytest.approx(FINAL_TOKENS)] * 2
+    with final_attempt():
+        default_tokens = paired_setups.tokens_by_setup_kernel(frame)
+        assert default_tokens == {("treated", "k1"): float(FINAL_TOKENS), ("control", "k1"): float(FINAL_TOKENS)}
+        usage = paired_setups.episode_usage(frame)
+        assert "share_tokens_crashed" not in usage.columns
+        assert usage.loc["treated", "tokens_crashed"] == pytest.approx(CRASHED_TOKENS)
+        setup_frame = pd.DataFrame(
+            paired_setups.setup_rows(
+                best, paired_setups.graded_rows(frame, setups), table, served, default_tokens, usage
+            )
+        )
+        assert setup_frame.cost_attempts.tolist() == ["final", "final"]
+        assert setup_frame.share_tokens_crashed.isna().all()
+        assert setup_frame.gm_tokens.tolist() == [pytest.approx(FINAL_TOKENS)] * 2
 
     with all_attempts():
         all_tokens = paired_setups.tokens_by_setup_kernel(frame)
@@ -411,7 +421,8 @@ def test_the_written_tables_carry_the_mode_they_were_built_under(
         str(tmp_path / "setups.csv"),
     ]
 
-    assert paired_setups.main(argv) == 0
+    with final_attempt():
+        assert paired_setups.main(argv) == 0
     pairs = pd.read_csv(tmp_path / "pairs.csv")
     setups = pd.read_csv(tmp_path / "setups.csv")
     assert (pairs.cost_attempts == "final").all()
@@ -437,8 +448,8 @@ def test_the_written_tables_carry_the_mode_they_were_built_under(
 def test_one_table_states_the_cost_with_and_without_the_crashed_attempts(
     paired_setups: types.ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """``--all-attempts-leg``: the table of the default run, plus per pair the tokens row the same run writes
-    under ``cost.attempts = all``, named ``tokens_all_attempts`` and stamped with its reading."""
+    """``--all-attempts-leg``: the table of a ``cost.attempts = final`` run, plus per pair the tokens row the
+    same run writes under ``cost.attempts = all``, named ``tokens_all_attempts`` and stamped with its reading."""
     rows = [
         row
         for index in range(6)
@@ -455,7 +466,8 @@ def test_one_table_states_the_cost_with_and_without_the_crashed_attempts(
         assert paired_setups.main([*argv, str(tmp_path / name), *flags]) == 0
         return pd.read_csv(tmp_path / name)
 
-    final, both = table("final.csv"), table("both.csv", "--all-attempts-leg")
+    with final_attempt():
+        final, both = table("final.csv"), table("both.csv", "--all-attempts-leg")
     with all_attempts():
         every = table("all.csv")
         with pytest.raises(SystemExit, match="already counts every attempt"):
