@@ -140,6 +140,7 @@ __all__ = [
     "mpi_wrapper_flags",
     "mpich_wrapper_flags",
     "named_identifiers",
+    "new_dtags_flag",
     "offload_arch",
     "offload_arch_spelling",
     "offload_build_driver",
@@ -1819,6 +1820,7 @@ def build_kernel_lib_commands(
         _, link_block = compiler_for_lang(compilers, link_lang_for(langs_present))
     link_subst = subst_map(link_block.cc, objs=" ".join(objs), lib=out_so)
     link_argv = render_argv(link_block.link, link_subst)
+    link_argv.append(new_dtags_flag(link_block))
     link_argv.extend(link_block.link_extra or [])
     link_argv.extend(f for f in stdpar_link_for_block(link_block) if f not in link_argv)
     link_argv.extend(f for f in openmp_link_for_block(link_block, mode) if f not in link_argv)
@@ -1931,6 +1933,7 @@ def build_mpi_executable_commands(
     link_cc = cc_override.get(link_lang, str(link_block.cc))
     link_subst = subst_map(link_cc, objs=" ".join(objs), exe=out_exe)
     link_argv = render_argv(link_block.link, link_subst)
+    link_argv.append(new_dtags_flag(link_block))
     link_argv.extend(link_block.link_extra or [])
     link_argv.extend(f for f in openmp_link_for_block(link_block, mode, link_cc) if f not in link_argv)
     link_argv.extend(extra_link)  # -l/-L on the link step
@@ -1940,6 +1943,7 @@ def build_mpi_executable_commands(
         lib_subst = subst_map(link_cc, objs=" ".join(objs[:-1]), exe=pathlib.Path(kernel_lib))
         lib_argv = render_argv(link_block.link, lib_subst)
         lib_argv.insert(1, "-shared")
+        lib_argv.append(new_dtags_flag(link_block))
         lib_argv.extend(link_block.link_extra or [])
         lib_argv.extend(extra_link)
         cmds.append(lib_argv)
@@ -1949,6 +1953,12 @@ def build_mpi_executable_commands(
 #: Position-independent code for the sharded kernel library; nvcc forwards host flags explicitly.
 PIC_FLAG = "-fPIC"
 PIC_FLAG_CUDA = "-Xcompiler=-fPIC"
+
+
+def new_dtags_flag(block: CompilerBlock) -> str:
+    """The link flag writing every rpath as DT_RUNPATH: a DT_RPATH is searched BEFORE ``LD_LIBRARY_PATH``, so the
+    build's OpenMP runtime would load beside the OpenMP context's (two runtimes, one pinned to a single core)."""
+    return "-Xlinker=--enable-new-dtags" if block.cuda else "-Wl,--enable-new-dtags"
 
 
 #: Languages whose emitted reference can contain a BLAS call, so BLAS is always linked (C++ shares the C target).
@@ -2024,6 +2034,7 @@ def build_shared_lib_commands(
     link = block.link
     if link:
         link_argv = render_argv(link, subst)
+        link_argv.append(new_dtags_flag(block))
         link_argv.extend(block.link_extra or [])
         link_argv.extend(f for f in openmp_link_for_block(block, mode, cc) if f not in link_argv)
         # <execution> policies dispatch into oneTBB in libstdc++: linked for every C++ build so the task text's
