@@ -445,6 +445,31 @@ The NestForge-issue fixes from the student's fork: MapFission, SubgraphFission, 
 TensorDot TTGT, EliminateCopyBack, LoopFusion, MoveLoopIntoMap, PromoteConstantTransients (NestForge #66, #71 to #74,
 #76, #78). The loop verdict `unsure` is now `unknown` on the CPF skill pages; the lock drops `unclecode-litellm`,
 which crawl4ai pulls in and which overwrote harbor's `litellm` package depending on install order.
+`DaceFramework.build_context(spec, offloaded)` derives the small, non-negative and positive symbols from the spec, so
+a plugin running a bench pipeline (Alloy) gets the facts the flavor itself runs with.
+
+### dace extended `c6dc4b695` -> `e4328d547`
+GPU offload and tile-layer fixes (work-8d's stack), the LiftEinsum ordering test (NestForge #82), and HPTT taking only
+a C-packed operand (a strided TTGT window used to transpose wrong). User plugins: NestForge `3fa4311` (PR #62 merged,
+bool symbols bound), Alloy `de16d5a` (`alloy_none`, the default rendering through the same judge, the baseline arm of
+the Alloy pilot). `results_db.open_db` sets a new file up one thread at a time (SQLite's WAL switch does not wait).
+
+### dace extended `d79d22e72` -> `45df10b00`
+z3 no longer aborts an xdist worker: a term finalized on another thread while z3 runs is released later instead of
+concurrently. Main merged (`node(i)` caches positions; reordering and copying a graph now drop that cache), and the
+greedy-enumerator memory bound compares the least of three runs.
+
+### dace extended `e4328d547` -> `d79d22e72`
+The canon tip merge (a block made a root no longer reports dominators above it), the offload's host-call rule judging
+a MatMul by what it specializes to (a Gemm- or Dot-shaped product inside a map is a kernel again), and MapFission
+keeping a conditional whole only when its condition reads no container the body writes (`test_if_scope_2` with
+simplification off). User plugins: NestForge `d4c8af2` (`snapshot-reads` probes a copy of the doall alone; the cloudsc
+job no longer times out listing moves).
+
+### dace extended `45df10b00` -> `bc2801fdf`
+A complex accumulator always takes its `declare reduction` in the CPF (`qe_newdxx_g`'s CPF failed to compile with
+`user defined reduction not found for _priv_acc`). User plugins: Alloy `88c93e4` (since `c7d7f0d` its runtime link writes the OpenMP
+rpath as DT_RUNPATH, so an Alloy-built library no longer loads a second OpenMP runtime).
 
 ### Release record
 Filled in when the release is cut; nothing below is claimed until its row says so.

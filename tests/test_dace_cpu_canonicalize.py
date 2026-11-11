@@ -4,7 +4,6 @@
 ``SDFG.openmp_array_reductions`` is set, and ``auto_optimize`` (the control) never sets it."""
 
 import copy
-import dataclasses
 import pathlib
 import types
 from typing import cast
@@ -100,7 +99,7 @@ def test_a_block_set_on_the_offloaded_program_is_the_block_its_kernel_is_tiled_b
                 offloaded.append(node.map.gpu_block_size)
                 node.map.gpu_block_size = [8, 8, 1]
 
-    ctx = dataclasses.replace(DaceFramework("dace_gpu_canon").build_context(), offloaded=set_block)
+    ctx = DaceFramework("dace_gpu_canon").build_context(offloaded=set_block)
 
     pipeline_canonicalize(sdfg, ctx)
 
