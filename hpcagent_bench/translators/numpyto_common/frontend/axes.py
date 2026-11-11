@@ -88,6 +88,10 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
             return self.index_(
                 node.args[0], [ast.Constant(value=None) if d == axis else ast.Slice() for d in range(rank + 1)], node
             )
+        if name == "squeeze" and not isinstance(node.args[0], (ast.Name, ast.Subscript)):
+            # An index into a computed operand (``np.squeeze(np.log(s) + m, axis=1)``) is no array access: leave the
+            # call for lowering, which spills the operand to a sized temp first.
+            return node
         if name == "squeeze":
             if not isinstance(node.args[0], (ast.Name, ast.Subscript)):
                 # An expression operand keeps the call, which the hoister spills to a sized temp: no lowering
