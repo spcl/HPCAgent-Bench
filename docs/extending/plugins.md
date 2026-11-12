@@ -60,6 +60,7 @@ my_plugin/
   __init__.py              # optional; the folder is imported as a package either way
   tools/<tool>.py          # agent-side @tool modules
   routes/<route>.py        # judge-side @route modules
+  tuners/<tuner>.py        # judge-side @tuner modules (gymnasium.md), one episode each
   skills/<page>/SKILL.md   # skill pages, read by the agent on demand
   prompt/*.yaml, *.md      # prompt overlays its packets list, and the texts they read (any path inside the folder)
   agents/<name>.md         # subagents a packet offers (Claude Code subagent files)

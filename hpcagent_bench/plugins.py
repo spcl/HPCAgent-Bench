@@ -43,6 +43,7 @@ __all__ = [
     "install",
     "install_root",
     "load",
+    "load_tuners",
     "main",
     "openmp_context",
     "openmp_environment",
@@ -317,6 +318,17 @@ def register() -> tuple[Plugin, ...]:
 
 
 @functools.lru_cache(maxsize=1, typed=True)
+def load_tuners() -> tuple[Plugin, ...]:
+    """:func:`register`, and every plugin's ``tuners/`` modules, whose ``@tuner`` functions join the tuner table."""
+    found = register()
+    for plugin in found:
+        agent_plugins.import_package(plugin)
+        for stem in plugin.modules("tuners"):
+            importlib.import_module(f"{plugin.package}.tuners.{stem}")
+    return found
+
+
+@functools.lru_cache(maxsize=1, typed=True)
 def load() -> tuple[Plugin, ...]:
     """:func:`register`, and every plugin's judge routes, once per process (the judge)."""
     from hpcagent_bench.harness import routes  # deferred: a figure never needs the judge's machinery
@@ -407,10 +419,10 @@ def fingerprint(found: tuple[Plugin, ...]) -> str:
 
 
 def import_failure(plugin: Plugin) -> str:
-    """Why ``plugin``'s package or its ``tools`` and ``routes`` modules do not import; ``""`` when they do."""
+    """Why ``plugin``'s package or its ``tools``, ``routes`` and ``tuners`` modules do not import; ``""`` when they do."""
     try:
         agent_plugins.import_package(plugin)
-        for part in ("tools", "routes"):
+        for part in ("tools", "routes", "tuners"):
             for stem in plugin.modules(part):
                 importlib.import_module(f"{plugin.package}.{part}.{stem}")
     except Exception as exc:  # noqa: BLE001 -- a plugin's module may raise anything at import; the report names it
@@ -546,6 +558,8 @@ def check() -> int:
     Returns the exit status."""
     from hpcagent_agent.tools import mcp_server  # deferred: only the check serves tools
 
+    from hpcagent_bench.harness import tuners  # deferred: the tuner table imports the optimizers
+
     try:
         found = register()
         importlib.import_module("hpcagent_bench.columns")
@@ -565,6 +579,11 @@ def check() -> int:
         path.parent.name for plugin in found for path in (plugin.root / "skills").glob("*/SKILL.md")
     }
     failures = [failure for plugin in found for failure in name_failures(plugin, pages)]
+    if not failures:  # a bad flavor fails the table's import: reported above instead
+        try:
+            print(f"tuners: {', '.join(sorted(tuners.registry()))}")
+        except ValueError as exc:
+            failures.append(str(exc))
     notes = [note for plugin in found if (note := gates_note(plugin))]
     print("\n".join([*notes, *(failures or [f"{len(found)} plugins are fine"])]))
     return 1 if failures else 0

@@ -112,9 +112,9 @@ jobs:
 
       - uses: ./.github/actions/setup
         with:
-          # harbor: test_harbor.py checks task.toml against Harbor's own model. docs: the floor leg
-          # also builds docs/.
-          sync-args: ${{ matrix.floor && '--group harbor --all-packages --extra docs' || '--group harbor --all-packages' }}
+          # harbor: test_harbor.py checks task.toml against Harbor's own model. gym: test_gym_env.py. docs: the
+          # floor leg also builds docs/.
+          sync-args: ${{ matrix.floor && '--group harbor --all-packages --extra gym --extra docs' || '--group harbor --all-packages --extra gym' }}
           ccache: unit-${{ matrix.shard }}
           vendor-compilers: ${{ steps.sweep.outputs.vendor-compilers }}
 
