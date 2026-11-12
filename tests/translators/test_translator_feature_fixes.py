@@ -363,7 +363,7 @@ def test_fancy_gather_separated_advanced_indices_refused() -> None:
     no raw slice token of its own -- icon_gather's pre-extracted ``idx``/
     ``blk`` locals) still refuses advanced indices SEPARATED by a real slice:
     it has no front-placement implementation of its own. ``SliceToScalarRewriter``
-    (the path a literal ``:`` in the RHS actually takes, e.g. zekin_gather's
+    (the path a literal ``:`` in the RHS actually takes, e.g. ICON z_ekinh's
     ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``) implements
     front placement -- see ``test_front_placed_gather_separated_by_real_slice``."""
     tree = ast.parse("A[idx, :, blk]", mode="eval").body
@@ -376,7 +376,7 @@ def test_front_placed_gather_separated_by_real_slice() -> None:
     """Advanced indices SEPARATED by a real slice move their broadcast result
     to the FRONT (numpy rule): each operand consumes the SAME leading iters
     as one shared block, and the slice consumes the iter after that block --
-    zekin_gather's ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``,
+    ICON z_ekinh's ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``,
     whose C emit segfaults if it reads the index arrays at the wrong
     (trailing) iters."""
     z = ast.Constant(value=0)

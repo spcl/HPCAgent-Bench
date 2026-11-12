@@ -300,7 +300,7 @@ def test_gather_front_placed_broadcast_separated_by_real_slice() -> None:
     text. numpy moves their broadcast result to the FRONT -- result shape
     (NB, NPROMA, NLEV) -- not the in-place layout (reading the index arrays
     there is a segfaulting off-by-one-axis misalignment).
-    zekin_gather's ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``
+    ICON z_ekinh's ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``
     in miniature."""
     src = (
         "import numpy as np\n"
