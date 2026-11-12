@@ -4,16 +4,40 @@
 
 The plane-wave operators run on device: Triton kernels apply the kinetic diagonal, the real-space local potential
 and the smoothed preconditioner with its band normalization (complex values as interleaved fp64 pairs); the FFTs,
-the band-block products and the small reduced generalised eigenproblem (Cholesky, eigh, triangular solve) are
-torch calls, as in the repository's ls3df_scf baseline. The Davidson control flow (which roots converged, when to
-restart) stays on the host, so each iteration reads the convergence flags back.
+the band-block products and the small reduced generalised eigenproblem (Cholesky, inverse, eigh, triangular solve)
+are CuPy calls over zero-copy DLPack views. The Davidson control flow (which roots converged, when to restart)
+stays on the host, so each iteration reads the convergence flags back (one device sync per iteration).
+
+Library: cupy.fft.fftn, cupy.fft.ifftn, cupy.matmul, cupy.linalg.cholesky, cupy.linalg.inv, cupy.linalg.eigh,
+cupyx.scipy.linalg.solve_triangular for the local-potential FFTs (cuFFT), the band-block products (cuBLAS) and the
+reduced eigenproblem (cuSOLVER)
 
 Source: CPF by hand (form: sequential iteration over dense linear algebra and FFT maps).
 """
 
+import cupy
+import cupyx.scipy.linalg
 import torch
 import triton
 import triton.language as tl
+
+
+def dev(x: torch.Tensor) -> cupy.ndarray:
+    """A zero-copy CuPy view over DLPack (a lazy torch conjugate is materialized first)."""
+    return cupy.from_dlpack(x.resolve_conj())
+
+
+def mm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    return torch.from_dlpack(cupy.matmul(dev(a), dev(b)))
+
+
+def fftn(x: torch.Tensor, dim: tuple[int, ...]) -> torch.Tensor:
+    return torch.from_dlpack(cupy.fft.fftn(dev(x), axes=dim))
+
+
+def ifftn(x: torch.Tensor, dim: tuple[int, ...]) -> torch.Tensor:
+    return torch.from_dlpack(cupy.fft.ifftn(dev(x), axes=dim))
+
 
 MAXTER = 20
 BLOCK = 1024
@@ -91,9 +115,9 @@ def local_potential(
     m = block.shape[0]
     psic = torch.zeros((m, nnr), dtype=block.dtype)
     psic[:, gmap] = block
-    r = torch.fft.ifftn(psic.reshape(m, n3, n2, n1), dim=(1, 2, 3)).reshape(m, nnr).contiguous()
+    r = ifftn(psic.reshape(m, n3, n2, n1), dim=(1, 2, 3)).reshape(m, nnr).contiguous()
     potential_kernel[(triton.cdiv(r.numel(), BLOCK),)](pairs(r), v, r.numel(), nnr, BLOCK=BLOCK)
-    return torch.fft.fftn(r.reshape(m, n3, n2, n1), dim=(1, 2, 3)).reshape(m, nnr)[:, gmap]
+    return fftn(r.reshape(m, n3, n2, n1), dim=(1, 2, 3)).reshape(m, nnr)[:, gmap]
 
 
 class Operators:
@@ -135,20 +159,20 @@ class Operators:
             self.spinor(out, 0)[:] += local_potential(r_up, self.gmap, self.vrs[0].contiguous(), self.grid)
             self.spinor(out, 1)[:] += local_potential(r_dw, self.gmap, self.vrs[0].contiguous(), self.grid)
             if self.uspp and self.vkb.shape[0] > 0 and self.deeq_nc is not None:
-                b0 = r_up @ self.vkb.conj().T
-                b1 = r_dw @ self.vkb.conj().T
+                b0 = mm(r_up, self.vkb.conj().T)
+                b1 = mm(r_dw, self.vkb.conj().T)
                 d = self.deeq_nc.to(x.dtype)
-                ps0 = b0 @ d[0] + b1 @ d[1]
-                ps1 = b0 @ d[2] + b1 @ d[3]
-                self.spinor(out, 0)[:] += ps0 @ self.vkb
-                self.spinor(out, 1)[:] += ps1 @ self.vkb
+                ps0 = mm(b0, d[0]) + mm(b1, d[1])
+                ps1 = mm(b0, d[2]) + mm(b1, d[3])
+                self.spinor(out, 0)[:] += mm(ps0, self.vkb)
+                self.spinor(out, 1)[:] += mm(ps1, self.vkb)
             return out
         for ip in range(self.npol):
             block = self.spinor(x, ip).contiguous()
             self.spinor(out, ip)[:] += local_potential(block, self.gmap, self.vrs[ip].contiguous(), self.grid)
             if self.vkb.shape[0] > 0:
-                ps = block @ self.vkb.conj().T
-                self.spinor(out, ip)[:] += (ps @ self.deeq.to(x.dtype)) @ self.vkb
+                ps = mm(block, self.vkb.conj().T)
+                self.spinor(out, ip)[:] += mm(mm(ps, self.deeq.to(x.dtype)), self.vkb)
         return out
 
     def apply_s(self, x: torch.Tensor) -> torch.Tensor:
@@ -157,8 +181,8 @@ class Operators:
             block = self.spinor(x, ip)
             self.spinor(out, ip)[:] = block
             if self.uspp and self.vkb.shape[0] > 0:
-                ps = block @ self.vkb.conj().T
-                self.spinor(out, ip)[:] += (ps @ self.qq.to(x.dtype)) @ self.vkb
+                ps = mm(block, self.vkb.conj().T)
+                self.spinor(out, ip)[:] += mm(mm(ps, self.qq.to(x.dtype)), self.vkb)
         return out
 
 
@@ -180,16 +204,16 @@ def diaghg(hc: torch.Tensor, sc: torch.Tensor, n: int, nvec: int) -> tuple[torch
     b = sc[:n, :n]
     a = 0.5 * (a + a.conj().T)
     b = 0.5 * (b + b.conj().T)
-    chol = torch.linalg.cholesky(b)
-    chol_inv = torch.linalg.inv(chol)
-    reduced = chol_inv @ a @ chol_inv.conj().T
+    chol = torch.from_dlpack(cupy.linalg.cholesky(dev(b)))
+    chol_inv = torch.from_dlpack(cupy.linalg.inv(dev(chol)))
+    reduced = mm(mm(chol_inv, a), chol_inv.conj().T)
     reduced = 0.5 * (reduced + reduced.conj().T)
-    ws, ys = torch.linalg.eigh(reduced)
+    ws, ys = (torch.from_dlpack(x) for x in cupy.linalg.eigh(dev(reduced)))
     # The reference's phase: the largest-modulus entry of each vector made real and positive.
     pivot = ys.abs().argmax(dim=0)
     phase = ys[pivot, torch.arange(n)]
     ys = ys * (phase.abs() / phase)[None, :]
-    vs = torch.linalg.solve_triangular(chol.conj().T, ys, upper=True)
+    vs = torch.from_dlpack(cupyx.scipy.linalg.solve_triangular(dev(chol.conj().T), dev(ys), lower=False))
     return ws[:nvec], vs[:, :nvec].T.contiguous()
 
 
@@ -262,8 +286,8 @@ def cegterg(
     if uspp:
         spsi[:nvec] = ops.apply_s(psi[:nvec])
     overlap = spsi if uspp else psi
-    hc[:nbase, :nbase] = psi[:nbase, :kdim].conj() @ hpsi[:nbase, :kdim].T
-    sc[:nbase, :nbase] = psi[:nbase, :kdim].conj() @ overlap[:nbase, :kdim].T
+    hc[:nbase, :nbase] = mm(psi[:nbase, :kdim].conj(), hpsi[:nbase, :kdim].T)
+    sc[:nbase, :nbase] = mm(psi[:nbase, :kdim].conj(), overlap[:nbase, :kdim].T)
     hermitianize(hc, sc, nbase)
     if lrot:
         e[:nbase] = hc.diagonal()[:nbase].real
@@ -281,8 +305,8 @@ def cegterg(
         ew[nbase : nbase + np_] = e[unconv]
         vc[:np_] = vc[unconv].clone()
         nb1 = nbase
-        ritz = vc[:notcnv, :nbase] @ overlap[:nbase, :kdim]
-        resid = vc[:notcnv, :nbase] @ hpsi[:nbase, :kdim]
+        ritz = mm(vc[:notcnv, :nbase], overlap[:nbase, :kdim])
+        resid = mm(vc[:notcnv, :nbase], hpsi[:nbase, :kdim])
         resid = resid - ew[nb1 : nb1 + notcnv, None].to(cplx) * ritz
         psi[nb1 : nb1 + notcnv, :kdim] = resid
         precondition_kernel[(notcnv,)](pairs(psi), hd, sd, ew, nb1, kdim, psi.shape[1], BLOCK=256)
@@ -291,8 +315,8 @@ def cegterg(
         if uspp:
             spsi[nb1 : nb1 + notcnv] = ops.apply_s(block)
         nend = nbase + notcnv
-        hc[nb1:nend, :nend] = hpsi[nb1:nend, :kdim].conj() @ psi[:nend, :kdim].T
-        sc[nb1:nend, :nend] = overlap[nb1:nend, :kdim].conj() @ psi[:nend, :kdim].T
+        hc[nb1:nend, :nend] = mm(hpsi[nb1:nend, :kdim].conj(), psi[:nend, :kdim].T)
+        sc[nb1:nend, :nend] = mm(overlap[nb1:nend, :kdim].conj(), psi[:nend, :kdim].T)
         nbase = nend
         hermitianize(hc, sc, nbase, nb1)
         w, v = diaghg(hc, sc, nbase, nvec)
@@ -302,13 +326,13 @@ def cegterg(
         notcnv = int((~conv).sum())
         e[:nvec] = w
         if notcnv == 0 or nbase + notcnv > nvecx or kter == MAXTER:
-            evc[:nvec, :kdim] = vc[:nvec, :nbase] @ psi[:nbase, :kdim]
+            evc[:nvec, :kdim] = mm(vc[:nvec, :nbase], psi[:nbase, :kdim])
             if notcnv == 0 or kter == MAXTER:
                 break
             psi[:nvec] = evc[:nvec]
             if uspp:
-                spsi[:nvec, :kdim] = vc[:nvec, :nbase] @ spsi[:nbase, :kdim]
-            hpsi[:nvec, :kdim] = vc[:nvec, :nbase] @ hpsi[:nbase, :kdim]
+                spsi[:nvec, :kdim] = mm(vc[:nvec, :nbase], spsi[:nbase, :kdim])
+            hpsi[:nvec, :kdim] = mm(vc[:nvec, :nbase], hpsi[:nbase, :kdim])
             nbase = nvec
             hc[:nbase, :nbase] = 0.0
             sc[:nbase, :nbase] = 0.0
