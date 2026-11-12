@@ -180,7 +180,7 @@ def test_merge_results_refuses_to_overwrite_a_shard(tmp_path: pathlib.Path) -> N
 @pytest.fixture
 def finished_job(tmp_path: pathlib.Path) -> Iterator[pathlib.Path]:
     """A finished job's run directory: a WAL judge shard holding a graded source, its deferred queue, an agent's
-    library in the shared folder, the merged ``results.db`` and an agent workspace; given back its write bits after
+    library in the shared folder, the merged ``results.db`` and an episode's transcript; given back its write bits after
     the test, so the temporary directory can be removed."""
     if os.geteuid() == 0:
         pytest.skip("root ignores file modes")
@@ -216,14 +216,15 @@ def record_digest(run: pathlib.Path) -> dict[str, str]:
 
 def test_a_sealed_job_refuses_a_plain_rm_r_and_an_overwrite(finished_job: pathlib.Path) -> None:
     """After the seal, ``rm -r`` of the job by its owner fails and leaves every file of the graded record (shard,
-    deferred queue, shared library, results DB) as it was, an overwrite is refused, and the shard still opens
-    read-only with its graded source."""
+    deferred queue, shared library, an episode's transcript, results DB) as it was, an overwrite is refused, and the
+    shard still opens read-only with its graded source."""
     data_guard.seal(finished_job, writable=False)
     before = record_digest(finished_job)
     assert set(before) >= {
         "judge/rank-0/hpcagent_bench0.db",
         "judge/rank-0/hpcagent_bench0.deferred.jsonl",
         "shared/agent-0/lib/libtuned.so",
+        "agents/p0/claude.log",
         "results.db",
     }
 
