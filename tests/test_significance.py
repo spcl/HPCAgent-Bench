@@ -225,7 +225,7 @@ def test_the_reporting_protocol_defaults() -> None:
     assert (stats_.alpha, stats_.equivalence, stats_.equivalence_margin) == (0.05, True, 1.2)
     assert (stats_.equivalence_margin_rate, stats_.detectable_power) == (0.1, 0.8)
     assert stats_.correction_family is config.CorrectionFamily.FAMILY_LEG
-    assert (stats_.repeats, stats_.exclude_degenerate) == (config.Repeats.MEDIAN_ANY, False)
+    assert (stats_.repeats, stats_.exclude_degenerate) == (config.Repeats.MEDIAN_ANY, True)
 
 
 def test_alpha_is_the_level_of_every_verdict_and_interval() -> None:
