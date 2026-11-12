@@ -1910,8 +1910,8 @@ def test_a_manifest_name_only_a_declared_shape_spells_is_frozen_to_its_value() -
     broadcast ``height - kernel_size + 1`` into ``height - dilation * (kernel_size - 1)`` and
     refuses. One quantity, two spellings: freezing one and not the other is what made it
     unprovable."""
-    assert kir_for("conv_depthwise_separable_2d").shape_only_consts == {"dilation": 1}
-    unused, text = emit_("conv_depthwise_separable_2d")
+    assert kir_for("dwsconv2d").shape_only_consts == {"dilation": 1}
+    unused, text = emit_("dwsconv2d")
     assert "dilation" not in set(re.findall(r"[A-Za-z_]\w*", text)), (
         "a name only a declared shape spells must reach the module as its literal, not a dc.symbol"
     )
@@ -1927,7 +1927,7 @@ def test_the_frozen_declared_extent_is_the_one_the_body_computes() -> None:
     pytest.importorskip("dace")
     import dace as dc
 
-    kir = freeze_shape_only_parameters(freeze_pinned_extent_scalars(kir_for("conv_depthwise_separable_2d")))
+    kir = freeze_shape_only_parameters(freeze_pinned_extent_scalars(kir_for("dwsconv2d")))
     annotation = array_annotation(next(a for a in kir.arrays if a.name == "out"))
     scope = {
         "dc": dc,
@@ -1948,12 +1948,12 @@ def test_a_shape_name_the_body_also_reads_is_left_symbolic() -> None:
     """The freeze is sound only because nothing else can observe the name. A manifest name the
     kernel READS is a real parameter -- pinned or not -- and baking its value in is a miscompile, so
     ``kernel_size`` stays a dc.symbol in the very kernel the freeze fires on."""
-    assert not kir_for("conv_depthwise_separable_2d").shape_only_consts.keys() & {
+    assert not kir_for("dwsconv2d").shape_only_consts.keys() & {
         "kernel_size",
         "height",
         "width",
     }
-    assert "kernel_size = dc.symbol('kernel_size'" in emit_("conv_depthwise_separable_2d")[1]
+    assert "kernel_size = dc.symbol('kernel_size'" in emit_("dwsconv2d")[1]
 
 
 def test_a_shape_only_extent_is_frozen_in_the_kernel_body_as_well_as_its_declarations() -> None:
