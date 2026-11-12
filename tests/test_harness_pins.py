@@ -212,18 +212,28 @@ def harnesses() -> object:
     return module(ROOT / "agent" / "hpcagent_agent" / "driver" / "harnesses.py", "harness_pins_harnesses")
 
 
-@functools.lru_cache(maxsize=1)
-def submitter_harnesses() -> tuple[str, ...]:
-    """The harness names hpcagent_bench/cluster/submit.sh accepts: claude plus the keys of its HARNESS_LAYER map."""
+#: The prompt layer each built-in runner's setups read: what submit.sh's HARNESS_LAYER map said before the registry
+#: carried it, so no recorded setup's prompt moves.
+BUILT_IN_LAYERS: dict[str, str] = {
+    "miniswe": "harness-cli",
+    "openhands": "harness-openhands",
+    "optimas": "harness-native",
+    "anthropic": "harness-native",
+    "openai": "harness-native",
+    "tuner": "",
+}
+
+
+def test_every_built_in_runner_keeps_the_prompt_layer_its_recorded_setups_read() -> None:
+    assert {name: spec.layer for name, spec in harnesses().RUNNERS.items()} == BUILT_IN_LAYERS
+
+
+def test_the_submitter_asks_the_drivers_registry_for_a_harness_and_its_layer() -> None:
+    """One registry: a setup spec the submitter accepts and the driver rejects would die after the nodes are held."""
     text = (ROOT / "hpcagent_bench" / "cluster" / "submit.sh").read_text(encoding="utf-8")
-    declared = re.search(r"declare -A HARNESS_LAYER=\(([^)]*)\)", text)
-    assert declared is not None, "submit.sh declares no HARNESS_LAYER map"
-    return tuple(sorted({"claude", *re.findall(r"\[([^\]]+)\]=", declared.group(1))}))
-
-
-def test_every_harness_the_submitter_can_name_is_one_the_driver_can_launch() -> None:
-    """A setup spec the submitter accepts and the driver rejects dies after the nodes are held."""
-    assert set(submitter_harnesses()) <= set(harnesses().HARNESSES), submitter_harnesses()
+    body = text[text.index("prompt_layers_of() {") : text.index("\n}\n", text.index("prompt_layers_of() {"))]
+    assert "-m hpcagent_agent.driver.harnesses layer" in body
+    assert "HARNESS_LAYER" not in text
 
 
 @pytest.mark.parametrize("name", sorted(PYTHON_HARNESSES))

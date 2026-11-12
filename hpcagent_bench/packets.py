@@ -14,6 +14,7 @@ import sys
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
+from hpcagent_agent.driver import harnesses
 from hpcagent_agent.plugins import PACKET_AGENTS_ENV
 
 from hpcagent_bench import paths, plugins
@@ -53,6 +54,7 @@ __all__ = [
     "leaves",
     "libraries_enabled",
     "main",
+    "packet_lines",
     "page_applies",
     "page_file",
     "print_packet_list",
@@ -121,6 +123,8 @@ class Packet:
     tools: tuple[str, ...] = ()
     #: The subagents the packet offers, sorted (``hpcagent_agent.plugins.PACKET_AGENTS_ENV``).
     agents: tuple[str, ...] = ()
+    #: The harness its setups run on, "" for any (``hpcagent_agent.driver.harnesses.PACKET_HARNESS_ENV``).
+    harness: str = ""
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -350,6 +354,9 @@ def resolve(
     seen: set[str] = set()
     for token in tokens:
         expand_token(token, language, env_source, definitions, skills, env, seen, fill, image, multinode)
+    required = sorted({definitions[key].harness for token in tokens for key in reached_keys(token, definitions)} - {""})
+    if len(required) > 1:
+        raise ValueError(f"packet spec {spec!r} runs on harnesses {required}, which no one setup can")
     return Packet(
         key=canonical(spec),
         label=label(spec),
@@ -377,6 +384,7 @@ def resolve(
                 }
             )
         ),
+        harness=required[0] if required else "",
     )
 
 
@@ -470,10 +478,26 @@ def print_packet_list() -> None:
         print(f"{key}\t{label}")
 
 
+def packet_lines(resolved: Packet, allow: str | None, requests_allow: str | None) -> list[str]:
+    """The ``KEY=VALUE`` lines a launcher pins for ``resolved``, the record key last."""
+    lines = [f"{key}={value}" for key, value in resolved.env]
+    if resolved.tools:
+        lines.append(f"{PACKET_TOOLS_ENV}={','.join(resolved.tools)}")
+    if resolved.agents:
+        lines.append(f"{PACKET_AGENTS_ENV}={','.join(resolved.agents)}")
+    if resolved.harness:
+        lines.append(f"{harnesses.PACKET_HARNESS_ENV}={resolved.harness}")
+    if allow != requests_allow:
+        lines.append(f"HPCAGENT_BENCH_REQUESTS_ALLOW={allow}")
+    lines.append(f"HPCAGENT_BENCH_RECORD_PACKET={resolved.key}")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     """``python -m hpcagent_bench.packets``: one packet's env as ``KEY=VALUE`` lines (``${VAR}`` placeholders
     filled from the environment), the last always ``HPCAGENT_BENCH_RECORD_PACKET=<canonical key>``; ``--list``
-    prints every key and label."""
+    prints every key and label. With ``--harness`` the packet is checked against the harness the setup runs on
+    (``harnesses.refusal``; empty: the one the packet names, else claude), and a refusal exits 2."""
     parser = argparse.ArgumentParser(prog="python -m hpcagent_bench.packets", description=main.__doc__)
     parser.add_argument(
         "--packet",
@@ -487,6 +511,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="CSV",
         help="the setup's requests.allow; printed back with what the packet needs added (packets.request_allowance)",
+    )
+    parser.add_argument(
+        "--harness",
+        default=None,
+        help="the harness the setup names, empty for none: refuse a packet that cannot run on it",
     )
     parser.add_argument("--list", action="store_true", help="print every registered packet key and label, then exit")
     args = parser.parse_args(argv)
@@ -506,16 +535,14 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-
-    for key, value in resolved.env:
-        print(f"{key}={value}")
-    if resolved.tools:
-        print(f"{PACKET_TOOLS_ENV}={','.join(resolved.tools)}")
-    if resolved.agents:
-        print(f"{PACKET_AGENTS_ENV}={','.join(resolved.agents)}")
-    if allow != args.requests_allow:
-        print(f"HPCAGENT_BENCH_REQUESTS_ALLOW={allow}")
-    print(f"HPCAGENT_BENCH_RECORD_PACKET={resolved.key}")
+    lines = packet_lines(resolved, allow, args.requests_allow)
+    if args.harness is not None:
+        harness = args.harness or resolved.harness or harnesses.CLAUDE
+        environment = {key: value for key, _, value in (line.partition("=") for line in lines)}
+        if refused := harnesses.refusal(harness, environment):
+            print(f"packet {args.packet!r}: {refused}", file=sys.stderr)
+            return 2
+    print("\n".join(lines))
     return 0
 
 

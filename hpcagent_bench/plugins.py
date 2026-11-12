@@ -21,12 +21,13 @@ from typing import Annotated, Any, Literal
 
 import pydantic
 from hpcagent_agent import plugins as agent_plugins
+from hpcagent_agent.driver import harnesses
 from hpcagent_agent.plugins import Plugin
 from hpcagent_agent.prompt_blocks import TEMPLATE_SYNTAX
 
 from hpcagent_bench import modules, paths, skill_packets
 from hpcagent_bench.skill_packets import PacketTable
-from hpcagent_bench.vocabulary import FRAMEWORKS, PACKETS, PacketDef, PacketPhase
+from hpcagent_bench.vocabulary import FRAMEWORKS, HARNESSES, PACKETS, PacketDef, PacketPhase
 
 __all__ = [
     "ENTRY_POINT_GROUP",
@@ -52,6 +53,7 @@ __all__ = [
     "recorded",
     "register",
     "register_flavors",
+    "register_harnesses",
     "register_once",
     "register_packets",
     "roots",
@@ -271,6 +273,24 @@ def register_packets(found: tuple[Plugin, ...]) -> None:
         PACKETS.add(key, definition, aliases=aliases)
 
 
+@functools.lru_cache(maxsize=1, typed=True)
+def register_harnesses() -> None:
+    """Add every plugin's harnesses to the vocabulary, once per process, after the shipped ones (``models.py`` calls
+    this at its end), checking all first. A harness whose name the vocabulary already holds under the same display
+    name keeps that entry and its slot (a harness recorded before it moved into a plugin); under another display name
+    it is refused."""
+    found = agent_plugins.find(roots())
+    blocks = [(plugin, name, block) for plugin in found for name, block in plugin.manifest.harnesses.items()]
+    for plugin, name, block in blocks:
+        if name in HARNESSES and HARNESSES[name] != block.name:
+            raise ValueError(
+                f"plugin {plugin.name!r}: harness {name!r} is registered as {HARNESSES[name]!r}, not {block.name!r}"
+            )
+    for _, name, block in blocks:
+        if name not in HARNESSES:
+            HARNESSES.add(name, block.name)
+
+
 def refuse_composition_loop(key: str, composes: Mapping[str, tuple[str, ...]], chain: tuple[str, ...] = ()) -> None:
     """Raise when packet ``key`` reaches itself through the packets it composes (``composes``: key -> its packets;
     a token missing from it is a skill page)."""
@@ -461,17 +481,37 @@ def gates_note(plugin: Plugin) -> str:
     )
 
 
+def harness_failure(key: str, packet: PacketDef, known: tuple[str, ...]) -> str:
+    """Why packet ``key`` cannot run on the harness it names (none, or one it refuses itself:
+    ``harnesses.refusal``); ``""`` when it names none or can."""
+    if not packet.harness:
+        return ""
+    if packet.harness not in known:
+        return f"packet {key!r}: no harness {packet.harness!r}"
+    environment = dict(packet.env)
+    environment[agent_plugins.PACKET_AGENTS_ENV] = ",".join(packet.agents)
+    refused = harnesses.refusal(packet.harness, environment)
+    return f"packet {key!r}: {refused}" if refused else ""
+
+
 def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
     """Every name ``plugin``'s manifest gives that nothing answers to: packet tools, skill pages, composed packets and
-    overlays, flavor optimizers, ``[ci]`` optimizers, the routes its ``[overrides.<tool>]`` build from, its
-    ``[gates]`` and, under ``api``, its routes' imports."""
+    overlays, the harness a packet runs on, its harnesses' runners, flavor optimizers, ``[ci]`` optimizers, the routes
+    its ``[overrides.<tool>]`` build from, its ``[gates]`` and, under ``api``, its routes' imports."""
     from hpcagent_agent.tools import registry  # deferred: only the check reads the tools
     from hpcagent_bench import prompt_build  # noqa: PLC0415 -- prompt_build loads plugins at its own import
     from hpcagent_bench.harness.routes import ROUTES  # noqa: PLC0415 -- only the check reads the routes
 
     failures: list[str] = []
+    known = harnesses.names()
+    failures += [
+        f"harness {name!r}: no runner {block.runner}"
+        for name, block in plugin.manifest.harnesses.items()
+        if not (plugin.root / block.runner).is_file()
+    ]
     for key in plugin.manifest.packets:
         packet = PACKETS[key]
+        failures.append(harness_failure(key, packet, known))
         failures += [f"packet {key!r}: no tool {name!r}" for name in packet.tools if name not in registry.REGISTRY]
         failures += [
             f"packet {key!r}: no skill page {name!r}" for name in packet.skills if name not in {*pages, "lang", "*"}
@@ -509,6 +549,7 @@ def check() -> int:
     try:
         found = register()
         importlib.import_module("hpcagent_bench.columns")
+        harnesses.runners()
     except (ValueError, KeyError, ImportError) as exc:
         print(exc)
         return 1

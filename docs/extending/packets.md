@@ -50,6 +50,7 @@ overlays = ["repo"]
 | `short` | a figure's short spelling |
 | `extends` | a table of the same file this one starts from: tables merge key by key, lists replace, `aliases` are not inherited |
 | `agent` | a plugin's phases the agent runs ([plugins.md](plugins.md#phases)); only a plugin declares phases |
+| `harness` | the harness its setups run on; a setup naming another is refused ([plugins.md](plugins.md#the-harness-a-packet-runs-on)). Default: any |
 
 Anything else is refused, and so is a wrong type, a missing `name`, a taken key or alias, a composed key that is not
 registered and a `device` that is not one of the three. The key `""` is the no-packet control, registered by

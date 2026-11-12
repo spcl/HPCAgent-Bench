@@ -1,21 +1,30 @@
 # Adding an agentic framework (agent harness)
 
 An agent harness runs the model's tool loop for one cluster agent, next to `claude`, `miniswe`,
-`openhands`, `optimas`, `anthropic` and `openai` in `agent/hpcagent_agent/driver/harnesses.py`. The in-process `Agent` API is the other
+`openhands`, `optimas`, `anthropic` and `openai`. The in-process `Agent` API is the other
 route: [writing_an_agent.md](../writing_an_agent.md). Run commands from the repo root.
+
+There is one harness registry, `hpcagent_agent.driver.harnesses.runners()`: the built-in runners (`RUNNERS`) and the
+harnesses plugins ship. `claude` is built in `agent_driver.py`; `agent_driver.harness_spec` returns
+`runners()[name]` for every other name. `submit.sh` (the prompt layer), `record_identity.sh` (the recorded name),
+`inference_service.py` (the wire format a service may serve) and the driver read the same registry.
+
+**From a plugin** (no file of the benchmark changes): a `[harnesses.<name>]` block in the plugin's `plugin.toml`,
+the runner script in the plugin folder, and an `install` argv for its venv ([plugins.md](plugins.md#harnesses)).
+
+**Built in**:
 
 | File | Change |
 |---|---|
 | `agent/hpcagent_agent/harness/run_<name>.py` | the runner |
 | `agent/pyproject.toml` | a `harness-<name>` dependency group, locked in `uv.lock` |
-| `agent/hpcagent_agent/driver/harnesses.py` | a `<name>_command` and a `RUNNERS` entry (`HARNESSES` is `(CLAUDE, *RUNNERS)`) |
+| `agent/hpcagent_agent/driver/harnesses.py` | a `<name>_command` and a `RUNNERS` entry with its service wire format and prompt layer |
 | `containers/images/lib/launch_venv.sh` | a line in the harness table: the name and every module its runner imports |
-| `hpcagent_bench/cluster/record_identity.sh`, `hpcagent_bench/models.py` | the name in the `case`, and `HARNESSES.add("<name>", "<display name>")` after the existing harnesses ([registry.md](registry.md)) |
-| `tests/test_harness_pins.py` (`PYTHON_HARNESSES`), `tests/test_harness_dispatch.py` (`expected_runner_argv`) | the new harness |
+| `hpcagent_bench/models.py` | `HARNESSES.add("<name>", "<display name>")` after the existing harnesses ([registry.md](registry.md)) |
+| `tests/test_harness_pins.py` (`PYTHON_HARNESSES`, `BUILT_IN_LAYERS`), `tests/test_harness_dispatch.py` (`expected_runner_argv`) | the new harness |
 
-`agent_driver.harness_spec` returns `RUNNERS[name]` for every name but `claude`, so the driver needs
-no edit. A new prompt fragment adds `agent/tools-<name>.md`, an `agent/prompt_overlays/harness-<name>.yaml` that sets
-the `file_tools` block to it, and the name in `submit.sh`'s `HARNESS_LAYER` map ([prompts.md](../prompts.md)).
+A new prompt fragment adds `agent/tools-<name>.md` and an `agent/prompt_overlays/harness-<name>.yaml` that sets the
+`file_tools` block to it, named as the runner's layer ([prompts.md](../prompts.md)).
 
 ## Runner contract
 
@@ -108,8 +117,7 @@ turn off the framework's own step, cost and iteration limits.
 
 ```python
 # agent/hpcagent_agent/driver/harnesses.py
-RUNNERS = {..., "myagent": runner("myagent", myagent_command, miniswe_env)}
-HARNESSES = (CLAUDE, *RUNNERS)  # unchanged: derived from RUNNERS
+RUNNERS = {..., "myagent": runner("myagent", myagent_command, miniswe_env, "openai", CLI_LAYER)}
 ```
 
 Write `myagent_command` like `miniswe_command`, whose `interpreter("myagent")` is the venv `launch_venv.sh` builds
@@ -125,15 +133,16 @@ Tool access and prompt:
   `runner_common.mcp_servers` does. They add `runner_common.SHELL_TOOL` and read the `harness-native` overlay.
 
 The setup's `.env` sets `HARNESS=myagent`; the submit script passes `myagent` as argument 8 of
-`record_identity`, which writes `HPCAGENT_BENCH_RECORD_HARNESS` (the `setups.harness` column). The
-runner script is bound from the checkout at launch and a new pin needs no image rebuild (see
-"Agent harness pins" in `containers/README.md`).
+`record_identity`, which refuses a name the registry does not know and writes `HPCAGENT_BENCH_RECORD_HARNESS` (the
+`setups.harness` column). The runner script is bound from the checkout at launch and a new pin needs no image rebuild
+(see "Agent harness pins" in `containers/README.md`).
 
 ## Validate
 
 ```bash
 python -m pytest --maxfail=10 tests/test_harness_dispatch.py tests/test_harness_runners.py \
-  tests/test_harness_identity.py tests/test_harness_pins.py
-(cd agent && python -c 'from hpcagent_agent.driver import harnesses; print(harnesses.HARNESSES, sorted(harnesses.RUNNERS))')
+  tests/test_harness_identity.py tests/test_harness_pins.py tests/test_plugin_harness.py
+(cd agent && python -c 'from hpcagent_agent.driver import harnesses; print(harnesses.names())')
+python -m hpcagent_agent.driver.harnesses layer myagent
 (cd agent/hpcagent_agent/harness && python -c 'import run_myagent')
 ```

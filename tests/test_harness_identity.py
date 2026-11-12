@@ -6,12 +6,15 @@ A setup env that names no harness must stamp exactly what it stamped before the 
 every experiment submitted today goes through ``record_identity`` with seven arguments.
 """
 
+import os
 import pathlib
-import re
 import shutil
 import subprocess
+import sys
 
 import pytest
+
+from hpcagent_agent.driver import harnesses
 
 from hpcagent_bench import paths, study_tags
 
@@ -41,6 +44,7 @@ def stamp(env: pathlib.Path, *harness: str, script: pathlib.Path = SCRIPT) -> su
     identity = ("harness-focus20", "qwen38", "c", "cpu", "", "harness-focus20-qwen38-claude")
     return subprocess.run(
         ["bash", "-c", '. "$0" && record_identity "$@"', str(script), str(env), *identity, *harness],
+        env={**os.environ, "HPCAGENT_BENCH_HOST_PYTHON": sys.executable},
         capture_output=True,
         text=True,
         check=False,
@@ -92,11 +96,9 @@ def test_an_unknown_harness_is_refused_before_anything_is_stamped(tmp_path: path
 
 
 def test_every_harness_the_launcher_accepts_has_a_display_name() -> None:
-    """Two lists of one closed set: a harness added to one and not the other is either refused at
-    submit or drawn under its raw tag."""
-    accepted = re.search(r'^\s*""\|([a-z|]+)\)', SCRIPT.read_text(), re.MULTILINE)
-    assert accepted is not None, f"no harness case in {SCRIPT}"
-    assert sorted(accepted.group(1).split("|")) == sorted(study_tags.names("harnesses"))
+    """The launcher accepts what the driver's registry knows; a harness it accepts and the vocabulary lacks would be
+    drawn under its raw tag."""
+    assert sorted(harnesses.names()) == sorted(study_tags.names("harnesses"))
 
 
 @pytest.mark.parametrize(

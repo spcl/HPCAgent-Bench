@@ -28,7 +28,8 @@
 # which matters because the cache holds what the prune below takes out of that venv.
 #
 # An agent step also installs the harnesses inside its venv, from the checkout's agent/harness pins and uv.lock groups:
-# ${venv}/harness/<name> for each Python runner and ${venv}/harness/node for the claude CLI (on PATH through ${venv}/bin).
+# ${venv}/harness/<name> for each Python runner and ${venv}/harness/node for the claude CLI (on PATH through ${venv}/bin),
+# and ${venv}/harness/<name> for each harness a plugin ships, from the plugin's own install argv.
 # They share the venv's key, lock and sweep, and the seal's keep of the venv reaches them. uv and node stay in the image;
 # this build fails, before any agent starts, on a uv, node or CLI that is not the pinned version or a harness that does
 # not import. A judge fails here on a checkout without the KernelBench submodule, which it would otherwise score as a
@@ -147,6 +148,12 @@ EOF
 hpcagent_agent.harness.runner_common
 assert importlib.metadata.version('mcp').split('.')[0] == '1', 'the openhands venv pins mcp < 2'
 assert importlib.util.find_spec('hpcagent_bench') is None, 'openhands can import hpcagent_bench'"
+                fi
+                # The harnesses plugins ship ([harnesses.<name>] in a plugin.toml): a venv each beside the built-in
+                # ones, filled by the plugin's install argv, the checkout's agent/ on its path, checked the same way.
+                if [ -n "${sources}" ]; then
+                    HPCAGENT_BENCH_PLUGIN_DIRS="${dirs}" HOME="${home}" "${venv}/bin/python" -m hpcagent_agent.plugins \
+                        harnesses --venv "${venv}" --python "/usr/bin/python${HARNESS_PYTHON}" --agent "${workspace}/agent" >&2
                 fi
                 cli="${venv}/harness/node"
                 mkdir -p "${cli}"

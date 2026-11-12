@@ -1,11 +1,15 @@
 # Plugins: extending the benchmark without editing it
 
-Every plugin adds optimizers, of two kinds:
+A plugin adds three kinds of things:
 
 - a **packet** an LLM agent runs: its skill pages, agent tools, judge routes and the prompt overlays it applies
   (`plugins/autokernel`);
 - a **flavor** that runs without an LLM: a `FlavorOptimizer` run over shipped columns, each pairing a framework
-  column run as `hpcagent-bench agent <column>` ([Flavors](#flavors)).
+  column run as `hpcagent-bench agent <column>` ([Flavors](#flavors));
+- a **harness**: the loop of one episode for one model, launched by the driver like a built-in one
+  ([Harnesses](#harnesses)).
+
+What a plugin is next to the judge and the harness: [README.md](README.md#how-to-extend).
 
 A plugin lives in a folder of its own, described by one `plugin.toml`. The plugins shipped with the repository live
 in `plugins/`; a plugin of your own can be dropped in beside them, kept anywhere else and named in
@@ -51,14 +55,15 @@ first. `plugins/autokernel` is the small example; NestForge, pinned in `.github/
 
 ```
 my_plugin/
-  plugin.toml              # everything the plugin declares: phases, packets, flavors, overrides, gates, api,
-                           # install, hooks, ci
+  plugin.toml              # everything the plugin declares: phases, packets, flavors, harnesses, overrides,
+                           # gates, api, install, hooks, ci
   __init__.py              # optional; the folder is imported as a package either way
   tools/<tool>.py          # agent-side @tool modules
   routes/<route>.py        # judge-side @route modules
   skills/<page>/SKILL.md   # skill pages, read by the agent on demand
   prompt/*.yaml, *.md      # prompt overlays its packets list, and the texts they read (any path inside the folder)
   agents/<name>.md         # subagents a packet offers (Claude Code subagent files)
+  run_<harness>.py         # a harness's runner (any path inside the folder)
 ```
 
 The folder is imported as the package `hpcagent_bench_plugins.<name>`, so a route imports a helper next to it as
@@ -156,6 +161,23 @@ carries the `next_phase` tool: it ends that phase, the judge calls each followin
 /<plugin>/<tool>` with `args`, as the agent's own call would), answers with what each returned, and moves the kernel to
 the next agent phase, the first again after the last. A tool of a later agent phase is refused until then. Every grade
 row records its phase (`grades.phase`). The plugin's tools must be served at `/<plugin name>/<tool>`.
+
+### The harness a packet runs on
+
+A packet may name the harness its setups run on:
+
+```toml
+[packets.my_packet]
+name = "My Packet"
+harness = "openhands"                       # default: any harness
+```
+
+A setup that names the packet and no harness runs on that harness and records it. A setup that names another
+harness is refused. One check, `hpcagent_agent.driver.harnesses.refusal`, decides whether a packet runs on a harness;
+it also refuses a packet that narrows the built-in tools ([Built-in tools](#built-in-tools)) or offers subagents
+([Subagents](#subagents)) on a harness that cannot. `submit.sh` runs it before it stages a setup
+(`python -m hpcagent_bench.packets --harness`), and the driver again before it starts an agent. `plugins check`
+reports a packet that names no registered harness, or one its own tools or subagents rule out.
 
 ## Agent tools
 
@@ -294,7 +316,7 @@ token cap counts one call less per subagent than `result.modelUsage` reports. Th
 conversation with the file's body as its system prompt and only the `tools` it lists (all of its parent's when it
 lists none; never `task` itself). A subagent's calls go to the episode's `usage.jsonl`, so its tokens count against
 the same budget; its transcript is `<harness>.subagent-<n>-<name>.jsonl`. Other harnesses refuse a packet with
-subagents.
+subagents (`harnesses.refusal`).
 
 ## Built-in tools
 
@@ -302,7 +324,35 @@ A packet narrows the agent's built-in tools with `env = { HPCAGENT_BENCH_NATIVE_
 Claude Code's names. The claude CLI takes them as `--tools`. The `anthropic` and `openai` harnesses offer `bash` for
 `Bash` and `read` for `Read`, and refuse any other name, so a packet without `Bash` has no shell on them either. `read`
 takes a `path` and an `offset` and returns a long file in pieces, which keeps skill pages readable. Other harnesses
-refuse a packet that narrows the tools.
+refuse a packet that narrows the tools (`harnesses.refusal`).
+
+## Harnesses
+
+A `[harnesses.<name>]` block ships a harness. It keeps the runner contract of a built-in runner
+([agent-harness.md](agent-harness.md#runner-contract)): the same argv, environment, `usage.jsonl` and
+`harness-end.json`, and the driver owns the wall clock, the token limits, the submission and the cost.
+
+```toml
+[harnesses.myagent]
+name = "My Agent"                           # the display name a figure prints
+runner = "run_myagent.py"                   # the runner script, a file of the plugin
+api = "openai"                              # or "anthropic": the wire format it speaks to the model server
+tools = "mcp"                               # or "shell": hpcagent-bench-tool on PATH
+install = ["uv", "pip", "install", "--python", "{python}", "-r", "{root}/requirements.txt"]
+imports = ["myagent.loop"]                  # checked when its venv is built
+```
+
+`HARNESS=myagent` (or `HARNESSES=myagent` at submission) runs it. The driver starts
+`<launch venv>/harness/myagent/bin/python <plugin>/run_myagent.py` with the argv of the built-in runner of the same
+`api` (`openai` or `anthropic`), plus `--mcp-config` for `tools = "mcp"`. Its setups read the `harness-native` prompt
+layer for `mcp` and `harness-cli` for `shell`. The agent launch venv builds its venv at job start (`python -m
+hpcagent_agent.plugins harnesses`, from `containers/images/lib/launch_venv.sh`): a fresh venv on the pinned harness
+Python, the checkout's `agent/` on its path (so the runner imports `hpcagent_agent.harness.runner_common`), `install`
+run into it in a writable copy of the plugin folder (`{python}` is the venv's interpreter, `{root}` the copy), then
+every module of `imports` imported; `hpcagent_bench` must not be importable from it. Nothing is baked into an image.
+The name joins the harness registry (`hpcagent_agent.driver.harnesses.runners`), which the driver, `submit.sh`,
+`record_identity.sh` and the results vocabulary read, so no file of the benchmark changes. A name a built-in harness
+or another plugin already has is refused.
 
 ## Flavors
 

@@ -25,7 +25,7 @@ import time
 import tomllib
 from collections.abc import Callable, Iterable, Mapping
 from types import ModuleType
-from typing import Literal
+from typing import Annotated, Literal
 
 import pydantic
 
@@ -34,6 +34,7 @@ from hpcagent_agent.tools import registry
 
 __all__ = [
     "ENTRY_POINT_GROUP",
+    "HARNESS_DIR",
     "JOB_INIT_ENV",
     "JOB_INIT_ENV_VAR",
     "JOB_INIT_PLUGINS",
@@ -45,9 +46,12 @@ __all__ = [
     "PLUGIN_DIRS_ENV",
     "SHIPPED",
     "USER_PLUGIN_DIRS_ENV",
+    "HarnessBlock",
+    "HarnessName",
     "Hooks",
     "Manifest",
     "Plugin",
+    "checked_run",
     "copied_files",
     "copied_without",
     "digest",
@@ -57,12 +61,14 @@ __all__ = [
     "import_package",
     "import_tools",
     "install",
+    "install_harnesses",
     "install_root",
     "job_init_context",
     "plugin_dirs",
     "plugin_file",
     "read",
     "roots",
+    "run_command",
     "run_job_init",
     "stage_agents",
     "tree_digest",
@@ -90,6 +96,8 @@ JOB_INIT_ENV = "env.sh"
 JOB_INIT_STAMP = "job-init.json"
 JOB_INIT_PLUGINS = "job-init.plugins"
 JOB_INIT_ENV_VAR = "HPCAGENT_BENCH_JOB_INIT"
+#: Where a launch venv keeps each Python harness's own venv, ``<launch venv>/harness/<name>`` (the built-in ones too).
+HARNESS_DIR = "harness"
 #: :func:`run_job_init`'s exit code when a ``job_init_required`` hook failed: the entrypoint stops the launch on it
 #: (1 is any other failed hook, 2 the argument parser's).
 JOB_INIT_REQUIRED_FAILED = 3
@@ -162,6 +170,30 @@ class Hooks(pydantic.BaseModel):
     job_init_required: bool = False
 
 
+#: A harness name: what ``HARNESS`` names and the ``harness`` column records.
+HarnessName = Annotated[str, pydantic.Field(pattern=r"^[a-z][a-z0-9_]*$")]
+
+
+class HarnessBlock(pydantic.BaseModel):
+    """A plugin's ``[harnesses.<name>]``: a harness it ships, launched by the driver like a built-in runner. ``runner``
+    is the runner script under the plugin folder, run by the venv ``<launch venv>/harness/<name>`` that ``install``
+    fills (an argv run in a writable copy of the plugin folder, ``{python}`` that venv's interpreter, ``{root}`` the
+    copy); the venv also sees the checkout's ``agent/``, so the runner imports ``hpcagent_agent.harness.runner_common``.
+    ``api`` is the wire format it speaks to the model server, ``tools`` how it reaches the benchmark tools: ``mcp``
+    (``--mcp-config``, the ``harness-native`` prompt layer) or ``shell`` (``hpcagent-bench-tool`` on ``PATH``, the
+    ``harness-cli`` layer). The venv build imports every module of ``imports``."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    #: The display name (``vocabulary.HARNESSES``).
+    name: str = pydantic.Field(min_length=1)
+    runner: str = pydantic.Field(pattern=r"^[^/][\w./-]*\.py$")
+    api: Literal["openai", "anthropic"] = "openai"
+    tools: Literal["mcp", "shell"] = "mcp"
+    install: tuple[str, ...] = pydantic.Field(min_length=1)
+    imports: tuple[str, ...] = ()
+
+
 class Manifest(pydantic.BaseModel):
     """A plugin's ``plugin.toml``: the optimizers it adds. ``packets`` maps a packet key (what an LLM agent runs)
     to its ``[packets.<key>]`` table (``hpcagent_bench.skill_packets.PacketTable``); ``flavors`` maps a flavor key (an optimizer that runs without an LLM over shipped
@@ -169,7 +201,8 @@ class Manifest(pydantic.BaseModel):
     its ``phases.<id>`` block (``hpcagent_bench.plugins.PhaseBlock``), the steps its packets order. ``openmp`` is the
     one OpenMP runtime its code links, served to the processes it starts (``hpcagent_bench.plugins.openmp_environment``).
     ``hooks`` are the functions the benchmark runs for it at well-known moments (:class:`Hooks`). ``overrides`` maps
-    a core tool to its ``[overrides.<tool>]`` block (:class:`Override`). ``api`` is the version of the plugin API
+    a core tool to its ``[overrides.<tool>]`` block (:class:`Override`). ``harnesses`` maps a harness name to its
+    ``[harnesses.<name>]`` block (:class:`HarnessBlock`). ``api`` is the version of the plugin API
     (``hpcagent_bench.plugin_api``) its routes keep to, which ``python -m hpcagent_bench.plugins check`` enforces."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
@@ -185,6 +218,7 @@ class Manifest(pydantic.BaseModel):
     #: where the gate keeps its slot, title and verdict and every grade still records the gate key.
     gates: dict[str, str] = pydantic.Field(default_factory=dict[str, str])
     overrides: dict[str, Override] = pydantic.Field(default_factory=dict[str, Override])
+    harnesses: dict[HarnessName, HarnessBlock] = pydantic.Field(default_factory=dict[HarnessName, HarnessBlock])
     api: Literal[1] | None = None
     install: Install | None = None
     ci: Checks | None = None
@@ -455,15 +489,57 @@ def install(found: Iterable[Plugin], python: str = sys.executable, role: Role = 
         root, block = install_root(plugin), plugin.manifest.install
         if root is None or block is None or role not in block.roles:
             continue
-        with tempfile.TemporaryDirectory(prefix=f"plugin-{plugin.name}-") as stage:
-            copy = pathlib.Path(stage) / root.name
-            shutil.copytree(root, copy, ignore=copied_without(root), symlinks=True)
-            argv = [arg.replace("{python}", python).replace("{root}", str(copy)) for arg in block.command]
-            done = subprocess.run(argv, cwd=copy, capture_output=True, text=True, check=False)
-        if done.returncode:
-            raise RuntimeError(f"plugin {plugin.name!r}: {shlex.join(argv)} failed:\n{done.stdout}{done.stderr}")
+        run_command(plugin, root, block.command, python)
         installed.append(plugin.name)
     return installed
+
+
+def checked_run(plugin: Plugin, argv: list[str], cwd: pathlib.Path | None = None) -> str:
+    """Run ``argv`` for ``plugin``; its stdout.
+
+    :raises RuntimeError: it failed; the message names the plugin and carries its output.
+    """
+    done = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
+    if done.returncode:
+        raise RuntimeError(f"plugin {plugin.name!r}: {shlex.join(argv)} failed:\n{done.stdout}{done.stderr}")
+    return done.stdout
+
+
+def run_command(plugin: Plugin, root: pathlib.Path, command: tuple[str, ...], python: str) -> None:
+    """Run an install ``command`` of ``plugin`` in a writable copy of ``root`` (``{root}``) for the interpreter
+    ``python`` (``{python}``).
+
+    :raises RuntimeError: it failed (:func:`checked_run`).
+    """
+    with tempfile.TemporaryDirectory(prefix=f"plugin-{plugin.name}-") as stage:
+        copy = pathlib.Path(stage) / root.name
+        shutil.copytree(root, copy, ignore=copied_without(root), symlinks=True)
+        checked_run(plugin, [arg.replace("{python}", python).replace("{root}", str(copy)) for arg in command], copy)
+
+
+def install_harnesses(found: Iterable[Plugin], venv: pathlib.Path, python: str, agent: pathlib.Path) -> list[str]:
+    """Build ``<venv>/harness/<name>`` for every harness of ``found``: a fresh venv on the interpreter ``python``, the
+    checkout's ``agent`` folder on its path, the block's ``install`` run into it, then every module of its ``imports``
+    and ``hpcagent_agent.harness.runner_common`` imported, and ``hpcagent_bench`` out of its reach (what
+    ``launch_venv.sh`` checks of a built-in harness). Returns the harnesses built, by name.
+
+    :raises RuntimeError: a step failed (:func:`checked_run`).
+    """
+    built: list[str] = []
+    for plugin in found:
+        for name, block in plugin.manifest.harnesses.items():
+            target = venv / HARNESS_DIR / name
+            shutil.rmtree(target, ignore_errors=True)
+            checked_run(plugin, ["uv", "venv", "-q", "--python", python, str(target)])
+            interpreter = str(target / "bin" / "python")
+            site = checked_run(plugin, [interpreter, "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"])
+            (pathlib.Path(site.strip()) / "zz-agent.pth").write_text(f"{agent}\n", encoding="utf-8")
+            run_command(plugin, plugin.root, block.install, interpreter)
+            modules = ", ".join(("importlib.util", "hpcagent_agent.harness.runner_common", *block.imports))
+            probe = f"import {modules}\nassert importlib.util.find_spec('hpcagent_bench') is None, 'hpcagent_bench'"
+            checked_run(plugin, [interpreter, "-c", probe], target)  # out of a checkout, whose folders import
+            built.append(name)
+    return built
 
 
 def job_init_context(
@@ -585,14 +661,19 @@ def run_job_init(
 def main(argv: list[str]) -> int:
     """``python -m hpcagent_agent.plugins install [--role judge|agent] [--python PATH]``: run the install command of
     every plugin this process sees that installs into that role, for this (or that) interpreter. The agent image runs
-    it too: it carries this package, never ``hpcagent_bench``. ``job-init [--home DIR] [--venv DIR] [--workspace DIR]
-    [--role judge|agent]`` runs every plugin's ``[hooks]`` ``job_init`` once, with a context of the node-local paths;
+    it too: it carries this package, never ``hpcagent_bench``. ``harnesses --venv DIR --python PATH --agent DIR``
+    builds the venv of every harness a plugin ships (:func:`install_harnesses`). ``job-init [--home DIR] [--venv DIR]
+    [--workspace DIR] [--role judge|agent]`` runs every plugin's ``[hooks]`` ``job_init`` once, with a context of the node-local paths;
     the images' entrypoint calls it after the launch venv exists."""
     parser = argparse.ArgumentParser(prog="python -m hpcagent_agent.plugins", description=main.__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     installing = commands.add_parser("install", help="run every plugin's [install] command for one role")
     installing.add_argument("--python", default=sys.executable, help="the interpreter to install into")
     installing.add_argument("--role", choices=("judge", "agent"), default="judge", help="the container role")
+    building = commands.add_parser("harnesses", help="build the venv of every harness a plugin ships")
+    building.add_argument("--venv", type=pathlib.Path, required=True, help="the launch venv")
+    building.add_argument("--python", required=True, help="the interpreter each harness venv is made from")
+    building.add_argument("--agent", type=pathlib.Path, required=True, help="the checkout's agent/ folder")
     hooking = commands.add_parser("job-init", help="run every plugin's [hooks].job_init once, with a small context")
     hooking.add_argument("--home", type=pathlib.Path, required=True, help="the launch venv's node-local home")
     hooking.add_argument("--venv", type=pathlib.Path, required=True, help="the launch venv")
@@ -601,6 +682,10 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.command == "job-init":
         return run_job_init(args.home, args.venv, args.workspace, args.role)
+    if args.command == "harnesses":
+        for name in install_harnesses(find(roots()), args.venv, args.python, args.agent):
+            print(f"built harness {name}")
+        return 0
     for name in install(find(roots()), args.python, args.role):
         print(f"installed {name} ({args.role})")
     return 0

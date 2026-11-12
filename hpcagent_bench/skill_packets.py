@@ -23,7 +23,8 @@ SHIPPED = paths.PACKAGE / "packets.toml"
 class PacketTable(pydantic.BaseModel):
     """One ``[packets.<key>]`` table (``docs/extending/packets.md``). ``skills`` default to the page named like the key
     when its source ships one; ``overlays`` are prompt overlay references (``docs/prompts.md``); ``extends`` names a
-    table of the same file whose fields this one starts from; ``agent`` names the plugin phases the agent runs."""
+    table of the same file whose fields this one starts from; ``agent`` names the plugin phases the agent runs;
+    ``harness`` the harness its setups run on (none: any)."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
@@ -41,6 +42,7 @@ class PacketTable(pydantic.BaseModel):
     frozen: str = ""
     marker: str = ""
     short: str = ""
+    harness: str = ""
 
 
 def merged_table(
@@ -110,6 +112,7 @@ def definition(
         short=table.short,
         phases=phases,
         workflow=workflow,
+        harness=table.harness,
     )
 
 
