@@ -7383,18 +7383,18 @@
 }
 },
 "icon_velocity_tendencies": {
-"fingerprint": "da945d844bad41b1ffa27ec438c7ea1380cd3f1be5a7cade1f40df6a796ef728",
+"fingerprint": "f869851e52bc505664475f72c594f005390c39bd186b514a4d4c991b108bd220",
 "kappa": {
-"p_diag_ddt_vn_apc_pc": 2.6440590257263454,
-"p_diag_ddt_vn_cor_pc": 1.0000000000000033,
-"p_diag_ddt_w_adv_pc": 1.4897138181395813,
-"p_diag_max_vcfl_dyn": 1.5361131269011365,
+"p_diag_ddt_vn_apc_pc": 3.672813215811851,
+"p_diag_ddt_vn_cor_pc": 1.0000000000000049,
+"p_diag_ddt_w_adv_pc": 2.158174479076616,
+"p_diag_max_vcfl_dyn": 1.8095623160587047,
 "p_diag_vn_ie": 1.3862680826356708,
-"p_diag_vt": 1.3366214681076891,
-"p_diag_w_concorr_c": 1.4442787686513092,
+"p_diag_vt": 1.8024295100174565,
+"p_diag_w_concorr_c": 1.634397649212127,
 "z_kin_hor_e": 2.093387400717158,
-"z_vt_ie": 1.4330495769486988,
-"z_w_concorr_me": 1.175689085383722
+"z_vt_ie": 1.8733749854518464,
+"z_w_concorr_me": 1.5284975897365223
 },
 "roles": {
 "p_diag_ddt_vn_apc_pc": {
@@ -7426,8 +7426,8 @@
 ],
 "p_metrics_coeff_gradekin": [
 2.0,
-2.0047095761381475,
-1.0047095761381475
+1.9968354430379747,
+1.0126582278481013
 ],
 "p_metrics_ddqz_z_full_e": [
 2.0,
@@ -7729,17 +7729,17 @@
 }
 },
 "icon_velocity_tendencies_multiblock": {
-"fingerprint": "da945d844bad41b1ffa27ec438c7ea1380cd3f1be5a7cade1f40df6a796ef728",
+"fingerprint": "f869851e52bc505664475f72c594f005390c39bd186b514a4d4c991b108bd220",
 "kappa": {
-"p_diag_ddt_vn_apc_pc": 3.096409039674466,
+"p_diag_ddt_vn_apc_pc": 2.331917088957929,
 "p_diag_ddt_vn_cor_pc": 1.000000000000005,
 "p_diag_ddt_w_adv_pc": 1.7140392475342685,
 "p_diag_max_vcfl_dyn": 1.1092747124985933,
-"p_diag_vn_ie": 1.104341625426632,
-"p_diag_vt": 1.0109471802027792,
-"p_diag_w_concorr_c": 1.856617023255623,
-"z_kin_hor_e": 1.9514901671061016,
-"z_vt_ie": 1.1851187887985575,
+"p_diag_vn_ie": 1.3917211786667945,
+"p_diag_vt": 1.1951220534583376,
+"p_diag_w_concorr_c": 1.8568072489851395,
+"z_kin_hor_e": 1.9843750000000269,
+"z_vt_ie": 1.4777787816376926,
 "z_w_concorr_me": 1.2891006784570849
 },
 "roles": {
@@ -7771,9 +7771,9 @@
 4.0
 ],
 "p_metrics_coeff_gradekin": [
-1.0005211047420532,
-1.9994788952579468,
-1.0005211047420532
+1.0022184523032756,
+2.0,
+1.0022184523032756
 ],
 "p_metrics_ddqz_z_full_e": [
 1.0,
