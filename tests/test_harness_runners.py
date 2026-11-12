@@ -1777,6 +1777,13 @@ def test_an_evaluation_is_worth_its_best_round_and_nothing_without_one(harness: 
     assert harness.optimas.best_reward([], []) == 0.0
 
 
+def test_a_proposed_instruction_is_all_of_it(harness: types.SimpleNamespace) -> None:
+    """A proposal spans lines; a reply without the marker is the instruction itself, and one without content none."""
+    assert harness.optimas.proposed_instruction("Think.\nsolution: Tile.\n\n- Vectorize.\n") == "Tile.\n\n- Vectorize."
+    assert harness.optimas.proposed_instruction(" Tile the loops. ") == "Tile the loops."
+    assert harness.optimas.proposed_instruction(None) == ""
+
+
 class ModelResponse(pydantic.BaseModel):
     """litellm's ``ModelResponse`` as the callback sees it: a pydantic model with ``usage`` as an extra field."""
 
