@@ -196,8 +196,8 @@ def test_text_outside_the_charset_is_escaped_into_it() -> None:
 
 
 def test_the_caps_come_from_the_drivers_variables() -> None:
-    environ = {"AGENT_MAX_TOKENS": "80000000", "AGENT_MAX_OUTPUT_TOKENS": "4000000", "AGENT_TIMEOUT_SECONDS": ""}
-    assert Limits.from_env(environ) == Limits(max_tokens=80_000_000, max_output_tokens=4_000_000)
+    environ = {"AGENT_MAX_TOKENS": "100000000", "AGENT_MAX_OUTPUT_TOKENS": "5000000", "AGENT_TIMEOUT_SECONDS": ""}
+    assert Limits.from_env(environ) == Limits(max_tokens=100_000_000, max_output_tokens=5_000_000)
 
 
 if __name__ == "__main__":
