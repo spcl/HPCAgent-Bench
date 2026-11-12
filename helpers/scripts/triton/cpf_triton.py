@@ -6,7 +6,7 @@
 
 Per kernel, under ``WORK/<kernel>/``: ``canonical.<ext>`` (+ ``canonical_device.<ext>``), the CPF render of the
 GPU canonical SDFG with one ``// par`` / ``// seq`` hint per loop and map; ``triton.py``, the kernel text of the
-canonical SDFG after ``VectorizeGPU`` compiled under ``compiler.backend=python`` and
+canonicalized, offloaded SDFG (without the CUDA tail of ``finalize_for_target``) after ``VectorizeGPU`` compiled under ``compiler.backend=python`` and
 ``compiler.python.tile_dialect=triton``; and ``summary.json``: the parallel form, each step's verdict, and whether
 the generated program matched the NumPy reference at preset S. ``WORK/summary.json`` collects every kernel. DaCe
 builds go to ``WORK/build``; a step that raises is recorded with its error, never fixed here.
@@ -14,7 +14,6 @@ builds go to ``WORK/build``; a step that raises is recorded with its error, neve
 
 import argparse
 import contextlib
-import copy
 import inspect
 import json
 import pathlib
@@ -50,6 +49,26 @@ def canonical_of(spec: BenchSpec, cache_root: pathlib.Path) -> object:
     sdfg = cpf_canonical.canonical_sdfg(spec, impl, key, cache_root, PRECISION, Target.GPU)[0]
     if isinstance(sdfg, cpf_canonical.RenderFailure):
         return f"canonicalize: {sdfg.verdict.text}: {sdfg.error}"
+    return sdfg
+
+
+def tile_input(spec: BenchSpec) -> object:
+    """The SDFG a tile backend vectorizes: canonicalized and offloaded, without ``finalize_for_target``, whose GPU
+    stage specializes the kernels for CUDA threads (thread-block tiles, warp partials, ``__syncthreads``)."""
+    from dace.transformation.passes.canonicalize.finalize import offload_to_gpu
+    from dace.transformation.passes.canonicalize.pipeline import canonicalize
+
+    impl = cpf_canonical.emit_program(spec)
+    if isinstance(impl, cpf_canonical.RenderFailure):
+        return f"emit: {impl.verdict.text}: {impl.error}"
+    sdfg = cpf_canonical.parse_program(spec, impl, PRECISION)
+    if isinstance(sdfg, cpf_canonical.RenderFailure):
+        return f"parse: {sdfg.verdict.text}"
+    cpf_canonical.declare_small(sdfg, cpf_canonical.small_symbols(spec))
+    cpf_canonical.declare_positive(sdfg, cpf_canonical.positive_symbols(spec))
+    nonnegative = sorted(cpf_canonical.nonnegative_symbols(spec))
+    canonicalize(sdfg, target=Target.GPU.text, nonnegative_symbols=nonnegative)  # pyright: ignore[reportArgumentType]
+    offload_to_gpu(sdfg)  # pyright: ignore[reportArgumentType]
     return sdfg
 
 
@@ -174,10 +193,13 @@ def dump_kernel(name: str, out: pathlib.Path, width: int) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001 -- a refused render is a finding
         summary["canonical"] = f"render: {type(exc).__name__}: {exc}"[:400]
         summary["form"] = parallel_form(sdfg, "")
-    widths = (width,) * map_rank(sdfg)
-    summary["widths"] = list(widths)
-    tiled = copy.deepcopy(sdfg)
     try:
+        tiled = tile_input(spec)
+        if isinstance(tiled, str):
+            summary["triton"] = tiled
+            return summary
+        widths = (width,) * map_rank(tiled)
+        summary["widths"] = list(widths)
         VectorizeGPU(VectorizeConfig(widths=widths, tile_programs=True)).apply_pass(tiled, {})
         with triton_backend(out / "build"):
             compiled = tiled.compile()
