@@ -446,7 +446,9 @@ def tango_score(pairs: Discordant, n: int, delta: float) -> float:
     kernels, the variance taken at the maximum-likelihood discordant rate under H0. Falls as ``delta`` rises."""
     spread = pairs.only_left + pairs.only_right
     linear = (2 * n - pairs.only_left + pairs.only_right) * delta - spread
-    constrained = (math.sqrt(linear * linear + 8 * n * pairs.only_right * delta * (1.0 - delta)) - linear) / (4 * n)
+    # the discriminant is never negative in exact arithmetic; rounding can take it a hair below 0 near its root
+    discriminant = max(0.0, linear * linear + 8 * n * pairs.only_right * delta * (1.0 - delta))
+    constrained = (math.sqrt(discriminant) - linear) / (4 * n)
     return (pairs.only_left - pairs.only_right - n * delta) / math.sqrt(n * (2.0 * constrained + delta * (1.0 - delta)))
 
 
@@ -455,13 +457,18 @@ def rate_interval(pairs: Discordant, n: int, alpha: float) -> tuple[float, float
     :func:`tango_score`: every ``delta`` in (-1, 1) whose two-sided score test is not rejected, ends found by
     bisection (the score falls as ``delta`` rises, so they form one interval)."""
     critical = NormalDist().inv_cdf(1.0 - alpha / 2.0)
+    observed = pairs.only_left - pairs.only_right
+
+    def score(delta: float) -> float:
+        # 0 where delta is the observed difference: without discordant kernels the variance there is 0 as well
+        return 0.0 if observed == n * delta else tango_score(pairs, n, delta)
 
     def edge(target: float) -> float:
         # the delta where the score crosses ``target``, inside the open interval the score is defined on
         low, high = -1.0 + 1e-12, 1.0 - 1e-12
         for _ in range(60):
             middle = (low + high) / 2.0
-            low, high = (middle, high) if tango_score(pairs, n, middle) > target else (low, middle)
+            low, high = (middle, high) if score(middle) > target else (low, middle)
         return (low + high) / 2.0
 
     return edge(critical), edge(-critical)
