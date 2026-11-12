@@ -37,15 +37,21 @@ tile-index helpers and `matmul`.
 
 ## Precision
 
-The column declares no fp64 (`precisions` in `columns.py`), but `run-framework` does not enforce a column's
-`precisions` and its default datatype is float64: pass `-d float32` (or `fp16`, `bf16`) yourself.
+The column's `precisions` (`columns.py`) list no fp64, but nothing enforces them: `run-framework` runs at `-d`, and
+without `-d` at float64 (`support/collect/sweep.py`), and `hpcagent-bench job baseline --column triton` passes no `-d`,
+so it validates and times every Triton kernel at float64. Validate and time a baseline at the precision of the
+experiment it is compared with: the scientific-computing grades run at float64 (`service.datatype` in
+`hpcagent_bench/config.yaml`), so a scientific baseline must validate at float64 (`-d float64`); `-d float32` (or
+`fp16`, `bf16`) only for a comparison made at that precision. Write the kernel precision-generic (accumulate in the
+element type of the tensors, `x.dtype.element_ty`), and do not rely on `tl.dot` for fp64: the shared `matmul`
+helper reduces fp64 products without it.
 
 ## Check and time it
 
 ```sh
 uv sync --extra nvgpu      # torch and triton; --extra amdgpu on ROCm
-uv run hpcagent-bench run-framework -f triton -b <kernel> -p S -d float32 -r 3   # validates against the compiled reference
-uv run hpcagent-bench run-framework -f triton -b <kernel> -d float32              # the default fuzzed preset
+uv run hpcagent-bench run-framework -f triton -b <kernel> -p S -d float64 -r 3   # validates against the compiled reference
+uv run hpcagent-bench run-framework -f triton -b <kernel> -d float64              # the default fuzzed preset
 ```
 
 A `validation: SUCCESS` line at preset `S` is the wiring check; report times from the default preset.
