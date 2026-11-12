@@ -526,9 +526,7 @@ def shared_token_kernels(
     return sorted({k[1] for k in tokens if k[0] == left} & {k[1] for k in tokens if k[0] == right} - set(excluded))
 
 
-def cost_leg(
-    left: str, right: str, tokens: dict[tuple[str, str], float], excluded: Collection[str] = ()
-) -> Leg | None:
+def cost_leg(left: str, right: str, tokens: dict[tuple[str, str], float], excluded: Collection[str] = ()) -> Leg | None:
     """The paper's ``rho_C = GM(C_b / C_a)`` over the kernels both setups have a token count for (``K``), less
     ``excluded``: control over treated, so above 1 means setup ``a`` is CHEAPER, the same direction as ``rho_S``."""
     shared = shared_token_kernels(left, right, tokens, excluded)

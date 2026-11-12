@@ -929,6 +929,7 @@ def infrastructure_ended(frame: "pd.DataFrame") -> frozenset[tuple[str, str]]:
     final attempt's :data:`CAUSE_COLUMN` is ``relaunch_limit`` (docs/matched_limits.md). Its tokens count, but they
     are what an outage left, not the cost of an episode the agent or a limit ended, so a paired cost ratio leaves the
     kernel out. Empty for a frame recorded before causes."""
+    # deferred: agent_driver imports the whole agent package and reads its environment at import
     from hpcagent_agent.driver.agent_driver import AttemptCause
 
     if CAUSE_COLUMN not in frame.columns or frame.empty:
