@@ -160,7 +160,9 @@ def compare_slice(
         return None
     timed = efficacy_figures.speedup_mask(paired, over)
     log_score = np.log((paired.treated_speedup / paired.control_speedup).to_numpy(dtype=float)[timed])
-    log_cost = np.log((paired.treated_tokens / paired.control_tokens).to_numpy(dtype=float))
+    # a kernel whose run infrastructure ended on either side forms no cost pair (statistics/paired_setups.py)
+    ended = sorted({kernel for _, kernel in population.infrastructure_ended(pd.concat([control, treated]))})
+    log_cost = np.log((paired.treated_tokens / paired.control_tokens).to_numpy(dtype=float)[~paired.index.isin(ended)])
     score, cost = significance.paired(log_score), significance.paired(log_cost)
     statistics = bench_config.current().statistics
     equivalence = (
