@@ -206,8 +206,13 @@ Three things can run an agent again; they are recorded differently.
 | what | when | limits | tokens | recorded as |
 |---|---|---|---|---|
 | infrastructure repair inside the episode (rule 2) | cause `infra`, at most `AGENT_CRASH_ATTEMPTS` attempts | the same; the wall clock keeps running, the token limits keep counting across resumes | resumed: counted less `tokens_lost`; fresh: the lost attempt in `tokens_void` | `resumes`, `fresh_relaunches`, `previous_attempt_result` |
-| owed repair in a new job (`owed run --class infra` or `--class task`) | infrastructure left the run without an episode the agent ended (a cancelled job, a judge fault, an MCP that never connected at the start), or its task changed | the setup's own; a repair of a resubmission is that resubmission again, at its k | the replaced launch is void | a new `episodes` row with `launch`, `previous_launch_result` and `launch_kind` `infra` or `task` (`resubmit` for a repaired resubmission) |
+| owed repair in a new job (`owed run --class infra` or `--class task`) | infrastructure left the run without an episode the agent ended (a cancelled job, a judge fault, an MCP that never connected at the start), or its task changed; an `infra` repair at most once per run (`owed.MAX_RERUNS`), from nothing | the setup's own; a repair of a resubmission is that resubmission again, at its k | the replaced launch is void | a new `episodes` row with `launch`, `previous_launch_result` and `launch_kind` `infra` or `task` (`resubmit` for a repaired resubmission) |
 | resubmission (`owed run --class resubmit`) | a limit stopped the run before it had an answer, and the experiment sets `RESUBMISSION = '<k>x'`; once per run | k times the setup's own; refused when the partition would not grant k times the wall clock (pick a smaller k) | counted, on top of the first launch's | `launch_kind` `resubmit`, `token_scale` = `time_scale` = k |
+
+**An infrastructure repair runs once.** A run whose repair (`launch_kind` `infra`) also ended by infrastructure
+is owed nothing more and stays without an answer; `owed run --class infra` refuses it. A cancelled episode's grades
+deliver nothing (the analysis drops the episode whole), so a job cut off under an episode that had already
+submitted owes that run its repair like any other cancelled one.
 
 **Resubmission is off by default** (`RESUBMISSION = 'off'` in `[common]`). It is an experiment's declared choice,
 set only in its `[experiment.<name>.env]`, and every episode of the setup records it (`resubmission`), so an arm

@@ -5,9 +5,11 @@
 ``owed collect`` reads every job directory under the run roots: a run is delivered when a job graded it (not as a
 ``score_error`` or ``adhoc`` grade) or when its latest episode ended without a judge fault after it by the agent's own
 cause (``agent``), by infrastructure past its last allowed attempt (``relaunch_limit``) or by a limit (``limit``): an
-unsolved task. Otherwise it is owed as ``infra`` (a repair), as ``task`` when a final grade found its task changed
-since, and, only when the setup's ``RESUBMISSION`` is ``<k>x``, a limit-stopped run that is no resubmission itself is
-owed as ``resubmit`` (docs/matched_limits.md). ``owed run --class`` reruns one setup's owed runs of one class from its
+unsolved task. A grade of an episode the job cancelled delivers nothing: the analysis drops such an episode whole
+(:func:`hpcagent_bench.results.studies.drop_cancelled_episode_rows`). Otherwise it is owed as ``infra`` (a repair,
+at most :data:`MAX_RERUNS` of them per run), as ``task`` when a final grade found its task changed since, and, only
+when the setup's ``RESUBMISSION`` is ``<k>x``, a limit-stopped run that is no resubmission itself is owed as
+``resubmit`` (docs/matched_limits.md). ``owed run --class`` reruns one setup's owed runs of one class from its
 last launch env and filtered problems via ``submit_common.sh``: ``resubmit`` under k times the setup's limits, the
 others under the setup's own; every problem states its launch, how the one before ended and its ``launch_kind``.
 """
@@ -41,6 +43,7 @@ __all__ = [
     "BUDGET_RETURNCODES",
     "LAUNCH_DIR",
     "LIMIT_KEYS",
+    "MAX_RERUNS",
     "NO_RECORD",
     "SUBMIT_SCRIPT",
     "TASK_CHANGED_FINALS",
@@ -48,6 +51,7 @@ __all__ = [
     "OwedClass",
     "Run",
     "build_parser",
+    "cancelled_runs",
     "cmd_collect",
     "cmd_run",
     "collect_jobs",
@@ -68,6 +72,7 @@ __all__ = [
     "problem_run",
     "read_env",
     "regrade_dbs",
+    "repairs",
     "rerun_limits",
     "rerun_problems",
     "resubmission",
@@ -84,6 +89,10 @@ BUDGET_RETURNCODES = frozenset({RC_TIMEOUT, RC_TOKEN_BUDGET})
 
 #: What run_cluster.sh stages for a job's agents, beside the job's run directory.
 LAUNCH_DIR = ".agent-launch"
+
+#: How many infrastructure repairs (``owed run --class infra``, each a fresh episode in a new job) one run gets: a run
+#: whose repair also ended by infrastructure is owed nothing more and stays without an answer.
+MAX_RERUNS = 1
 
 
 class OwedClass(Coded):
@@ -170,9 +179,20 @@ def collect_jobs(roots: Iterable[pathlib.Path], excluded: set[str]) -> tuple[dic
     return by_identity, empty
 
 
+def cancelled_runs(job_dir: pathlib.Path) -> set[Run]:
+    """Every run whose episode in ``job_dir`` the job cancelled (the driver's marker beside its record)."""
+    cancelled: set[Run] = set()
+    for path in job_dir.glob(episodes.RECORD_GLOB):
+        record = episodes.read_record(path)
+        kernel = kernel_stem(record.kernel or "") if record is not None else ""
+        if record is not None and kernel and (path.parent / CANCELLED_MARKER).exists():
+            cancelled.add(Run(kernel, slot_of(record.episode_id)))
+    return cancelled
+
+
 def delivered_at(job_dir: pathlib.Path) -> dict[Run, int]:
     """Every run ``job_dir`` graded with the ``ts_ms`` of its newest such grade (a submission or a refused real
-    attempt; never a judge fault or an operator void)."""
+    attempt; never a judge fault, an operator void or a grade of an episode the job cancelled)."""
     kinds = ", ".join("?" * len(results_db.SUBMIT_KINDS))
     voided = " ".join("and g.reason not like ?" for _ in RERUN_PREFIXES)
     graded = shard_rows(
@@ -188,7 +208,9 @@ def delivered_at(job_dir: pathlib.Path) -> dict[Run, int]:
             *(f"{prefix}%" for prefix in RERUN_PREFIXES),
         ),
     )
-    return {Run(str(kernel), int(str(slot))): int(str(ts)) for kernel, slot, ts in graded}
+    cancelled = cancelled_runs(job_dir)
+    runs = {Run(str(kernel), int(str(slot))): int(str(ts)) for kernel, slot, ts in graded}
+    return {run: ts for run, ts in runs.items() if run not in cancelled}
 
 
 def delivered(job_dir: pathlib.Path) -> set[Run]:
@@ -308,10 +330,22 @@ def designed_runs(jobs: Sequence[Job], tag_kernels: Sequence[str]) -> list[Run]:
     return [Run(kernel, slot) for kernel in tag_kernels for slot in sorted(slots)]
 
 
+def repairs(job_dirs: Iterable[pathlib.Path]) -> collections.Counter[Run]:
+    """How many episodes of each run an infrastructure repair started (``launch_kind`` infra) over ``job_dirs``."""
+    started: collections.Counter[Run] = collections.Counter()
+    for job_dir in job_dirs:
+        for path in job_dir.glob(episodes.RECORD_GLOB):
+            record = episodes.read_record(path)
+            kernel = kernel_stem(record.kernel or "") if record is not None else ""
+            if record is not None and kernel and record.launch_kind == OwedClass.INFRA.text:
+                started[Run(kernel, slot_of(record.episode_id))] += 1
+    return started
+
+
 def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Path] = ()) -> dict[Run, OwedClass]:
     """Every run of ``runs`` the identity owes, in order, with its class: undelivered and not ended by the agent
-    (``infra`` if never started or a judge fault came after its latest episode started), or not delivered after a
-    task-changed final grade (``task``)."""
+    (``infra`` if never started or a judge fault came after its latest episode started, while it had fewer than
+    :data:`MAX_RERUNS` repairs), or not delivered after a task-changed final grade (``task``)."""
     done: dict[Run, int] = {}
     faults: dict[Run, int] = {}
     for job in jobs:
@@ -322,6 +356,7 @@ def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Pa
     shards = [shard for job in jobs for shard in merge_results.judge_shards(job.path)]
     changed = task_changed([*shards, *regrades], jobs[0].setup) if jobs else {}
     classes = latest_classes((job.path for job in jobs), bool(jobs) and resubmission(jobs[-1].path) > 0)
+    repaired = repairs(job.path for job in jobs)
     result: dict[Run, OwedClass] = {}
     for run in runs:
         if run in changed and done.get(run, changed[run]) <= changed[run]:
@@ -330,6 +365,8 @@ def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Pa
             start, owed_class = classes.get(run, (0, OwedClass.INFRA))
             if owed_class is None and faults.get(run, -1) >= start:
                 owed_class = OwedClass.INFRA
+            if owed_class is OwedClass.INFRA and repaired[run] >= MAX_RERUNS:
+                owed_class = None
             if owed_class is not None:
                 result[run] = owed_class
     return result
@@ -512,7 +549,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         if read_env(path).get("SETUP") == setup
     ]
-    history = launch_history(args.job_dir.parent / path.parent.name for path in launched)
+    job_dirs = [args.job_dir.parent / path.parent.name for path in launched]
+    history = launch_history(job_dirs)
+    if kind == OwedClass.INFRA.text:
+        spent = repairs(job_dirs)
+        capped = sorted(run.line() for run in runs if spent[run] >= MAX_RERUNS)
+        if capped:
+            raise SystemExit(
+                f"{setup}: {capped} already had {MAX_RERUNS} infrastructure repair(s); a run is repaired at most "
+                f"{MAX_RERUNS} time(s) (owed.MAX_RERUNS)"
+            )
     lines = [
         json.dumps(
             json.loads(line)
