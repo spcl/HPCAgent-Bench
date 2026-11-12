@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The library rule of docs/triton_authoring.md over every ``*_triton.py`` baseline, read with ``ast``.
 
-Top-level library work (dense GEMM, inverse, solve, norms, FFTs, contractions, scans) goes through CuPy and is
-declared in the module docstring by a ``Library: <cupy calls> for <what>`` paragraph naming every such call;
-``torch.linalg``, ``torch.fft`` transforms, ``torch.matmul`` / ``mm`` / ``bmm`` / ``einsum`` / ``tensordot`` /
-``cumsum`` and the ``@`` operator (which cannot say whose matmul it is) are refused.
+Host-level library work (dense GEMM, inverse, solve, norms, FFTs, contractions, reductions, arg-reductions, scans)
+goes through CuPy and is declared in the module docstring by a ``Library: <cupy calls> for <what>`` paragraph naming
+every such call; ``torch.linalg``, ``torch.fft`` transforms, the ``torch`` products and reductions (``matmul``,
+``dot``, ``einsum``, ``sum``, ``argmax``, ``cumsum``, ...) and the ``@`` operator (which cannot say whose matmul it is)
+are refused. A reduction spelled as a tensor method (``x.sum()``) cannot be told from a CuPy one without types, so
+only the documentation asks for it.
 """
 
 import ast
@@ -19,10 +21,10 @@ from hpcagent_bench import paths
 EXCEPTIONS: dict[str, str] = {}
 
 CUPY_PREFIXES = ("cupy.linalg.", "cupy.fft.", "cupyx.scipy.", "cupy.cublas.", "cupy.cuda.cublas.", "cupyx.cublas.")
-CUPY_CALLS = frozenset(
-    {"cupy.matmul", "cupy.dot", "cupy.vdot", "cupy.inner", "cupy.tensordot", "cupy.einsum", "cupy.cumsum"}
-)
-TORCH_CALLS = frozenset({"torch.matmul", "torch.mm", "torch.bmm", "torch.einsum", "torch.tensordot", "torch.cumsum"})
+REDUCTIONS = ("sum", "prod", "mean", "max", "min", "amax", "amin", "argmax", "argmin", "cumsum", "cumprod")
+PRODUCTS = ("dot", "vdot", "inner", "tensordot", "einsum", "matmul")
+CUPY_CALLS = frozenset(f"cupy.{name}" for name in (*REDUCTIONS, *PRODUCTS))
+TORCH_CALLS = frozenset(f"torch.{name}" for name in (*REDUCTIONS, *PRODUCTS, "mm", "bmm", "norm"))
 TORCH_PREFIXES = ("torch.linalg.", "torch.fft.")
 #: Index helpers, not transforms.
 TORCH_ALLOWED = frozenset({"torch.fft.fftfreq", "torch.fft.rfftfreq", "torch.fft.fftshift", "torch.fft.ifftshift"})
@@ -148,6 +150,9 @@ def test_each_refused_spelling_is_caught() -> None:
         ("import torch\nx = torch.fft.ifftn(a)\n", "torch.fft.ifftn"),
         ("import torch\nx = torch.einsum('ij,j->i', a, b)\n", "torch.einsum"),
         ("import torch\nx = torch.cumsum(a, 0)\n", "torch.cumsum"),
+        ("import torch\nx = torch.dot(a, b)\n", "torch.dot"),
+        ("import torch\nx = torch.argmax(a)\n", "torch.argmax"),
+        ("import torch\nx = torch.norm(a)\n", "torch.norm"),
         ("x = a @ b\n", "@ (line 1)"),
     ):
         assert expected in uses_of(source).forbidden, source
@@ -163,7 +168,8 @@ def test_cupy_calls_need_a_library_line_naming_them() -> None:
     assert violations(partial) == ["'Library:' does not name cupy.linalg.solve"]
     wrapped = '"""Kernel.\n\nLibrary: cupy.matmul,\ncupy.linalg.solve for the update\n\nMore.\n"""\n' + body
     assert violations(wrapped) == []
-    assert violations("import cupy\nx = cupy.from_dlpack(t) + cupy.sum(t)\n") == []
+    assert violations("import cupy\nx = cupy.from_dlpack(t) + cupy.abs(t)\n") == []
+    assert uses_of("import cupy\nx = cupy.sum(t)\n").cupy == {"cupy.sum"}
     assert violations("import torch\nk = torch.fft.fftfreq(8)\n") == []
 
 
