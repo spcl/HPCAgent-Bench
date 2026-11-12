@@ -36,9 +36,10 @@ def axis_taps(x, xx, y, z, s, mask, tap: tl.constexpr, LB: tl.constexpr, K):
 
 
 @triton.jit
-def hamiltonian_kernel(x, vloc, out, coef, LB: tl.constexpr, K, total, BLOCK: tl.constexpr):
+def hamiltonian_kernel(x, vloc, out, coef_ptr, LB: tl.constexpr, K, total, BLOCK: tl.constexpr):
     """out = coef * (-1/2 nabla^2 periodic 8th-order stencil)(x) + vloc * x on an (LB, LB, LB, K) block;
     coef = -half_inv_h2, and the three axes each add C0 on the diagonal."""
+    coef = tl.load(coef_ptr)
     e = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = e < total
     s = e % K
@@ -68,8 +69,9 @@ def gather_kernel(src, dst, ox, oy, oz, N, LB: tl.constexpr, BLOCK: tl.constexpr
 
 
 @triton.jit
-def density_patch_kernel(x, occ, rho, ox, oy, oz, a, N, K, LB: tl.constexpr, BLOCK: tl.constexpr):
+def density_patch_kernel(x, occ, rho, ox, oy, oz, a_ptr, N, K, LB: tl.constexpr, BLOCK: tl.constexpr):
     """rho[(o + r) % N] += a * sum_k occ_k x[r, k]^2 (Gen_dens; one fragment, so no two points collide)."""
+    a = tl.load(a_ptr)
     p = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = p < LB * LB * LB
     dens = tl.zeros((BLOCK,), dtype=tl.float32).to(x.dtype.element_ty)
@@ -111,7 +113,9 @@ def hpsi(X, vloc, proj_f, dij_f, half_inv_h2):
     X = X.contiguous()
     out = torch.empty_like(X)
     total = X.numel()
-    hamiltonian_kernel[(triton.cdiv(total, BLOCK),)](X, vloc, out, -half_inv_h2, lb, k, total, BLOCK=BLOCK)
+    # An fp64 scalar travels in a tensor: a Python float kernel argument is passed as fp32.
+    coef = torch.tensor([-half_inv_h2], dtype=X.dtype)
+    hamiltonian_kernel[(triton.cdiv(total, BLOCK),)](X, vloc, out, coef, lb, k, total, BLOCK=BLOCK)
     flat = X.reshape(-1, k)
     overlap = matmul(proj_f.T, flat)  # <beta_q|X>   (nproj, nstate)
     return out + matmul(proj_f, matmul(dij_f, overlap)).reshape(X.shape)
@@ -191,7 +195,6 @@ def ls3df_scf(dvol, half_inv_h2, tol, nscf, mix, m, offsets, alpha, occ, V_ion, 
     h = math.sqrt(0.5 / half_inv_h2)
     proj_flat = proj.reshape(nfrag, Lb * Lb * Lb, nproj)
     offs = offsets.cpu().tolist()
-    alphas = alpha.cpu().tolist()
     patch_grid = (triton.cdiv(Lb * Lb * Lb, BLOCK),)
 
     rho_in = rho.clone()
@@ -215,7 +218,7 @@ def ls3df_scf(dvol, half_inv_h2, tol, nscf, mix, m, offsets, alpha, occ, V_ion, 
             X, w = rayleigh_ritz(vloc, pf, df, half_inv_h2, Y)
             psi_frag[f] = X
             density_patch_kernel[patch_grid](
-                psi_frag[f], occ, rho_out, ox, oy, oz, alphas[f], N, nstate, Lb, BLOCK=BLOCK
+                psi_frag[f], occ, rho_out, ox, oy, oz, alpha[f:], N, nstate, Lb, BLOCK=BLOCK
             )
         rho_out = torch.clamp(rho_out, min=0.0)
         q = float(rho_out.sum()) * dvol
