@@ -91,7 +91,8 @@ def test_compile_failure_status_carries_the_compiler_error(monkeypatch: pytest.M
     real = subprocess.run
 
     def fake(cmd: list, *a: object, **k: object) -> subprocess.CompletedProcess:
-        if cmd and cmd[0] in ("gcc", "g++", "gfortran"):
+        # The driver is resolved (a path, or gcc-<major>), so match its program name
+        if cmd and pathlib.Path(str(cmd[0])).name.split("-")[0] in ("gcc", "g++", "gfortran"):
             return _proc(stderr="prog.c:3:1: error: unknown type name 'nope'")
         return real(cmd, *a, **k)
 
