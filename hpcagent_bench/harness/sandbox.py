@@ -71,7 +71,7 @@ __all__ = [
     "preprocessed_name",
     "requested_libraries",
     "resolve_shared",
-    "run_file",
+    "run_path",
     "safe_link",
     "sandbox_dir_usable",
     "sandbox_parent_dir",
@@ -179,16 +179,16 @@ def resolve_shared(path: str, root: pathlib.Path | None = None) -> pathlib.Path:
     return resolved
 
 
-def run_file(recorded: str, db: pathlib.Path) -> pathlib.Path:
-    """The file a grade of the results DB ``db`` names at ``recorded``, the path its judge read: itself when it is a
-    file or lies outside the judge's shared mount (:data:`DEFAULT_SHARED_DIR`), else the first file at that path under
-    a run's ``shared`` folder above ``db``."""
+def run_path(recorded: str, db: pathlib.Path) -> pathlib.Path:
+    """The file or folder a grade of the results DB ``db`` names at ``recorded``, the path its judge read: itself when
+    it exists or lies outside the judge's shared mount (:data:`DEFAULT_SHARED_DIR`), else the first one at that path
+    under a run's ``shared`` folder above ``db``. Copy, verify and re-grade all locate a graded path by this rule."""
     named = pathlib.Path(recorded)
-    if named.is_file() or not named.is_relative_to(DEFAULT_SHARED_DIR):
+    if named.exists() or not named.is_relative_to(DEFAULT_SHARED_DIR):
         return named
     relative = named.relative_to(DEFAULT_SHARED_DIR)
     kept = (parent / run_layout.SHARED_DIRNAME / relative for parent in db.resolve().parents)
-    return next((file for file in kept if file.is_file()), named)
+    return next((path for path in kept if path.exists()), named)
 
 
 def read_resolved(resolved: pathlib.Path) -> str:

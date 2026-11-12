@@ -1,12 +1,14 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Collect an experiment's recorded data into one self-describing directory, verify it, archive it (copy-only:
-sources read-only, overlapping outputs refused, DBs copied as consistent snapshots, with every prebuilt library a
-grade ran). Verify checks every file by hash and every graded source and library by its own hash.
+sources read-only, overlapping outputs refused, DBs copied as consistent snapshots, with every file a re-grade reads:
+prebuilt libraries, agent libraries, a pre-release shard's stored sources). Verify checks every file by hash and every
+graded source and library by its own hash; ``archive --remove-sources`` is the only removal of run data.
 
     hpcagent-bench collect copy --out $DATA          # run roots + their DBs
     hpcagent-bench collect verify $DATA              # re-hash every file, quick_check every DB
     hpcagent-bench collect archive $DATA             # verify, then $DATA.tar.zst (or .tar.gz)
+    hpcagent-bench collect archive --remove-sources $DATA   # ... check the tar, then remove the collected roots
 """
 
 import argparse
@@ -22,11 +24,12 @@ import subprocess
 import sys
 import tarfile
 from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Set as AbstractSet
 
 from hpcagent_agent.coded import Coded
 
 from hpcagent_bench import experiments, paths
-from hpcagent_bench.results import data_guard
+from hpcagent_bench.results import convert_v0, data_guard
 from hpcagent_bench.cache_files import file_sha256
 from hpcagent_bench.harness import results_db, sandbox
 from hpcagent_bench.run_layout import MERGE_FAILED_NAME
@@ -39,9 +42,12 @@ __all__ = [
     "SOURCES",
     "SUMS",
     "DataSource",
+    "Graded",
     "Home",
+    "Need",
     "Root",
     "archive",
+    "archive_problems",
     "build_parser",
     "check_roots",
     "copy",
@@ -49,15 +55,19 @@ __all__ = [
     "copy_file",
     "env_script",
     "files_of",
-    "graded_libraries",
+    "graded",
+    "graded_of",
     "graded_problems",
     "in_copy",
     "is_db",
-    "library_jobs",
+    "listed_roots",
     "main",
+    "needed_jobs",
     "quick_check",
+    "remove_sources",
     "roots_of",
     "skipped_dir",
+    "uncopied",
     "verify",
     "walk",
     "wanted",
@@ -188,10 +198,73 @@ def env_script(roots: Sequence[Root]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def graded_libraries(conn: sqlite3.Connection) -> list[tuple[str, str]]:
-    """``(library, sha256)`` of every prebuilt library a grade of the results DB ``conn`` ran."""
-    rows = conn.execute("SELECT DISTINCT library, library_hash FROM grades WHERE library != ''")
-    return [(str(library), str(digest)) for library, digest in rows]
+@dataclasses.dataclass(frozen=True, slots=True)
+class Need:
+    """A file a re-grade reads besides its results DB, at the path it reads it (:func:`sandbox.run_path`)."""
+
+    path: pathlib.Path
+    #: Its sha256; ``""`` for an agent folder, whose grades recorded only a digest of its files' times.
+    sha256: str
+    what: str
+    #: A source text: a copy holds it as well in any results DB storing a text of that hash.
+    text: bool = False
+
+    def files(self) -> list[pathlib.Path]:
+        """The files of this need where it is: the file, or an agent folder's ``lib``/``include``."""
+        if self.sha256:
+            return [self.path] if self.path.is_file() else []
+        return sorted(file for sub in ("lib", "include") for file in (self.path / sub).rglob("*") if file.is_file())
+
+    def met(self, kept: pathlib.Path | None, texts: AbstractSet[str]) -> bool:
+        """Whether a copy holds this need at ``kept``, or as one of the source ``texts`` its results DBs store."""
+        if self.text and self.sha256 in texts:
+            return True
+        if kept is None:
+            return False
+        if self.sha256:
+            return kept.is_file() and file_sha256(kept) == self.sha256
+        return sandbox.library_digest(kept) != ""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Graded:
+    """What a re-grade of one results DB's grades reads (:func:`graded`)."""
+
+    #: Sources a grade names whose stored text is missing or does not hash to its key.
+    unhashed: list[str]
+    needs: list[Need]
+    #: The hashes of every source text the DB stores whole.
+    texts: frozenset[str]
+
+
+def graded(db: pathlib.Path, *, finished: bool) -> Graded:
+    """What a re-grade of the results DB ``db`` reads besides its rows: every prebuilt library a grade ran, every agent
+    folder whose ``lib``/``include`` a grade linked, and every source a pre-release shard keeps in its content store
+    (:func:`convert_v0.store_dir`). Raises SchemaVersionError (NoResultsError: no results at all)."""
+    try:
+        with results_db.reading(db, finished=finished) as conn:
+            unhashed = results_db.unhashed_sources(conn)
+            libraries = conn.execute("SELECT DISTINCT library, library_hash FROM grades WHERE library != ''").fetchall()
+            folders = conn.execute("SELECT DISTINCT agent_root FROM grades WHERE agent_libs != ''").fetchall()
+            texts = frozenset(
+                str(digest)
+                for digest, text in conn.execute("SELECT hash, text FROM sources")
+                if results_db.source_hash(str(text)) == digest
+            )
+    except results_db.SchemaVersionError as not_current:
+        try:
+            with convert_v0.reading_v0(db) as conn:
+                stored = conn.execute("SELECT DISTINCT hash, path FROM sources").fetchall()
+        except ValueError:
+            raise not_current from None
+        store = convert_v0.store_dir(db)
+        needs = [
+            Need(store / str(path), str(digest), f"pre-release source {digest}", text=True) for digest, path in stored
+        ]
+        return Graded([], needs, frozenset())
+    needs = [Need(sandbox.run_path(str(lib), db), str(digest), f"library {lib}") for lib, digest in libraries]
+    needs += [Need(sandbox.run_path(str(root), db), "", f"agent libraries {root}") for (root,) in folders]
+    return Graded(unhashed, needs, texts)
 
 
 def in_copy(file: pathlib.Path, homes: Sequence[Home]) -> pathlib.Path | None:
@@ -200,33 +273,31 @@ def in_copy(file: pathlib.Path, homes: Sequence[Home]) -> pathlib.Path | None:
     return next((dest / real.relative_to(home) for home, dest in homes if data_guard.within(real, home)), None)
 
 
-def library_jobs(
+def needed_jobs(
     roots: Sequence[Root], dbs: Iterable[pathlib.Path], out: pathlib.Path
 ) -> dict[pathlib.Path, pathlib.Path]:
-    """``copy -> file`` of every prebuilt library a grade of the results DBs ``dbs`` ran that lies in one of ``roots``,
-    at its place in that root: where a re-grade of the copy looks for it (:func:`sandbox.run_file`)."""
+    """``copy -> file`` of every file a grade of the results DBs ``dbs`` needs (:func:`graded`) that lies in one
+    of ``roots``, at its place in that root: where a re-grade of the copy looks for it."""
     homes = [(data_guard.real(root.path), out / root.dest) for root in roots]
     found: dict[pathlib.Path, pathlib.Path] = {}
     for db in dbs:
         try:
-            with results_db.reading(db, finished=results_db.finished_db(db)) as conn:
-                libraries = graded_libraries(conn)
+            needs = graded(db, finished=results_db.finished_db(db)).needs
         except (results_db.SchemaVersionError, sqlite3.DatabaseError):
-            continue  # not a results DB of this schema: verify reports it
-        for library, _ in libraries:
-            file = sandbox.run_file(library, db)
-            if file.is_file() and (kept := in_copy(file, homes)) is not None:
+            continue  # not a results DB: verify reports it
+        for file in (file for need in needs for file in need.files()):
+            if (kept := in_copy(file, homes)) is not None:
                 found[kept] = file
     return found
 
 
 def copy(roots: Sequence[Root], out: pathlib.Path, *, threads: int = 8) -> int:
-    """Copy every collected file of ``roots`` and every library their grades ran under ``out``; write SOURCES.tsv,
-    env.sh, SHA256SUMS."""
+    """Copy every collected file of ``roots`` and every file their grades need (:func:`graded`) under ``out``;
+    write SOURCES.tsv, env.sh, SHA256SUMS."""
     check_roots(roots, out)
     out.mkdir(parents=True, exist_ok=True)
     jobs = {out / r.dest / rel: r.path.absolute() / rel for r in roots for rel in walk(r)}
-    jobs |= library_jobs(roots, [src for dst, src in jobs.items() if is_db(dst)], out)
+    jobs |= needed_jobs(roots, [src for dst, src in jobs.items() if is_db(dst)], out)
     with concurrent.futures.ThreadPoolExecutor(threads) as pool:
         list(pool.map(lambda job: copy_file(job[1], job[0]), jobs.items()))
     (out / SOURCES).write_text("".join(f"{r.kind.text}\t{r.dest}\t{r.path.resolve()}\n" for r in roots))
@@ -271,28 +342,35 @@ def verify(out: pathlib.Path, *, threads: int = 8) -> list[str]:
     return problems + graded_problems(out)
 
 
-def graded_problems(out: pathlib.Path) -> list[str]:
-    """What a re-grade of the copy ``out`` would not find, per results DB: a source whose text is missing or does not
-    hash to its key, a prebuilt library a grade ran that the copy does not hold with that library's sha256."""
-    listed = (out / SOURCES).read_text().splitlines() if (out / SOURCES).is_file() else []
-    homes = [(pathlib.Path(path), out / dest) for _, dest, path in (line.split("\t") for line in listed if line)]
+def graded_of(out: pathlib.Path) -> tuple[dict[pathlib.Path, Graded], list[str]]:
+    """:func:`graded` of every results DB of the copy ``out``, and the DBs it could not read."""
+    found: dict[pathlib.Path, Graded] = {}
     problems: list[str] = []
     for db in (path for path in files_of(out) if is_db(path)):
-        rel = db.relative_to(out).as_posix()
         try:
-            with results_db.reading(db, finished=True) as conn:
-                unhashed, libraries = results_db.unhashed_sources(conn), graded_libraries(conn)
+            found[db] = graded(db, finished=True)
         except results_db.NoResultsError:
             continue
         except (results_db.SchemaVersionError, sqlite3.DatabaseError) as exc:
-            problems.append(f"graded sources of {rel} not checked: {exc}")
-            continue
-        problems += [f"source {digest} of {rel}: missing, or its text does not hash to it" for digest in unhashed]
-        for library, digest in libraries:
-            file = sandbox.run_file(library, db)
-            kept = file if data_guard.within(data_guard.real(file), data_guard.real(out)) else in_copy(file, homes)
-            if kept is None or not kept.is_file() or file_sha256(kept) != digest:
-                problems.append(f"library {library} ({digest}) of {rel}: not in the copy with that sha256")
+            problems.append(f"graded sources of {db.relative_to(out).as_posix()} not checked: {exc}")
+    return found, problems
+
+
+def graded_problems(out: pathlib.Path) -> list[str]:
+    """What a re-grade of the copy ``out`` would not find, per results DB: a source whose text is missing or does not
+    hash to its key, and a need (:func:`graded`) the copy does not hold."""
+    homes = [(root.path, dest) for root, dest in listed_roots(out)] if (out / SOURCES).is_file() else []
+    found, problems = graded_of(out)
+    texts = frozenset[str]().union(*(entry.texts for entry in found.values()))
+    for db, entry in found.items():
+        rel = db.relative_to(out).as_posix()
+        problems += [f"source {digest} of {rel}: missing, or its text does not hash to it" for digest in entry.unhashed]
+        for need in entry.needs:
+            inside = data_guard.within(data_guard.real(need.path), data_guard.real(out))
+            if not need.met(need.path if inside else in_copy(need.path, homes), texts):
+                problems.append(
+                    f"{need.what} of {rel}: not in the copy" + (f" with sha256 {need.sha256}" if need.sha256 else "")
+                )
     return problems
 
 
@@ -318,6 +396,79 @@ def archive(out: pathlib.Path) -> pathlib.Path:
     return target
 
 
+def archive_problems(out: pathlib.Path, target: pathlib.Path) -> list[str]:
+    """Why the tar ``target`` is not a whole copy of ``out``: a file of ``out`` it does not list, or bytes that differ
+    (``tar --diff``); a tar that cannot be read is one problem."""
+    codec = ["-I", "zstd"] if target.name.endswith(".zst") else ["-z"]
+    listed = subprocess.run(["tar", *codec, "-tf", str(target)], capture_output=True, text=True, check=False)
+    differ = subprocess.run(
+        ["tar", *codec, "-C", str(out.parent), "-df", str(target)], capture_output=True, text=True, check=False
+    )
+    if listed.returncode or differ.returncode:
+        return [f"{target} does not match {out}: {(listed.stderr + differ.stdout + differ.stderr).strip()}"]
+    names = set(listed.stdout.splitlines())
+    return [
+        f"{target} lacks {rel}"
+        for p in out.rglob("*")
+        if p.is_file() and (rel := f"{out.name}/{p.relative_to(out).as_posix()}") not in names
+    ]
+
+
+def listed_roots(out: pathlib.Path) -> list[tuple[Root, pathlib.Path]]:
+    """Every root ``out`` was collected from (its SOURCES.tsv) with where its copy lies."""
+    lines = (line.split("\t") for line in (out / SOURCES).read_text().splitlines() if line)
+    return [(Root(kind=DataSource.parse(kind), path=pathlib.Path(path)), out / dest) for kind, dest, path in lines]
+
+
+def uncopied(out: pathlib.Path) -> list[str]:
+    """What removing the roots of ``out`` would lose, checked against the roots as they are now: a file collect takes
+    that the copy lacks or holds other bytes of, a grade or graded unit of a results DB its copy lacks, a file a grade
+    needs (:func:`graded`) that the copy does not hold with its sha256."""
+    listed = listed_roots(out)
+    homes = [(data_guard.real(root.path), dest) for root, dest in listed]
+    texts = frozenset[str]().union(*(entry.texts for entry in graded_of(out)[0].values()))
+    problems: list[str] = []
+    for root, dest in listed:
+        for rel in walk(root):
+            src, kept = root.path / rel, dest / rel
+            if not kept.is_file() or (not is_db(rel) and file_sha256(src) != file_sha256(kept)):
+                problems.append(f"{src}: not in the copy as it is now")
+                continue
+            if not is_db(rel):
+                continue
+            try:
+                lost = results_db.held_units(src) - results_db.held_units(kept)
+            except (results_db.SchemaVersionError, sqlite3.DatabaseError):
+                lost = set()  # a pre-release shard: its graded sources are its needs below
+            problems += [f"{src}: graded unit {unit} not in the copy" for unit in sorted(lost)]
+            try:
+                needs = graded(src, finished=results_db.finished_db(src)).needs
+            except (results_db.SchemaVersionError, sqlite3.DatabaseError):
+                continue
+            problems += [
+                f"{need.what} of {src}: not in the copy"
+                for need in needs
+                if not need.met(in_copy(need.path, homes), texts)
+            ]
+    return problems
+
+
+def remove_sources(out: pathlib.Path) -> list[pathlib.Path]:
+    """Remove the roots ``out`` was collected from, whole, and return them: the one way run data is removed
+    (:func:`data_guard.remove`). Only for a copy that passed :func:`verify` and is archived (:func:`archive_problems`);
+    refused (SystemExit) while :func:`uncopied` finds anything, and for a protected root itself (collect and remove its
+    runs one by one)."""
+    roots = [root.path for root, _ in listed_roots(out)]
+    protected = set(data_guard.protected_roots())
+    if refused := [root for root in roots if data_guard.real(root) in protected]:
+        raise SystemExit(f"{', '.join(map(str, refused))}: a protected root itself is not removed")
+    if problems := uncopied(out):
+        raise SystemExit("nothing removed:\n" + "\n".join(problems))
+    for root in roots:
+        data_guard.remove(root)
+    return roots
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="hpcagent-bench collect", description=(__doc__ or "").split("\n\n")[0])
     sub = ap.add_subparsers(dest="action", required=True)
@@ -331,10 +482,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="run root; repeatable (default the experiment runs root)",
     )
     cp.add_argument("--db-root", action="append", default=[], metavar="DIR", help="directory of SQLite DBs; repeatable")
-    for p in (
-        cp,
-        *(sub.add_parser(name, help=h) for name, h in (("verify", "re-check a copy"), ("archive", "verify, then tar"))),
-    ):
+    ar = sub.add_parser("archive", help="verify, then tar")
+    ar.add_argument(
+        "--remove-sources",
+        action="store_true",
+        help="once the tar is checked against the copy, remove the collected roots (the only way to remove run data)",
+    )
+    for p in (cp, sub.add_parser("verify", help="re-check a copy"), ar):
         p.add_argument("--threads", type=int, default=8)
         if p is not cp:
             p.add_argument("out", type=pathlib.Path)
@@ -356,7 +510,14 @@ def main(argv: Iterable[str] | None = None) -> int:
                 return 1
             print(f"verified {args.out}")
             if args.action == "archive":
-                print(f"archived {archive(args.out)}; the sources are untouched")
+                target = archive(args.out)
+                if not args.remove_sources:
+                    print(f"archived {target}; the sources are untouched")
+                    return 0
+                if problems := archive_problems(args.out, target):
+                    print("\n".join(problems), file=sys.stderr)
+                    return 1
+                print(f"archived {target}; removed {', '.join(map(str, remove_sources(args.out)))}")
             return 0
     raise AssertionError(args.action)
 
