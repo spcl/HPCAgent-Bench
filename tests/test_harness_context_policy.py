@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One context policy for every harness: no episode may die on the window.
 
-``harnesses.context_policy`` gives the runners L = min(served window, 262144), the reply cap
-R = min(launcher cap, L // 8) and the compaction trigger T = L - R - round(0.12 * L);
+``harnesses.context_policy`` gives the runners L = min(served window, 262144), the reply cap R (one value for
+every window, [common]'s CLAUDE_CODE_MAX_OUTPUT_TOKENS) and the compaction trigger T = L - R - round(0.12 * L);
 ``agent_driver.claude_context_env`` gives claude the same three numbers through the CLI's own
 variables. Two computations of one policy, so this holds them equal on every committed setup and on
 the reply caps a launcher may configure: a harness comparison must not also compare compaction
@@ -18,11 +18,11 @@ import pytest
 from tests.env_render import BASES, rendered
 from tests.fresh_module import fresh
 
-#: (served window, launcher reply cap) -> (L, R, T).
+#: (served window, reply cap) -> (L, R, T): the reply cap is the same at every window.
 POLICY = {
     (262144, 32768): (262144, 32768, 197919),
     (262144, 16384): (262144, 16384, 214303),
-    (131072, 32768): (131072, 16384, 98959),
+    (131072, 32768): (131072, 32768, 82575),
     (1048576, 32768): (262144, 32768, 197919),
 }
 
@@ -38,9 +38,9 @@ def harnesses_fixture() -> ModuleType:
 
 
 def env_values(path: str) -> dict[str, str]:
-    """The flat KEY=VALUE environment a job sources for base ``path``, quotes stripped, with the launcher's
-    reply cap (run_cluster.sh exports it)."""
-    values = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768"}
+    """The flat KEY=VALUE environment a job sources for base ``path``, quotes stripped ([common] sets the reply
+    cap)."""
+    values: dict[str, str] = {}
     for line in rendered(path).splitlines():
         key, _, value = line.partition("=")
         values[key] = value.strip().strip('"')
@@ -84,6 +84,15 @@ def test_the_smallest_window_any_source_names_wins(harnesses: ModuleType) -> Non
         "VLLM_EXTRA_ARGS": "--dtype auto --max-model-len=131072 --gpu-memory-utilization 0.70",
     }
     assert harnesses.served_context(environment) == 131072
+
+
+def test_every_setup_sends_every_server_the_one_reply_cap_of_common(harnesses: ModuleType) -> None:
+    """One reply cap for vLLM and SGLang alike, whatever window the model is served at: [common] sets it, so a
+    model never answers at another length than another because of its server. The one exception is the run-protocol
+    smoke, whose own experiment lowers it so that replies are cut."""
+    reply = {path: harnesses.context_policy(env_values(path)).reply for path in BASES}
+    assert {cap for path, cap in reply.items() if not path.startswith("smoke-protocol:")} == {32768}
+    assert {cap for path, cap in reply.items() if path.startswith("smoke-protocol:")} == {2048}
 
 
 def test_a_setup_naming_no_window_gets_the_policy_cap(harnesses: ModuleType) -> None:

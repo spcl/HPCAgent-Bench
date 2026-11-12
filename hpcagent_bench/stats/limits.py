@@ -81,7 +81,8 @@ PROTOCOL_COLUMNS: tuple[str, ...] = (
     "episode_resubmission",
     "episode_crash_relaunch",
     "episode_crash_attempts",
-    "episode_reply_cap_resumes",
+    "episode_reply_cap",
+    "episode_auto_submit",
 )
 #: The episode-row columns of what infrastructure repair cost a setup, totalled per setup in the settings sidecar.
 REPAIR_COLUMNS: tuple[str, ...] = ("episode_resumes", "episode_fresh_relaunches", "tokens_lost")
@@ -121,11 +122,14 @@ class Limits(NamedTuple):
     source: str = ""
     #: The setup's ``RESUBMISSION`` (``off`` or ``<k>x``); ``""`` = not recorded.
     resubmission: str = ""
-    #: How infrastructure failures were repaired: ``AGENT_CRASH_RELAUNCH``, ``AGENT_CRASH_ATTEMPTS`` and
-    #: ``AGENT_REPLY_CAP_RESUMES``; ``""`` = not recorded.
+    #: How infrastructure failures were repaired: ``AGENT_CRASH_RELAUNCH`` and ``AGENT_CRASH_ATTEMPTS``; ``""`` = not
+    #: recorded.
     crash_relaunch: str = ""
     crash_attempts: str = ""
-    reply_cap_resumes: str = ""
+    #: Every request's reply cap (``CLAUDE_CODE_MAX_OUTPUT_TOKENS``) and what the harness submits for an episode with
+    #: no /submit of its own (``AGENT_AUTO_SUBMIT``); ``""`` = not recorded (schema 27 and earlier).
+    reply_cap: str = ""
+    auto_submit: str = ""
 
     @property
     def caps(self) -> tuple[int, int, int]:
@@ -248,17 +252,7 @@ def setup_limits(observations: "pd.DataFrame") -> dict[str, SetupLimits]:
         rows = mine & recorded
         for values in zip(*(column[rows] for column in limits), *(column[rows] for column in protocol), strict=True):
             tokens, output_tokens, seconds, *rules = values
-            source, resubmission, crash_relaunch, crash_attempts, reply_cap_resumes = (str(rule) for rule in rules)
-            key = Limits(
-                int(tokens),
-                int(output_tokens),
-                int(seconds),
-                source,
-                resubmission,
-                crash_relaunch,
-                crash_attempts,
-                reply_cap_resumes,
-            )
+            key = Limits(int(tokens), int(output_tokens), int(seconds), *(str(rule) for rule in rules))
             counts[key] = counts.get(key, 0) + 1
         out[setup] = SetupLimits(
             counts=counts,
@@ -501,7 +495,7 @@ def pair_columns(frame: "pd.DataFrame", by_setup: Mapping[str, SetupLimits]) -> 
 
 def settings_block(by_setup: Mapping[str, SetupLimits]) -> dict[str, dict[str, object]]:
     """Per setup, what a table's settings sidecar states about the rules its episodes ran under: each recorded set of
-    limits with its run protocol (source, resubmission, crash relaunch mode, attempt and reply-cap bounds) and
+    limits with its run protocol (source, resubmission, crash relaunch mode, attempt bound, reply cap, auto-submit) and
     episode count; the episodes that record none, ran under scaled limits, were resubmissions (whose answer is a
     second chance's) or record no run protocol; and what infrastructure repair cost (resumes, fresh relaunches,
     lost tokens)."""

@@ -31,7 +31,6 @@ COMMON_VARS = (
     "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS",
     "CLAUDE_STREAM_IDLE_TIMEOUT_MS",
     "API_FORCE_IDLE_TIMEOUT",
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
 )
 
 #: The launcher's default for each of them. The idle watchdog is the wall that fires first in Claude
@@ -48,7 +47,6 @@ LAUNCHER_DEFAULTS = {
     # The event watchdog takes the SAME derived number, never a second one.
     "CLAUDE_STREAM_IDLE_TIMEOUT_MS": "${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS}",
     "API_FORCE_IDLE_TIMEOUT": "0",
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768",
 }
 
 #: The rungs each model's server accepts, lowest first, whether that server is a local SGLang/vLLM

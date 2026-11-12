@@ -99,7 +99,8 @@ class EndReason(Coded):
     API_TIMEOUT = enum.auto()
     ERROR = enum.auto()
     #: The last model call generated the whole reply cap (reasoning included): its reply was cut, so it carried no
-    #: complete tool call, and the run ended on that (:func:`run_and_record`). The driver's reply-cap rule applies.
+    #: complete tool call, and the run ended on that (:func:`run_and_record`): no failure, the driver continues the
+    #: run from its checkpoint.
     OUTPUT_CAP = enum.auto()
 
 
@@ -596,8 +597,8 @@ def write_end(workdir: pathlib.Path, reason: EndReason, turns: int, detail: str,
 
 def cap_end(reason: EndReason, detail: str, usage_log: UsageLog, cap: int) -> tuple[EndReason, str]:
     """``reason`` and ``detail``, or :attr:`EndReason.OUTPUT_CAP` when the call the run ended right after generated
-    the whole reply cap: a cut reply carries no complete tool call, so whatever the harness made of it is the reply
-    cap, not the agent's choice. :func:`run_and_record` applies it to an ``error`` end (OpenHands' stuck detector
+    the whole reply cap: a cut reply carries no complete tool call, so the end is named for the cut reply, whatever
+    the harness made of it. :func:`run_and_record` applies it to an ``error`` end (OpenHands' stuck detector
     after empty replies, mini-SWE-agent's format errors); a runner whose finish is a reply that calls no tool (the
     Agents SDK) applies it to its ``finished``."""
     if not usage_log.calls or usage_log.last_generated < cap:

@@ -47,7 +47,6 @@ __all__ = [
     "OPEN_MESSAGE_KEY",
     "PROVIDER_CACHE_DISCOUNT",
     "SYNTHETIC_MODEL",
-    "TRUNCATED_STOP_REASON",
     "USAGE_EVENT_MARKERS",
     "USAGE_FIELDS",
     "USAGE_JSONL_SOURCE",
@@ -83,7 +82,7 @@ __all__ = [
     "main",
     "model_usage_totals",
     "numbered_attempts",
-    "request_end",
+    "request_completed",
     "resolve_output",
     "stream_message_id",
     "transcripts",
@@ -205,9 +204,10 @@ USAGE_EVENT_MARKERS: tuple[str, ...] = (
 
 #: The driver's own line in a claude transcript where it resumed the SAME session after a crash
 #: (``agent_driver.resume_marker``): the next leg continues this transcript's context and its counts. The
-#: request in flight at the failure (a ``message_start`` with no ``message_stop``, or one the server cut at the
-#: reply cap) left nothing in the resumed context: every fold drops it at this line and reports it as LOST
-#: (:data:`LOST_MESSAGE_KEY`, ``lost_effective``), never in the cost and never hidden.
+#: request in flight at the failure (a ``message_start`` with no ``message_stop``) left nothing in the resumed
+#: context: every fold drops it at this line and reports it as LOST (:data:`LOST_MESSAGE_KEY`, ``lost_effective``),
+#: never in the cost and never hidden. A reply the server cut at the reply cap completed (its ``message_stop``) and
+#: stays in the context the CLI continues from: counted like any other.
 RESUME_SUBTYPE = "driver_resume"
 
 
@@ -301,24 +301,10 @@ def stream_message_id(event: dict[str, object]) -> str | None:
     return str(found) if isinstance(found, str) and found else None
 
 
-#: A request's ``stop_reason`` when the server cut its reply at the reply cap (``max_tokens``): it failed, like a
-#: request the connection lost.
-TRUNCATED_STOP_REASON = "max_tokens"
-
-
-def request_end(event: dict[str, object]) -> bool | None:
-    """How ``event`` ends the request in flight: True for its ``message_stop`` (completed), False for a
-    ``message_delta`` whose ``stop_reason`` is :data:`TRUNCATED_STOP_REASON` (failed), None for anything else.
-    Either shape: the raw stream event or the CLI's ``stream_event`` envelope around it."""
-    inner = stream_event_body(event)
-    if inner.get("type") == "message_stop":
-        return True
-    if (
-        inner.get("type") == "message_delta"
-        and as_block(inner.get("delta")).get("stop_reason") == TRUNCATED_STOP_REASON
-    ):
-        return False
-    return None
+def request_completed(event: dict[str, object]) -> bool:
+    """Whether ``event`` is the ``message_stop`` that completes the request in flight, in either shape: the raw
+    stream event or the CLI's ``stream_event`` envelope around it."""
+    return stream_event_body(event).get("type") == "message_stop"
 
 
 def delta_total(series: list[int]) -> tuple[int, str]:
@@ -420,19 +406,18 @@ OPEN_MESSAGE_KEY = "open-message:"
 #: :func:`lost_total`, excluded from every other total.
 LOST_MESSAGE_KEY = "lost-message:"
 
-#: :data:`OPEN_MESSAGE_KEY` states: streaming, completed (its ``message_stop``), failed (cut at the reply cap).
-OPEN, COMPLETED, TRUNCATED = 0, 1, -1
+#: :data:`OPEN_MESSAGE_KEY` states: streaming, completed (its ``message_stop``).
+OPEN, COMPLETED = 0, 1
 
 
 def open_keys(by_message: dict[str, int]) -> list[str]:
     return [key for key in by_message if key.startswith(OPEN_MESSAGE_KEY)]
 
 
-def note_request_end(by_message: dict[str, int], completed: bool) -> None:
-    """Mark the open request completed or truncated; a truncated one stays truncated."""
+def note_request_completed(by_message: dict[str, int]) -> None:
+    """Mark the open request completed."""
     for key in open_keys(by_message):
-        if by_message[key] != TRUNCATED:
-            by_message[key] = COMPLETED if completed else TRUNCATED
+        by_message[key] = COMPLETED
 
 
 def drop_in_flight(by_message: dict[str, int]) -> None:
@@ -453,9 +438,8 @@ def track_open_message(event: dict[str, object], by_message: dict[str, int]) -> 
             del by_message[key]
         by_message[OPEN_MESSAGE_KEY + opened] = OPEN
         return True
-    end = request_end(event)
-    if end is not None:
-        note_request_end(by_message, end)
+    if request_completed(event):
+        note_request_completed(by_message)
         return True
     if delta_usage(event) is not None:
         return True
@@ -527,10 +511,10 @@ def accumulate_output_tokens(lines: list[str], output_by_message: dict[str, int]
             message_id = named if isinstance(named, str) and named else (open_ids[0] if open_ids else "")
             if message_id:
                 output_by_message[message_id] = max(reading[1], output_by_message.get(message_id, 0))
-        end = request_end(event)
-        if end is not None:
-            note_request_end(output_by_message, end)
-        if reading is not None or end is not None:
+        completed = request_completed(event)
+        if completed:
+            note_request_completed(output_by_message)
+        if reading is not None or completed:
             continue
         if event.get("type") == "assistant":
             message = as_block(event.get("message"))
@@ -556,7 +540,7 @@ class PromptFold(NamedTuple):
 
 
 class LostTokens(NamedTuple):
-    """The requests a failure lost (in flight, or cut at the reply cap), split as the cost fold splits a call, so
+    """The requests a failure lost (in flight), split as the cost fold splits a call, so
     every cost card can price them: inside every limit, outside the cost."""
 
     fresh_input: int = 0
@@ -618,9 +602,8 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
 
 
 #: A runner transcript's driver line where it resumed the runner (``agent_driver.usage_resume_marker``): ``lost``
-#: says what the failure lost, ``previous`` (the call before it was cut at the reply cap: its line moves from the
-#: cost to the lost tokens) or ``in_flight`` (a call that died before returning: the line carries at least the
-#: prompt it sent, counted against the limits and reported lost). Neither is ever cost.
+#: says what the failure lost, ``in_flight`` (a call that died before returning: the line carries at least the
+#: prompt it sent, counted against the limits and reported lost, never cost), else nothing.
 USAGE_RESUME_KEY = "driver_resume"
 
 
@@ -644,11 +627,6 @@ def usage_lines_cost(lines: list[str]) -> CostRow:
     """:func:`usage_episode_cost` over the lines of a usage.jsonl."""
     records = usage_records(lines)
     lost_calls = {
-        index - 1
-        for index, record in enumerate(records)
-        if record.get(USAGE_RESUME_KEY) is not None and record.get("lost") == "previous" and index > 0
-    }
-    lost_calls |= {
         index
         for index, record in enumerate(records)
         if record.get(USAGE_RESUME_KEY) is not None and record.get("lost") == "in_flight"
@@ -764,8 +742,8 @@ def events_cost(events: list[dict[str, object]]) -> CostRow:
     wall_ms = api_ms = 0
     compacted_by_cli = False
     model_usage_event: dict[str, object] | None = None
-    # Per request: True once its message_stop arrived, False once the server cut it at the reply cap.
-    ended: dict[str, bool] = {}
+    # The requests whose message_stop arrived.
+    ended: set[str] = set()
     started_input: dict[str, int] = {}
     lost = LostTokens()
     for event in events:
@@ -783,14 +761,13 @@ def events_cost(events: list[dict[str, object]]) -> CostRow:
             continue
         if is_resume(event):
             # The request in flight at the failure left nothing in the resumed context: lost, not cost.
-            if current and not ended.get(current):
+            if current and current not in ended:
                 taken = lost_request(current, per_turn, order, deltas, started_input)
                 lost = lost.plus(*taken)
             current = ""
             continue
-        end = request_end(event)
-        if end is not None and current and ended.get(current) is not False:
-            ended[current] = end
+        if request_completed(event) and current:
+            ended.add(current)
         delta = delta_usage(event)
         if delta is not None:
             # Grouped under the message_start that opened this request. Without one -- a CLI that
@@ -966,7 +943,7 @@ class EpisodeTotals(NamedTuple):
     tokens_output: int | None = None
     tokens_effective_void: int = 0
     cause: str = ""
-    #: The requests lost at a failure (in flight, or cut at the reply cap), over every attempt: reported, not cost.
+    #: The requests lost at a failure (in flight), over every attempt: reported, not cost.
     tokens_effective_lost: int = 0
     tokens_lost_fresh_input: int = 0
     tokens_lost_cached_input: int = 0
@@ -984,7 +961,7 @@ class AttemptTotals(NamedTuple):
     fresh_input: int
     cached_input: int
     output: int
-    #: The requests lost at a failure (in flight, or cut at the reply cap), left out of every reading above.
+    #: The requests lost at a failure (in flight), left out of every reading above.
     lost: LostTokens = LostTokens()
 
     def minus(self, other: "AttemptTotals") -> "AttemptTotals":

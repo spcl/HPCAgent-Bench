@@ -1,7 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The context window claude-code is told about and where it compacts: L = min(served window, 262144), reply
-reserve R = min(max output, L // 8), trigger R + round(0.12 * L) below L, read from the setup's existing keys."""
+reserve R = the reply cap (the same at every window), trigger R + round(0.12 * L) below L, read from the setup's
+existing keys."""
 
 import math
 import pathlib
@@ -22,8 +23,8 @@ SERVED = {
     "apertus15": 262144,
 }
 
-#: What claude is given for each served window at the launcher's 32768-token reply cap:
-#: 262144 -> R 32768, H 31457, trigger 197919; 131072 -> R 16384, H 15729, trigger 98959. The CLI
+#: What claude is given for each served window at [common]'s 32768-token reply cap:
+#: 262144 -> R 32768, H 31457, trigger 197919; 131072 -> R 32768, H 15729, trigger 82575. The CLI
 #: compacts at floor((window - min(R, 20000)) * pct / 100).
 EXPECTED = {
     262144: {
@@ -35,8 +36,8 @@ EXPECTED = {
     131072: {
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "131072",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "131072",
-        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "86.2854",
-        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "74.3436",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768",
     },
 }
 
@@ -44,7 +45,7 @@ EXPECTED = {
 TRIGGERS = {
     (262144, 32768): (32768, 262144 - 32768 - 31457),
     (262144, 16384): (16384, 262144 - 16384 - 31457),
-    (131072, 32768): (16384, 131072 - 16384 - 15729),
+    (131072, 32768): (32768, 131072 - 32768 - 15729),
     (131072, 8192): (8192, 131072 - 8192 - 15729),
 }
 
@@ -77,12 +78,13 @@ def cli_trigger(environment: dict[str, str]) -> int:
     return min(math.floor(effective * (percent / 100)), effective - 13000)
 
 
-@pytest.mark.parametrize("path", BASES)
+#: The run-protocol smoke lowers the reply cap in its own experiment (test_harness_context_policy), so its compaction
+#: point is not the one of [common]'s cap.
+@pytest.mark.parametrize("path", [path for path in BASES if not path.startswith("smoke-protocol:")])
 def test_every_setup_env_gives_claude_its_models_window_capped_at_256k(driver: ModuleType, path: str) -> None:
     """Each base, rendered the way a snapshot is: the window is the model's own, never the
     cap standing in for a window the setup forgot to name, and never above 262144."""
     values = env_values(path)
-    values["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "32768"  # the launcher's export (run_cluster.sh)
     served = SERVED[model_of(path)]
     assert driver.harnesses.served_context(values) == served
     assert driver.claude_context_env(values) == EXPECTED[min(served, 262144)]
@@ -92,8 +94,8 @@ def test_every_setup_env_gives_claude_its_models_window_capped_at_256k(driver: M
 def test_the_trigger_leaves_the_reply_reserve_and_one_turn_under_the_window(
     driver: ModuleType, window: int, configured: int
 ) -> None:
-    """The reply cap shrinks to an eighth of a small window and never grows past what the launcher
-    configured; it is exported, so the server holds exactly that much free. A request sent just under
+    """The reply cap is what [common] configured at every window; it is exported, so the server holds exactly that
+    much free. A request sent just under
     the trigger still fits with its reply reserved, and so does the compaction request after one more
     turn of 12% of the window. The truncated percentage may place the trigger a token or two early,
     never late."""

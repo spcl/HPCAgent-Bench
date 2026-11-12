@@ -908,9 +908,9 @@ SEIDEL_2D_USAGE = (
 def test_a_run_that_ends_right_after_a_cut_reply_ends_on_the_reply_cap(
     harness: types.SimpleNamespace, tmp_path: pathlib.Path, ended: str, tail: tuple[dict[str, int], ...], expected: str
 ) -> None:
-    """docs/matched_limits.md, "Cause of an attempt": a reply cut at the reply cap is an infrastructure end, so the
-    runner records it as ``output_cap`` whatever the harness made of the cut reply, and the driver reads it as the
-    reply cap: resumed once, then the agent's own end (tests/test_agent_driver_crash_resume.py)."""
+    """docs/matched_limits.md, "Cause of an attempt": the runner records a run that ended on a reply cut at the reply
+    cap as ``output_cap`` whatever the harness made of the cut reply, and the driver reads it as the agent's own end,
+    never resumed (tests/test_agent_driver_crash_resume.py)."""
     common = harness.common
     (tmp_path / "prompt.txt").write_text("task", encoding="utf-8")
     args = common.RunnerArgs(
@@ -934,7 +934,7 @@ def test_a_run_that_ends_right_after_a_cut_reply_ends_on_the_reply_cap(
     assert closing.output_cap is (expected == "output_cap")
     if expected == "output_cap":
         driver = importlib.import_module("hpcagent_agent.driver.agent_driver")
-        assert driver.attempt_cause(1, closing) is driver.AttemptCause.INFRA
+        assert driver.attempt_cause(1, closing) is driver.AttemptCause.AGENT
 
 
 def test_an_agents_sdk_run_that_ends_at_a_cut_reply_ends_on_the_reply_cap(
