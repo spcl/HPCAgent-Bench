@@ -174,7 +174,7 @@ def test_the_default_paired_table_corrects_each_leg_on_its_own() -> None:
             1.352886457977328,
             1.8514139515427432,
             "sign-flip-exact",
-            "sign-flip v1",
+            "sign-flip v2",
             0.0078125,
             "benjamini-hochberg",
             0.0078125,
@@ -188,7 +188,7 @@ def test_the_default_paired_table_corrects_each_leg_on_its_own() -> None:
             0.9673849349699104,
             1.14240723669634,
             "sign-flip-exact",
-            "sign-flip v1",
+            "sign-flip v2",
             0.125,
             "benjamini-hochberg",
             0.125,
@@ -270,6 +270,60 @@ def test_every_table_states_the_settings_it_was_made_with(tmp_path: pathlib.Path
     assert (written["producer"], written["cost_model"]) == ("test", {"name": "billed"})
 
 
+def test_the_interval_excludes_zero_exactly_when_the_test_rejects() -> None:
+    """One construction: on synthetic log ratios, exact (n <= 16) and sampled (n = 24), the 95% interval excludes
+    0 exactly when the sign-flip p is below 0.05, and the 90% interval lies inside the margin exactly when the TOST p
+    is below 0.05."""
+    for seed in range(40):
+        for n in (6, 9, 24):
+            logs = np.random.default_rng(seed).normal(0.15, 0.3, n)
+            tested, same = significance.paired(logs), significance.equivalence(logs, margin=1.2)
+            assert (tested.pvalue < 0.05) == (not tested.low <= 0.0 <= tested.high)
+            assert (same.pvalue < 0.05) == (-same.margin < same.low and same.high < same.margin)
+
+
+def test_a_p_of_exactly_alpha_is_not_rejected_and_its_interval_holds_zero() -> None:
+    """Six log ratios of one sign but one: the exact sign-flip p is 4/64. Read at alpha = 4/64 the test does not
+    reject (a verdict needs p below alpha), so the interval must hold 0; it excludes 0 just above that p."""
+    logs = [0.5, 0.6, 0.7, 0.8, 0.9, -0.1]
+    tested = significance.paired(logs, alpha=4.0 / 64.0)
+    assert tested.pvalue == 4.0 / 64.0
+    assert tested.low <= 0.0 <= tested.high
+    wider = significance.paired(logs, alpha=4.0 / 64.0 + 1e-9)
+    assert wider.low > 0.0
+
+
+def test_a_log_t_interval_and_the_sign_flip_test_can_disagree_and_one_construction_cannot() -> None:
+    """Five small gains and one large one: every log ratio is positive, so the exact sign-flip p is 2/64 and its
+    interval excludes 0, while the Student t interval of the same mean (the paper's log-t formula) holds 0 and the
+    t test does not reject. Mixing the t interval with the sign-flip p would print p < 0.05 beside an interval
+    containing 1."""
+    logs = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 3.0])
+    tested = significance.paired(logs)
+    assert tested.pvalue == 2.0 / 64.0
+    assert tested.low > 0.0
+    half = float(stats.t.ppf(0.975, 5)) * float(np.std(logs, ddof=1)) / math.sqrt(6)
+    assert float(np.mean(logs)) - half < 0.0
+    assert float(stats.ttest_1samp(logs, 0.0).pvalue) > 0.05
+
+
+def test_the_solve_rate_interval_inverts_the_score_test_its_tost_reads() -> None:
+    """Over a grid of discordant counts the 90% interval of the rate difference holds the observed difference and
+    lies inside the margin exactly when the score TOST passes at 0.05; the exact McNemar test stays the test of a
+    difference."""
+    for n in (10, 40):
+        for only_left in range(6):
+            for only_right in range(6):
+                pairs = significance.Discordant(only_left, only_right)
+                same = significance.rate_equivalence(pairs, n, margin=0.1)
+                assert same.low <= (only_left - only_right) / n <= same.high
+                assert (same.pvalue < 0.05) == (-0.1 < same.low and same.high < 0.1)
+    assert significance.configured().paired_proportion.name == "mcnemar"
+    low, high = significance.rate_interval(significance.Discordant(3, 3), 40, 0.05)
+    assert low == pytest.approx(-high)
+    assert significance.rate_interval(significance.Discordant(3, 3), 40, 0.1)[1] < high
+
+
 if __name__ == "__main__":
     test_every_registry_resolves_its_documented_default()
     test_an_unknown_name_stops_the_run_listing_the_registered_ones(
@@ -308,6 +362,10 @@ if __name__ == "__main__":
     test_a_correction_runs_once_per_leg_or_once_per_family()
     with pytest.MonkeyPatch.context() as patch:
         test_a_protocol_cannot_declare_an_unregistered_timing_test(patch)
+    test_the_interval_excludes_zero_exactly_when_the_test_rejects()
+    test_a_p_of_exactly_alpha_is_not_rejected_and_its_interval_holds_zero()
+    test_a_log_t_interval_and_the_sign_flip_test_can_disagree_and_one_construction_cannot()
+    test_the_solve_rate_interval_inverts_the_score_test_its_tost_reads()
 
 
 def null_logs(step: float, pairs: int = 5) -> list[float]:

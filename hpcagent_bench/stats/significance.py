@@ -12,6 +12,7 @@ import math
 import pathlib
 import types
 from collections.abc import Callable, Sequence
+from statistics import NormalDist
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from hpcagent_agent.coded import Coded
@@ -60,6 +61,7 @@ __all__ = [
     "proportion",
     "proportion_test",
     "rate_equivalence",
+    "rate_interval",
     "scoped",
     "settings",
     "settings_mismatch",
@@ -448,19 +450,37 @@ def tango_score(pairs: Discordant, n: int, delta: float) -> float:
     return (pairs.only_left - pairs.only_right - n * delta) / math.sqrt(n * (2.0 * constrained + delta * (1.0 - delta)))
 
 
-def rate_equivalence(pairs: Discordant, n: int, *, margin: float) -> Equivalence:
+def rate_interval(pairs: Discordant, n: int, alpha: float) -> tuple[float, float]:
+    """The ``1 - alpha`` interval of the difference of two solve rates on ``n`` paired kernels that inverts
+    :func:`tango_score`: every ``delta`` in (-1, 1) whose two-sided score test is not rejected, ends found by
+    bisection (the score falls as ``delta`` rises, so they form one interval)."""
+    critical = NormalDist().inv_cdf(1.0 - alpha / 2.0)
+
+    def edge(target: float) -> float:
+        # the delta where the score crosses ``target``, inside the open interval the score is defined on
+        low, high = -1.0 + 1e-12, 1.0 - 1e-12
+        for _ in range(60):
+            middle = (low + high) / 2.0
+            low, high = (middle, high) if tango_score(pairs, n, middle) > target else (low, middle)
+        return (low + high) / 2.0
+
+    return edge(critical), edge(-critical)
+
+
+def rate_equivalence(pairs: Discordant, n: int, *, margin: float, alpha: float | None = None) -> Equivalence:
     """Is the difference of two setups' solve rates over the ``n`` kernels both ran inside ``[-margin, +margin]``?
-    TOST with :func:`tango_score` at each end (asymptotic, unlike the exact McNemar test of a difference).
-    ``margin`` is a difference of PROPORTIONS in (0, 1), fixed before the data are seen. No kernels, no test."""
+    TOST with :func:`tango_score` at each end (asymptotic, unlike the exact McNemar test of a difference); ``low``
+    and ``high`` are the ``1 - 2 alpha`` interval that inverts the same score (:func:`rate_interval`), inside the
+    margin exactly when ``pvalue < alpha`` (``alpha`` default ``statistics.alpha``). ``margin`` is a difference of
+    PROPORTIONS in (0, 1), fixed before the data are seen. No kernels, no test."""
     if not 0.0 < margin < 1.0:
         raise ValueError(f"a solve-rate equivalence margin is a difference of proportions in (0, 1); got {margin!r}")
     if n == 0:
         return Equivalence(math.nan, math.nan, math.nan, margin, 0, "degenerate", "tango-score", "1")
     above_lower = 0.5 * math.erfc(tango_score(pairs, n, -margin) / math.sqrt(2.0))
     below_upper = 0.5 * math.erfc(-tango_score(pairs, n, margin) / math.sqrt(2.0))
-    return Equivalence(
-        max(above_lower, below_upper), math.nan, math.nan, margin, n, "tost-tango-score", "tango-score", "1"
-    )
+    low, high = rate_interval(pairs, n, 2.0 * level(alpha))
+    return Equivalence(max(above_lower, below_upper), low, high, margin, n, "tost-tango-score", "tango-score", "1")
 
 
 def variance_components(left: Sequence[Sequence[float]], right: Sequence[Sequence[float]]) -> tuple[float, float]:
@@ -613,7 +633,7 @@ def mean_of(x: "FloatArray") -> float:
     return math.fsum(x.tolist()) / x.size if x.size else math.nan
 
 
-@paired_test("sign-flip")
+@paired_test("sign-flip", version="2")
 def sign_flip(log_ratios: "FloatArray", alpha: float) -> Result:
     """The GEOMETRIC MEAN of the paired ratios (its log is the estimate), its two-sided sign-flip
     permutation p and the interval that inverts that test. Exact up to

@@ -391,8 +391,10 @@ def sign_flip_pvalue(differences: Samples, flips: FloatArray) -> float:
 
 
 def sign_flip_interval(differences: Samples, flips: FloatArray, alpha: float | None = None) -> tuple[float, float]:
-    """The shifts ``delta`` the sign-flip test does NOT reject at ``alpha`` on ``differences - delta`` (the interval
-    that inverts :func:`sign_flip_pvalue`), found by bisection; ends hold within the p comparison's 1e-12 tolerance."""
+    """The shifts ``delta`` the sign-flip test does NOT reject at ``alpha`` on ``differences - delta``, those with a p
+    of at least ``alpha`` (the interval that inverts :func:`sign_flip_pvalue`, so it excludes 0 exactly when that p is
+    below ``alpha``), found by bisection; ends hold within the p comparison's 1e-12 tolerance. Every sign vector's
+    indicator is monotone in ``delta`` on each side of the mean, so the shifts not rejected form one interval."""
     alpha = default_alpha() if alpha is None else alpha
     x: FloatArray = np.asarray(differences, dtype=np.float64)
     centre = float(np.mean(x))
@@ -402,7 +404,7 @@ def sign_flip_interval(differences: Samples, flips: FloatArray, alpha: float | N
         inner = centre
         for _ in range(60):
             middle = (inner + outer) / 2.0
-            if sign_flip_pvalue(x - middle, flips) > alpha:
+            if sign_flip_pvalue(x - middle, flips) >= alpha:
                 inner = middle
             else:
                 outer = middle

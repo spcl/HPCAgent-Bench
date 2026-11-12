@@ -25,7 +25,7 @@ import math
 import pathlib
 import sys
 import warnings
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import NamedTuple
 
 import pandas as pd
@@ -113,8 +113,15 @@ POPULATION_COLUMNS = (
     # never ran has no token total)
     "n_both_solved",
     "n_both_tokens",
-    # rho_R = solved by setup_a / solved by setup_b, both counted over the kernels both ran (n_both_run)
+    # rho_R = solved by setup_a / solved by setup_b, both counted over the kernels both ran (n_both_run), and the
+    # same two counts as a difference of solve rates, (n_only_a - n_only_b) / n_both_run, the scale the solve-rate
+    # equivalence test reads
     "rho_r",
+    "rate_difference",
+    # of the kernels both ran, those whose chosen run infrastructure ended on that side (episode_cause
+    # relaunch_limit): their tokens count, but no cost pair is formed on them, so the tokens leg leaves them out
+    "n_infra_ended_a",
+    "n_infra_ended_b",
     # coverage_p adjusted over the family's pairs (one per pair, its own family, statistics.correction);
     # coverage_p itself stays the raw value
     "coverage_p_adjusted",
@@ -148,6 +155,10 @@ EQUIVALENCE_COLUMNS = (
     # is different or inconclusive, never equivalent
     "coverage_equivalence_margin",
     "coverage_equivalence_p",
+    # the 1 - 2 alpha interval of rate_difference that inverts the same score test: inside the margin exactly when
+    # coverage_equivalence_p < alpha
+    "coverage_equivalence_ci_low",
+    "coverage_equivalence_ci_high",
     "coverage_equivalence_p_adjusted",
     "coverage_conclusion",
 )
@@ -294,9 +305,11 @@ IMPACT_LEG_COLUMNS = {
     "p_adjusted": "p_adjusted",
     "verdict": "verdict",
 }
-#: Appended under ``--sensitivity-policy``: the speedup leg's ratio over the OTHER kernel population, for the
-#: reader to see what the choice of ``--policy`` does. DESCRIPTIVE: no p value, no verdict and no member of the
-#: family, so no adjusted p of the table moves. Blank on the tokens leg, which no policy touches.
+#: Appended to every pair table: the speedup leg's ratio over the OTHER kernel population than ``--policy``'s, for the
+#: reader to see what that choice does. Under the default ``solved`` it is the all-kernel ratio, a kernel a setup did
+#: not solve entering at ``S_i = 1``, beside the ratio over the kernels both solved (``n_only_a`` and ``n_only_b``
+#: count the kernels solved by one setup only). DESCRIPTIVE: no p value, no verdict and no member of the family, so
+#: no adjusted p of the table moves. Blank on the tokens leg, which no policy touches.
 SENSITIVITY_COLUMNS = (
     "sensitivity_policy",
     "sensitivity_n_pairs",
@@ -343,6 +356,8 @@ COUNT_COLUMNS = frozenset(
         "n_only_run_b",
         "n_both_solved",
         "n_both_tokens",
+        "n_infra_ended_a",
+        "n_infra_ended_b",
         "episodes_a",
         "episodes_b",
         "repeats_min",
@@ -503,15 +518,20 @@ def score_leg(left: population.SetupAggregate, right: population.SetupAggregate)
     return paired_leg(population.log_differences(aligned[0], aligned[1]), aligned[0].n)
 
 
-def shared_token_kernels(left: str, right: str, tokens: dict[tuple[str, str], float]) -> list[str]:
-    """The kernels BOTH setups have a token total for, sorted -- the cost leg's population (P2)."""
-    return sorted({k[1] for k in tokens if k[0] == left} & {k[1] for k in tokens if k[0] == right})
+def shared_token_kernels(
+    left: str, right: str, tokens: dict[tuple[str, str], float], excluded: Collection[str] = ()
+) -> list[str]:
+    """The kernels BOTH setups have a token total for, less ``excluded`` (a side's run infrastructure ended:
+    :func:`~hpcagent_bench.stats.population.infrastructure_ended`), sorted -- the cost leg's population (P2)."""
+    return sorted({k[1] for k in tokens if k[0] == left} & {k[1] for k in tokens if k[0] == right} - set(excluded))
 
 
-def cost_leg(left: str, right: str, tokens: dict[tuple[str, str], float]) -> Leg | None:
-    """The paper's ``rho_C = GM(C_b / C_a)`` over the kernels both setups have a token count for (``K``):
-    control over treated, so above 1 means setup ``a`` is CHEAPER, the same direction as ``rho_S``."""
-    shared = shared_token_kernels(left, right, tokens)
+def cost_leg(
+    left: str, right: str, tokens: dict[tuple[str, str], float], excluded: Collection[str] = ()
+) -> Leg | None:
+    """The paper's ``rho_C = GM(C_b / C_a)`` over the kernels both setups have a token count for (``K``), less
+    ``excluded``: control over treated, so above 1 means setup ``a`` is CHEAPER, the same direction as ``rho_S``."""
+    shared = shared_token_kernels(left, right, tokens, excluded)
     if not shared:
         return None
     return paired_leg([math.log(tokens[(right, k)] / tokens[(left, k)]) for k in shared], len(shared))
@@ -553,6 +573,7 @@ def pair_rows(
     rate_margin: float | None = None,
     episodes: population.LegLogs | None = None,
     sensitivity: dict[str, population.SetupAggregate] | None = None,
+    infra_ended: frozenset[tuple[str, str]] = frozenset(),
 ) -> list[dict[str, object]]:
     """One row per leg per pair, with the family's corrected verdicts already applied.
 
@@ -562,7 +583,8 @@ def pair_rows(
     :data:`EQUIVALENCE_COLUMNS` (the solve-rate equivalence only with a ``rate_margin``); ``episodes``
     (:func:`~hpcagent_bench.stats.population.episode_logs`) adds :data:`EPISODE_COLUMNS`; ``sensitivity`` (the
     setups' aggregates under the other kernel policy) adds :data:`SENSITIVITY_COLUMNS`. None of them changes
-    any other value of a row."""
+    any other value of a row. ``infra_ended`` (:func:`~hpcagent_bench.stats.population.infrastructure_ended`) is left
+    out of the tokens leg of every pair one of whose setups it names."""
     populations = populations or equivalence_margin is not None
     rows: list[dict[str, object]] = []
     differences: list[tuple[float, ...]] = []
@@ -571,6 +593,7 @@ def pair_rows(
         kernels_a, kernels_b = ((served or {}).get(setup, frozenset(tag_kernels)) for setup in (setup_a, setup_b))
         # solved-or-not is paired over the kernels BOTH setups ran, never one only a single setup ran
         both_ran = kernels_a & kernels_b
+        ended_a, ended_b = ({k for s, k in infra_ended if s == setup} & both_ran for setup in (setup_a, setup_b))
         gap = population.coverage(left, right, tag_kernels=both_ran, within=both_ran)
         coverage = significance.paired_proportion(significance.Discordant(gap.n_only_left, gap.n_only_right))
         if served is not None:
@@ -589,7 +612,7 @@ def pair_rows(
             "coverage_p": coverage.pvalue,
         }
         if populations:
-            both_priced = shared_token_kernels(setup_a, setup_b, tokens)
+            both_priced = shared_token_kernels(setup_a, setup_b, tokens, ended_a | ended_b)
             solved_a, solved_b = gap.n_both + gap.n_only_left, gap.n_both + gap.n_only_right
             head |= {
                 "n_roster": len(tag_kernels),
@@ -602,21 +625,29 @@ def pair_rows(
                 "n_both_solved": gap.n_both,
                 "n_both_tokens": len(both_priced),
                 "rho_r": solved_a / solved_b if solved_b else math.nan,
+                "rate_difference": (gap.n_only_left - gap.n_only_right) / len(both_ran) if both_ran else math.nan,
+                "n_infra_ended_a": len(ended_a),
+                "n_infra_ended_b": len(ended_b),
             }
         if equivalence_margin is not None:
             discordant = significance.Discordant(gap.n_only_left, gap.n_only_right)
-            head |= {
-                "coverage_equivalence_margin": math.nan if rate_margin is None else rate_margin,
-                "coverage_equivalence_p": math.nan
+            rate = (
+                None
                 if rate_margin is None
-                else significance.rate_equivalence(discordant, len(both_ran), margin=rate_margin).pvalue,
+                else significance.rate_equivalence(discordant, len(both_ran), margin=rate_margin)
+            )
+            head |= {
+                "coverage_equivalence_margin": math.nan if rate is None else rate.margin,
+                "coverage_equivalence_p": math.nan if rate is None else rate.pvalue,
+                "coverage_equivalence_ci_low": math.nan if rate is None else rate.low,
+                "coverage_equivalence_ci_high": math.nan if rate is None else rate.high,
             }
         legs = [(significance.Leg.SPEEDUP, score_leg(left, right))]
         leg_kernels = {
             significance.Leg.SPEEDUP: population.common_kernels([left, right]),
-            significance.Leg.TOKENS: shared_token_kernels(setup_a, setup_b, tokens),
+            significance.Leg.TOKENS: shared_token_kernels(setup_a, setup_b, tokens, ended_a | ended_b),
         }
-        cost = cost_leg(setup_a, setup_b, tokens)
+        cost = cost_leg(setup_a, setup_b, tokens, ended_a | ended_b)
         if cost is not None:
             legs.append((significance.Leg.TOKENS, cost))
         for leg, (change, n_pairs, signs, logs) in legs:
@@ -995,14 +1026,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "the smallest limits the setups' episodes record. Both tables then state the cut in truncated_at",
     )
     ap.add_argument(
-        "--sensitivity-policy",
-        default=None,
-        type=population.KernelPolicy.parse,
-        metavar="|".join(population.KernelPolicy.texts()),
-        help="append to each speedup leg its ratio, interval and paired n over this OTHER kernel population, as "
-        "description only: no test, no p value, and no adjusted p of the table changes",
-    )
-    ap.add_argument(
         "--episodes",
         action="store_true",
         help="append to the pair table, per leg: each setup's episodes behind it, the fewest on any one kernel, "
@@ -1053,8 +1076,6 @@ def main(argv: list[str]) -> int:
     statistics = config.current().statistics
     margin = statistics.equivalence_margin if statistics.equivalence else None
     rate_margin = statistics.equivalence_margin_rate
-    if args.sensitivity_policy == args.policy:
-        raise SystemExit(f"--sensitivity-policy must name the policy --policy does not ({args.policy.text})")
     pairs = [parse_pair(spec) for spec in args.pair]
     setups = sorted({setup for pair in pairs for setup in pair})
 
@@ -1132,16 +1153,18 @@ def main(argv: list[str]) -> int:
     populations = margin is not None or tasks_checked
     pair_columns = [
         *(name for name in PAIR_COLUMNS if limits_reported or name not in limits.PAIR_COLUMNS),
+        *SENSITIVITY_COLUMNS,
         *(POPULATION_COLUMNS if populations else ()),
         *(EQUIVALENCE_COLUMNS if margin is not None else ()),
         *(EPISODE_COLUMNS if args.episodes else ()),
         # a table reduced by another rule than the published one always names it
         *(("repeat_rule",) if not args.episodes and population.repeat_rule() is not config.Repeats.MEDIAN_ANY else ()),
-        *(SENSITIVITY_COLUMNS if args.sensitivity_policy else ()),
     ]
 
     episodes = population.episode_logs(observations[observations.setup.isin(setups)]) if args.episodes else None
-    sensitivity = setup_aggregates(best, served, baseline, args.sensitivity_policy) if args.sensitivity_policy else None
+    # the speedup leg over the other kernel population, descriptive (SENSITIVITY_COLUMNS)
+    other = next(policy for policy in population.KernelPolicy if policy != args.policy)
+    sensitivity = setup_aggregates(best, served, baseline, other)
 
     rows = pair_rows(
         pairs,
@@ -1155,6 +1178,7 @@ def main(argv: list[str]) -> int:
         rate_margin=rate_margin,
         episodes=episodes,
         sensitivity=sensitivity,
+        infra_ended=population.infrastructure_ended(observations[observations.setup.isin(setups)]),
     )
     pair_frame = (
         pd.DataFrame(rows)
@@ -1184,7 +1208,7 @@ def main(argv: list[str]) -> int:
         "baseline": args.baseline,
         "tag_file": str(args.tag_file) if args.tag_file is not None else None,
         "include_incomplete": args.include_incomplete,
-        "sensitivity_policy": args.sensitivity_policy.text if args.sensitivity_policy else None,
+        "sensitivity_policy": other.text,
         "episodes": args.episodes,
         "iteration_counts": list(args.iteration_counts),
         "observations": [observation_input(path) for path in args.observations],

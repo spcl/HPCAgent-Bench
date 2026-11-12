@@ -1064,6 +1064,7 @@ def test_a_non_significant_leg_is_equivalent_only_when_the_equivalence_test_pass
     table = pd.read_csv(out)
     assert list(table.columns) == [
         *paired_setups.PAIR_COLUMNS,
+        *paired_setups.SENSITIVITY_COLUMNS,
         *paired_setups.POPULATION_COLUMNS,
         *paired_setups.EQUIVALENCE_COLUMNS,
     ]
@@ -1155,7 +1156,7 @@ def test_the_protocol_columns_are_appended_and_every_other_column_keeps_its_byte
     monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "off")
     paired_setups.main([*arguments, "--out", str(plain), "--setups-out", str(setups_plain)])
     before, after = plain.read_text().splitlines(), extended.read_text().splitlines()
-    assert before[0].split(",") == list(paired_setups.PAIR_COLUMNS)
+    assert before[0].split(",") == [*paired_setups.PAIR_COLUMNS, *paired_setups.SENSITIVITY_COLUMNS]
     assert len(before) == len(after) == 7
     for old, new in zip(before, after, strict=True):
         assert new.startswith(old + ",")
@@ -1184,10 +1185,15 @@ def test_solve_rates_are_called_equivalent_only_against_a_stated_margin(
     assert table.coverage_equivalence_p.tolist() == pytest.approx([expected] * 6)
     assert table.coverage_equivalence_p_adjusted.tolist() == pytest.approx([expected] * 6)
     assert set(table.coverage_conclusion) == {"equivalent"}
+    # the 90% interval of the rate difference the TOST reads: around 0, inside thirty points, not inside ten
+    assert (table.rate_difference == 0.0).all()
+    assert ((-0.3 < table.coverage_equivalence_ci_low) & (table.coverage_equivalence_ci_high < 0.3)).all()
+    assert (table.coverage_equivalence_ci_low < 0.0).all()
     paired_setups.main(arguments)
     table = pd.read_csv(out)
     assert (table.coverage_equivalence_margin == 0.1).all()
     assert set(table.coverage_conclusion) == {"inconclusive"}
+    assert (table.coverage_equivalence_ci_high > 0.1).all()
 
 
 def test_the_impact_table_states_each_legs_conclusion_only_under_equivalence(
@@ -1248,7 +1254,11 @@ def test_the_episode_columns_count_the_episodes_and_split_the_spread_of_a_repeat
     for old, new in zip(plain.read_text().splitlines(), extended.read_text().splitlines(), strict=True):
         assert new.startswith(old + ",")
     table = pd.read_csv(extended)
-    assert list(table.columns) == [*paired_setups.PAIR_COLUMNS, *paired_setups.EPISODE_COLUMNS]
+    assert list(table.columns) == [
+        *paired_setups.PAIR_COLUMNS,
+        *paired_setups.SENSITIVITY_COLUMNS,
+        *paired_setups.EPISODE_COLUMNS,
+    ]
     speed, tokens = table.set_index("leg").loc["speedup"], table.set_index("leg").loc["tokens"]
     assert (speed.n_pairs, speed.episodes_a, speed.episodes_b, speed.repeats_min) == (8, 16, 16, 2)
     assert speed.sigma_within == pytest.approx(math.sqrt(0.02))
@@ -1273,35 +1283,37 @@ def test_one_episode_per_kernel_is_stated_and_has_no_run_to_run_spread(
     assert table.sigma_between.isna().all()
 
 
-def test_the_other_policys_ratio_is_reported_beside_the_leg_without_joining_the_family(
+def test_the_all_kernel_ratio_is_reported_beside_the_leg_without_joining_the_family(
     paired_setups: ModuleType, tmp_path: pathlib.Path, plain: None
 ) -> None:
     """``a`` failed k7 and k8, which ``b`` solved at 2x; on the six kernels both solved ``a`` is 2x faster. The
-    default leg is over those six. ``--sensitivity-policy served`` adds the ratio over all eight, a failure at
-    1x: ``(2^6 * (1/2)^2) ^ (1/8)``. It is description only: every other column keeps its bytes, and the tokens
-    leg, which no policy touches, stays blank."""
+    default leg is over those six; every table adds the ratio over all eight, a failure at 1x:
+    ``(2^6 * (1/2)^2) ^ (1/8)``, beside the two kernels only ``b`` solved. It is description only: the verdict and
+    p values are those of the leg over the six, and the tokens leg, which no policy touches, stays blank. Under
+    ``--policy served`` the same column carries the ratio over the six both solved."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS:
         rows += episode("b", kernel, 2.0, 100.0)
         rows += episode("a", kernel, 4.0, 100.0) if kernel not in ("k7", "k8") else [task("a", kernel, 100.0)]
         rows += [] if kernel not in ("k7", "k8") else [call("a", kernel, 100.0)]
     path = observations(rows, tmp_path)
-    plain, extended = tmp_path / "plain.csv", tmp_path / "extended.csv"
-    arguments = ["--observations", str(path), "--pair", "a,b", "--family", "f"]
-    paired_setups.main([*arguments, "--out", str(plain)])
-    paired_setups.main([*arguments, "--sensitivity-policy", "served", "--out", str(extended)])
-    for old, new in zip(plain.read_text().splitlines(), extended.read_text().splitlines(), strict=True):
-        assert new.startswith(old + ",")
-    table = pd.read_csv(extended)
+    out = tmp_path / "pairs.csv"
+    arguments = ["--observations", str(path), "--pair", "a,b", "--family", "f", "--out", str(out)]
+    paired_setups.main(arguments)
+    table = pd.read_csv(out)
     assert list(table.columns) == [*paired_setups.PAIR_COLUMNS, *paired_setups.SENSITIVITY_COLUMNS]
     speed, tokens = table.set_index("leg").loc["speedup"], table.set_index("leg").loc["tokens"]
     assert (speed.kernel_policy, speed.n_pairs, speed.rho) == ("solved", 6, pytest.approx(2.0))
+    assert (speed.n_only_a, speed.n_only_b) == (0, 2)
     assert (speed.sensitivity_policy, speed.sensitivity_n_pairs) == ("served", 8)
     assert speed.sensitivity_rho == pytest.approx(2.0 ** (4 / 8))
     assert speed.sensitivity_ci_low < speed.sensitivity_rho < speed.sensitivity_ci_high
+    assert speed.n_tested == 6
     assert tokens[list(paired_setups.SENSITIVITY_COLUMNS)].isna().all()
-    with pytest.raises(SystemExit, match="does not"):
-        paired_setups.main([*arguments, "--sensitivity-policy", "solved"])
+    paired_setups.main([*arguments, "--policy", "served"])
+    served = pd.read_csv(out).set_index("leg").loc["speedup"]
+    assert (served.n_pairs, served.sensitivity_policy, served.sensitivity_n_pairs) == (8, "solved", 6)
+    assert served.sensitivity_rho == pytest.approx(2.0)
 
 
 def test_a_kernel_solved_in_a_minority_of_its_slots_is_solved_only_under_the_any_slot_rule(
@@ -1329,7 +1341,7 @@ def test_a_kernel_solved_in_a_minority_of_its_slots_is_solved_only_under_the_any
         paired_setups.main(["--observations", str(path), "--pair", "a,b", "--family", "f", "--out", str(out)])
     assert answers == {"k2": pytest.approx(4.0), "k3": 6.0}
     table = pd.read_csv(out)
-    assert list(table.columns) == [*paired_setups.PAIR_COLUMNS, "repeat_rule"]
+    assert list(table.columns) == [*paired_setups.PAIR_COLUMNS, *paired_setups.SENSITIVITY_COLUMNS, "repeat_rule"]
     assert set(table.repeat_rule) == {"log-median-majority"}
     assert table.set_index("leg").loc["speedup", "n_pairs"] == 2
 
@@ -1371,7 +1383,11 @@ def test_the_population_columns_name_the_n_behind_each_ratio(
     monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_TASKS", "flag")
     paired_setups.main([*arguments, "--include-incomplete", "--out", str(out)])
     table = pd.read_csv(out)
-    assert list(table.columns) == [*paired_setups.PAIR_COLUMNS, *paired_setups.POPULATION_COLUMNS]
+    assert list(table.columns) == [
+        *paired_setups.PAIR_COLUMNS,
+        *paired_setups.SENSITIVITY_COLUMNS,
+        *paired_setups.POPULATION_COLUMNS,
+    ]
     counts = ["n_roster", "n_run_a", "n_run_b", "n_both_run", "n_only_run_a", "n_only_run_b"]
     for row in table.itertuples():
         assert [getattr(row, name) for name in counts] == [8, 7, 7, 6, 1, 1]
@@ -1421,6 +1437,38 @@ def test_an_unsolved_kernel_is_out_of_the_speed_ratio_and_in_the_cost_ratio(
     assert served.loc["speedup", "n_pairs"] == 8
     # six kernels at 4/2 and two at 1/2: (2**6 * 0.5**2) ** (1/8)
     assert served.loc["speedup", "rho"] == pytest.approx(2.0**0.5)
+
+
+def ended_by(rows: list[dict[str, object]], cause: str) -> list[dict[str, object]]:
+    """``rows`` with ``cause`` as their task record's final-attempt cause (``episode_cause``)."""
+    return [row | {"episode_cause": cause} if row["row_kind"] == "episode" else row for row in rows]
+
+
+def test_a_kernel_infrastructure_ended_forms_no_cost_pair_and_still_costs_its_setup(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """``a``'s run of k8 ended ``relaunch_limit`` after 5 tokens (an outage at its first request); every other run
+    ended by the agent. Its log ratio ``ln(200 / 5)`` would weigh as much as a whole run's, so the tokens leg pairs
+    the other seven and says why, while the setup's own cost still counts the 5 tokens."""
+    rows: list[dict[str, object]] = []
+    for kernel in KERNELS:
+        rows += ended_by(episode("b", kernel, 2.0, 200.0), "agent")
+        if kernel == "k8":
+            rows += ended_by([call("a", kernel, 5.0), task("a", kernel, 5.0)], "relaunch_limit")
+        else:
+            rows += ended_by(episode("a", kernel, 4.0, 100.0), "agent")
+    out, setups_out = tmp_path / "pairs.csv", tmp_path / "setups.csv"
+    arguments = ["--observations", str(observations(rows, tmp_path)), "--pair", "a,b", "--family", "f"]
+    paired_setups.main([*arguments, "--out", str(out), "--setups-out", str(setups_out)])
+    legs = pd.read_csv(out).set_index("leg")
+    assert legs.n_infra_ended_a.tolist() == [1, 1]
+    assert legs.n_infra_ended_b.tolist() == [0, 0]
+    assert legs.n_both_tokens.tolist() == [7, 7]
+    assert legs.loc["tokens", "n_pairs"] == 7
+    assert legs.loc["tokens", "rho"] == pytest.approx(2.0)
+    setups = pd.read_csv(setups_out).set_index("setup")
+    assert setups.loc["a", "n_token_kernels"] == 8
+    assert setups.loc["a", "gm_tokens"] == pytest.approx((100.0**7 * 5.0) ** (1 / 8))
 
 
 def test_unmatched_task_sets_are_refused_by_default_flagged_or_unchecked(
