@@ -142,9 +142,9 @@ jobs:
           floor = tuple(int(part) for part in os.environ["FLOOR_PYTHON"].split("."))
           assert sys.version_info[:2] == floor, f"the floor environment runs {sys.version}, not {floor}"
           # Packages of extras this leg does not install: the GPU ones (the amd/nvidia extras and the
-          # ROCm base image ship them). A module that needs one is
+          # ROCm base image ship them) and gymnasium (the gym extra). A module that needs one is
           # skipped by name, never silently: any other missing module still fails the leg.
-          NOT_INSTALLED = {"triton", "cupy"}
+          NOT_INSTALLED = {"triton", "cupy", "gymnasium"}
           names = [m.name for m in pkgutil.walk_packages(hpcagent_bench.__path__, "hpcagent_bench.")
                    if ".benchmarks." not in m.name]
           names += [m.name for m in pkgutil.walk_packages(hpcagent_agent.__path__, "hpcagent_agent.")]

@@ -28,7 +28,7 @@ Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). Every framework extra
 `dev` extra); `uv.lock` pins every dependency, dace at the spcl/dace@extended commit `[tool.uv.sources]` names:
 
 ```sh
-uv sync --extra cpu                        # --extra nvgpu / --extra amdgpu on a GPU host
+uv sync --extra cpu --extra gym            # --extra nvgpu / --extra amdgpu on a GPU host
 . .venv/bin/activate
 pre-commit install
 ```

@@ -97,7 +97,8 @@ defaults to `<tuner>.<kernel>`, and `limits` caps the episode (`Episode.ended`).
 
 ## The Gymnasium environment
 
-gymnasium is in no image and no default install. The `gym` extra (`uv sync --extra gym`) installs it for local use; a
+gymnasium is in no image and no default install. The `gym` extra (`uv sync --extra gym`) installs it for local use and
+for lint (`uv sync --extra dev --extra gym`: pyright checks `gym_env.py`; CI's unit sweep installs it too); a
 plugin that needs it declares it in its `[install]`, which the launch environment runs at job start.
 `examples/plugins/gym_tuner/` is that plugin: `tuners/gym_scored_reference.py` registers `gym-scored-reference`, which
 scores the reference through `KernelEnv` and submits it when correct. It lives outside `plugins/` because every setup
