@@ -24,7 +24,7 @@ def _kernel_mandelbrot(
     xn,
     yn,
     maxiter,
-    horizon,
+    horizon: tl.float64,
     BLOCK_SIZE_X: tl.constexpr,
     BLOCK_SIZE_Y: tl.constexpr,
 ):
