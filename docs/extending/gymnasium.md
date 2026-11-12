@@ -17,7 +17,7 @@ achieved. The first level is the Gymnasium environment below; the second is an a
 | typical optimizer | random or evolutionary search, OPRO over code, an RL policy that emits code, an autotuner | prompt optimizers (Optimas/OPRO over instructions), agent scaffolds |
 | shipped example | `helpers/scripts/gym_policy.py` (best of the reference and given files) | `agent/hpcagent_agent/harness/run_optimas.py` (`HARNESS=optimas`) |
 | limits enforced by | the environment (`Limits`), from the driver's variables | the agent driver (rc 124, 125) |
-| recorded as | judge `grades` rows under the environment's `optimizer` name; the episode row via the tuner path (below) | the same rows, the episode from the driver's `tokens.json` |
+| recorded as | judge `grades` rows under the judge's setup identity; the episode row via the tuner path (below) | the same rows, the episode from the driver's `tokens.json` |
 
 Optimas stays a harness. Its unit of optimization is an agent's instruction, and the reward of one instruction is a
 whole agent round; reaching the judge directly would leave it nothing to optimize. Its reward is already the
@@ -28,7 +28,7 @@ case: it needs a reward per candidate, which is what the environment gives.
 ## The environment
 
 One episode is one kernel task in one language. `KernelEnv(task, client, optimizer=..., limits=..., episode_id=...)`
-takes the task (`TaskSpec`), a `JudgeClient` on a running judge, the name the grades are recorded under and the caps.
+takes the task (`TaskSpec`), a `JudgeClient` on a running judge, the optimizer's name (request provenance) and the caps.
 
 **`reset()`** starts the episode and contacts no judge. The observation carries the task:
 
@@ -86,10 +86,14 @@ input, output or timing reaches the optimizer, also when a judge runs with `serv
 ## Recording
 
 The judge records every graded request itself, so an environment's grades land in the results DB like any agent's:
-each `/score` and `/submit` is a `grades` row with the request's `episode_id` and `optimizer` (the identity variables
-`HPCAGENT_BENCH_EPISODE_ID` and `HPCAGENT_BENCH_OPTIMIZER` win over the constructor's when set), under the setup
-identity the judge was started with. A correct `/submit` gets its `final` grade as for any agent, and the statistics
-tools read the environment's arm by its setup, like any other.
+each `/score` and `/submit` is a `grades` row of the request's episode, a correct `/submit` gets its `final` grade,
+and the row's arm is the setup identity the judge was started with (`record.study`, `record.model`,
+`record.setup`, `record.harness`, ...; the `HPCAGENT_BENCH_RECORD_*` variables a launch renders). The statistics
+tools therefore read an environment's arm by its setup, like any other. The episode is the request's `episode_id`:
+the constructor's `<episode_id>.r<reset>`, or the driver's label when `HPCAGENT_BENCH_EPISODE_ID` is set, which
+wins (as does `HPCAGENT_BENCH_OPTIMIZER` over the `optimizer` argument). `optimizer` is provenance on the request;
+it must not be one of the replay markers (`probe`, `promoted-unsubmitted`, `harvested-workspace`,
+`recording.ORIGIN_KINDS`), which change the grade's kind.
 
 The episode row (`episodes`: its tokens, limits and how it ended) is written by the agent driver from `tokens.json`
 and no one else. A cluster run therefore launches the environment's optimizer as a **tuner**
