@@ -172,6 +172,12 @@ python agent/hpcagent_agent/driver/token_cost.py "$RUN_ROOT"/<run-dir> [--csv pe
 (`total` card), `effective` and `effective_provider` (`billed` card). It is stdlib-only so it ships
 in the agent image; `tests/test_cost_models.py` pins it to `stats/cost.py`.
 
+A collected copy holds a Claude Code episode's transcript extract instead of its stream logs
+([data_collection.md](data_collection.md#the-transcript-extract)); the extract keeps every event this
+fold reads, and `transcripts.restore` writes them back as `claude.attempt<N>.log`/`claude.log` that
+`token_cost.py` reads to the same totals. A runner's `usage.jsonl` is copied as it is, and the extract's
+usage records hold the same counts.
+
 From an extracted observations DB, the experiment cost under the `billed` card:
 
 ```sql
