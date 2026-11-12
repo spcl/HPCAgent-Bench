@@ -126,6 +126,20 @@ def triton_backend(build: pathlib.Path) -> Iterator[None]:
         yield
 
 
+def gpu_library_nodes(sdfg: object) -> list[str]:
+    """The kinds of the GPU-scheduled library nodes of ``sdfg``, which the Python backend expands to CuPy calls."""
+    from dace import dtypes, nodes
+    from dace.libraries.tileops.nodes.tile_op import TileOp
+
+    found = sdfg.all_nodes_recursive()  # pyright: ignore[reportAttributeAccessIssue]
+    kinds = {
+        type(n).__name__
+        for n, owner in found
+        if isinstance(n, nodes.LibraryNode) and not isinstance(n, TileOp) and n.schedule in dtypes.GPU_SCHEDULES
+    }
+    return sorted(kinds)
+
+
 def map_rank(sdfg: object) -> int:
     from dace import nodes
 
@@ -201,12 +215,19 @@ def dump_kernel(name: str, out: pathlib.Path, width: int) -> dict[str, object]:
         widths = (width,) * map_rank(tiled)
         summary["widths"] = list(widths)
         VectorizeGPU(VectorizeConfig(widths=widths, tile_programs=True)).apply_pass(tiled, {})
+        libraries = gpu_library_nodes(tiled)
         with triton_backend(out / "build"):
             compiled = tiled.compile()
         text = compiled.path.read_text(encoding="utf-8")  # pyright: ignore[reportAttributeAccessIssue]
         start = text.find("\ndef kernel_")
         (folder / "triton.py").write_text(text[start:] if start >= 0 else text, encoding="utf-8")
-        summary["triton"] = "compiled" if start >= 0 else "compiled, no tile kernel (host code only)"
+        if start >= 0:
+            summary["triton"] = "compiled"
+        elif libraries:
+            # The backend runs a GPU library node as a CuPy call, as CUDA runs it as a CUB or cuBLAS one
+            summary["triton"] = f"compiled, CuPy library call ({', '.join(libraries)})"
+        else:
+            summary["triton"] = "compiled, no tile kernel (host code only)"
     except Exception as exc:  # noqa: BLE001 -- a backend failure is a finding, not fixed here
         summary["triton"] = f"{type(exc).__name__}: {exc}"[:400]
         (folder / "triton_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
