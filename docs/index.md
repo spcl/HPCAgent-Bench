@@ -57,6 +57,7 @@ extending/registry
 extending/benchmark
 extending/optimizer
 extending/agent-harness
+extending/gymnasium
 extending/skills-and-tools
 extending/packets
 extending/plugins
