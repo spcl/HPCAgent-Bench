@@ -4,6 +4,9 @@
 
 hpcagent-bench plot efficacy scored.csv blind.csv --mode relative --mark bar --out results/plots/blind.pdf
 hpcagent-bench plot kernel-speedups --help
+
+From Python the same figure is its command module's ``plot(Options(...))``, one ``Options`` field per flag
+(docs/plotting.md, "From Python").
 """
 
 import enum
@@ -36,8 +39,9 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else list(argv)
     named = {figure.text: figure for figure in Figure}
     if not args or args[0] in ("-h", "--help") or args[0] not in named:
-        print("usage: hpcagent-bench plot {" + ",".join(named) + "} ...", file=sys.stderr if args else sys.stdout)
-        return 0 if args and args[0] in ("-h", "--help") else 2
+        asked = bool(args) and args[0] in ("-h", "--help")
+        print("usage: hpcagent-bench plot {" + ",".join(named) + "} ...", file=sys.stdout if asked else sys.stderr)
+        return 0 if asked else 2
     # Deferred: each command pulls in matplotlib and the figure library.
     importlib.import_module(command(named[args[0]])).main(args[1:])
     return 0

@@ -140,6 +140,30 @@ def test_a_caller_spells_the_kernel_ticks() -> None:
     assert fig.axes[0].get_xticklabels()[0].get_text() == "s115"
 
 
+def test_folded_kernel_names_too_wide_for_their_columns_go_back_on_one_line() -> None:
+    """A rotated name folded on several lines is that many lines wide; forty overprinted at the floor before."""
+    kernels = [f"k{index}" for index in range(40)]
+    speed = speed_metric([pk.KernelCell(kernel, (2.0,)) for kernel in kernels])
+    fig = pk.figure_panels(
+        [speed], kernels, pk.Style.CI, True, "", tick_label=lambda kernel: f"A\nLong\nKernel\n{kernel}"
+    )
+    names = [label.get_text() for label in fig.axes[0].get_xticklabels()]
+    assert names[0] == "A Long Kernel k0"
+    assert not style.crowded_at(fig, fig.axes, float(fig.axes[0].get_xticklabels()[0].get_fontsize()))
+    plt.close(fig)
+
+
+def test_a_name_folded_after_its_hyphen_goes_back_on_one_line_without_a_space() -> None:
+    """textwrap folds "Rayleigh-Ritz" after the hyphen; unfolded with a space it printed "Rayleigh- Ritz"."""
+    kernels = [f"k{index}" for index in range(40)]
+    speed = speed_metric([pk.KernelCell(kernel, (2.0,)) for kernel in kernels])
+    fig = pk.figure_panels(
+        [speed], kernels, pk.Style.CI, True, "", tick_label=lambda kernel: f"A\nRayleigh-\nRitz\n{kernel}"
+    )
+    assert fig.axes[0].get_xticklabels()[0].get_text() == "A Rayleigh-Ritz k0"
+    plt.close(fig)
+
+
 def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once() -> None:
     """Both panels summarize by the geomean (paper rule), so the statistic is named once, as the
     shared axis' summary tick, and no panel annotates a median."""

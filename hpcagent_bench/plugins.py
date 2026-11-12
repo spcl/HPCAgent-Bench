@@ -7,10 +7,12 @@ agent-side folders plus installed packages
 under :data:`ENTRY_POINT_GROUP`; :func:`roots` is what a launcher exports to every role."""
 
 import argparse
+import ast
 import contextlib
 import functools
 import hashlib
 import importlib
+import json
 import pathlib
 import sys
 import threading
@@ -19,12 +21,13 @@ from typing import Annotated, Any, Literal
 
 import pydantic
 from hpcagent_agent import plugins as agent_plugins
+from hpcagent_agent.driver import harnesses
 from hpcagent_agent.plugins import Plugin
 from hpcagent_agent.prompt_blocks import TEMPLATE_SYNTAX
 
 from hpcagent_bench import modules, paths, skill_packets
 from hpcagent_bench.skill_packets import PacketTable
-from hpcagent_bench.vocabulary import FRAMEWORKS, PACKETS, PacketDef, PacketPhase
+from hpcagent_bench.vocabulary import FRAMEWORKS, HARNESSES, PACKETS, PacketDef, PacketPhase
 
 __all__ = [
     "ENTRY_POINT_GROUP",
@@ -40,6 +43,7 @@ __all__ = [
     "install",
     "install_root",
     "load",
+    "load_tuners",
     "main",
     "openmp_context",
     "openmp_environment",
@@ -50,6 +54,7 @@ __all__ = [
     "recorded",
     "register",
     "register_flavors",
+    "register_harnesses",
     "register_once",
     "register_packets",
     "roots",
@@ -269,6 +274,24 @@ def register_packets(found: tuple[Plugin, ...]) -> None:
         PACKETS.add(key, definition, aliases=aliases)
 
 
+@functools.lru_cache(maxsize=1, typed=True)
+def register_harnesses() -> None:
+    """Add every plugin's harnesses to the vocabulary, once per process, after the shipped ones (``models.py`` calls
+    this at its end), checking all first. A harness whose name the vocabulary already holds under the same display
+    name keeps that entry and its slot (a harness recorded before it moved into a plugin); under another display name
+    it is refused."""
+    found = agent_plugins.find(roots())
+    blocks = [(plugin, name, block) for plugin in found for name, block in plugin.manifest.harnesses.items()]
+    for plugin, name, block in blocks:
+        if name in HARNESSES and HARNESSES[name] != block.name:
+            raise ValueError(
+                f"plugin {plugin.name!r}: harness {name!r} is registered as {HARNESSES[name]!r}, not {block.name!r}"
+            )
+    for _, name, block in blocks:
+        if name not in HARNESSES:
+            HARNESSES.add(name, block.name)
+
+
 def refuse_composition_loop(key: str, composes: Mapping[str, tuple[str, ...]], chain: tuple[str, ...] = ()) -> None:
     """Raise when packet ``key`` reaches itself through the packets it composes (``composes``: key -> its packets;
     a token missing from it is a skill page)."""
@@ -292,6 +315,17 @@ def register() -> tuple[Plugin, ...]:
     (:func:`hpcagent_bench.study_tags.registry`), after the shipped ones (:mod:`hpcagent_bench.skill_packets`)."""
     with REGISTER_LOCK:
         return register_once()
+
+
+@functools.lru_cache(maxsize=1, typed=True)
+def load_tuners() -> tuple[Plugin, ...]:
+    """:func:`register`, and every plugin's ``tuners/`` modules, whose ``@tuner`` functions join the tuner table."""
+    found = register()
+    for plugin in found:
+        agent_plugins.import_package(plugin)
+        for stem in plugin.modules("tuners"):
+            importlib.import_module(f"{plugin.package}.tuners.{stem}")
+    return found
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -385,10 +419,10 @@ def fingerprint(found: tuple[Plugin, ...]) -> str:
 
 
 def import_failure(plugin: Plugin) -> str:
-    """Why ``plugin``'s package or its ``tools`` and ``routes`` modules do not import; ``""`` when they do."""
+    """Why ``plugin``'s package or its ``tools``, ``routes`` and ``tuners`` modules do not import; ``""`` when they do."""
     try:
         agent_plugins.import_package(plugin)
-        for part in ("tools", "routes"):
+        for part in ("tools", "routes", "tuners"):
             for stem in plugin.modules(part):
                 importlib.import_module(f"{plugin.package}.{part}.{stem}")
     except Exception as exc:  # noqa: BLE001 -- a plugin's module may raise anything at import; the report names it
@@ -412,15 +446,84 @@ def flavor_failure(key: str, block: FlavorBlock) -> str:
     return f"flavor {key!r}: optimizer {block.optimizer!r} is no FlavorOptimizer"
 
 
+def api_failure(plugin: Plugin) -> str:
+    """Why ``plugin``'s ``api`` declaration does not hold: a ``routes/`` module importing benchmark code that is not
+    the plugin API (``hpcagent_bench.plugin_api``); ``""`` when it declares none or every such import is the API's."""
+    if plugin.manifest.api is None:
+        return ""
+    for stem in plugin.modules("routes"):
+        for node in ast.walk(ast.parse((plugin.root / "routes" / f"{stem}.py").read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                imported = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                imported = [node.module]
+            else:
+                continue
+            for name in imported:
+                if name.split(".")[0] == "hpcagent_bench" and name != "hpcagent_bench.plugin_api":
+                    return (
+                        f"api {plugin.manifest.api}: routes/{stem}.py imports {name!r}, not hpcagent_bench.plugin_api"
+                    )
+    return ""
+
+
+def gate_failure(key: str, symbol: str) -> str:
+    """Why ``[gates]`` entry ``key = symbol`` could not replace a gate's check (what ``anticheat.replace`` would
+    refuse when the gates run); ``""`` when it could."""
+    from hpcagent_bench import anticheat  # deferred: the gate registry pulls the judge's harness
+
+    gate = anticheat.ANTICHEAT.entries.get(key)
+    if gate is None or gate.check is None:
+        return f"[gates]: {key!r} is no post-run gate"
+    try:
+        found = modules.resolve(symbol)
+    except (ImportError, KeyError) as exc:
+        return f"[gates] {key}: {symbol!r} does not resolve: {exc}"
+    return "" if callable(found) else f"[gates] {key}: {symbol!r} is not callable"
+
+
+def gates_note(plugin: Plugin) -> str:
+    """What the check says of a ``[gates]`` table that passed: it is a declaration, and no grade runs its checks
+    until the deployment adopts them; ``""`` for a plugin without one."""
+    if not plugin.manifest.gates:
+        return ""
+    return (
+        f"plugin {plugin.name!r}: [gates] is a declaration: no grade runs these checks until the deployment sets "
+        f"anticheat.replace: {json.dumps(dict(plugin.manifest.gates))}"
+    )
+
+
+def harness_failure(key: str, packet: PacketDef, known: tuple[str, ...]) -> str:
+    """Why packet ``key`` cannot run on the harness it names (none, or one it refuses itself:
+    ``harnesses.refusal``); ``""`` when it names none or can."""
+    if not packet.harness:
+        return ""
+    if packet.harness not in known:
+        return f"packet {key!r}: no harness {packet.harness!r}"
+    environment = dict(packet.env)
+    environment[agent_plugins.PACKET_AGENTS_ENV] = ",".join(packet.agents)
+    refused = harnesses.refusal(packet.harness, environment)
+    return f"packet {key!r}: {refused}" if refused else ""
+
+
 def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
     """Every name ``plugin``'s manifest gives that nothing answers to: packet tools, skill pages, composed packets and
-    overlays, flavor optimizers and ``[ci]`` optimizers."""
+    overlays, the harness a packet runs on, its harnesses' runners, flavor optimizers, ``[ci]`` optimizers, the routes
+    its ``[overrides.<tool>]`` build from, its ``[gates]`` and, under ``api``, its routes' imports."""
     from hpcagent_agent.tools import registry  # deferred: only the check reads the tools
     from hpcagent_bench import prompt_build  # noqa: PLC0415 -- prompt_build loads plugins at its own import
+    from hpcagent_bench.harness.routes import ROUTES  # noqa: PLC0415 -- only the check reads the routes
 
     failures: list[str] = []
+    known = harnesses.names()
+    failures += [
+        f"harness {name!r}: no runner {block.runner}"
+        for name, block in plugin.manifest.harnesses.items()
+        if not (plugin.root / block.runner).is_file()
+    ]
     for key in plugin.manifest.packets:
         packet = PACKETS[key]
+        failures.append(harness_failure(key, packet, known))
         failures += [f"packet {key!r}: no tool {name!r}" for name in packet.tools if name not in registry.REGISTRY]
         failures += [
             f"packet {key!r}: no skill page {name!r}" for name in packet.skills if name not in {*pages, "lang", "*"}
@@ -437,6 +540,13 @@ def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
                 failures.append(f"packet {key!r}: overlay {ref!r}: {exc}")
     for key, raw in plugin.manifest.flavors.items():
         failures.append(flavor_failure(key, flavor_block(plugin, key, raw)))
+    failures += [
+        f"[overrides.{name}]: no route {route!r}"
+        for name, block in plugin.manifest.overrides.items()
+        if (route := block.build.partition("?")[0].partition("/")[0]) not in ROUTES
+    ]
+    failures += [gate_failure(key, symbol) for key, symbol in plugin.manifest.gates.items()]
+    failures.append(api_failure(plugin))
     if plugin.manifest.ci is not None:
         failures += [f"[ci]: no column {name!r}" for name in plugin.manifest.ci.optimizers if name not in FRAMEWORKS]
     return [f"plugin {plugin.name!r}: {failure}" for failure in failures if failure]
@@ -448,21 +558,34 @@ def check() -> int:
     Returns the exit status."""
     from hpcagent_agent.tools import mcp_server  # deferred: only the check serves tools
 
+    from hpcagent_bench.harness import tuners  # deferred: the tuner table imports the optimizers
+
     try:
         found = register()
         importlib.import_module("hpcagent_bench.columns")
+        harnesses.runners()
     except (ValueError, KeyError, ImportError) as exc:
         print(exc)
         return 1
     if failed := next(filter(None, map(import_failure, found)), ""):
         print(failed)
         return 1
-    mcp_server.load_tools()
+    try:
+        mcp_server.load_tools()
+    except ValueError as exc:
+        print(exc)
+        return 1
     pages = skill_packets.shipped_pages() | {
         path.parent.name for plugin in found for path in (plugin.root / "skills").glob("*/SKILL.md")
     }
     failures = [failure for plugin in found for failure in name_failures(plugin, pages)]
-    print("\n".join(failures) or f"{len(found)} plugins are fine")
+    if not failures:  # a bad flavor fails the table's import: reported above instead
+        try:
+            print(f"tuners: {', '.join(sorted(tuners.registry()))}")
+        except ValueError as exc:
+            failures.append(str(exc))
+    notes = [note for plugin in found if (note := gates_note(plugin))]
+    print("\n".join([*notes, *(failures or [f"{len(found)} plugins are fine"])]))
     return 1 if failures else 0
 
 

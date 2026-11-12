@@ -1311,7 +1311,8 @@ class FortranBodyEmitter(BaseEmitter):
         return "\n".join(out)
 
     def is_int_flag_scalar(self, node: ast.expr) -> bool:
-        """arr[i] (int param array) or a bare int scalar param used as a 0/1 flag; can't retype to logical (C ABI)."""
+        """arr[i] (int param array) or a bare int scalar (param or local) used as a 0/1 flag; a param cannot be retyped
+        to logical (C ABI)."""
         ints = self._int_array_names
         if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in ints:
             return True
@@ -1323,7 +1324,8 @@ class FortranBodyEmitter(BaseEmitter):
             int_scalars = {s.name for s in self.kir.symbols}
             int_scalars |= {s.name for s in self.kir.scalars if dtypes.is_integer(s.dtype)}
             self._int_scalar_names = int_scalars
-        return isinstance(node, ast.Name) and node.id in int_scalars
+        # An integer implicit local too: the hoisted result of ``np.all`` / ``np.any`` is declared integer.
+        return isinstance(node, ast.Name) and (node.id in int_scalars or node.id in self._int_kinds)
 
     def is_logical_node(self, node: ast.expr) -> bool:
         """True when node emits a Fortran LOGICAL.

@@ -14,6 +14,7 @@ from hpcagent_bench import phase_clock
 from hpcagent_bench.harness import results_db
 from hpcagent_bench.phase_clock import Phase
 from hpcagent_bench.support.collect import canon_db
+from tests import results_seed
 
 PHASE_COLUMNS = ("transform_time", "codegen_time", "compile_time")
 
@@ -103,17 +104,8 @@ def test_concurrent_measurements_in_two_threads_see_only_their_own_time_and_cred
 
 def version_13_canon_file(path: pathlib.Path) -> None:
     """A results file as user_version 13 wrote it: the current schema without the phase columns."""
-    with contextlib.closing(results_db.open_db(path)) as conn:
-        for column in PHASE_COLUMNS:
-            conn.execute(f"ALTER TABLE canon DROP COLUMN {column}")
-        conn.execute("ALTER TABLE setups DROP COLUMN plugins")
-        conn.execute("ALTER TABLE grades DROP COLUMN library_hash")
-        conn.execute("ALTER TABLE grades DROP COLUMN agent_root")
-        conn.execute("ALTER TABLE grades DROP COLUMN agent_libs")
-        conn.execute("ALTER TABLE grades DROP COLUMN phase")
-        conn.execute("ALTER TABLE grades DROP COLUMN library")
-        conn.execute("PRAGMA user_version = 13")
-        conn.commit()
+    results_db.open_db(path).close()
+    results_seed.as_version(path, 13)
 
 
 def test_a_version_13_file_is_upgraded_in_place_when_opened_for_writing(tmp_path: pathlib.Path) -> None:

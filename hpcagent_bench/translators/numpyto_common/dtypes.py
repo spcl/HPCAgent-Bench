@@ -28,6 +28,7 @@ __all__ = [
     "DTYPE_CACHE_SIZE",
     "FLOAT_EPS",
     "MAX_SIGNED_BYTES",
+    "NUMPY_SPELLING",
     "REAL_COMPLEX_COMPONENT",
     "REGISTRY",
     "SCALAR_KINDS",
@@ -196,6 +197,12 @@ ALIASES = {
     "float8_e4m3fn": "float8_e4m3",
     # The Precision-enum spelling a manifest's `allowed_precisions:` uses (``bf16``).
     "bf16": "bfloat16",
+    # The other Precision-enum spellings: ``ml.datatype: fp16`` (a DATATYPE_CHOICES value) reaches
+    # ``canonical`` through declared_float_dtype, and without the alias every ML emit at fp16 died
+    # with ``KeyError: 'fp16'``.
+    "fp16": "float16",
+    "fp32": "float32",
+    "fp64": "float64",
 }
 
 
@@ -260,19 +267,30 @@ def is_storage_only(dtype: str) -> bool:
         return False
 
 
+#: Registry key -> the name numpy knows the SAME format by, where they differ. ml_dtypes registers
+#: ``float8_e4m3`` too, but as the IEEE-style E4M3 (infinities, max 240) -- a different format from the
+#: OCP ``float8_e4m3fn`` (no infinities, max 448) this registry row and its C helpers implement. So
+#: ``numpy.dtype("float8_e4m3")`` silently allocated the wrong fp8 format, and a grade whose data was
+#: drawn in ``float8_e4m3fn`` asked the precision casts for a nonexistent ``float8_e4m3fn ->
+#: float8_e4m3`` cast. Every numpy-facing spelling goes through :func:`storage_dtype`.
+NUMPY_SPELLING: dict[str, str] = {"float8_e4m3": "float8_e4m3fn"}
+
+
 def storage_dtype(dtype: str) -> str:
     """The dtype one element is physically STORED as -- what numpy allocates and what a
-    C buffer element is.
+    C buffer element is -- in numpy's spelling.
 
-    Sub-byte int4 stores one value per int8 byte; every other dtype stores as itself. Any
-    caller turning a DECLARED manifest dtype into a numpy dtype goes through here, because
-    ``numpy.dtype("int4")`` does not exist. Unknown dtypes pass through unchanged.
+    Sub-byte int4 stores one value per int8 byte; every other dtype stores as itself, spelled as
+    numpy names it (:data:`NUMPY_SPELLING`: the OCP e4m3 is ``float8_e4m3fn``). Any caller turning a
+    DECLARED manifest dtype into a numpy dtype goes through here, because ``numpy.dtype("int4")``
+    does not exist and ``numpy.dtype("float8_e4m3")`` is another format. Unknown dtypes pass through
+    unchanged.
     """
     try:
         row = info(dtype)
     except KeyError:
         return dtype
-    return row.storage or row.numpy
+    return row.storage or NUMPY_SPELLING.get(row.numpy, row.numpy)
 
 
 def value_range(dtype: str) -> tuple[int, int] | None:

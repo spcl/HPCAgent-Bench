@@ -10,12 +10,21 @@ the suite reads a REAL ``.db`` rather than a frame built in the test body.
 import pathlib
 import types
 
+import pytest
+
 from hpcagent_bench.results import studies
 from hpcagent_bench.stats.commands import efficacy as efficacy_command
 from tests.conftest import script_path
 from tests.fresh_module import module_at
 
 FIXTURE = pathlib.Path(__file__).with_name("data") / "observations-mini.db"
+
+
+@pytest.fixture(autouse=True)
+def unrecorded_limits_are_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These observations record no episode limits, so they are read as a database from before the limits were
+    recorded is: ``budgets.matched_limits`` flag (strict refuses unrecorded limits)."""
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
 
 
 def load_script(name: str) -> types.ModuleType:

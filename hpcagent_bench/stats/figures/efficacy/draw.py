@@ -42,7 +42,6 @@ from hpcagent_bench.stats.figures.efficacy.layout import (
     SUCCESS_TICKS,
     TICK_LABEL_CLEARANCE_IN,
     TREATMENT_NAMES,
-    VERDICT_MARKS,
     Comparator,
     DifferenceKey,
     DotColumn,
@@ -97,6 +96,8 @@ from hpcagent_bench.stats.figures.efficacy.layout import (
 from hpcagent_bench.stats.figures.efficacy.reduce import (
     COST_SIG_LABEL,
     COST_SIG_MARK,
+    EQUIVALENT_LABEL,
+    EQUIVALENT_MARK,
     JOINT_SIG_LABEL,
     NO_SIGNIFICANCE,
     SCORE_SIG_LABEL,
@@ -115,6 +116,7 @@ from hpcagent_bench.study_tags import Marker
 
 __all__ = [
     "SETUP_DOTS_ROW_HEIGHT_IN",
+    "TOKEN_COVERAGE_NOTE",
     "category_x_axis",
     "colour_legend_marks",
     "comparator_legend_marks",
@@ -167,17 +169,19 @@ __all__ = [
     "stagger_crowded_ticks",
     "thin_rules",
     "token_axis",
+    "token_coverage",
     "treatment_legend_marks",
     "widen_y_axis_linear",
 ]
 
 
-def significance_legend_marks(score_sig: bool, cost_sig: bool) -> list[Line2D]:
+def significance_legend_marks(score_sig: bool, cost_sig: bool, *equivalent: bool) -> list[Line2D]:
     """One legend row per superscript the panel drew: the symbol as text, then what it means (fixed text; no test
-    count or threshold)."""
+    count or threshold). ``equivalent`` is whether either measure wears :data:`EQUIVALENT_MARK`."""
     rows = (
         (score_sig, SCORE_SIG_MARK, SCORE_SIG_LABEL),
         (cost_sig, COST_SIG_MARK, COST_SIG_LABEL),
+        (any(equivalent), EQUIVALENT_MARK, EQUIVALENT_LABEL),
     )
     return [
         # The symbol goes in the TEXT: a mathtext swatch renders the asterisk as a six-pointed star.
@@ -244,16 +248,16 @@ def packet_legend_mark(treatment: str, config: FigureConfig = DEFAULT_CONFIG) ->
     )
 
 
-def joint_significance_mark(score_sig: bool, cost_sig: bool) -> list[Line2D]:
-    """The superscripts in ONE key row, listing only the ones the figure drew."""
+def joint_significance_mark(score_sig: bool, cost_sig: bool, *equivalent: bool) -> list[Line2D]:
+    """The significance superscripts in ONE key row, listing only the ones the figure drew, then the
+    equivalence mark's own row when it drew one."""
     marks = zip((SCORE_SIG_MARK, COST_SIG_MARK), SIG_MEASURE_NAMES, strict=True)
     drawn = [(mark, name) for (mark, name), shown in zip(marks, (score_sig, cost_sig), strict=True) if shown]
-    if not drawn:
-        return []
-    if len(drawn) == 1:
-        return significance_legend_marks(score_sig, cost_sig)
+    if len(drawn) < 2:
+        return significance_legend_marks(score_sig, cost_sig, *equivalent)
     symbols, names = ", ".join(pair[0] for pair in drawn), ", ".join(pair[1] for pair in drawn)
-    return [Line2D([], [], linestyle="none", marker="none", label=f"{symbols}  {JOINT_SIG_LABEL}: {names}")]
+    joint = Line2D([], [], linestyle="none", marker="none", label=f"{symbols}  {JOINT_SIG_LABEL}: {names}")
+    return [joint, *significance_legend_marks(False, False, *equivalent)]
 
 
 def place_key(
@@ -552,10 +556,10 @@ def draw_setup(
     return held, high
 
 
-def draw_verdict(ax: Axes, x: float, value: float, measure: Measure, config: FigureConfig) -> None:
-    """The measure's significance mark just above the treated mark at ``(x, value)``."""
+def draw_verdict(ax: Axes, x: float, value: float, mark: str, config: FigureConfig) -> None:
+    """The measure's superscript ``mark`` (:func:`row_verdict`) just above the treated mark at ``(x, value)``."""
     ax.annotate(
-        VERDICT_MARKS.get(measure, SCORE_SIG_MARK),
+        mark,
         (x, value),
         textcoords="offset points", xytext=(0.0, config.symbol_offset_pt), fontsize=config.type_.annotation_pt,
         color=style.INK, ha="center", va="bottom", zorder=style.MARK_Z + 2.0,
@@ -586,8 +590,8 @@ def draw_measure_marks(
                 span += draw_setup(ax, x, row.treated, measure, bounds, (True, row.shape or shape, row.colour), config)[
                     0
                 ]
-                if row_verdict(row, measure, significance):
-                    draw_verdict(ax, x, measure_value(row.treated, measure)[0], measure, config)
+                if verdict := row_verdict(row, measure, significance):
+                    draw_verdict(ax, x, measure_value(row.treated, measure)[0], verdict, config)
             continue
         if row.comparator:
             # A comparator spends no tokens: the cost row keeps its slot empty.
@@ -609,8 +613,8 @@ def draw_measure_marks(
         if (row.model, row.leg) in differences:
             arrow_top = top if math.isfinite(top) else math.nan
             draw_difference_arrow(ax, x, control_value, treated_value, row.colour, measure, config, arrow_top)
-        if row_verdict(row, measure, significance):
-            draw_verdict(ax, x + config.dodge, treated_value, measure, config)
+        if verdict := row_verdict(row, measure, significance):
+            draw_verdict(ax, x + config.dodge, treated_value, verdict, config)
     return span
 
 
@@ -716,9 +720,9 @@ def draw_success_row(
                 success_rate(row.control.solved, row.control.served), x - config.dodge, x + config.dodge,
                 color=palette.lighten(row.colour, palette.CONTROL_SHADE), linewidth=2.0, zorder=style.CONNECTOR_Z,
             )  # fmt: skip
-        if not row.comparator and row_verdict(row, Measure.SUCCESS, significance or {}):
+        if not row.comparator and (mark := row_verdict(row, Measure.SUCCESS, significance or {})):
             rate = success_rate(row.treated.solved, row.treated.served)
-            draw_verdict(ax, x if relative else x + config.dodge, rate, Measure.SUCCESS, config)
+            draw_verdict(ax, x if relative else x + config.dodge, rate, mark, config)
     ax.set_yticks(SUCCESS_TICKS)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{100.0 * value:.0f}%"))
     minor_grid(ax, "y", style.MinorKind.COUNT, config)
@@ -890,14 +894,32 @@ def control_key_marks(drawn: Sequence[DotColumn], config: FigureConfig) -> list[
 
 
 def note_marks(rows: Sequence[SetupRow], config: FigureConfig) -> list[Line2D]:
-    """The pending "?" swatch and the few-kernels note, each only where the figure shows one."""
+    """The pending "?" swatch, the few-kernels note and the token-coverage note (:func:`token_coverage`), each only
+    where the figure shows one."""
     handles: list[Line2D] = []
     if config.mark_pending and any(is_pending(row) for row in rows):
         handles.append(style.pending_legend_mark(config.legend_marker_pt))
     if config.key_notes and few_kernel_marks(rows, config):
         note = FEW_KERNELS_NOTE.format(config.min_interval_kernels)
         handles.append(Line2D([], [], linestyle="none", marker="none", label=note))
+    short = token_coverage(rows)
+    if short:
+        handles.append(Line2D([], [], linestyle="none", marker="none", label=TOKEN_COVERAGE_NOTE.format(short)))
     return handles
+
+
+#: The key's note naming every column whose cost is over fewer kernels than it served (a task total still to come).
+TOKEN_COVERAGE_NOTE: str = "Tokens Recorded for: {}"
+
+
+def token_coverage(rows: Sequence[SetupRow]) -> str:
+    """``"<model> <leg> <kernels with a token total>/<served>"`` for each column of ``rows`` whose cost leaves
+    served kernels out (an episode with no task total: its job still runs), comma separated; "" when none does."""
+    return ", ".join(
+        f"{study_tags.model_name(row.model)} {row.leg} {row.treated.token_kernels}/{row.treated.served}"
+        for row in rows
+        if 0 < row.treated.token_kernels < row.treated.served
+    )
 
 
 def comparator_legend_marks(rows: Sequence[SetupRow], config: FigureConfig) -> list[Line2D]:

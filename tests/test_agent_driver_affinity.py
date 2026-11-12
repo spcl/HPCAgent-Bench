@@ -226,3 +226,32 @@ def test_the_memory_share_divides_the_node_over_its_agents_unless_named(
     assert driver.agent_memory_cap(4) == 2 * 2**30
     monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "0")
     assert driver.agent_memory_cap(4) == 0
+
+
+def test_agent_memory_flag_sets_cap(driver: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--agent-memory-gb exports ``AGENT_MEMORY_CAP_GB``, the variable the cap already reads: the named GiB wins
+    over the node's RAM share for any agent count, and 0 switches the cap off."""
+    monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "24")
+    assert driver.agent_memory_cap(4) == 24 * 2**30
+    monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "0")
+    assert driver.agent_memory_cap(4) == 0
+
+
+def test_the_agent_cpus_flag_caps_the_share(
+    driver: types.ModuleType, node: Callable[[int], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--agent-cpus holds each agent to that many CPUs of its round-robin deal -- still disjoint, the remainder
+    left for whoever else shares the node. 0, unset or garbage leaves the deal whole."""
+    node(192)
+    monkeypatch.setenv(driver.AGENT_CPUS_ENV, "2")
+    shares = [driver.agent_cpus(i, 4) for i in range(4)]
+    assert [len(share) for share in shares] == [2, 2, 2, 2]
+    flat = [cpu for share in shares for cpu in share]
+    assert len(flat) == len(set(flat)), "two agents were dealt the same CPU"
+    assert driver.agent_cpus(0, 4) == [0, 4], "the cap takes the front of the deal"
+    monkeypatch.setenv(driver.AGENT_CPUS_ENV, "0")
+    assert len(driver.agent_cpus(0, 4)) == 48
+    monkeypatch.setenv(driver.AGENT_CPUS_ENV, "many")
+    assert len(driver.agent_cpus(0, 4)) == 48
+    monkeypatch.delenv(driver.AGENT_CPUS_ENV)
+    assert len(driver.agent_cpus(0, 4)) == 48

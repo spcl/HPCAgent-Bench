@@ -29,6 +29,7 @@ from hpcagent_bench.dtypes import (
     value_range,
 )
 from hpcagent_bench.spec import BenchSpec
+from hpcagent_bench.translators.numpyto_common.dtypes import NUMPY_SPELLING
 
 #: How many fuzz iterations the comet draw is checked over -- enough that an unconstrained
 #: [lo, hi] interval would have produced an odd size with overwhelming probability.
@@ -82,8 +83,9 @@ def test_int4_borrows_int8_binding_kinds_without_shadowing_int8() -> None:
 
 
 def test_every_other_dtype_stores_as_itself() -> None:
-    """int4 is the only borrower; adding it must not have re-pointed any other row's storage."""
-    borrowers = sorted(name for name in REGISTRY if storage_dtype(name) != name)
+    """int4 is the only borrower; adding it must not have re-pointed any other row's storage. The e4m3 row stores
+    as itself under numpy's spelling of the same format (``float8_e4m3fn``: :data:`NUMPY_SPELLING`)."""
+    borrowers = sorted(name for name in REGISTRY if storage_dtype(name) != NUMPY_SPELLING.get(name, name))
     assert borrowers == ["int4"]
 
 

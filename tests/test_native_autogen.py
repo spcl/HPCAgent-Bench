@@ -496,3 +496,64 @@ def test_the_wrapper_names_the_manifest_not_an_identity_two_kernels_share() -> N
     # and the name the wrapper carries is one the loader can resolve back
     for spec in (a, b):
         assert BenchSpec.load(spec.short_name).short_name == spec.short_name
+
+
+def stub_dace_emit(monkeypatch: pytest.MonkeyPatch, returncode: int, stderr: str = "") -> list[list[str]]:
+    """Replace the ``dace emit`` child of :func:`autogen.emit_device` by one that writes a host unit, a hip unit
+    and a build file into its ``-o`` directory (exit 0) or only fails; returns the commands it was given."""
+    import subprocess
+
+    from hpcagent_bench import autogen
+
+    commands: list[list[str]] = []
+
+    def run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd)
+        if returncode == 0:
+            staging = pathlib.Path(cmd[cmd.index("-o") + 1])
+            for suffix in (".cpp", ".hip", ".build"):
+                (staging / f"rendered{suffix}").write_text(f"unit {suffix}\n")
+        return subprocess.CompletedProcess(cmd, returncode, "", stderr)
+
+    monkeypatch.setattr(autogen.subprocess, "run", run)
+    return commands
+
+
+def test_emit_device_stamps_the_pair_the_gpu_pipeline_renders(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A GPU language's native sources are the host unit, the device unit and the build file of ``dace emit``,
+    under the kernel's native stem and the autogen marker; a hand-written unit of that name is left alone."""
+    from hpcagent_bench import autogen
+    from hpcagent_bench.translators.numpyto_common.emit_io import is_generated
+
+    spec = BenchSpec.load(DENSE)
+    monkeypatch.setattr(paths, "BENCHMARKS", tmp_path)
+    commands = stub_dace_emit(monkeypatch, 0)
+    assert autogen.emit_device(spec, DENSE, Language.HIP) == {f"hip:{DENSE}:fp64": "ok"}
+    cpp_backend = tmp_path / spec.relative_path / "cpp_backend"
+    units = sorted(cpp_backend.iterdir())
+    assert [unit.name for unit in units] == [f"{DENSE}_fp64_dace{suffix}" for suffix in (".build", ".cpp", ".hip")]
+    assert all(is_generated(unit) for unit in units)
+    assert commands[0][commands[0].index("--pipeline") + 1] == autogen.NATIVE_GPU_PIPELINE
+    hand = cpp_backend / f"{DENSE}_fp64_dace.hip"
+    hand.write_text("// mine\n")
+    assert autogen.emit_device(spec, DENSE, Language.HIP) == {f"hip:{DENSE}:fp64": "override"}
+    assert hand.read_text() == "// mine\n"
+
+
+def test_a_kernel_the_gpu_pipeline_cannot_lower_is_refused_by_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed render names the kernel and the construct, and deletes the units an earlier render generated: no
+    stale device source survives a refusal."""
+    from hpcagent_bench import autogen
+
+    spec = BenchSpec.load(DENSE)
+    monkeypatch.setattr(paths, "BENCHMARKS", tmp_path)
+    stub_dace_emit(monkeypatch, 0)
+    autogen.emit_device(spec, DENSE, Language.HIP)
+    stub_dace_emit(monkeypatch, 1, "warning\ndace emit: parallel_gpu on k: NotImplementedError: a consume scope")
+    with pytest.raises(RuntimeError, match=rf"{DENSE}: native emit failed .* NotImplementedError: a consume scope"):
+        autogen.ensure_native(DENSE, Language.HIP)
+    assert not list((tmp_path / spec.relative_path / "cpp_backend").iterdir())

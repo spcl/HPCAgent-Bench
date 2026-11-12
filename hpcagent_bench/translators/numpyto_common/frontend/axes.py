@@ -89,6 +89,10 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
                 node.args[0], [ast.Constant(value=None) if d == axis else ast.Slice() for d in range(rank + 1)], node
             )
         if name == "squeeze":
+            if not isinstance(node.args[0], (ast.Name, ast.Subscript)):
+                # An expression operand keeps the call, which the hoister spills to a sized temp: no lowering
+                # indexes ``(a + m)[:, 0]``, and the emitter spelled it as pointer arithmetic (dist_mlp_tp).
+                return node
             axis = axes[0] % rank
             return self.index_(
                 node.args[0], [ast.Constant(value=0) if d == axis else ast.Slice() for d in range(rank)], node

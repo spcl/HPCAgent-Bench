@@ -100,6 +100,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.views import (
     PadImplicitTrailingSlices,
     fold_slice_view_aliases,
     fold_subarray_aliases,
+    write_back_reshape_views,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.whole_array import WholeArrayAssignRewriter
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
@@ -239,14 +240,16 @@ def required[T](value: T | None, what: str) -> T:
 
 def signature_float_dtype(kir: KernelIR) -> str:
     """The float the C emitter computes this kernel in, before any run precision is applied: the
-    compute dtype of a storage-only ABI format, float32 when every real float in the signature is,
-    else float64 -- the width its gemm call is chosen for."""
+    compute dtype of a storage-only ABI format, float32 when every real float in the signature is
+    float32 or float16 (a half kernel's temporaries and accumulators are float32, as numpy's and
+    PyTorch's half loops accumulate; before, an fp16 ABI fell to float64 temporaries), else float64
+    -- the width its gemm call is chosen for."""
     storage = {dtypes.compute_dtype(a.dtype) for a in kir.arrays if a.dtype and dtypes.is_storage_only(a.dtype)}
     if len(storage) == 1:
         return storage.pop()
     reals = {dtypes.c_type(dtypes.compute_dtype(d.dtype)) for d in descs(kir.arrays, kir.scalars) if d.dtype}
-    reals &= {"float", "double"}
-    return "float32" if reals == {"float"} else "float64"
+    reals &= {"_Float16", "float", "double"}
+    return "float32" if reals and reals <= {"_Float16", "float"} else "float64"
 
 
 def kernel_float_dtype(kir: KernelIR) -> str:
@@ -621,6 +624,8 @@ def lp_libnode_expand(ctx: LoweringContext) -> None:
     # AFTER the FFT idiom match (which consumes its own reshape chains) so the
     # single expand_reshape path serves lulesh's varargs spelling.
     ReshapeMethodRewriter().visit(tree)
+    # A reshape is lowered as a copy; a store through the reshaped name must still reach the array it views.
+    write_back_reshape_views(tree, ctx.lib_shape_table)
     # ... and the reduction methods, for the same reason: one function-form path per op instead of
     # a receiver-shape special case in every expander.
     ArrayMethodRewriter(set(ctx.original_kir.sparse or {})).visit(tree)
@@ -653,6 +658,7 @@ def lp_libnode_expand(ctx: LoweringContext) -> None:
         blas=ctx.blas,
         blas_float=signature_float_dtype(ctx.kir),
         blas_complex=ctx.blas_complex,
+        opmath=ctx.kir.opmath,
         fft_library=ctx.fft_library,
         fft_library_nd=ctx.fft_library_nd,
         extent_values={

@@ -14,3 +14,6 @@ parameters:
 args:
   graph: (N, N)
   dist: {shape: "(N,)", out: true}
+chain_length:
+  # a distance is a path sum of at most N - 1 edge weights (min is exact)
+  dist: N

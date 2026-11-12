@@ -475,6 +475,25 @@ def test_a_size_alone_is_timed_only_through_make_inputs() -> None:
     assert torch_baseline.workload_builder(with_data, shipped) is torch_baseline.shipped_data_workload
 
 
+def test_seeding_leaves_a_file_already_in_the_working_cache_untouched(tmp_path: pathlib.Path) -> None:
+    """A newer archive adds what the working directory lacks and rewrites nothing in it: a child on the node may
+    have a compiled library of the cache loaded, and a rewrite in place killed such children (SIGSEGV under 32
+    parallel grades)."""
+    first = torch_baseline.CacheLayer(tmp_path / "node-a", tmp_path / "shared" / "k.tar")
+    (first.work / "inductor").mkdir(parents=True)
+    (first.work / "inductor" / "lib.so").write_text("a", encoding="ascii")
+    (first.work / "inductor" / "new.so").write_text("n", encoding="ascii")
+    first.publish()
+    second = torch_baseline.CacheLayer(tmp_path / "node-b", first.archive)
+    (second.work / "inductor").mkdir(parents=True)
+    loaded = second.work / "inductor" / "lib.so"
+    loaded.write_text("in use", encoding="ascii")
+    second.seed()
+    assert loaded.read_text(encoding="ascii") == "in use"
+    assert (second.work / "inductor" / "new.so").read_text(encoding="ascii") == "n"
+    assert not list(second.work.rglob("*.tmp"))
+
+
 def test_the_working_cache_round_trips_through_one_archive(tmp_path: pathlib.Path) -> None:
     """A node publishes its working directory as ONE archive; another node's empty working directory is
     seeded from it, and a later publish merges what either added instead of dropping it."""

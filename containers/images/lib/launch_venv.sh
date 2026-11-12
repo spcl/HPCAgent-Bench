@@ -28,7 +28,8 @@
 # which matters because the cache holds what the prune below takes out of that venv.
 #
 # An agent step also installs the harnesses inside its venv, from the checkout's agent/harness pins and uv.lock groups:
-# ${venv}/harness/<name> for each Python runner and ${venv}/harness/node for the claude CLI (on PATH through ${venv}/bin).
+# ${venv}/harness/<name> for each Python runner and ${venv}/harness/node for the claude CLI (on PATH through ${venv}/bin),
+# and ${venv}/harness/<name> for each harness a plugin ships, from the plugin's own install argv.
 # They share the venv's key, lock and sweep, and the seal's keep of the venv reaches them. uv and node stay in the image;
 # this build fails, before any agent starts, on a uv, node or CLI that is not the pinned version or a harness that does
 # not import. A judge fails here on a checkout without the KernelBench submodule, which it would otherwise score as a
@@ -101,8 +102,8 @@ if [ ! -f "${home}/ready" ]; then
             # The ENTRYPOINT sees the image's environment and an EDF's [env], never the step's
             # HPCAGENT_BENCH_PLUGIN_DIRS: the plugin folders come from the mounts. ${plugins}/<name> is a plugin folder,
             # or its [install] root holding the plugin folder named <name> (container_runtime.sh plugin_entries).
-            if [ -n "${sources}" ]; then
-                dirs=""
+            dirs=""
+            if [ -d "${plugins}" ]; then
                 for mounted in "${plugins}"/*/; do
                     mounted="${mounted%/}"
                     name="$(basename "${mounted}")"
@@ -111,6 +112,8 @@ if [ ! -f "${home}/ready" ]; then
                         -not -path '*/.git/*' -printf '%d %h\n' | sort -n | head -n 1 | cut -d' ' -f2-)"
                     [ -n "${folder}" ] && dirs="${dirs:+${dirs}:}${folder}"
                 done
+            fi
+            if [ -n "${sources}" ]; then
                 HPCAGENT_BENCH_PLUGIN_DIRS="${dirs}" "${venv}/bin/python" -m hpcagent_agent.plugins install \
                     --role "${role}" --python "${venv}/bin/python" >&2
             fi
@@ -133,6 +136,25 @@ openai agents, agents.mcp, agents.models.openai_chatcompletions, agents.run_conf
 optimas agents, agents.exceptions, agents.mcp, agents.models.openai_chatcompletions, agents.run_config, litellm, \
 openai, openai.types.shared, optimas.arch.base, optimas.optim.opro, optimas.wrappers.example
 EOF
+                # OpenHands pins mcp < 2 (its own project and lock, agent/harness/openhands): synced like TileLang,
+                # never with --package hpcagent-agent (mcp >= 2.3), and the checkout's agent/ on its path with a .pth,
+                # which is all its runner imports (runner_common: pydantic and hpcagent_agent.coded). The driver's MCP
+                # server runs on the driver's interpreter, so the runner is only its client.
+                if [ -f "${harness}/openhands/uv.lock" ]; then
+                    (cd "${harness}/openhands" && UV_PROJECT_ENVIRONMENT="${venv}/harness/openhands" \
+                        uv sync -q --frozen --inexact --python "/usr/bin/python${HARNESS_PYTHON}")
+                    echo "${workspace}/agent" > "$(site "${venv}/harness/openhands/bin/python")/zz-agent.pth"
+                    HOME="${home}" "${venv}/harness/openhands/bin/python" -c "import importlib.metadata, importlib.util, \
+hpcagent_agent.harness.runner_common
+assert importlib.metadata.version('mcp').split('.')[0] == '1', 'the openhands venv pins mcp < 2'
+assert importlib.util.find_spec('hpcagent_bench') is None, 'openhands can import hpcagent_bench'"
+                fi
+                # The harnesses plugins ship ([harnesses.<name>] in a plugin.toml): a venv each beside the built-in
+                # ones, filled by the plugin's install argv, the checkout's agent/ on its path, checked the same way.
+                if [ -n "${sources}" ]; then
+                    HPCAGENT_BENCH_PLUGIN_DIRS="${dirs}" HOME="${home}" "${venv}/bin/python" -m hpcagent_agent.plugins \
+                        harnesses --venv "${venv}" --python "/usr/bin/python${HARNESS_PYTHON}" --agent "${workspace}/agent" >&2
+                fi
                 cli="${venv}/harness/node"
                 mkdir -p "${cli}"
                 cp "${harness}/node/package.json" "${harness}/node/package-lock.json" "${cli}/"
@@ -158,6 +180,20 @@ EOF
                 chmod +x "${venv}/bin/tilelang-python"
                 site "${tilelang}/bin/python" > "${home}/tilelang.site"
             fi
+            # The plugins' [hooks].job_init, once per node and role: this home is node state shared by every step
+            # and later job of this pin, and the ready file below is its gate, so the hook runs once -- after the
+            # venv exists and before any service starts. A profiler preload or another one-shot node setup runs
+            # here; it may drop env.sh beside the venv (sourced below by every step). A failing hook is logged
+            # and left behind; one its plugin marks job_init_required (exit 3) fails the launch, before the venv
+            # is declared ready. Never at an image build gate: that is no job start.
+            if [ -n "${sources}" ] && [ -z "${HPCAGENT_BENCH_LAUNCH_ROOT:-}" ]; then
+                HPCAGENT_BENCH_PLUGIN_DIRS="${dirs}" "${venv}/bin/python" -m hpcagent_agent.plugins job-init \
+                    --home "${home}" --venv "${venv}" --workspace "${workspace}" --role "${role}" >&2 \
+                    || {
+                        [ $? -ne 3 ] || { echo "launch_venv: a required job-init hook failed" >&2; exit 1; }
+                        echo "launch_venv: job-init failed; continuing without it" >&2
+                    }
+            fi
             touch "${home}/ready"
             echo "launch_venv: ${venv} built in $(($(date +%s) - start)) s" >&2
             # Venvs of other pins nobody used for a day hold RAM: drop them, and the cache of their wheels when no other
@@ -177,6 +213,12 @@ if [ "${role}" = agent ]; then
     rm -rf "$("${venv}/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')/relayout/corpus"
 fi
 # A python submission naming python_env "tilelang" is graded on that venv's packages (hpcagent_bench/harness/python_envs.py).
+# A [hooks].job_init hook may have dropped env.sh beside the venv (its context names the path): source it into the
+# service environment ahead of the launch's own exports, so it wins over the image's and an EDF's [env], but can
+# neither clobber the venv (VIRTUAL_ENV, PATH, HPCAGENT_BENCH_IMAGE_PYTHON, the TileLang site) nor survive the
+# exec'd command's own assignments. What ran is stamped beside it; the service environment carries the names.
+[ ! -f "${home}/env.sh" ] || . "${home}/env.sh"
+[ ! -f "${home}/job-init.plugins" ] || export HPCAGENT_BENCH_JOB_INIT="$(cat "${home}/job-init.plugins")"
 [ ! -f "${home}/tilelang.site" ] || export HPCAGENT_BENCH_TILELANG_SITE="$(cat "${home}/tilelang.site")"
 export VIRTUAL_ENV="${venv}" PATH="${venv}/bin:${PATH}" HPCAGENT_BENCH_IMAGE_PYTHON="${venv}/bin/python3"
 exec "$@"

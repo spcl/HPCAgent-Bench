@@ -32,7 +32,7 @@ import json
 import pathlib
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import NamedTuple, cast
 
 __all__ = [
@@ -43,6 +43,7 @@ __all__ = [
     "COMPACTION_SEEN_KEY",
     "COMPACT_BOUNDARY_SUBTYPE",
     "INPUT_FIELDS",
+    "LOST_MESSAGE_KEY",
     "OPEN_MESSAGE_KEY",
     "PROVIDER_CACHE_DISCOUNT",
     "SYNTHETIC_MODEL",
@@ -50,6 +51,7 @@ __all__ = [
     "USAGE_FIELDS",
     "USAGE_JSONL_SOURCE",
     "USAGE_NAME",
+    "VOID_CAUSE",
     "AttemptTotals",
     "CostRow",
     "EpisodeTotals",
@@ -76,9 +78,11 @@ __all__ = [
     "is_compact_boundary",
     "is_synthetic",
     "is_usage_transcript",
+    "lost_total",
     "main",
     "model_usage_totals",
     "numbered_attempts",
+    "request_completed",
     "resolve_output",
     "stream_message_id",
     "transcripts",
@@ -136,8 +140,12 @@ USAGE_FIELDS = (*INPUT_FIELDS, "output_tokens")
 ATTEMPT_MARKER = re.compile(r"\.attempt(\d+)\.")
 
 #: The driver's attempt ledger in a worker directory, one JSON line per attempt (T5): when each
-#: attempt ran, how it ended, and whether the driver wiped the agent's state after it.
+#: attempt ran, how it ended, its cause, and whether the driver wiped the agent's state after it.
 ATTEMPTS_NAME = "attempts.jsonl"
+
+#: The ledger ``cause`` of an attempt lost to infrastructure (``agent_driver.AttemptCause.INFRA``): its tokens are
+#: void, never in the cost. Any other cause, or none (a ledger from before causes), counts.
+VOID_CAUSE = "infra"
 
 
 def transcripts(run_dir: pathlib.Path) -> Iterator[pathlib.Path]:
@@ -178,7 +186,7 @@ def usage_total(usage: dict[str, object]) -> int | None:
 
 
 #: Substrings every event a token fold reads must contain: an ``assistant`` turn, the ``result``
-#: record, a ``thinking_tokens`` delta, a request's ``message_start`` and ``message_delta``, a proactive
+#: record, a ``thinking_tokens`` delta, a request's ``message_start``, ``message_delta`` and ``message_stop``, a proactive
 #: ``compact_boundary``, the driver's resume line. A line with none of them --
 #: a tool result or a user turn, most of a transcript's bytes -- is skipped without being decoded; a
 #: line that only mentions one is decoded and then rejected by its type, so the filter saves work and
@@ -189,14 +197,17 @@ USAGE_EVENT_MARKERS: tuple[str, ...] = (
     "thinking_tokens",
     "message_start",
     "message_delta",
+    "message_stop",
     "compact_boundary",
     "driver_resume",
 )
 
 #: The driver's own line in a claude transcript where it resumed the SAME session after a crash
 #: (``agent_driver.resume_marker``): the next leg continues this transcript's context and its counts. The
-#: request the crash cut off (a ``message_start`` with no ``message_delta``) is dropped from every fold at this
-#: line: the resumed CLI sends it again, so counting the lost one too would charge it twice.
+#: request in flight at the failure (a ``message_start`` with no ``message_stop``) left nothing in the resumed
+#: context: every fold drops it at this line and reports it as LOST (:data:`LOST_MESSAGE_KEY`, ``lost_effective``),
+#: never in the cost and never hidden. A reply the server cut at the reply cap completed (its ``message_stop``) and
+#: stays in the context the CLI continues from: counted like any other.
 RESUME_SUBTYPE = "driver_resume"
 
 
@@ -288,6 +299,12 @@ def stream_message_id(event: dict[str, object]) -> str | None:
     message = as_block(inner.get("message"))
     found = message.get("id")
     return str(found) if isinstance(found, str) and found else None
+
+
+def request_completed(event: dict[str, object]) -> bool:
+    """Whether ``event`` is the ``message_stop`` that completes the request in flight, in either shape: the raw
+    stream event or the CLI's ``stream_event`` envelope around it."""
+    return stream_event_body(event).get("type") == "message_stop"
 
 
 def delta_total(series: list[int]) -> tuple[int, str]:
@@ -385,24 +402,49 @@ def fold_compaction_recovery(event: dict[str, object], total_by_message: dict[st
 OPEN_MESSAGE_KEY = "open-message:"
 
 
+#: The key a fold files a request dropped at a resume line under, as ``LOST_MESSAGE_KEY + id``: reported by
+#: :func:`lost_total`, excluded from every other total.
+LOST_MESSAGE_KEY = "lost-message:"
+
+#: :data:`OPEN_MESSAGE_KEY` states: streaming, completed (its ``message_stop``).
+OPEN, COMPLETED = 0, 1
+
+
+def open_keys(by_message: dict[str, int]) -> list[str]:
+    return [key for key in by_message if key.startswith(OPEN_MESSAGE_KEY)]
+
+
+def note_request_completed(by_message: dict[str, int]) -> None:
+    """Mark the open request completed."""
+    for key in open_keys(by_message):
+        by_message[key] = COMPLETED
+
+
+def drop_in_flight(by_message: dict[str, int]) -> None:
+    """At a resume line: the open request, unless it completed, moves from its own entry to the lost one."""
+    for key in open_keys(by_message):
+        if by_message.pop(key) != COMPLETED:
+            message = key[len(OPEN_MESSAGE_KEY) :]
+            by_message[LOST_MESSAGE_KEY + message] = by_message.pop(message, 0)
+
+
 def track_open_message(event: dict[str, object], by_message: dict[str, int]) -> bool:
-    """Keep a billed fold's one :data:`OPEN_MESSAGE_KEY` entry on the request still streaming; at a
-    :data:`RESUME_SUBTYPE` line drop that unfinished request's own entry with it. True when ``event`` was one of
-    the three it reads (``message_start``, ``message_delta``, the resume line)."""
+    """Keep a billed fold's one :data:`OPEN_MESSAGE_KEY` entry on the latest request and its state; at a
+    :data:`RESUME_SUBTYPE` line move that request's own entry to :data:`LOST_MESSAGE_KEY` unless it completed. True
+    when ``event`` was one it reads (``message_start``, ``message_delta``, ``message_stop``, the resume line)."""
     opened = stream_message_id(event)
     if opened is not None:
-        for key in [key for key in by_message if key.startswith(OPEN_MESSAGE_KEY)]:
+        for key in open_keys(by_message):
             del by_message[key]
-        by_message[OPEN_MESSAGE_KEY + opened] = 0
+        by_message[OPEN_MESSAGE_KEY + opened] = OPEN
+        return True
+    if request_completed(event):
+        note_request_completed(by_message)
         return True
     if delta_usage(event) is not None:
-        for key in [key for key in by_message if key.startswith(OPEN_MESSAGE_KEY)]:
-            del by_message[key]
         return True
     if is_resume(event):
-        for key in [key for key in by_message if key.startswith(OPEN_MESSAGE_KEY)]:
-            del by_message[key]
-            by_message.pop(key[len(OPEN_MESSAGE_KEY) :], None)
+        drop_in_flight(by_message)
         return True
     return False
 
@@ -412,8 +454,13 @@ def billed_total(total_by_message: dict[str, int]) -> int:
     return sum(
         value
         for key, value in total_by_message.items()
-        if key != COMPACTION_SEEN_KEY and not key.startswith(OPEN_MESSAGE_KEY)
+        if key != COMPACTION_SEEN_KEY and not key.startswith((OPEN_MESSAGE_KEY, LOST_MESSAGE_KEY))
     )
+
+
+def lost_total(by_message: dict[str, int]) -> int:
+    """What a fold dropped at its resume lines (:data:`LOST_MESSAGE_KEY`): the requests in flight at a failure."""
+    return sum(value for key, value in by_message.items() if key.startswith(LOST_MESSAGE_KEY))
 
 
 def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) -> int:
@@ -421,8 +468,8 @@ def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) 
 
     A compaction's own tokens are recovered too (:func:`fold_compaction_recovery`) once its
     ``compact_boundary`` marker and the transcript's closing ``result.modelUsage`` have both been
-    seen, in this call or an earlier one. A request a crash cut off is dropped at the driver's resume line
-    (:func:`track_open_message`).
+    seen, in this call or an earlier one. This is the total the consumed-token cap enforces, so the request in
+    flight at a failure, which the cost leaves out (:func:`track_open_message`, :func:`lost_total`), is in it.
     """
     for line in lines:
         event = usage_event(line)
@@ -432,7 +479,8 @@ def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) 
             continue
         fold_compaction_recovery(event, total_by_message)
         fold_billed_event(event, total_by_message)
-    return billed_total(total_by_message)
+    # What the cap enforces: the lost requests too (only the cost leaves them out, docs/matched_limits.md).
+    return billed_total(total_by_message) + lost_total(total_by_message)
 
 
 def accumulate_output_tokens(lines: list[str], output_by_message: dict[str, int]) -> int:
@@ -448,26 +496,25 @@ def accumulate_output_tokens(lines: list[str], output_by_message: dict[str, int]
             continue
         opened = stream_message_id(event)
         if opened is not None:
-            for key in [key for key in output_by_message if key.startswith(OPEN_MESSAGE_KEY)]:
+            for key in open_keys(output_by_message):
                 del output_by_message[key]
-            output_by_message[OPEN_MESSAGE_KEY + opened] = 0
+            output_by_message[OPEN_MESSAGE_KEY + opened] = OPEN
             continue
         if is_resume(event):
-            # The open request's key stays after its deltas (later ones are named through it); a value of 1
-            # marks one that got a reading, so only a request the crash cut off is dropped.
-            for key in [key for key in output_by_message if key.startswith(OPEN_MESSAGE_KEY)]:
-                if not output_by_message.pop(key):
-                    output_by_message.pop(key[len(OPEN_MESSAGE_KEY) :], None)
+            # The request in flight at the failure, unless it completed, is lost: reported, never counted.
+            drop_in_flight(output_by_message)
             continue
         reading = delta_usage(event)
         if reading is not None:
             named = event.get("api_message_id")
-            open_ids = [key[len(OPEN_MESSAGE_KEY) :] for key in output_by_message if key.startswith(OPEN_MESSAGE_KEY)]
+            open_ids = [key[len(OPEN_MESSAGE_KEY) :] for key in open_keys(output_by_message)]
             message_id = named if isinstance(named, str) and named else (open_ids[0] if open_ids else "")
             if message_id:
                 output_by_message[message_id] = max(reading[1], output_by_message.get(message_id, 0))
-                if OPEN_MESSAGE_KEY + message_id in output_by_message:
-                    output_by_message[OPEN_MESSAGE_KEY + message_id] = 1
+        completed = request_completed(event)
+        if completed:
+            note_request_completed(output_by_message)
+        if reading is not None or completed:
             continue
         if event.get("type") == "assistant":
             message = as_block(event.get("message"))
@@ -475,6 +522,7 @@ def accumulate_output_tokens(lines: list[str], output_by_message: dict[str, int]
             value = as_block(message.get("usage")).get("output_tokens")
             if isinstance(assistant_id, str) and isinstance(value, int) and not isinstance(value, bool):
                 output_by_message[assistant_id] = max(value, output_by_message.get(assistant_id, 0))
+    # What the cap enforces: the lost requests' output too (only the cost leaves it out).
     return sum(value for key, value in output_by_message.items() if not key.startswith(OPEN_MESSAGE_KEY))
 
 
@@ -489,6 +537,32 @@ class PromptFold(NamedTuple):
     fresh: int
     cached: int
     compacted: int
+
+
+class LostTokens(NamedTuple):
+    """The requests a failure lost (in flight), split as the cost fold splits a call, so
+    every cost card can price them: inside every limit, outside the cost."""
+
+    fresh_input: int = 0
+    cached_input: int = 0
+    output: int = 0
+
+    def plus(self, fresh_input: int, cached_input: int, output: int) -> "LostTokens":
+        return LostTokens(self.fresh_input + fresh_input, self.cached_input + cached_input, self.output + output)
+
+    @property
+    def effective(self) -> int:
+        """The lost requests in the effective unit."""
+        return int(self.fresh_input + CACHE_DISCOUNT * self.cached_input + self.output)
+
+    def row(self) -> dict[str, float | str]:
+        """The cost-row fields: the three components and ``lost_effective``."""
+        return {
+            "lost_fresh_input": self.fresh_input,
+            "lost_cached_input": self.cached_input,
+            "lost_output": self.output,
+            "lost_effective": self.effective,
+        }
 
 
 def fold_prompt(prompt: int, previous: int) -> PromptFold:
@@ -523,9 +597,19 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
     else -- is their sum, which is the call's ``completion_tokens``. Reasoning is never a third
     addend. There is no duration in the file, so the row carries no wall_ms/api_ms.
     """
-    fresh = cached = previous_input = output = thinking = calls = compactions = 0
     with path.open(errors="replace") as handle:
-        lines = list(handle)
+        return usage_lines_cost(list(handle))
+
+
+#: A runner transcript's driver line where it resumed the runner (``agent_driver.usage_resume_marker``): ``lost``
+#: says what the failure lost, ``in_flight`` (a call that died before returning: the line carries at least the
+#: prompt it sent, counted against the limits and reported lost, never cost), else nothing.
+USAGE_RESUME_KEY = "driver_resume"
+
+
+def usage_records(lines: list[str]) -> list[dict[str, object]]:
+    """The JSON objects of usage.jsonl ``lines`` (a half-written tail and non-JSON skipped)."""
+    records: list[dict[str, object]] = []
     for raw in lines:
         line = raw.strip()
         if not line.startswith("{"):
@@ -534,16 +618,36 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
             record = json.loads(line)
         except ValueError:
             continue  # the tail can be half-written while the runner is mid-append
-        if not isinstance(record, dict):
+        if isinstance(record, dict):
+            records.append(cast("dict[str, object]", record))
+    return records
+
+
+def usage_lines_cost(lines: list[str]) -> CostRow:
+    """:func:`usage_episode_cost` over the lines of a usage.jsonl."""
+    records = usage_records(lines)
+    lost_calls = {
+        index
+        for index, record in enumerate(records)
+        if record.get(USAGE_RESUME_KEY) is not None and record.get("lost") == "in_flight"
+    }
+    fresh = cached = previous_input = output = thinking = calls = compactions = 0
+    lost = LostTokens()
+    for index, record in enumerate(records):
+        if record.get(USAGE_RESUME_KEY) is not None and index not in lost_calls:
             continue
         call_input = usage_prompt_tokens(record)
-        fresh_now, cached_now, compacted = fold_prompt(call_input, previous_input)
-        fresh += fresh_now
-        cached += cached_now
-        compactions += compacted
-        previous_input = call_input
+        fold = fold_prompt(call_input, previous_input)
         reasoning = count(record, "reasoning")
-        output += count(record, "output") + reasoning
+        generated = count(record, "output") + reasoning
+        if index in lost_calls:
+            lost = lost.plus(fold.fresh, fold.cached, generated)
+            continue
+        fresh += fold.fresh
+        cached += fold.cached
+        compactions += fold.compacted
+        previous_input = call_input
+        output += generated
         thinking += reasoning
         calls += 1
     return {
@@ -558,6 +662,7 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
         "naive_total": fresh + cached + output,
         "effective": fresh + CACHE_DISCOUNT * cached + output,
         "effective_provider": fresh + PROVIDER_CACHE_DISCOUNT * cached + output,
+        **lost.row(),
     }
 
 
@@ -599,6 +704,32 @@ def is_synthetic(message: dict[str, object]) -> bool:
     return message.get("model") == SYNTHETIC_MODEL
 
 
+def stream_event_body(event: dict[str, object]) -> dict[str, object]:
+    """The raw stream event: ``event`` itself, or the one the CLI's ``stream_event`` envelope carries."""
+    return as_block(event.get("event")) if event.get("type") == "stream_event" else event
+
+
+def lost_request(
+    message: str,
+    per_turn: dict[str, dict[str, object]],
+    order: list[str],
+    deltas: dict[str, list[int]],
+    started_input: dict[str, int],
+) -> LostTokens:
+    """Take the request ``message`` out of a fold and return what it spent, its prompt (its own usage, else its
+    ``message_start``'s) folded against the last kept turn's by :func:`fold_prompt` (a compaction charges it whole)
+    and what it generated."""
+    usage = per_turn.pop(message, None)
+    if usage is not None:
+        order.remove(message)
+    series = deltas.pop(message, [])
+    prompt = sum(count(usage, f) for f in INPUT_FIELDS) if usage else started_input.get(message, 0)
+    before = sum(count(per_turn[order[-1]], f) for f in INPUT_FIELDS) if order else 0
+    generated = max(delta_total(series)[0] if series else 0, count(usage, "output_tokens") if usage else 0)
+    fold = fold_prompt(prompt, before)
+    return LostTokens(fold.fresh, fold.cached, generated)
+
+
 def events_cost(events: list[dict[str, object]]) -> CostRow:
     """:func:`episode_cost` over a transcript's already-parsed :func:`claude_events`."""
     per_turn: dict[str, dict[str, object]] = {}
@@ -611,6 +742,10 @@ def events_cost(events: list[dict[str, object]]) -> CostRow:
     wall_ms = api_ms = 0
     compacted_by_cli = False
     model_usage_event: dict[str, object] | None = None
+    # The requests whose message_stop arrived.
+    ended: set[str] = set()
+    started_input: dict[str, int] = {}
+    lost = LostTokens()
     for event in events:
         if is_compact_boundary(event):
             compacted_by_cli = True
@@ -621,14 +756,18 @@ def events_cost(events: list[dict[str, object]]) -> CostRow:
         started = stream_message_id(event)
         if started is not None:
             current = started
+            usage = as_block(as_block(stream_event_body(event).get("message")).get("usage"))
+            started_input[started] = sum(count(usage, f) for f in INPUT_FIELDS)
             continue
         if is_resume(event):
-            # The request the crash cut off, never closed by a delta: the resumed leg re-sends its prompt.
-            if current and current not in deltas and current in per_turn:
-                del per_turn[current]
-                order.remove(current)
+            # The request in flight at the failure left nothing in the resumed context: lost, not cost.
+            if current and current not in ended:
+                taken = lost_request(current, per_turn, order, deltas, started_input)
+                lost = lost.plus(*taken)
             current = ""
             continue
+        if request_completed(event) and current:
+            ended.add(current)
         delta = delta_usage(event)
         if delta is not None:
             # Grouped under the message_start that opened this request. Without one -- a CLI that
@@ -707,6 +846,8 @@ def events_cost(events: list[dict[str, object]]) -> CostRow:
         "effective": fresh + CACHE_DISCOUNT * cached + output,
         # The same fold priced the way a hosted provider meters it: re-read prefixes at a tenth.
         "effective_provider": fresh + PROVIDER_CACHE_DISCOUNT * cached + output,
+        # The requests in flight at a failure the driver resumed from: reported, not cost.
+        **lost.row(),
         # The SELF-HOSTED unit. Tokens are a borrowed currency here -- nobody bills us per token,
         # we pay for nodes by the second -- and api_ms is the share of the shared inference node
         # this episode actually occupied. An episode's node-seconds is the job's
@@ -784,8 +925,9 @@ def attempt_transcripts(worker_dir: pathlib.Path) -> list[pathlib.Path]:
 class EpisodeTotals(NamedTuple):
     """T2: one task's token totals, read off the attempts in its worker directory.
 
-    ``tokens_effective``/``tokens_billed`` are the FINAL attempt's, which is what the task cost
-    under T2; the two ``_crashed`` fields hold what the attempts before it spent, and
+    ``tokens_effective``/``tokens_billed`` are the FINAL attempt's; the two ``_crashed`` fields hold what the
+    attempts before it spent that the cost counts, ``tokens_effective_void`` what those lost to infrastructure
+    spent (:data:`VOID_CAUSE`), ``cause`` how the final attempt ended (``""`` when the ledger does not say), and
     ``final_attempt_start_ms`` is when it began (:func:`final_attempt_start`).
     """
 
@@ -799,6 +941,16 @@ class EpisodeTotals(NamedTuple):
     tokens_fresh_input: int | None = None
     tokens_cached_input: int | None = None
     tokens_output: int | None = None
+    tokens_effective_void: int = 0
+    cause: str = ""
+    #: The requests lost at a failure (in flight), over every attempt: reported, not cost.
+    tokens_effective_lost: int = 0
+    tokens_lost_fresh_input: int = 0
+    tokens_lost_cached_input: int = 0
+    tokens_lost_output: int = 0
+    #: Infrastructure ends continued in the session (``resume``) and restarted from nothing (``fresh``).
+    resumes: int = 0
+    fresh_relaunches: int = 0
 
 
 class AttemptTotals(NamedTuple):
@@ -809,19 +961,50 @@ class AttemptTotals(NamedTuple):
     fresh_input: int
     cached_input: int
     output: int
+    #: The requests lost at a failure (in flight), left out of every reading above.
+    lost: LostTokens = LostTokens()
+
+    def minus(self, other: "AttemptTotals") -> "AttemptTotals":
+        """What this attempt spent past ``other``, a prefix of it (:func:`attempt_totals` with ``before_last_leg``)."""
+        return AttemptTotals(
+            self.effective - other.effective,
+            self.billed - other.billed,
+            self.fresh_input - other.fresh_input,
+            self.cached_input - other.cached_input,
+            self.output - other.output,
+            LostTokens(
+                self.lost.fresh_input - other.lost.fresh_input,
+                self.lost.cached_input - other.lost.cached_input,
+                self.lost.output - other.lost.output,
+            ),
+        )
 
 
-def attempt_totals(log: pathlib.Path) -> AttemptTotals:
+def leg_cut(items: list[str] | list[dict[str, object]], is_marker: Callable[[object], bool]) -> int:
+    """The index just past the last resume marker of ``items`` (0 when there is none): the attempt's legs before its
+    last one."""
+    marks = [index for index, item in enumerate(items) if is_marker(item)]
+    return marks[-1] + 1 if marks else 0
+
+
+def attempt_totals(log: pathlib.Path, before_last_leg: bool = False) -> AttemptTotals:
     """One attempt's effective and billed tokens (8.1) and their components, from ONE read of its transcript: the
     effective cost model of :func:`events_cost` and the last-usage-per-message-id fold of
     :func:`fold_billed_event` (plus :func:`fold_compaction_recovery`, the same as
     :func:`accumulate_total_tokens`) over the same parsed events. Each attempt folds fresh, since the
-    driver starts every attempt with a new transcript (no message id repeats across attempts)."""
+    driver starts every attempt with a new transcript (no message id repeats across attempts). ``before_last_leg``
+    reads only the legs before its last resume line (that line included, so the request it lost stays lost)."""
     if is_usage_transcript(log):
-        cost = usage_episode_cost(log)
+        with log.open(errors="replace") as handle:
+            lines = list(handle)
+        if before_last_leg:
+            lines = lines[: leg_cut(lines, lambda line: f'"{USAGE_RESUME_KEY}"' in str(line))]
+        cost = usage_lines_cost(lines)
         billed = int(cast("float", cost["naive_total"]))
     else:
         events = claude_events(log)
+        if before_last_leg:
+            events = events[: leg_cut(events, lambda event: is_resume(cast("dict[str, object]", event)))]
         billed_by_message: dict[str, int] = {}
         for event in events:
             if track_open_message(event, billed_by_message):
@@ -836,6 +1019,11 @@ def attempt_totals(log: pathlib.Path) -> AttemptTotals:
         int(cast("float", cost["fresh_input"])),
         int(cast("float", cost["cached_input"])),
         int(cast("float", cost["output"])),
+        LostTokens(
+            int(cast("float", cost["lost_fresh_input"])),
+            int(cast("float", cost["lost_cached_input"])),
+            int(cast("float", cost["lost_output"])),
+        ),
     )
 
 
@@ -876,31 +1064,54 @@ def final_attempt_start(worker_dir: pathlib.Path, logs: list[pathlib.Path]) -> i
 
 
 def episode_totals(worker_dir: pathlib.Path) -> EpisodeTotals:
-    """The TASK TOKEN TOTAL (T2) of one task: its FINAL attempt, and what the earlier ones spent.
+    """The TASK TOKEN TOTAL (T2) of one task: its FINAL attempt, and what the earlier ones spent, by cause.
 
-    A resumed crash stays in one transcript (T5), so its legs are one attempt here, counted once. Only a fresh
-    relaunch leaves ``.attemptN`` transcripts: it hands the next attempt an empty context and workspace, so an
-    earlier attempt contributed no part of the answer that was graded -- it is spend, reported as ``_crashed``
-    beside the total and never added to it.
+    A resumed crash stays in one transcript (T5), so its legs are one attempt here, counted once, less the request in
+    flight at each failure (``tokens_effective_lost``, reported). Only a fresh
+    relaunch leaves ``.attemptN`` transcripts, each ended by the ledger line that cleared the workspace after it:
+    one whose ``cause`` is :data:`VOID_CAUSE` is void (``tokens_effective_void``), any other counts (``_crashed``).
 
     A worker directory with no transcript at all was never entered -- not a zero-token task -- so it
     reports ``attempts=0`` and ``None`` totals rather than 0.
     """
     logs = attempt_transcripts(worker_dir)
+    ledger = attempt_ledger(worker_dir)
+    cause = str(ledger[-1].get("cause") or "") if ledger else ""
     if not logs:
-        return EpisodeTotals(0, None, None, 0, 0, 0)
+        return EpisodeTotals(0, None, None, 0, 0, 0, cause=cause)
     per_attempt = [attempt_totals(log) for log in logs]
     final = per_attempt[-1]
+    cleared = [block.get("cause") for block in ledger if block.get("cleared") is True]
+    counted: list[AttemptTotals] = []
+    void: list[AttemptTotals] = []
+    for index, (log, attempt) in enumerate(zip(logs[:-1], per_attempt, strict=False)):
+        if not (index < len(cleared) and cleared[index] == VOID_CAUSE):
+            counted.append(attempt)
+            continue
+        # Restarted from nothing after it had resumed: its legs before the last failure counted against the limits
+        # and stay counted; only the last leg is void.
+        kept = attempt_totals(log, before_last_leg=True)
+        counted.append(kept)
+        void.append(attempt.minus(kept))
+    lost = [attempt.lost for attempt in per_attempt]
     return EpisodeTotals(
         attempts=len(logs),
         tokens_effective=final.effective,
         tokens_billed=final.billed,
-        tokens_effective_crashed=sum(attempt.effective for attempt in per_attempt[:-1]),
-        tokens_billed_crashed=sum(attempt.billed for attempt in per_attempt[:-1]),
+        tokens_effective_crashed=sum(attempt.effective for attempt in counted),
+        tokens_billed_crashed=sum(attempt.billed for attempt in counted),
         final_attempt_start_ms=final_attempt_start(worker_dir, logs),
         tokens_fresh_input=final.fresh_input,
         tokens_cached_input=final.cached_input,
         tokens_output=final.output,
+        tokens_effective_void=sum(attempt.effective for attempt in void),
+        cause=cause,
+        tokens_effective_lost=sum(part.effective for part in lost),
+        tokens_lost_fresh_input=sum(part.fresh_input for part in lost),
+        tokens_lost_cached_input=sum(part.cached_input for part in lost),
+        tokens_lost_output=sum(part.output for part in lost),
+        resumes=sum(block.get("resumed") is True for block in ledger),
+        fresh_relaunches=len(cleared),
     )
 
 

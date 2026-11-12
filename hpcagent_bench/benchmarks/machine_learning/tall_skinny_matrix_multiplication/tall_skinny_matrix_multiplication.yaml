@@ -19,3 +19,6 @@ args:
   A: (M, N)
   B: (N, M)
   out: {shape: "(M, M)", out: true}
+chain_length:
+  # one N-term dot product per element
+  out: N

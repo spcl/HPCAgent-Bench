@@ -369,6 +369,13 @@ def test_a_release_that_does_not_load_back_from_the_hub_exits_3(
     assert "publish a new patch tag" in err.getvalue()
 
 
+def test_a_release_tag_is_a_v_prefixed_release_or_pre_release() -> None:
+    from hpcagent_bench.export import hf as H
+
+    assert all(H.RELEASE_TAG.fullmatch(tag) for tag in ("v0.5.0", "v1.0a1", "v1.0.0-rc.1"))
+    assert not any(H.RELEASE_TAG.fullmatch(tag) for tag in ("0.5", "1.0a1", "v1", "v1.0alpha"))
+
+
 @pytest.mark.parametrize("extra", [("--release-tag", "v0.5.0"), ("--push", "org/demo", "--release-tag", "0.5")])
 def test_a_bad_release_request_is_refused_before_building(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, extra: tuple[str, ...]

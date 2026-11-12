@@ -79,6 +79,7 @@ __all__ = [
     "C_PRELUDE",
     "C_SHAPE_BINOPS",
     "C_TYPE_BYTES",
+    "E4M3_SATURATING",
     "FLOATABLE",
     "FLOAT_LITERAL_SUFFIX",
     "FLOAT_MATH_MACROS",
@@ -988,12 +989,46 @@ class CBodyEmitter(BaseEmitter):
         if op is None:
             raise NotImplementedError(f"augmented op {type(node.op).__name__}")
         lhs = self.emit_expr(node.target)
-        rhs = self.emit_expr(node.value)
+        rhs = self.widened_product(node) or self.emit_expr(node.value)
         fns = self.store_fns(node.target)
         if fns is not None:
             # fp8 storage can't use C's += (target is 1-byte): expand to explicit load/op/store (read promotes, result demotes).
             return f"{indent}{lhs} = {fns.demote}({fns.promote}({lhs}) {op} ({rhs}));"
         return f"{indent}{lhs} {op}= {rhs};"
+
+    def widened_product(self, node: ast.AugAssign) -> str | None:
+        """``acc += a * b`` into a float32/float64 accumulator with a half (``_Float16``) operand: the product
+        computed in the accumulator's type, ``((float)(a) * (float)(b))``, else None. A half product is
+        exact in float32, and numpy's and PyTorch's half GEMMs accumulate the unrounded products; left to C,
+        ``a * b`` is a ``_Float16`` operation -- rounded to half where the target has AVX512-FP16, in float
+        elsewhere -- so the same source accumulated differently per machine. The storage-only formats need no
+        cast: their reads already promote to float."""
+        if not isinstance(node.op, (ast.Add, ast.Sub)):
+            return None
+        value = node.value
+        if not (isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult)):
+            return None
+        base: ast.expr = node.target
+        while isinstance(base, ast.Subscript):
+            base = base.value
+        acc = self.name_dtype(base.id) if isinstance(base, ast.Name) else None
+        if acc is None or dtypes.compute_dtype(acc) not in ("float32", "float64") or dtypes.is_storage_only(acc):
+            return None
+        if not (self.touches_dtype(value.left, "float16") or self.touches_dtype(value.right, "float16")):
+            return None
+        wide = c_type_(dtypes.compute_dtype(acc))
+        return self.fp8_round(
+            value, f"(({wide})({self.emit_expr(value.left)}) * ({wide})({self.emit_expr(value.right)}))"
+        )
+
+    def touches_dtype(self, node: ast.expr, dtype: str) -> bool:
+        """Whether the subtree reads a name (array or scalar) declared ``dtype``."""
+        for sub in walk_nodes(node):
+            name = sub.value.id if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name) else None
+            name = sub.id if isinstance(sub, ast.Name) else name
+            if name is not None and (self.name_dtype(name) or "") == dtype:
+                return True
+        return False
 
     # expression-level
 
@@ -1004,9 +1039,9 @@ class CBodyEmitter(BaseEmitter):
         if isinstance(node, ast.Constant):
             return self.emit_constant(node.value)
         if isinstance(node, ast.Name):
-            # A size-1 array read bare in a value expression is its sole element: emit x[0], not the pointer x.
+            # A size-1 or 0-d array read bare in a value expression is its sole element: emit x[0], not the pointer x.
             shape = self.array_shapes.get(node.id)
-            access = f"{node.id}[0]" if (shape and all(str(s) == "1" for s in shape)) else node.id
+            access = f"{node.id}[0]" if (shape is not None and all(str(s) == "1" for s in shape)) else node.id
             return self.promote_name_read(node, access)
         if isinstance(node, ast.UnaryOp):
             return self.emit_unaryop(node)
@@ -3060,9 +3095,38 @@ FP8_HELPERS = {
 }
 
 
+#: The e4m3fn demote's out-of-range answers in an :attr:`KernelIR.opmath` kernel, as ``(numpy line, opmath
+#: line)`` edits of :data:`FP8_HELPERS`: numpy's ml_dtypes turns a finite overflow and +-Inf into NaN, while
+#: PyTorch's cast -- the ML track's oracle -- and the hardware ``satfinite`` conversion saturate them to +-448
+#: (NaN stays NaN). e5m2 has infinities and overflows to them under both.
+E4M3_SATURATING: tuple[tuple[str, str], ...] = (
+    (
+        "    if (rest >= 0x7f800000u) return ({ct})((s << 7) | 0x7Fu);   /* Inf/NaN -> NaN */\n",
+        (
+            "    if (rest > 0x7f800000u) return ({ct})((s << 7) | 0x7Fu);    /* NaN */\n"
+            "    if (rest == 0x7f800000u) return ({ct})((s << 7) | 0x7Eu);   /* Inf saturates to +-448 */\n"
+        ),
+    ),
+    (
+        "return ({ct})((s << 7) | 0x7Fu);  /* overflow -> NaN */",
+        "return ({ct})((s << 7) | 0x7Eu);  /* overflow saturates to +-448 */",
+    ),
+)
+
+
 def fp8_prelude(kir: KernelIR) -> str:
-    """Storage typedef + conversions for each fp8 format the kernel uses; empty for a non-fp8 kernel."""
-    return "".join(FP8_HELPERS[dt].format(ct=dtypes.c_type(dt)) for dt in fp8_dtypes_used(kir))
+    """Storage typedef + conversions for each fp8 format the kernel uses; empty for a non-fp8 kernel. The e4m3fn
+    demote saturates in an :attr:`KernelIR.opmath` kernel (:data:`E4M3_SATURATING`)."""
+    out = []
+    for dt in fp8_dtypes_used(kir):
+        ct = dtypes.c_type(dt)
+        body = FP8_HELPERS[dt].format(ct=ct)
+        if kir.opmath and dt == "float8_e4m3":
+            for numpy_line, opmath_line in E4M3_SATURATING:
+                assert numpy_line.format(ct=ct) in body, numpy_line
+                body = body.replace(numpy_line.format(ct=ct), opmath_line.format(ct=ct))
+        out.append(body)
+    return "".join(out)
 
 
 def helper_return_ctype(hkir: KernelIR) -> str:

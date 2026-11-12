@@ -3,7 +3,6 @@
 """The efficacy command: stars survive the BH correction only for real effects, and the dot-row contract holds
 (one column per (LLM, delivery), hollow control, per-row stars)."""
 
-import argparse
 import dataclasses
 import itertools
 import math
@@ -20,14 +19,15 @@ from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 
+from hpcagent_bench import config as bench_config
 from hpcagent_bench import paths
 from hpcagent_bench.results import studies
-from hpcagent_bench.stats import cost, palette, population, score_rule, summary
+from hpcagent_bench.stats import cost, limits, palette, population, score_rule, significance, summary
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.commands import efficacy as efficacy_command
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 from hpcagent_bench.stats.figures.efficacy import Measure
-from hpcagent_bench.stats.significance import Finding, Leg
+from hpcagent_bench.stats.significance import Conclusion, Finding, Leg
 
 REPO = paths.ROOT
 
@@ -93,6 +93,13 @@ def episode(setup: str, model: str, language: str, kernel: int, run: str, speedu
     ]
 
 
+@pytest.fixture(autouse=True)
+def unrecorded_limits_are_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The synthetic observations here record no episode limits, so they are read as a database from before the
+    limits were recorded is: ``budgets.matched_limits`` flag (strict refuses unrecorded limits)."""
+    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
+
+
 def observations(gains: tuple[float, ...], winner: tuple[str, str] | None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Control and treated frames for all six cells, ``gains`` applied to ``winner`` alone.
 
@@ -146,14 +153,15 @@ def one_setup_stats(
     language: str = "c",
     score_verdict: str = Finding.NOT_SIGNIFICANT.text,
     cost_verdict: str = Finding.NOT_SIGNIFICANT.text,
-    family_size: int = 2,
+    family_size: int = 1,
 ) -> pd.DataFrame:  # fmt: skip
     return pd.DataFrame([{
         "model": model,
         "language": language,
         "score_verdict": score_verdict,
         "cost_verdict": cost_verdict,
-        "family_size": family_size
+        "score_family_size": family_size,
+        "cost_family_size": family_size,
     }])  # fmt: skip
 
 
@@ -181,12 +189,21 @@ def test_an_effect_every_setup_shows_still_survives_the_correction() -> None:
 
 
 def test_the_family_the_marks_are_corrected_over_is_every_test_the_figure_could_mark() -> None:
-    """Six (model, language) cells on two axes is twelve, and the count is reported rather than
-    left to a reader to reconstruct from how the table happened to be built."""
+    """Six (model, language) cells: each leg's six tests under ``statistics.correction_family`` family-leg (the
+    default), twelve on both axes under ``family``, and the count is reported rather than left to a reader to
+    reconstruct from how the table happened to be built."""
     before, after = observations(MARGINAL, winner=("qwen38", "c"))
     frame = plot.points(before, after)
     assert len(frame) == 6
-    assert plot.efficacy_figures.family_size(frame) == 12
+    assert plot.efficacy_figures.family_sizes(frame) == (6, 6)
+    assert list(frame.score_p_adjusted) == pytest.approx(significance.correct(list(frame.score_p)), nan_ok=True)
+    assert list(frame.cost_p_adjusted) == pytest.approx(significance.correct(list(frame.cost_p)), nan_ok=True)
+    with bench_config.overridden("statistics.correction_family", "family"):
+        pooled = plot.points(before, after)
+    assert plot.efficacy_figures.family_sizes(pooled) == (12, 12)
+    both = significance.correct([*pooled.score_p, *pooled.cost_p])
+    assert list(pooled.score_p_adjusted) == pytest.approx(both[:6], nan_ok=True)
+    assert list(pooled.cost_p_adjusted) == pytest.approx(both[6:], nan_ok=True)
 
 
 #: The card for a frame that carries only ``setup`` and ``packet``: ``effective`` leaves the frame
@@ -577,6 +594,39 @@ def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: s
     )
 
 
+def test_an_equivalent_measure_wears_its_own_mark_only_when_the_family_csv_carries_conclusions() -> None:
+    """``paired_setups.py`` writes a three-way conclusion per leg (``statistics.equivalence``). The figure then marks
+    a measure that passed the equivalence test with ``=`` and explains it in the key; a significant measure keeps
+    its star. With ``statistics.equivalence`` false a family CSV without the column draws and explains exactly what
+    it always did."""
+    import matplotlib.pyplot as plt
+
+    table = family_csv([SCICOMP_PAIR], Finding.NOT_SIGNIFICANT.text, Finding.SIGNIFICANT.text)
+    with bench_config.overridden("statistics.equivalence", False):
+        plain = plot.family_stats(table, "repo")
+    assert not set(efficacy_figures.CONCLUSION_COLUMNS) & set(plain.columns)
+    assert efficacy_figures.drawn_symbols(plain) == (False, True)
+    conclusions = {Leg.SPEEDUP.text: Conclusion.EQUIVALENT.text, Leg.TOKENS.text: Conclusion.DIFFERENT.text}
+    stats = plot.family_stats(table.assign(conclusion=table.leg.map(conclusions)), "repo")
+    assert stats[list(efficacy_figures.CONCLUSION_COLUMNS)].iloc[0].tolist() == list(conclusions.values())
+    assert efficacy_figures.drawn_symbols(stats) == (False, True, True, False)
+    row = dataclasses.replace(arrow_row(), model=str(stats.model.iloc[0]), leg=str(stats.leg.iloc[0]))
+    drawn = {}
+    for measure in (Measure.SPEEDUP, Measure.COST):
+        _, ax = plt.subplots()
+        efficacy_figures.draw_measure_row(ax, [row], measure, "^", efficacy_figures.axis_significance(stats))
+        drawn[measure] = [text.get_text() for text in ax.texts]
+    assert drawn == {
+        Measure.SPEEDUP: [efficacy_figures.EQUIVALENT_MARK],
+        Measure.COST: [efficacy_figures.COST_SIG_MARK],
+    }
+    labels = [handle.get_label() for handle in efficacy_figures.legend_tail(efficacy_figures.drawn_symbols(stats))]
+    assert labels[-2:] == [
+        f"{efficacy_figures.COST_SIG_MARK}  {efficacy_figures.COST_SIG_LABEL}",
+        f"{efficacy_figures.EQUIVALENT_MARK}  {efficacy_figures.EQUIVALENT_LABEL}",
+    ]
+
+
 def test_a_pairs_leg_names_the_language_and_every_packet_both_setups_carried() -> None:
     """llrblind runs C and C with the skill pages against their own scored setups, so a leg label of
     the language alone would draw two different setups as one."""
@@ -605,7 +655,25 @@ def test_the_stars_come_off_the_family_csv_and_are_never_recomputed_here() -> No
     assert list(stats.score_verdict) == [Finding.SIGNIFICANT.text]
     assert list(stats.cost_verdict) == [Finding.NOT_SIGNIFICANT.text]
     assert list(stats.kernels) == [40]
-    assert plot.efficacy_figures.family_size(stats) == 2
+    assert plot.efficacy_figures.family_sizes(stats) == (1, 1)
+
+
+def test_a_family_csv_is_drawn_only_under_the_settings_its_sidecar_states(tmp_path: pathlib.Path) -> None:
+    """The figure draws the family CSV's verdicts as they are, so it reads one only when the sidecar
+    ``paired_setups.py`` wrote beside it names the current ``statistics`` and ``budgets``; a CSV without a sidecar
+    only while ``statistics.equivalence`` is off (tables from before the sidecar)."""
+    table = family_csv([BLIND_PAIR], Finding.SIGNIFICANT.text, Finding.NOT_SIGNIFICANT.text).assign(
+        conclusion=Conclusion.INCONCLUSIVE.text, limits_match=limits.LimitsMatch.IDENTICAL.text, same_task_set=True
+    )
+    source = tmp_path / "family.csv"
+    with pytest.raises(SystemExit, match="no family.settings.json"):
+        plot.same_protocol(table, source)
+    with bench_config.overridden("statistics.equivalence", False):
+        plot.same_protocol(table.drop(columns="conclusion"), source)
+    significance.write_settings(source)
+    plot.same_protocol(table, source)
+    with bench_config.overridden("statistics.alpha", 0.01), pytest.raises(SystemExit, match="alpha"):
+        plot.same_protocol(table, source)
 
 
 def test_the_family_csv_declares_the_pairs_in_the_order_it_wrote_them() -> None:
@@ -1101,7 +1169,7 @@ def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_
 def test_without_the_success_row_speedup_and_cost_keep_their_order(
     success_row: bool, want: tuple[Measure, ...]
 ) -> None:
-    assert plot.dot_measures(argparse.Namespace(success_row=success_row)) == want
+    assert plot.dot_measures(plot.Options(success_row=success_row)) == want
 
 
 def setup(x: float, high: float, solved: int = 4, served: int = 6) -> efficacy_figures.SetupPoint:

@@ -23,7 +23,9 @@ from hpcagent_bench.stats import palette, population, rules, style, summary
 from hpcagent_bench.stats.figures.efficacy.reduce import (
     COST_SIG_MARK,
     EMPTY_POINT,
+    EQUIVALENT_MARK,
     NO_SIGNIFICANCE,
+    SCORE_SIG_MARK,
     SPEEDUP_OVER,
     UNCHANGED_POINT,
     Series,
@@ -1030,11 +1032,18 @@ def verdicts_of(significance: dict[tuple[str, str], Significance], row: SetupRow
     return significance.get((row.model, language), NO_SIGNIFICANCE)
 
 
-def row_verdict(row: SetupRow, measure: Measure, significance: dict[tuple[str, str], Significance]) -> bool:
-    """Whether ``row`` is starred on ``measure``'s row. Each row carries only ITS OWN verdict: a star
-    on the cost row would test the speedup."""
-    score_sig, cost_sig = verdicts_of(significance, row)
-    return {Measure.COST: cost_sig, Measure.SUCCESS: False}.get(measure, score_sig)
+def row_verdict(row: SetupRow, measure: Measure, significance: dict[tuple[str, str], Significance]) -> str:
+    """The superscript ``row`` wears on ``measure``'s row, empty for none: the measure's own star when it is
+    significant, else :data:`EQUIVALENT_MARK` when it was found equivalent. Each row carries only ITS OWN
+    verdict: a star on the cost row would test the speedup."""
+    if measure is Measure.SUCCESS:
+        return ""
+    flags = verdicts_of(significance, row)
+    index = 1 if measure is Measure.COST else 0
+    if flags[index]:
+        return VERDICT_MARKS.get(measure, SCORE_SIG_MARK)
+    equivalent = flags[len(NO_SIGNIFICANCE) :]
+    return EQUIVALENT_MARK if equivalent and equivalent[index] else ""
 
 
 #: Each measure's superscript (:func:`draw_verdict`); anything else is the speedup's.

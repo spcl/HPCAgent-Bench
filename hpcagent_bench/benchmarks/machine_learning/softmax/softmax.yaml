@@ -22,3 +22,6 @@ parameters:
 args:
   x: (N, H, SM, SM)
   out: {shape: "(N, H, SM, SM)", out: true}
+chain_length:
+  # the SM-term normalising sum
+  out: SM

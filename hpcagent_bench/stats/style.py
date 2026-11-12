@@ -99,6 +99,7 @@ __all__ = [
     "clear_labels",
     "clear_place",
     "count_minor_values",
+    "crowded_at",
     "crowded_ticks",
     "decade_label",
     "despine",
@@ -603,8 +604,9 @@ FILL_Z: float = 3.0
 CONNECTOR_Z: float = 4.0
 MARK_Z: float = 5.0
 
-#: Fraction of a mark's area the not-delivered cross covers; the model shape still reads first.
-CROSS_SCALE: float = 0.45
+#: The not-delivered cross's area over its mark's: past the shape, so the arms show outside a shape of any size
+#: (a small hollow star swallowed a cross drawn inside it and read as solved at 1x).
+CROSS_SCALE: float = 1.6
 
 #: What the cross means, wherever a figure draws one: a 1x placeholder, not a measurement.
 NOT_DELIVERED_LABEL: str = "No Verified Answer (Drawn at 1x)"
@@ -816,22 +818,26 @@ def crowded_ticks(ax: Axes, renderer: RendererBase, gap: float) -> bool:
     )
 
 
+def crowded_at(fig: Figure, axes: Sequence[Axes], size: float) -> bool:
+    """Whether the X tick labels of ``axes``, all set to ``size`` points, crowd on some printed line
+    (:func:`crowded_ticks`, a third of the size apart)."""
+    for ax in axes:
+        for label in ax.get_xticklabels():
+            label.set_fontsize(size)
+    gap = size / 3.0 * fig.dpi / POINTS_PER_INCH
+    return any(crowded_ticks(ax, renderer_of(fig), gap) for ax in axes)
+
+
 def shrink_crowded_ticks(fig: Figure, axes: Sequence[Axes], start_pt: float, floor_pt: float) -> float:
     """Step the X tick labels of ``axes`` down from ``start_pt``, all to one size, until no printed line is
-    crowded (:func:`crowded_ticks`); returns the size. Labels still crowded at ``floor_pt`` stay there, reported."""
-    renderer = renderer_of(fig)
+    crowded (:func:`crowded_at`); returns the size. Labels still crowded at ``floor_pt`` stay there, reported."""
     size = start_pt
-    while True:
-        for ax in axes:
-            for label in ax.get_xticklabels():
-                label.set_fontsize(size)
-        gap = size / 3.0 * fig.dpi / POINTS_PER_INCH
-        if not any(crowded_ticks(ax, renderer, gap) for ax in axes):
-            return size
+    while crowded_at(fig, axes, size):
         if size <= floor_pt:
             LOG.warning("style: tick labels still overlap at the %.2fpt floor; the axis needs more width", floor_pt)
-            return size
+            break
         size = max(floor_pt, size - 0.25)
+    return size
 
 
 def mark_boxes(ax: Axes) -> list[Bbox]:

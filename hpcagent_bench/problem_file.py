@@ -41,6 +41,13 @@ class ProblemLine(pydantic.BaseModel):
     #: A fused wave's env file and the setup identity its rows carry.
     env_file: str | None = None
     setup: str | None = None
+    #: Stamped by a rerun in a new job (``owed run``): the 1-based launch of this (setup, kernel, slot) and how the
+    #: episode of the launch before it ended (an ``episodes.result`` name, ``none`` when it left no record). The
+    #: driver copies both into the episode's record. None = not stamped. ``launch_kind`` says why the run was owed:
+    #: ``infra`` (a repair), ``task`` (its task changed) or ``resubmit`` (``RESUBMISSION``).
+    launch: int | None = None
+    previous_result: str | None = None
+    launch_kind: str | None = None
 
 
 def dump_line(line: ProblemLine) -> str:

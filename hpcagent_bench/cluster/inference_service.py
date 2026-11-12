@@ -15,13 +15,14 @@ import sys
 from collections.abc import Mapping
 
 import pydantic
+from hpcagent_agent import env_aliases, network_policy
+from hpcagent_agent.driver import harnesses
 from hpcagent_agent.coded import Coded
 
 __all__ = [
     "CLAUDE_KEY_VARIABLE",
     "CLAUDE_MODEL_PINS",
     "FREE_ONLY_KEY",
-    "HARNESSES_BY_API",
     "RECORD_NAME",
     "REQUIRED",
     "Api",
@@ -34,6 +35,7 @@ __all__ = [
     "TunerProvenance",
     "Source",
     "check_free",
+    "check_network",
     "claude_key_variable",
     "from_environ",
     "launcher_env",
@@ -43,6 +45,7 @@ __all__ = [
     "provenance",
     "record",
     "required_value",
+    "service_harnesses",
     "shell_block",
     "source",
 ]
@@ -79,11 +82,12 @@ class Auth(Coded):
     KEY_HEADER = enum.auto()
 
 
-#: Harnesses that speak each wire format (by name: the agent payload is not staged on the batch host).
-HARNESSES_BY_API: dict[Api, tuple[str, ...]] = {
-    Api.OPENAI: ("miniswe", "optimas", "openai"),
-    Api.ANTHROPIC: ("claude", "anthropic"),
-}
+def service_harnesses(api: Api, environ: Mapping[str, str]) -> tuple[str, ...]:
+    """The harnesses a service of wire format ``api`` may serve (``Harness.service_api``): claude speaks the
+    Anthropic one, a runner the one it declares."""
+    claude = (harnesses.CLAUDE,) if api is Api.ANTHROPIC else ()
+    return (*claude, *(name for name, spec in harnesses.runners(environ).items() if spec.service_api == api.text))
+
 
 #: Which variable the claude CLI's key belongs in, per auth spelling.
 CLAUDE_KEY_VARIABLE: dict[Auth, str] = {Auth.BEARER: "ANTHROPIC_AUTH_TOKEN", Auth.KEY_HEADER: "ANTHROPIC_API_KEY"}
@@ -163,8 +167,8 @@ def from_environ(environ: Mapping[str, str]) -> Service:
     nodes = environ.get("INFERENCE_NODES", "0").strip() or "0"
     if nodes != "0":
         raise SystemExit(f"a service setup starts no server; set INFERENCE_NODES=0, not {nodes}")
-    harness = environ.get("HARNESS", "").strip() or "claude"
-    accepted = HARNESSES_BY_API[resolved.api]
+    harness = env_aliases.resolve("HARNESS", "", environ).strip() or "claude"
+    accepted = service_harnesses(resolved.api, environ)
     if harness not in accepted:
         raise SystemExit(
             f"HARNESS={harness} cannot speak the {resolved.api.text} wire format this service serves; "
@@ -263,6 +267,18 @@ def check_free(service: Service, timeout: float = 30.0) -> None:
         raise SystemExit(f"{FREE_ONLY_KEY}=1 and {reason}; refusing to launch")
 
 
+def check_network(service: Service, environ: Mapping[str, str]) -> None:
+    """Refuse the launch when the setup's agent network policy cannot reach ``service`` (``agent.network`` ``none``
+    or ``allowlist`` and an ``https://`` base URL): the agents would have no model. Asked on the batch host before
+    any node is used, so the job ends with the reason and the line that overrides it."""
+    try:
+        reason = network_policy.unrelayable([service.base_url], environ)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if reason is not None:
+        raise SystemExit(f"{reason} Refusing to launch.")
+
+
 def shell_block(exported: Mapping[str, str]) -> str:
     """``exported`` as :func:`shlex.quote`-d assignments for the launcher to eval."""
     return "\n".join(f"{key}={shlex.quote(value)}" for key, value in exported.items())
@@ -345,10 +361,17 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help=f"when the setup sets {FREE_ONLY_KEY}=1, fail unless its model is free",
     )
+    parser.add_argument(
+        "--check-network",
+        action="store_true",
+        help="fail when a service setup's agent network policy cannot reach its endpoint",
+    )
     parser.add_argument("--record", type=pathlib.Path, help="write the run's inference provenance into this directory")
     args = parser.parse_args(argv)
     if args.check_free and os.environ.get(FREE_ONLY_KEY, "").strip() == "1":
         check_free(from_environ(os.environ))
+    if args.check_network and source(os.environ) is Source.SERVICE:
+        check_network(from_environ(os.environ), os.environ)
     if args.record is not None:
         record(args.record, os.environ)
     if args.export:
