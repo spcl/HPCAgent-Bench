@@ -35,10 +35,6 @@ PYTHON_HARNESSES: dict[str, str] = {
     "miniswe": (
         "import yaml, minisweagent.agents.default, minisweagent.environments.local, minisweagent.models.litellm_model"
     ),
-    "optimas": (
-        "import agents, agents.exceptions, agents.mcp, agents.models.openai_chatcompletions, agents.run_config, "
-        "litellm, openai, openai.types.shared, optimas.arch.base, optimas.optim.opro, optimas.wrappers.example"
-    ),
     "anthropic": "import anthropic, anthropic.lib.tools, anthropic.lib.tools.mcp, mcp, mcp.client.stdio",
     "openai": (
         "import agents, agents.mcp, agents.models.openai_chatcompletions, agents.run_config, openai, "
@@ -213,11 +209,11 @@ def harnesses() -> object:
 
 
 #: The prompt layer each built-in runner's setups read: what submit.sh's HARNESS_LAYER map said before the registry
-#: carried it, so no recorded setup's prompt moves.
+#: carried it, so no recorded setup's prompt moves (optimas, now the optimas plugin's harness, keeps harness-native:
+#: tests/test_plugin_harness.py).
 BUILT_IN_LAYERS: dict[str, str] = {
     "miniswe": "harness-cli",
     "openhands": "harness-openhands",
-    "optimas": "harness-native",
     "anthropic": "harness-native",
     "openai": "harness-native",
     "tuner": "",

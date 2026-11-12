@@ -346,7 +346,7 @@ install = ["uv", "pip", "install", "--python", "{python}", "-r", "{root}/require
 imports = ["myagent.loop"]                  # checked when its venv is built
 ```
 
-`HARNESS=myagent` (or `HARNESSES=myagent` at submission) runs it. The driver starts
+`plugins/optimas` is the shipped example. `HARNESS=myagent` (or `HARNESSES=myagent` at submission) runs it. The driver starts
 `<launch venv>/harness/myagent/bin/python <plugin>/run_myagent.py` with the argv of the built-in runner of the same
 `api` (`openai` or `anthropic`), plus `--mcp-config` for `tools = "mcp"`. Its setups read the `harness-native` prompt
 layer for `mcp` and `harness-cli` for `shell`. The agent launch venv builds its venv at job start (`python -m
@@ -440,8 +440,10 @@ venv runs the install per role (`python -m hpcagent_agent.plugins install --role
 `containers/images/lib/launch_venv.sh`) right after its `uv sync`. The plugins' sources are part of that venv's cache
 key (`python -m hpcagent_bench.plugins fingerprint`), so a changed plugin gets a fresh venv.
 
-A results row records each plugin as `name:<digest>`: the sha256 of its folder's files, without what an install copy
-leaves out (`.git`, `.venv`, `__pycache__`, and a top-level `build`, `dist` and `*.egg-info`), plus `+<commit>` of an
+A results row (`setups.plugins`) records each plugin its setup uses as `name:<digest>`: the plugins that declare a
+packet the setup reaches, its harness or the flavor it runs, and every plugin with a `[hooks]` `job_init` (it runs on
+the node of every setup). A plugin the setup does not use is not recorded, so adding or editing one changes no other
+setup's row. The digest is the sha256 of the plugin folder's files, without what an install copy leaves out (`.git`, `.venv`, `__pycache__`, and a top-level `build`, `dist` and `*.egg-info`), plus `+<commit>` of an
 `[install]` root in git (`-dirty` with uncommitted changes, `-status-unknown` when git cannot tell). The launch venv's key is the same digest over the
 install roots.
 

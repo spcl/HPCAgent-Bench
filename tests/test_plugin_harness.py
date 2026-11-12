@@ -233,6 +233,38 @@ def test_the_check_names_a_harness_whose_runner_the_plugin_does_not_ship(tmp_pat
     assert "plugin 'echoplug': harness 'echoharness': no runner missing.py" in done.stdout
 
 
+def test_optimas_is_the_optimas_plugins_harness_with_the_identity_layer_and_wire_format_it_had() -> None:
+    """Moved out of the core with no change in what a setup records or reads: name ``optimas``, the vocabulary entry
+    and slot of models.py, the harness-native layer, the OpenAI wire format, its runner under the openai argv."""
+    spec = harnesses.runners({})["optimas"]
+    assert (spec.layer, spec.service_api, spec.log_name) == (harnesses.NATIVE_LAYER, "openai", "optimas.log")
+    assert "optimas" not in harnesses.RUNNERS
+    workdir = paths.ROOT / "work"
+    argv = spec.command(context(workdir, "optimas"))
+    built_in = harnesses.RUNNERS["openai"].command(context(workdir, "openai"))
+    assert argv[:2] == [harnesses.interpreter("optimas"), str(plugins.SHIPPED / "optimas" / "run_optimas.py")]
+    assert argv[2:] == built_in[3:]
+
+
+def test_a_setup_records_only_the_plugins_it_uses() -> None:
+    """An unused plugin leaves a setup's row alone: autokernel is recorded under its packet only, optimas under its
+    harness only."""
+    probe = (
+        "from hpcagent_bench import plugins\n"
+        "print(plugins.recorded(frozenset(), 'claude', 'qwen38'))\n"
+        "print(plugins.recorded(frozenset({'autokernel'}), 'claude', 'qwen38').split(':')[0])\n"
+        "print(plugins.recorded(frozenset(), 'optimas', 'qwen38').split(':')[0])\n"
+    )
+    env = {**os.environ}
+    env.pop(plugins.PLUGIN_DIRS_ENV, None)
+    env.pop(plugins.USER_PLUGIN_DIRS_ENV, None)
+    done = subprocess.run(
+        [sys.executable, "-c", probe], env=env, capture_output=True, text=True, timeout=300, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["", "autokernel", "optimas"]
+
+
 def test_a_plugin_harness_is_named_on_figures_after_every_shipped_one(tmp_path: pathlib.Path) -> None:
     """Its display name joins the vocabulary last, so it repaints no recorded harness."""
     write_plugin(tmp_path / "user")
@@ -294,6 +326,8 @@ if __name__ == "__main__":
         ("openhands", {subagents.PACKET_AGENTS_ENV: "reviewer"}, "offers subagents"),
     ):
         test_one_check_decides_whether_a_packet_runs_on_a_harness(*case)
+    test_optimas_is_the_optimas_plugins_harness_with_the_identity_layer_and_wire_format_it_had()
+    test_a_setup_records_only_the_plugins_it_uses()
     for test in (
         test_a_plugin_harness_joins_the_one_registry_and_launches_its_runner_with_the_contract_argv,
         test_a_plugin_harness_runner_writes_the_records_the_driver_reads,

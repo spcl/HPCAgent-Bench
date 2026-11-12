@@ -11,6 +11,8 @@ harnesses plugins ship. `claude` is built in `agent_driver.py`; `agent_driver.ha
 
 **From a plugin** (no file of the benchmark changes): a `[harnesses.<name>]` block in the plugin's `plugin.toml`,
 the runner script in the plugin folder, and an `install` argv for its venv ([plugins.md](plugins.md#harnesses)).
+`plugins/optimas` is the shipped example: its runner drives the `openai` runner's agent in process
+(`hpcagent_agent.harness.run_openai.run_agent`) and its venv installs `plugins/optimas/requirements.txt`.
 
 **Built in**:
 

@@ -133,8 +133,6 @@ assert importlib.util.find_spec('hpcagent_bench') is None, '${name} can import h
 miniswe yaml, minisweagent.agents.default, minisweagent.environments.local, minisweagent.models.litellm_model
 anthropic anthropic, anthropic.lib.tools, anthropic.lib.tools.mcp, mcp, mcp.client.stdio
 openai agents, agents.mcp, agents.models.openai_chatcompletions, agents.run_config, openai, openai.types.shared
-optimas agents, agents.exceptions, agents.mcp, agents.models.openai_chatcompletions, agents.run_config, litellm, \
-openai, openai.types.shared, optimas.arch.base, optimas.optim.opro, optimas.wrappers.example
 EOF
                 # OpenHands pins mcp < 2 (its own project and lock, agent/harness/openhands): synced like TileLang,
                 # never with --package hpcagent-agent (mcp >= 2.3), and the checkout's agent/ on its path with a .pth,

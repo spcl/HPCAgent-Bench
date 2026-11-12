@@ -46,7 +46,6 @@ WHERE: dict[str, str] = {
             "run_miniswe",
             "run_anthropic",
             "run_openai",
-            "run_optimas",
         )
     },
     **{

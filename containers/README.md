@@ -399,8 +399,9 @@ Every package added to a Dockerfile gets a probe that uses it (compile, import, 
 
 The images bake only uv and node, from `agent/harness/pins.env`. Every agent step installs the rest at launch inside
 its launch venv (`lib/launch_venv.sh`), from the checkout: claude-code 2.1.303 from `node/package.json` +
-`package-lock.json`, and one venv each for the `harness-{miniswe,optimas,anthropic,openai}` groups of
-`agent/pyproject.toml`, at `harness/<name>` and `harness/node`.
+`package-lock.json`, one venv each for the `harness-{miniswe,anthropic,openai}` groups of
+`agent/pyproject.toml`, at `harness/<name>` and `harness/node`, and one for each harness a plugin ships, from the
+plugin's install argv (optimas: `plugins/optimas/requirements.txt`).
 To bump a harness, edit the pin (for the npm lock, then run `agent/harness/freeze.sh`) and run
 `tests/test_harness_pins.py`: nothing rebuilds. A uv or node bump in `pins.env` needs a rebuild.
 The launch build checks uv and node against `pins.env`, the CLI against `package.json` and each harness's imports, and

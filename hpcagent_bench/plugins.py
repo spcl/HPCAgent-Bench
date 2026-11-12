@@ -58,6 +58,7 @@ __all__ = [
     "register_once",
     "register_packets",
     "roots",
+    "used",
 ]
 
 #: The tool every packet with an agent phase carries: it ends the agent's phase and runs the default ones after it.
@@ -374,12 +375,27 @@ def openmp_environment(name: str) -> Iterator[None]:
         yield
 
 
-@functools.lru_cache(maxsize=1, typed=True)
-def recorded() -> str:
-    """The loaded plugins as a results row records them: sorted ``name:sha256`` joined by ``,``, the digest over the
-    plugin folder and, with an ``[install]`` root in git, that checkout's commit (its optimizer and route code);
-    ``""`` if none."""
-    return ",".join(sorted(f"{plugin.name}:{provenance(plugin)}" for plugin in register()))
+def used(packet_keys: frozenset[str], harness: str, optimizer: str) -> tuple[Plugin, ...]:
+    """The plugins a setup uses: those declaring a packet it reaches (``packet_keys``), its ``harness`` or the flavor
+    its ``optimizer`` runs, and every plugin with a ``[hooks]`` ``job_init``, which runs on the node of every setup."""
+    flavored = flavor_plugin(optimizer)
+    return tuple(
+        plugin
+        for plugin in register()
+        if plugin.name == flavored
+        or harness in plugin.manifest.harnesses
+        or not packet_keys.isdisjoint(plugin.manifest.packets)
+        or (plugin.manifest.hooks is not None and plugin.manifest.hooks.job_init is not None)
+    )
+
+
+@functools.lru_cache(maxsize=16, typed=True)
+def recorded(packet_keys: frozenset[str], harness: str, optimizer: str) -> str:
+    """The plugins a setup uses (:func:`used`) as its results row records them: sorted ``name:sha256`` joined by
+    ``,``, the digest over the plugin folder and, with an ``[install]`` root in git, that checkout's commit (its
+    optimizer and route code); ``""`` if none. A plugin the setup does not use is not recorded, so adding or editing
+    one leaves every other setup's row as it was."""
+    return ",".join(sorted(f"{plugin.name}:{provenance(plugin)}" for plugin in used(packet_keys, harness, optimizer)))
 
 
 def provenance(plugin: Plugin) -> str:

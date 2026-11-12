@@ -205,7 +205,7 @@ def test_only_a_package_the_image_installs_moves_its_fingerprint_with_the_lock(
     git(tmp_path, "commit", "-qam", "a wheel and the release move")
     assert agent_fingerprint() == before
     # A harness bump: what the launch hook installs, from uv.lock and the npm lock, and the playwright crawl4ai drives.
-    for package in ("litellm", "mini-swe-agent", "optimas-ai", "openai-agents", "anthropic", "playwright"):
+    for package in ("litellm", "mini-swe-agent", "openai-agents", "anthropic", "playwright"):
         move_locked(lock, package)
     npm_lock = tmp_path / "agent" / "harness" / "node" / "package-lock.json"
     npm_lock.parent.mkdir(parents=True)

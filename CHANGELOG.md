@@ -361,6 +361,13 @@ upgraded in place when opened for writing; v0.5.0 refuses a v1.0a1 file.
   Each repaired output moves across seeded draws by more than ten times the grading band at every rung, and another
   seed's answer failed the grade on every measured seed pair of the six adapted tasks (nqueens' exact count at S can
   still repeat, on ~2% of pairs) and on at least 96% of pairs for the three losses (one scalar each).
+- **Optimas is a plugin's harness** (`plugins/optimas`). Its runner moved from `agent/hpcagent_agent/harness/` to the
+  plugin folder unchanged and its pins from the `harness-optimas` group of `uv.lock` to
+  `plugins/optimas/requirements.txt` (the same versions, hash-checked). It keeps the name `optimas`, its vocabulary
+  slot, the `harness-native` prompt layer, the openai runner's argv, its usage and end records and the driver's
+  limits. `setups.plugins` now records only the plugins a setup uses (its packets', its harness's, its flavor's and
+  every `job_init` hook's), not every plugin present; rows recorded before keep their value, and a merge still
+  compares the column, so shards of one setup recorded on both sides of this change refuse to merge.
 
 ### Carried from the v1.0 development stack
 
