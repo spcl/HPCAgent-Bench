@@ -43,6 +43,8 @@ ENDED_BY: dict[int, str] = {
     127: "api_timeout",
     128: "output_cap",
     129: "model_error",
+    #: The agent never ran: its MCP server did not connect (``stats.population.NOT_STARTED_RESULTS``).
+    122: "mcp_unavailable",
 }
 
 #: ``previous_attempt_result`` of an attempt that ended on a returncode :data:`ENDED_BY` does not name.
@@ -115,6 +117,13 @@ class RecordLimits(pydantic.BaseModel):
     timeout_seconds: Count
     token_scale: Count | None = None
     time_scale: Count | None = None
+    #: The bounds of the infrastructure repair (``AGENT_CRASH_ATTEMPTS``, ``AGENT_REPLY_CAP_RESUMES``).
+    crash_attempts: Count | None = None
+    reply_cap_resumes: Count | None = None
+    #: ``common`` or ``experiment`` (a token limit the experiment overrode), and the setup's ``RESUBMISSION``;
+    #: '' where the render stamped none.
+    source: str = ""
+    resubmission: str = ""
 
 
 class NetworkRecord(pydantic.BaseModel):
@@ -173,6 +182,7 @@ class EpisodeRecord(pydantic.BaseModel):
     #: A rerun's stamp (``ProblemLine.launch``, ``previous_result``); None and '' where the launch stamped none.
     launch: Count | None = None
     previous_result: str = ""
+    launch_kind: str = ""
     tokens: Count | None = None
     output_source: str = ""
     output_delta_shape: str = ""
@@ -196,6 +206,15 @@ class EpisodeRecord(pydantic.BaseModel):
     #: (``agent_driver.AttemptCause``); None and '' on a record written before causes.
     tokens_effective_void: Count | None = None
     cause: str = ""
+    #: The requests in flight at the failures it resumed from (reported, never cost), the resumes and fresh
+    #: relaunches infrastructure cost it, and the configured repair mode; None, None, None and '' on an older record.
+    tokens_effective_lost: Count | None = None
+    tokens_lost_fresh_input: Count | None = None
+    tokens_lost_cached_input: Count | None = None
+    tokens_lost_output: Count | None = None
+    resumes: Count | None = None
+    fresh_relaunches: Count | None = None
+    crash_relaunch: str = ""
     #: What the agent could reach; None on a record written before these blocks existed.
     agent_network: NetworkRecord | None = None
     #: One base, or a list when the setup names several (``agent.knowledge`` as a list).
@@ -234,6 +253,18 @@ def episode_values(record: EpisodeRecord, cancelled: bool = False) -> dict[str, 
         "previous_attempt_result": None if previous is None else ENDED_BY.get(previous, PREVIOUS_CRASH),
         "launch": record.launch,
         "previous_launch_result": record.previous_result or None,
+        "launch_kind": record.launch_kind or None,
+        "limits_source": (limits.source or None) if limits else None,
+        "resubmission": (limits.resubmission or None) if limits else None,
+        "crash_attempts": limits.crash_attempts if limits else None,
+        "reply_cap_resumes": limits.reply_cap_resumes if limits else None,
+        "crash_relaunch": record.crash_relaunch or None,
+        "resumes": record.resumes,
+        "fresh_relaunches": record.fresh_relaunches,
+        "lost_effective_tokens": record.tokens_effective_lost,
+        "lost_fresh_input_tokens": record.tokens_lost_fresh_input,
+        "lost_cached_input_tokens": record.tokens_lost_cached_input,
+        "lost_output_tokens": record.tokens_lost_output,
         "resources": record.resources.model_dump_json() if record.resources else None,
         "agent_rootfs": record.agent_rootfs or None,
         "returncode": record.returncode,

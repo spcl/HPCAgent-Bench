@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Matched limits (docs/matched_limits.md): the limits an episode ran under are recorded with it, reach the
 observations table, and every paired comparison states whether its two setups' limits are identical
-(``budgets.matched_limits``: ``flag`` reports, ``strict`` refuses, ``off`` leaves the tables as they were). Budget-extension reruns are off by default
-(``budgets.extension_reruns``; the submit side is in test_owed.py and test_submit_file_isolation.py).
+(``budgets.matched_limits``: ``flag`` reports, ``strict`` refuses, ``off`` leaves the tables as they were). Two arms
+whose limits came from different places, or that resubmit differently, never match (the owed side is in
+test_owed.py).
 """
 
 import contextlib
@@ -33,18 +34,74 @@ BASE = limits.Limits(tokens=12_000_000, output_tokens=1_000_000, seconds=14_400)
 DOUBLE = limits.Limits(tokens=24_000_000, output_tokens=1_000_000, seconds=28_800)
 
 
-def test_budget_extension_reruns_are_off_and_a_mismatch_is_refused_by_default() -> None:
+def test_a_mismatch_is_refused_by_default_and_no_config_key_moves_a_limit() -> None:
     budgets = config.current().budgets
-    assert budgets.extension_reruns is False
     assert budgets.matched_limits is budgets.matched_tasks is config.MatchedLimits.STRICT
     assert config.MatchedLimits.texts() == ("off", "flag", "strict")
+    assert set(config.Budgets.model_fields) == {"matched_limits", "matched_tasks"}
 
 
-def test_the_budget_keys_follow_their_environment_names(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_EXTENSION_RERUNS", "true")
-    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "strict")
-    budgets = config.current().budgets
-    assert (budgets.extension_reruns, budgets.matched_limits) == (True, config.MatchedLimits.STRICT)
+def test_an_arm_that_overrode_a_limit_or_resubmits_never_matches_one_that_did_not() -> None:
+    """Same three limits, different rules: an experiment override (``limits_source``) or a resubmission setting
+    differs, so the pair is ``differ`` and its resubmitted episodes are counted."""
+    common = BASE._replace(source="common", resubmission="off")
+    rows = setup_rows("a", [common, common]) + setup_rows("b", [common._replace(source="experiment")] * 2)
+    rows += setup_rows("c", [common._replace(resubmission="2x")] * 2)
+    rows[-1][limits.LAUNCH_KIND_COLUMN] = limits.RESUBMIT_KIND
+    found = limits.setup_limits(pd.DataFrame(rows))
+    assert limits.compare(found["a"], found["b"]) is limits.compare(found["a"], found["c"]) is limits.LimitsMatch.DIFFER
+    assert (found["a"].resubmitted, found["c"].resubmitted) == (0, 1)
+    assert "source=experiment" in found["b"].text()
+    assert limits.settings_block(found)["c"]["resubmitted_episodes"] == 1
+
+
+#: Limits as a schema-27 database records them under the [common] run protocol.
+PROTOCOL = BASE._replace(
+    source="common", resubmission="off", crash_relaunch="resume", crash_attempts="3", reply_cap_resumes="1"
+)
+
+
+def test_two_arms_that_both_resubmit_match_whatever_they_resubmitted() -> None:
+    """A resubmission's k-times limits are not its setup's limits: two arms with RESUBMISSION='2x', one kernel
+    resubmitted at 2x in one of them, ran under the same rules."""
+    twice = PROTOCOL._replace(resubmission="2x")
+    rows = setup_rows("a", [twice, twice]) + setup_rows("b", [twice, twice])
+    resubmitted = task("a", "k9", DOUBLE._replace(**{name: getattr(twice, name) for name in twice._fields[3:]}), 2)
+    rows.append(resubmitted | {limits.LAUNCH_KIND_COLUMN: limits.RESUBMIT_KIND})
+    found = limits.setup_limits(pd.DataFrame(rows))
+    assert (found["a"].resubmitted, found["a"].counts) == (1, {twice: 2})
+    assert limits.compare(found["a"], found["b"]) is limits.LimitsMatch.IDENTICAL
+
+
+def test_a_database_before_schema_27_never_matches_one_after_it_and_strict_says_why() -> None:
+    """Rows of schema 26 and earlier record the limits but no run protocol: two such setups compare on their limits
+    alone, but against a schema-27 setup at the same limits the pair is not shown identical (``unrecorded``), and
+    strict refuses it naming the schema. A recorded protocol difference is a difference whatever the other side
+    lacks."""
+    rows = setup_rows("new", [PROTOCOL, PROTOCOL]) + setup_rows("old", [BASE, BASE])
+    rows += setup_rows("other", [PROTOCOL._replace(source="experiment")] * 2)
+    found = limits.setup_limits(pd.DataFrame(rows))
+    assert found["old"].protocol_unrecorded == 2
+    assert limits.compare(found["new"], found["old"]) is limits.LimitsMatch.UNRECORDED
+    assert limits.compare(found["old"], found["old"]) is limits.LimitsMatch.IDENTICAL
+    assert limits.compare(found["new"], found["other"]) is limits.LimitsMatch.DIFFER
+    with config.overridden("budgets.matched_limits", "strict"), pytest.raises(limits.MismatchedLimitsError) as refused:
+        limits.check([("new", "old")], found)
+    assert "before schema 27" in str(refused.value)
+
+
+def test_arms_repaired_under_different_settings_do_not_match_and_the_sidecar_states_the_repairs() -> None:
+    """The repair protocol is part of the rules: an arm that relaunches fresh, or allows more attempts, is not matched
+    to one that resumes. The settings sidecar states each setup's repair settings and what repair cost it."""
+    rows = setup_rows("a", [PROTOCOL, PROTOCOL]) + setup_rows("b", [PROTOCOL._replace(crash_relaunch="fresh")] * 2)
+    rows += setup_rows("c", [PROTOCOL._replace(crash_attempts="5")] * 2)
+    rows[0] |= {"episode_resumes": 2, "episode_fresh_relaunches": 0, "tokens_lost": 130}
+    found = limits.setup_limits(pd.DataFrame(rows))
+    assert limits.compare(found["a"], found["b"]) is limits.compare(found["a"], found["c"]) is limits.LimitsMatch.DIFFER
+    block = limits.settings_block(found)["a"]
+    assert (block["resumes"], block["fresh_relaunches"], block["tokens_lost"]) == (2, 0, 130)
+    (stated,) = block["limits"]
+    assert (stated["crash_relaunch"], stated["crash_attempts"], stated["reply_cap_resumes"]) == ("resume", "3", "1")
 
 
 # --- recording: driver record -> episodes row -> observation row ---
@@ -61,6 +118,10 @@ def test_the_driver_records_the_limits_it_enforces(monkeypatch: pytest.MonkeyPat
         "max_tokens": 24_000_000,
         "max_output_tokens": 1_000_000,
         "timeout_seconds": 28_800,
+        "crash_attempts": agent_driver.AGENT_CRASH_ATTEMPTS,
+        "reply_cap_resumes": agent_driver.AGENT_REPLY_CAP_RESUMES,
+        "source": "",
+        "resubmission": "",
         "token_scale": 2,
         "time_scale": None,
     }
@@ -136,11 +197,11 @@ def test_an_episodes_limits_reach_its_row_and_its_observation(
 
     with results_db.reading(out) as conn:
         stored = dict(conn.execute("SELECT * FROM episodes WHERE label = ?", (LABEL,)).fetchone())
-    assert (stored["token_limit"], stored["output_token_limit"], stored["time_limit_s"]) == tuple(DOUBLE)
+    assert (stored["token_limit"], stored["output_token_limit"], stored["time_limit_s"]) == tuple(DOUBLE)[:3]
     assert (stored["token_scale"], stored["time_scale"]) == (2, 2)
     assert stored["previous_attempt_result"] == "api_timeout"
     (row,) = episode_rows(out)
-    assert tuple(row[column] for column in limits.LIMIT_COLUMNS) == tuple(DOUBLE)
+    assert tuple(row[column] for column in limits.LIMIT_COLUMNS) == tuple(DOUBLE)[:3]
     assert tuple(row[column] for column in limits.SCALE_COLUMNS) == (2, 2)
     assert row["episode_previous_attempt_result"] == "api_timeout"
 
@@ -225,7 +286,9 @@ def test_a_version_21_file_reads_its_limits_as_unrecorded_and_upgrades_when_writ
 
 def task(setup: str, kernel: str, ran: limits.Limits | None, scale: int | None = 1) -> dict[str, object]:
     """One episode observation row of ``setup`` on ``kernel`` under ``ran`` (None: no limits recorded)."""
-    recorded = dict(zip(limits.LIMIT_COLUMNS, ran if ran is not None else ("", "", ""), strict=True))
+    recorded = dict(zip(limits.LIMIT_COLUMNS, ran[:3] if ran is not None else ("", "", ""), strict=True))
+    blank = ("",) * len(limits.PROTOCOL_COLUMNS)
+    recorded |= dict(zip(limits.PROTOCOL_COLUMNS, ran[3:] if ran is not None else blank, strict=True))
     scales = dict.fromkeys(limits.SCALE_COLUMNS, "" if scale is None or ran is None else scale)
     return {
         "run_root": "stamp",
@@ -263,7 +326,7 @@ def test_a_setup_under_twice_the_budget_differs_and_the_note_names_both() -> Non
 
 
 def test_one_extended_episode_makes_its_setup_differ_and_is_counted() -> None:
-    """A budget-extension rerun inside a setup: its episodes no longer share one budget."""
+    """A resubmission under scaled limits inside a setup: its episodes no longer share one budget."""
     rows = [*setup_rows("a", [BASE, BASE]), task("a", "k9", DOUBLE, scale=2), *setup_rows("b", [BASE, BASE, BASE])]
     found = limits.setup_limits(pd.DataFrame(rows))
     assert (found["a"].extended, found["b"].extended) == (1, 0)

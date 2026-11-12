@@ -689,16 +689,18 @@ def resumed_transcript(token_cost: ModuleType, *, resumed: bool) -> list[str]:
     ]
 
 
-def test_a_resumed_crash_counts_both_legs_once_and_drops_only_the_cut_off_request(
+def test_a_resumed_crash_counts_both_legs_once_and_reports_the_cut_off_request_as_lost(
     token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """A crash resumes its own session in the same transcript: the first leg's turns keep counting and the resumed
-    leg's add to them. The one request the crash cut off (m3) is dropped from every fold -- its prompt is the prefix
-    the resumed leg sends again, and its partial reply was discarded. Exact numbers, every fold."""
+    leg's add to them. The one request the crash cut off (m3) is lost (docs/matched_limits.md, "Limits and cost"):
+    the limit folds still count it, every limit runs on across a resume, and the cost leaves it out, reported as
+    ``tokens_effective_lost``. Exact numbers, every fold."""
     lines = resumed_transcript(token_cost, resumed=True)
     billed = 1000 + 1200 + 1350 + 1500
-    assert token_cost.accumulate_total_tokens(lines, {}) == billed
-    assert token_cost.accumulate_output_tokens(lines, {}) == 100 + 50 + 80 + 40
+    lost = 1300 + 30
+    assert token_cost.accumulate_total_tokens(lines, {}) == billed + lost
+    assert token_cost.accumulate_output_tokens(lines, {}) == 100 + 50 + 30 + 80 + 40
 
     cost = token_cost.episode_cost(tmp_path_log(tmp_path, lines))
     assert cost["turns"] == 4
@@ -710,6 +712,33 @@ def test_a_resumed_crash_counts_both_legs_once_and_drops_only_the_cut_off_reques
     totals = token_cost.episode_totals(tmp_path)
     assert (totals.attempts, totals.tokens_billed, totals.tokens_billed_crashed) == (1, billed, 0)
     assert (totals.tokens_effective, totals.tokens_effective_crashed) == (1500 + 270, 0)
+    assert totals.tokens_effective_lost == (1300 - 1200) + 30  # its fresh prompt and its partial reply
+
+
+def test_a_lost_request_after_a_compaction_is_its_whole_prompt_split_as_the_cost_is(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """The request in flight at the crash was sent after a compaction (its prompt, 400, shrank below the last kept
+    turn's 1200): like a compacted turn in the cost, it is charged whole as fresh input. The lost tokens are reported
+    as fresh, cached and output, so every cost card can price them."""
+    lines = [
+        message_start("m1"),
+        assistant_line("m1", 1000, 0),
+        message_delta(100),
+        message_start("m2"),
+        assistant_line("m2", 1200, 0),
+        message_delta(50),
+        message_start("m3"),
+        assistant_line("m3", 400, 30),
+        resume_line(token_cost),
+        message_start("m4"),
+        assistant_line("m4", 600, 0),
+        message_delta(20),
+        result_line(20),
+    ]
+    row = token_cost.episode_cost(tmp_path_log(tmp_path, lines))
+    assert (row["lost_fresh_input"], row["lost_cached_input"], row["lost_output"]) == (400, 0, 30)
+    assert row["lost_effective"] == 400 + 30
 
 
 def test_the_live_watcher_folds_a_resumed_transcript_to_the_same_totals_line_by_line(

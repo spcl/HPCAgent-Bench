@@ -139,13 +139,8 @@ def test_an_empty_queue_passes_through(tmp_path: pathlib.Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-#: The opt-in a scaled budget needs (``budgets.extension_reruns``, docs/matched_limits.md).
-EXTENSION_KEY = "HPCAGENT_BENCH_BUDGETS_EXTENSION_RERUNS"
-
-
 def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """Source submit_common.sh with the given knobs and run ``script`` against it. Budget-extension reruns are on
-    unless ``extra_env`` says otherwise (an empty value leaves the key to the configuration)."""
+    """Source submit_common.sh with the given knobs and run ``script`` against it."""
     site = tmp_path / "site.env"
     site.write_text("")
     env = {
@@ -153,7 +148,6 @@ def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -
         "USER": "tester",
         "HPCAGENT_BENCH_HOST_PYTHON": sys.executable,
         "HPCAGENT_BENCH_SITE_ENV": str(site),
-        EXTENSION_KEY: "true",
         **extra_env,
     }
     return subprocess.run(
@@ -166,70 +160,51 @@ def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -
     )
 
 
-@pytest.mark.parametrize("scale", ["scale_tokens 12000000", "scale_time 14400"])
-@pytest.mark.parametrize("knob", ["BUDGET_SCALE", "TOKEN_SCALE", "TIME_SCALE"])
-def test_a_scaled_budget_is_refused_unless_extension_reruns_are_on(
-    tmp_path: pathlib.Path, scale: str, knob: str
+@pytest.mark.parametrize(
+    ("seconds", "knobs", "want", "note"),
+    [
+        pytest.param("57600", {"HPCAGENT_BENCH_MAX_TIME_HOURS": "23"}, "57600", "", id="under-the-limit"),
+        pytest.param(
+            "115200", {"HPCAGENT_BENCH_MAX_TIME_HOURS": "23"}, "72000", "capped to 72000 s", id="past-the-limit"
+        ),
+        pytest.param("115200", {"HPCAGENT_BENCH_SYSTEM": "beverin"}, "72000", "capped", id="system-entry"),
+        pytest.param("115200", {}, "115200", "", id="no-known-limit"),
+    ],
+)
+def test_a_resubmissions_wall_clock_is_clamped_to_the_partition_limit_less_staging(
+    tmp_path: pathlib.Path, seconds: str, knobs: dict[str, str], want: str, note: str
 ) -> None:
-    """Off by default: with any scale above 1 neither limit is computed, so no scaled env can be staged."""
-    result = run_common(tmp_path, scale, {knob: "2", EXTENSION_KEY: "false"})
-    assert result.returncode == 2, result.stdout
-    assert result.stdout == ""
-    assert "budget-extension rerun, off by default" in result.stderr
-
-
-def test_without_the_environment_name_the_configured_default_refuses(tmp_path: pathlib.Path) -> None:
-    """The key unset in the environment is read from the configuration, whose default is off."""
-    result = run_common(tmp_path, "scale_tokens 12000000", {"TOKEN_SCALE": "2", EXTENSION_KEY: ""})
-    assert result.returncode == 2, result.stdout
-    assert "budget-extension rerun, off by default" in result.stderr
-
-
-def test_the_base_budget_needs_no_opt_in(tmp_path: pathlib.Path) -> None:
-    result = run_common(tmp_path, 'echo "[$(scale_tokens 12000000)][$(scale_time 14400)]"', {EXTENSION_KEY: "false"})
+    """``owed run`` clamps k times the wall clock to (23 - 3) h = 20 h, a --time the partition grants, and says so;
+    under the limit, or with no limit the environment or system names, the time is kept."""
+    result = run_common(tmp_path, f"clamp_time {seconds}", {"STAGING_HOURS": "3", **knobs})
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "[12000000][14400]"
+    assert result.stdout.strip() == want
+    assert note in result.stderr
+    assert bool(result.stderr) == bool(note)
 
 
-def test_token_scale_and_time_scale_default_to_budget_scale(tmp_path: pathlib.Path) -> None:
-    """BUDGET_SCALE alone scales both: TOKEN_SCALE and TIME_SCALE fall back to it."""
-    result = run_common(tmp_path, 'echo "[$TOKEN_SCALE][$TIME_SCALE]"', {"BUDGET_SCALE": "3"})
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "[3][3]"
+@pytest.mark.parametrize(
+    "key",
+    [
+        "AGENT_MAX_TOKENS",
+        "AGENT_MAX_OUTPUT_TOKENS",
+        "AGENT_TIMEOUT_SECONDS",
+        "RESUBMISSION",
+        "AGENT_CRASH_RELAUNCH",
+        "AGENT_CRASH_ATTEMPTS",
+        "AGENT_REPLY_CAP_RESUMES",
+    ],
+)
+def test_extra_env_kv_never_pins_a_run_protocol_key(tmp_path: pathlib.Path, key: str) -> None:
+    """docs/matched_limits.md, "One way to set a limit": experiments.toml sets the run protocol, nothing else."""
+    result = run_common(tmp_path, f"refuse_protocol_pins LANGUAGE=c {key}=1", {})
+    assert result.returncode == 2
+    assert f"{key} is a run-protocol key" in result.stderr
 
 
-def test_scale_tokens_is_never_capped(tmp_path: pathlib.Path) -> None:
-    """A token ceiling costs money, not a --time no partition will grant -- unlike scale_time,
-    scale_tokens has no cap to hit."""
-    result = run_common(tmp_path, "scale_tokens 12000000", {"TOKEN_SCALE": "4"})
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "48000000"
-
-
-def test_scale_time_is_uncapped_under_the_partition_limit(tmp_path: pathlib.Path) -> None:
-    """4h times 4 is 16h, under the 20h cap (23h partition limit minus 3h staging): scaled as is."""
-    result = run_common(
-        tmp_path, "scale_time 14400", {"TIME_SCALE": "4", "STAGING_HOURS": "3", "HPCAGENT_BENCH_MAX_TIME_HOURS": "23"}
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "57600"  # 16h
-
-
-def test_scale_time_clamps_to_the_partition_limit_minus_staging(tmp_path: pathlib.Path) -> None:
-    """8h times 4 is 32h, a --time the 24h partition never grants: clamped to (23 - 3)h = 20h
-    instead of a job that stays PENDING forever."""
-    result = run_common(
-        tmp_path, "scale_time 28800", {"TIME_SCALE": "4", "STAGING_HOURS": "3", "HPCAGENT_BENCH_MAX_TIME_HOURS": "23"}
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "72000"  # 20h, not 115200 (32h)
-
-
-def test_a_clamped_scale_says_so(tmp_path: pathlib.Path) -> None:
-    """The clamp is stated where a dry run shows it: the wall clock runs at less than the scale asked for."""
-    knobs = {"TIME_SCALE": "4", "STAGING_HOURS": "3", "HPCAGENT_BENCH_MAX_TIME_HOURS": "23"}
-    assert "capped to 72000 s" in run_common(tmp_path, "scale_time 28800", knobs).stderr
-    assert run_common(tmp_path, "scale_time 14400", knobs).stderr == ""
+def test_extra_env_kv_pins_any_other_key(tmp_path: pathlib.Path) -> None:
+    result = run_common(tmp_path, "refuse_protocol_pins LANGUAGE=c AGENT_MAX_TOKENS_NOTE=1", {})
+    assert (result.returncode, result.stderr) == (0, "")
 
 
 @pytest.mark.parametrize(
@@ -252,62 +227,6 @@ def test_the_job_time_is_capped_at_the_partition_limit(
     assert result.stdout.strip() == walltime
     assert note in result.stderr
     assert bool(result.stderr) == bool(note)
-
-
-def test_scale_time_is_never_clamped_without_a_known_limit(tmp_path: pathlib.Path) -> None:
-    """A generic cluster names no partition limit (no code default exists): the scaled time is the answer."""
-    result = run_common(tmp_path, "scale_time 28800", {"TIME_SCALE": "4", "STAGING_HOURS": "3"})
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "115200"  # 32h
-
-
-def test_scale_time_takes_the_limit_from_the_system_entry(tmp_path: pathlib.Path) -> None:
-    """max_time_hours of the beverin entry (23) clamps exactly as the environment variable does."""
-    result = run_common(
-        tmp_path, "scale_time 28800", {"TIME_SCALE": "4", "STAGING_HOURS": "3", "HPCAGENT_BENCH_SYSTEM": "beverin"}
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "72000"
-
-
-def test_scaled_budget_from_reports_the_same_capped_value_it_writes(tmp_path: pathlib.Path) -> None:
-    """submit.sh records scaled_budget_from's return value as the setup's budget, so that value must
-    already be the capped one the job runs under."""
-    base = tmp_path / "base.env"
-    base.write_text("AGENT_TIMEOUT_SECONDS=28800\nAGENT_MAX_TOKENS=12000000\n")
-    result = run_common(
-        tmp_path,
-        f'echo "[$(scaled_budget_from "{base}" AGENT_TIMEOUT_SECONDS)]'
-        f'[$(scaled_budget_from "{base}" AGENT_MAX_TOKENS)]"',
-        {
-            "TOKEN_SCALE": "4",
-            "TIME_SCALE": "4",
-            "STAGING_HOURS": "3",
-            "HPCAGENT_BENCH_MAX_TIME_HOURS": "23",
-        },
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "[72000][48000000]"  # 20h capped, 48M uncapped
-
-
-@pytest.mark.parametrize(
-    ("token_scale", "time_scale", "want"),
-    [
-        ("1", "1", ""),
-        ("4", "4", "-budget4x"),
-        ("2", "2", "-budget2x"),
-        ("4", "2", "-tok4x-time2x"),
-    ],
-)
-def test_budget_env_suffix_names_both_scales_when_they_diverge(
-    tmp_path: pathlib.Path, token_scale: str, time_scale: str, want: str
-) -> None:
-    """Equal scales name one number ("-budget<N>x"); diverging scales name both."""
-    result = run_common(
-        tmp_path, 'echo "[$(budget_env_suffix)]"', {"TOKEN_SCALE": token_scale, "TIME_SCALE": time_scale}
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == f"[{want}]"
 
 
 def run_submit_setup_job_probe(

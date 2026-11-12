@@ -40,6 +40,7 @@ __all__ = [
     "PLATFORM_COLUMN",
     "PROTOCOL_COLUMN",
     "PSEUDO_SETUPS",
+    "NOT_STARTED_RESULTS",
     "RAN_RECORDS",
     "RAW_SPEEDUP_COLUMN",
     "REDUCTION_COLUMN",
@@ -190,17 +191,26 @@ def condition_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
 
 
 #: Records that show a setup RAN a kernel: a graded answer, accepted or not, or a judge call. The call
-#: is the score route on a scored setup; a blind setup has no score tool and calls submit or verify.
+#: is the score route on a scored setup; a blind setup has no score tool and calls submit or verify. An episode row
+#: shows it too, unless its agent never started (:data:`NOT_STARTED_RESULTS`).
 RAN_RECORDS: frozenset[RowKind] = frozenset({RowKind.SUBMISSION, RowKind.ATTEMPT, RowKind.CALL})
+
+#: ``episode_result`` of an episode whose agent never ran (its MCP server never connected): the one way a kernel
+#: with an episode row was not run.
+NOT_STARTED_RESULTS: frozenset[str] = frozenset({"mcp_unavailable"})
 
 
 def ran_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
-    """The rows of every ``(setup, kernel)`` the setup RAN (at least one :data:`RAN_RECORDS` row); a kernel it
-    never ran is left out of its population, tokens included, rather than entered as a failure."""
+    """The rows of every ``(setup, kernel)`` the setup RAN: a :data:`RAN_RECORDS` row, or an episode that started
+    (an agent that ended without ever calling the judge is served and unsolved, its tokens counted). A kernel whose
+    episode never started is left out of its population, tokens included, rather than entered as a failure."""
     if not {"row_kind", "setup", "kernel"} <= set(frame.columns):
         return frame
     key = frame["setup"].fillna("").astype(str) + "\x1f" + frame["kernel"].fillna("").astype(str)
-    ran = set(key.loc[frame["row_kind"].isin([kind.text for kind in RAN_RECORDS])])
+    kind = frame["row_kind"]
+    result = frame["episode_result"].fillna("").astype(str) if "episode_result" in frame.columns else kind.map(str)
+    started = (kind == RowKind.EPISODE.text) & ~result.isin(list(NOT_STARTED_RESULTS))
+    ran = set(key.loc[kind.isin([record.text for record in RAN_RECORDS]) | started])
     return frame.loc[key.isin(list(ran))]
 
 
