@@ -164,7 +164,7 @@ def test_a_tuner_registered_after_a_lookup_is_found(table: None) -> None:
 
 def test_a_second_tuner_of_one_name_is_refused(table: None) -> None:
     with pytest.raises(ValueError, match="twice"):
-        tuners.tuner("best-of")(score_reference)
+        tuners.tuner("scored-reference")(score_reference)
 
 
 def test_gym_without_its_extra_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,8 +175,8 @@ def test_gym_without_its_extra_names_the_extra(monkeypatch: pytest.MonkeyPatch) 
 
 def test_a_tuner_setup_names_its_tuner_as_model_and_optimizer() -> None:
     spec = env_spec.load_spec()
-    env = env_spec.render_experiment(next(iter(spec)), "best-of", spec)
-    assert env["TUNER"] == env["HPCAGENT_BENCH_OPTIMIZER"] == "best-of"
+    env = env_spec.render_experiment(next(iter(spec)), "scored-reference", spec)
+    assert env["TUNER"] == env["HPCAGENT_BENCH_OPTIMIZER"] == "scored-reference"
 
 
 def test_an_episode_that_never_submits_is_promoted_at_the_drivers_teardown(
@@ -259,7 +259,7 @@ def test_the_example_plugin_registers_its_gymnasium_tuner() -> None:
     """examples/plugins/gym_tuner is the Gymnasium interface's example; it loads only where a setup names it."""
     done = plugins_check(paths.ROOT / "examples" / "plugins")
     assert done.returncode == 0, done.stdout + done.stderr
-    assert "gym-best-of" in listed_tuners(done)
+    assert "gym-scored-reference" in listed_tuners(done)
 
 
 if __name__ == "__main__":
