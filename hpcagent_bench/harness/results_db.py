@@ -41,6 +41,7 @@ __all__ = [
     "SCHEMA_PATH",
     "SCHEMA_NAME",
     "SCHEMA_VERSION",
+    "WIDENED",
     "SIDECAR_SUFFIXES",
     "SUBMIT_KINDS",
     "TABLES",
@@ -100,13 +101,14 @@ __all__ = [
     "table_names",
     "unhashed_sources",
     "upsert",
+    "widen_checks",
 ]
 
 #: The schema every writer creates and every reader expects.
 SCHEMA_PATH = paths.ROOT / "hpcagent_bench" / "harness" / "schema.sql"
 #: The schema's name, and its ``PRAGMA user_version``.
 SCHEMA_NAME = "hb-results-v1.0"
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 #: The columns each version added, by the version that added them.
 ADDED: dict[int, tuple[str, ...]] = {
     14: tuple(f"ALTER TABLE canon ADD COLUMN {phase}_time REAL" for phase in ("transform", "codegen", "compile")),
@@ -171,6 +173,13 @@ ADDED: dict[int, tuple[str, ...]] = {
         "ALTER TABLE episodes ADD COLUMN auto_submit TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE episodes ADD COLUMN reply_cap_continuations INTEGER",
     ),
+    29: (),
+}
+#: The CHECK constraints each version widened, by the version: ``(table, old text, new text)`` of its stored CREATE.
+#: Every stored row satisfies the wider CHECK, so the stored text is rewritten in place (SQLite's documented route
+#: for a constraint that changes no stored data): rows, rowids, indexes, triggers and references stay as they are.
+WIDENED: dict[int, tuple[tuple[str, str, str], ...]] = {
+    29: (("grades", "'torch-autotune', '')", "'torch-autotune', 'triton-gpu', '')"),),
 }
 #: Additive steps from an earlier ``user_version``, applied when such a file is opened for writing.
 ADDITIVE_UPGRADES: dict[int, tuple[str, ...]] = {
@@ -269,13 +278,42 @@ def check_schema(conn: sqlite3.Connection, where: str, upgrade: bool = False) ->
     if version in ADDITIVE_UPGRADES:
         if upgrade:
             with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if schema_version(conn) == SCHEMA_VERSION:  # another writer upgraded it first
+                    return True
                 for statement in ADDITIVE_UPGRADES[version]:
                     conn.execute(statement)
+                widen_checks(conn, version, where)
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         return True
     if version or table_names(conn) & set(TABLES):
         raise SchemaVersionError(f"{where} is not an {SCHEMA_NAME} results database (user_version {version})")
     return False
+
+
+def widen_checks(conn: sqlite3.Connection, version: int, where: str) -> None:
+    """Rewrite the stored CHECKs every version after ``version`` widened (:data:`WIDENED`), inside the caller's
+    transaction; raises :class:`SchemaVersionError` for a stored CREATE that holds neither the old nor the new text."""
+    steps = [step for added in range(version + 1, SCHEMA_VERSION + 1) for step in WIDENED.get(added, ())]
+    if not steps:
+        return
+    conn.execute("PRAGMA writable_schema = ON")
+    try:
+        for table, old, new in steps:
+            row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+            sql = str(row[0]) if row is not None else ""
+            if new in sql:
+                continue
+            if old not in sql:
+                raise SchemaVersionError(f"{where}: table {table} has no CHECK text {old!r} to widen")
+            conn.execute(
+                "UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = ?", (sql.replace(old, new, 1), table)
+            )
+        # A new schema cookie makes every connection, this one included, re-read the stored CREATE text.
+        cookie = int(conn.execute("PRAGMA schema_version").fetchone()[0])
+        conn.execute(f"PRAGMA schema_version = {cookie + 1}")
+    finally:
+        conn.execute("PRAGMA writable_schema = OFF")
 
 
 @functools.lru_cache(maxsize=None, typed=True)
