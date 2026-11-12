@@ -79,6 +79,8 @@ dependencies = [
     "z3-solver",
     # The upstream KernelBench models the machine_learning ports are compared against import it.
     "einops",
+    # dace lowers np.einsum through opt_einsum's contraction paths (qe_vexx_k, ls3df_scf, cp2k_grid_integrate).
+    "opt-einsum>=3.4",
     # tvm.s_tir and tvm.tirx (frameworks/tvm_build.py) first ship in 0.25.
     "apache-tvm>=0.25",
     # Built from source against the system MPI (MPICC).
