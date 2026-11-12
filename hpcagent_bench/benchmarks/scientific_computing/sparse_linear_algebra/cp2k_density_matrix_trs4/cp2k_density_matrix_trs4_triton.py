@@ -34,7 +34,7 @@ def runs(ctl, it, gate):
 
 
 @triton.jit(do_not_specialize=["it"])
-def multiply_kernel(col_idx, a, b, c, ctl, it, gate, eps_sq, BS: tl.constexpr, BSP: tl.constexpr):
+def multiply_kernel(col_idx, a, b, c, ctl, it, gate, eps_sq_ptr, BS: tl.constexpr, BSP: tl.constexpr):
     """c[p] = sum_s a[row, s] b[s, col] over the pattern, zeroed when its squared norm is below ``eps_sq``."""
     if runs(ctl, it, gate):
         p = tl.program_id(0).to(tl.int64)
@@ -52,7 +52,7 @@ def multiply_kernel(col_idx, a, b, c, ctl, it, gate, eps_sq, BS: tl.constexpr, B
                     left = tl.load(a + (row * FANOUT + s) * BS * BS + tile, mask=inside, other=0.0)
                     right = tl.load(b + (mid * FANOUT + u) * BS * BS + tile, mask=inside, other=0.0)
                     acc += tl.sum(left[:, :, None] * right[None, :, :], axis=1)
-        keep = tl.sum(tl.sum(acc * acc, axis=1), axis=0) >= eps_sq
+        keep = tl.sum(tl.sum(acc * acc, axis=1), axis=0) >= tl.load(eps_sq_ptr)
         tl.store(c + p * BS * BS + tile, tl.where(keep, acc, 0.0), mask=inside)
 
 
@@ -115,7 +115,9 @@ def decide_kernel(partial, consts, ctl, gamma_values, branch_history, it, P, PB:
         small = (frob_id_sq < threshold * frob_x_sq) & (tl.abs(delta_n) < 0.5)
         floor = tl.abs(delta_n) / 100.0
         denominator = tl.where(tl.abs(frob_id_sq) < floor, tl.where(frob_id_sq >= 0.0, floor, -floor), frob_id_sq)
-        gamma = tl.where(small, 3.0, tl.where(tl.abs(delta_n) < 1.0e-14, 0.0, delta_n / denominator))
+        gamma = tl.where(
+            small, 3.0, tl.where(tl.abs(delta_n) < tl.full((), 1.0e-14, tl.float64), 0.0, delta_n / denominator)
+        )
         branch = tl.where(gamma > 6.0, 1, tl.where(gamma < 0.0, 2, 3))
         tl.store(gamma_values + it, gamma)
         tl.store(branch_history + it, branch.to(branch_history.dtype.element_ty))
@@ -133,7 +135,7 @@ def decide_kernel(partial, consts, ctl, gamma_values, branch_history, it, P, PB:
 
 
 @triton.jit(do_not_specialize=["it"])
-def doubling_kernel(x, x2, ctl, it, eps_sq, BS: tl.constexpr, BSP: tl.constexpr):
+def doubling_kernel(x, x2, ctl, it, eps_sq_ptr, BS: tl.constexpr, BSP: tl.constexpr):
     """Branch 1: x = 2x - x2, then the block-norm filter, one program per block."""
     if runs(ctl, it, 1):
         p = tl.program_id(0).to(tl.int64)
@@ -141,7 +143,7 @@ def doubling_kernel(x, x2, ctl, it, eps_sq, BS: tl.constexpr, BSP: tl.constexpr)
         inside = (ii[:, None] < BS) & (ii[None, :] < BS)
         offs = p * BS * BS + ii[:, None] * BS + ii[None, :]
         v = 2.0 * tl.load(x + offs, mask=inside, other=0.0) - tl.load(x2 + offs, mask=inside, other=0.0)
-        keep = tl.sum(tl.sum(v * v, axis=1), axis=0) >= eps_sq
+        keep = tl.sum(tl.sum(v * v, axis=1), axis=0) >= tl.load(eps_sq_ptr)
         tl.store(x + offs, tl.where(keep, v, 0.0), mask=inside)
 
 
@@ -189,7 +191,8 @@ def bisect_kernel(gamma_values, ctl, consts, state):
                 cubic = xr2 * (4.0 * xr - 3.0 * xr2) + gamma * xr2 * one_minus_xr * one_minus_xr
                 xr = tl.where(gamma > 6.0, 2.0 * xr - xr2, tl.where(gamma < 0.0, xr2, cubic))
             mu_fc = xr - 0.5
-            done = (tl.abs(mu_fc) < 1.0e-6) | (0.5 * (mu_b - mu_a) < 1.0e-6)
+            tol = tl.full((), 1.0e-6, tl.float64)  # a bare literal in a comparison rounds to fp32
+            done = (tl.abs(mu_fc) < tol) | (0.5 * (mu_b - mu_a) < tol)
             if ~done:
                 move_a = mu_fc * mu_fa > 0.0
                 mu_a = tl.where(move_a, mu_c, mu_a)
@@ -250,6 +253,7 @@ def cp2k_density_matrix_trs4(
         [scale, float(eps_max), float(nelectron), thr, float(spin_scale), float(eps_min)], dtype=x_blocks.dtype
     )
     ctl = torch.zeros(CONTROL_SIZE, dtype=torch.float64)
+    eps_sq = torch.full((1,), thr * thr, dtype=torch.float64)  # fp64: a Python float argument is fp32
     ctl[STOP_AT.value] = float(n_iter)
     programs = triton.cdiv(ne, BLOCK)
     partial = torch.empty(programs * 3, dtype=x_blocks.dtype)
@@ -257,7 +261,7 @@ def cp2k_density_matrix_trs4(
     elements = (programs,)
 
     def multiply(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, it: int, gate: int) -> None:
-        multiply_kernel[blocks](col_idx, a, b, c, ctl, it, gate, thr * thr, BS=bs, BSP=bsp)
+        multiply_kernel[blocks](col_idx, a, b, c, ctl, it, gate, eps_sq, BS=bs, BSP=bsp)
 
     # Outside the loop ``it`` = 0 with gate 0: iteration 0 is never past convergence, so these always run.
     multiply(s_inv_blocks, ks_blocks, scratch_blocks, 0, 0)
@@ -269,7 +273,7 @@ def cp2k_density_matrix_trs4(
             col_idx, x_blocks, x2_blocks, g_blocks, poly_blocks, partial, ctl, it, ne, BS=bs, BLOCK=BLOCK
         )
         decide_kernel[(1,)](partial, consts, ctl, gamma_values, branch_history, it, programs, PB=1024)
-        doubling_kernel[blocks](x_blocks, x2_blocks, ctl, it, thr * thr, BS=bs, BSP=bsp)
+        doubling_kernel[blocks](x_blocks, x2_blocks, ctl, it, eps_sq, BS=bs, BSP=bsp)
         square_kernel[elements](x_blocks, x2_blocks, ctl, it, ne, BLOCK=BLOCK)
         poly_kernel[elements](poly_blocks, g_blocks, ctl, it, ne, BLOCK=BLOCK)
         multiply(x2_blocks, poly_blocks, x_blocks, it, 3)

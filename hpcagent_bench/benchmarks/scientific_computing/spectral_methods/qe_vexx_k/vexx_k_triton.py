@@ -25,7 +25,7 @@ FPI = 4.0 * math.pi
 
 
 @triton.jit
-def pair_density_kernel(rho, phi, psi, omega_inv, NRXX, NPOL: tl.constexpr, BLOCK: tl.constexpr):
+def pair_density_kernel(rho, phi, psi, omega_inv_ptr, NRXX, NPOL: tl.constexpr, BLOCK: tl.constexpr):
     """rho[j, r] = omega_inv * sum_p conj(phi[j, p, r]) psi[p, r]; grid (r blocks, j)."""
     r = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
     j = tl.program_id(1).to(tl.int64)
@@ -41,6 +41,7 @@ def pair_density_kernel(rho, phi, psi, omega_inv, NRXX, NPOL: tl.constexpr, BLOC
         si = tl.load(psi + s + 1, mask=mask, other=0.0)
         re += fr * sr + fi * si
         im += fr * si - fi * sr
+    omega_inv = tl.load(omega_inv_ptr)  # fp64: a Python float argument would arrive as fp32
     out = 2 * (j * NRXX + r)
     tl.store(rho + out, re * omega_inv, mask=mask)
     tl.store(rho + out + 1, im * omega_inv, mask=mask)
@@ -228,7 +229,7 @@ def vexx_k(
     nqs, negrp, eg = int(nqs), int(negrp), int(my_egrp_id)
     okvan, okpaw, tqr, gamma_only = bool(okvan), bool(okpaw), bool(tqr), bool(gamma_only)
     grid = (int(n3), int(n2), int(n1))
-    omega_inv = 1.0 / float(omega)
+    omega_inv_dev = torch.full((1,), 1.0 / float(omega), dtype=torch.float64, device=exxbuff.device)
     nqs_inv = 1.0 / nqs
     screening = tuple(float(v) for v in (exxdiv, eps_qdiv, gau_scrlen, erf_scrlen, erfc_scrlen, yukawa))
     # The band-group bookkeeping, read once to the host.
@@ -295,7 +296,7 @@ def vexx_k(
                 rho = torch.empty((count, nrxxs), dtype=psi.dtype)
                 band = temppsic[ii].contiguous()
                 pair_density_kernel[(rblocks, count)](
-                    pairs(rho), pairs(phi), pairs(band), omega_inv, nrxxs, NPOL=npol, BLOCK=BLOCK
+                    pairs(rho), pairs(phi), pairs(band), omega_inv_dev, nrxxs, NPOL=npol, BLOCK=BLOCK
                 )
                 if okvan and tqr:
                     aug.add_r(rho, becphi, becpsi[ibnd - 1])
