@@ -231,6 +231,29 @@ def test_merge_results_cut_short_by_a_corrupt_shard_leaves_no_partial_results_db
     assert not list(tmp_path.glob("results.db*"))
 
 
+def test_merge_results_never_rebuilds_away_a_graded_source_only_its_results_db_holds(tmp_path: pathlib.Path) -> None:
+    """``grade-under apply --into results.db`` writes grades no shard holds; merging the job again must refuse rather
+    than rebuild them away, and leave the results DB, the graded source in it retrievable by its hash."""
+    seed_shard(str(tmp_path / "judge" / "rank-0" / "hpcagent_bench0.db"), run="r0", kernels=["gemm"])
+    out = tmp_path / "results.db"
+    merge_results.merge(tmp_path, out)
+    with contextlib.closing(results_db.open_db(out)) as conn:
+        episode = results_db.ensure_episode(conn, "r0", "r0", results_db.LOCAL_JOB)
+        stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "task_hash": "test-task"}
+        grade, _ = results_db.add_grade(conn, episode, "gemm", "promoted", ts_ms=3, values=stamp)
+        digest = results_db.store_source(conn, grade, "host", "c", "the promoted answer")
+        conn.commit()
+    before = out.read_bytes()
+
+    with pytest.raises(results_db.DataLossError, match="left as it was"):
+        merge_results.merge(tmp_path, out)
+
+    assert out.read_bytes() == before
+    with results_db.reading(out) as conn:
+        assert conn.execute("SELECT text FROM sources WHERE hash = ?", (digest,)).fetchone()[0] == "the promoted answer"
+    assert not list(tmp_path.glob("results.db.tmp*"))
+
+
 def test_merge_results_without_shards_still_records_the_episodes(tmp_path: pathlib.Path) -> None:
     """An agent that timed out before its first submit leaves no judge shard; its episode and token spend
     are still the run's data."""

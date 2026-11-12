@@ -1,7 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Collect an experiment's recorded data into one self-describing directory, verify it, archive it (copy-only:
-sources read-only, overlapping outputs refused, DBs copied as consistent snapshots).
+sources read-only, overlapping outputs refused, DBs copied as consistent snapshots, with every prebuilt library a
+grade ran). Verify checks every file by hash and every graded source and library by its own hash.
 
     hpcagent-bench collect copy --out $DATA          # run roots + their DBs
     hpcagent-bench collect verify $DATA              # re-hash every file, quick_check every DB
@@ -27,7 +28,7 @@ from hpcagent_agent.coded import Coded
 from hpcagent_bench import experiments, paths
 from hpcagent_bench.results import data_guard
 from hpcagent_bench.cache_files import file_sha256
-from hpcagent_bench.harness import results_db
+from hpcagent_bench.harness import results_db, sandbox
 from hpcagent_bench.run_layout import MERGE_FAILED_NAME
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "SOURCES",
     "SUMS",
     "DataSource",
+    "Home",
     "Root",
     "archive",
     "build_parser",
@@ -47,7 +49,11 @@ __all__ = [
     "copy_file",
     "env_script",
     "files_of",
+    "graded_libraries",
+    "graded_problems",
+    "in_copy",
     "is_db",
+    "library_jobs",
     "main",
     "quick_check",
     "roots_of",
@@ -77,6 +83,9 @@ RUN_FILE_GLOBS = (".env", ".env.*", "*.resolved", "*.json", "*.jsonl", "*.csv", 
 
 SUMS = "SHA256SUMS"
 SOURCES = "SOURCES.tsv"
+
+#: ``(source root, its copy)``: where the files of one collected root land.
+type Home = tuple[pathlib.Path, pathlib.Path]
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -179,13 +188,47 @@ def env_script(roots: Sequence[Root]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def graded_libraries(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """``(library, sha256)`` of every prebuilt library a grade of the results DB ``conn`` ran."""
+    rows = conn.execute("SELECT DISTINCT library, library_hash FROM grades WHERE library != ''")
+    return [(str(library), str(digest)) for library, digest in rows]
+
+
+def in_copy(file: pathlib.Path, homes: Sequence[Home]) -> pathlib.Path | None:
+    """Where ``file`` lands in a copy of the roots ``homes``; None when no root holds it."""
+    real = data_guard.real(file)
+    return next((dest / real.relative_to(home) for home, dest in homes if data_guard.within(real, home)), None)
+
+
+def library_jobs(
+    roots: Sequence[Root], dbs: Iterable[pathlib.Path], out: pathlib.Path
+) -> dict[pathlib.Path, pathlib.Path]:
+    """``copy -> file`` of every prebuilt library a grade of the results DBs ``dbs`` ran that lies in one of ``roots``,
+    at its place in that root: where a re-grade of the copy looks for it (:func:`sandbox.run_file`)."""
+    homes = [(data_guard.real(root.path), out / root.dest) for root in roots]
+    found: dict[pathlib.Path, pathlib.Path] = {}
+    for db in dbs:
+        try:
+            with results_db.reading(db, finished=results_db.finished_db(db)) as conn:
+                libraries = graded_libraries(conn)
+        except (results_db.SchemaVersionError, sqlite3.DatabaseError):
+            continue  # not a results DB of this schema: verify reports it
+        for library, _ in libraries:
+            file = sandbox.run_file(library, db)
+            if file.is_file() and (kept := in_copy(file, homes)) is not None:
+                found[kept] = file
+    return found
+
+
 def copy(roots: Sequence[Root], out: pathlib.Path, *, threads: int = 8) -> int:
-    """Copy every collected file of ``roots`` under ``out``; write SOURCES.tsv, env.sh, SHA256SUMS."""
+    """Copy every collected file of ``roots`` and every library their grades ran under ``out``; write SOURCES.tsv,
+    env.sh, SHA256SUMS."""
     check_roots(roots, out)
     out.mkdir(parents=True, exist_ok=True)
-    jobs = [(r.path.absolute() / rel, out / r.dest / rel) for r in roots for rel in walk(r)]
+    jobs = {out / r.dest / rel: r.path.absolute() / rel for r in roots for rel in walk(r)}
+    jobs |= library_jobs(roots, [src for dst, src in jobs.items() if is_db(dst)], out)
     with concurrent.futures.ThreadPoolExecutor(threads) as pool:
-        list(pool.map(lambda job: copy_file(*job), jobs))
+        list(pool.map(lambda job: copy_file(job[1], job[0]), jobs.items()))
     (out / SOURCES).write_text("".join(f"{r.kind.text}\t{r.dest}\t{r.path.resolve()}\n" for r in roots))
     (out / "env.sh").write_text(env_script(roots))
     commit = paths.git_head(paths.repo_root())
@@ -225,6 +268,31 @@ def verify(out: pathlib.Path, *, threads: int = 8) -> list[str]:
     for rel in common:
         if is_db(pathlib.PurePath(rel)):
             problems += [f"sqlite {rel}: {msg}" for msg in quick_check(present[rel])]
+    return problems + graded_problems(out)
+
+
+def graded_problems(out: pathlib.Path) -> list[str]:
+    """What a re-grade of the copy ``out`` would not find, per results DB: a source whose text is missing or does not
+    hash to its key, a prebuilt library a grade ran that the copy does not hold with that library's sha256."""
+    listed = (out / SOURCES).read_text().splitlines() if (out / SOURCES).is_file() else []
+    homes = [(pathlib.Path(path), out / dest) for _, dest, path in (line.split("\t") for line in listed if line)]
+    problems: list[str] = []
+    for db in (path for path in files_of(out) if is_db(path)):
+        rel = db.relative_to(out).as_posix()
+        try:
+            with results_db.reading(db, finished=True) as conn:
+                unhashed, libraries = results_db.unhashed_sources(conn), graded_libraries(conn)
+        except results_db.NoResultsError:
+            continue
+        except (results_db.SchemaVersionError, sqlite3.DatabaseError) as exc:
+            problems.append(f"graded sources of {rel} not checked: {exc}")
+            continue
+        problems += [f"source {digest} of {rel}: missing, or its text does not hash to it" for digest in unhashed]
+        for library, digest in libraries:
+            file = sandbox.run_file(library, db)
+            kept = file if data_guard.within(data_guard.real(file), data_guard.real(out)) else in_copy(file, homes)
+            if kept is None or not kept.is_file() or file_sha256(kept) != digest:
+                problems.append(f"library {library} ({digest}) of {rel}: not in the copy with that sha256")
     return problems
 
 

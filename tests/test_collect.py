@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """hpcagent_bench.results.collect: copy-only collection of run roots and DBs, then verify and archive."""
 
+import contextlib
 import hashlib
 import pathlib
 import sqlite3
@@ -10,6 +11,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from hpcagent_bench.harness import results_db, sandbox
 from hpcagent_bench.results import collect
 from hpcagent_bench.results.collect import DataSource
 from tests.sqlite_closing import connect
@@ -187,3 +189,77 @@ def test_archive_refuses_a_copy_that_does_not_verify(sources: pathlib.Path, tmp_
     (out / "COMMIT").write_text("tampered\n")
     assert collect.main(["archive", str(out)]) == 1
     assert not list(tmp_path.glob("data.tar.*"))
+
+
+#: The graded answer of :func:`graded_run`: a source and a prebuilt library, as the judge recorded them.
+SOURCE = "void gemm(double *c) { c[0] = 1.0; }\n"
+LIBRARY = "/shared/agent-0/libgemm.so"
+#: The stamps every grade row carries.
+STAMP = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "task_hash": "test-task", "correct": 1}
+
+
+def graded_run(runs: pathlib.Path) -> tuple[str, str]:
+    """A job under ``runs`` whose judge shard holds one graded source and one graded prebuilt library (the library
+    file in the job's shared folder, its only copy); returns their sha256."""
+    job = runs / "camp-1" / "901"
+    library = job / "shared" / "agent-0" / "libgemm.so"
+    library.parent.mkdir(parents=True)
+    library.write_bytes(b"\x7fELF graded")
+    library_hash = hashlib.sha256(library.read_bytes()).hexdigest()
+    with contextlib.closing(results_db.open_db(job / "judge" / "rank-0" / "hpcagent_bench0.db")) as conn:
+        results_db.ensure_setup(conn, results_db.Setup("s", "c", "cpu"))
+        episode = results_db.ensure_episode(conn, "s", "s.n0.p0.w0", 901)
+        grade, _ = results_db.add_grade(conn, episode, "gemm", "submit", ts_ms=1, values=STAMP)
+        source_hash = results_db.store_source(conn, grade, "host", "c", SOURCE)
+        values = STAMP | {"source_mode": "any", "library": LIBRARY, "library_hash": library_hash}
+        results_db.add_grade(conn, episode, "gemm", "submit", ts_ms=2, values=values)
+        conn.commit()
+    return source_hash, library_hash
+
+
+def copied_db(out: pathlib.Path) -> pathlib.Path:
+    return out / "runs/runs/camp-1/901/judge/rank-0/hpcagent_bench0.db"
+
+
+def copied_library(out: pathlib.Path) -> pathlib.Path:
+    """The graded library's place in the copy: the job's shared folder, as in the run root."""
+    return out / "runs/runs/camp-1/901/shared/agent-0/libgemm.so"
+
+
+def test_copy_keeps_every_graded_source_and_library(sources: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """The collected copy alone gives back a graded answer by its hash: the source text from its DB, the prebuilt
+    library (recorded at the judge's ``/shared`` path) from the job's shared folder in the copy, where a re-grade
+    looks for it. A copy that lacked either would let the run root's removal lose the answer."""
+    source_hash, library_hash = graded_run(sources / "runs")
+    out = tmp_path / "data"
+    collect.copy(roots(sources), out)
+    with results_db.reading(copied_db(out), finished=True) as conn:
+        text = conn.execute("SELECT text FROM sources WHERE hash = ?", (source_hash,)).fetchone()
+    assert text is not None
+    assert results_db.source_hash(text[0]) == source_hash
+    assert hashlib.sha256(copied_library(out).read_bytes()).hexdigest() == library_hash
+    assert sandbox.run_file(LIBRARY, copied_db(out)) == copied_library(out).resolve()
+    assert collect.verify(out) == []
+
+
+@pytest.mark.parametrize("damage", ["library", "source"])
+def test_verify_refuses_a_copy_without_a_graded_answer(
+    sources: pathlib.Path, tmp_path: pathlib.Path, damage: str
+) -> None:
+    """A copy whose checksum list is consistent but which lacks a graded library, or holds a source whose text is not
+    the one its hash names, fails verify, so ``collect archive`` refuses it."""
+    source_hash, library_hash = graded_run(sources / "runs")
+    out = tmp_path / "data"
+    collect.copy(roots(sources), out)
+    if damage == "library":
+        copied_library(out).unlink()
+        expected = f"library {LIBRARY} ({library_hash}) of {copied_db(out).relative_to(out).as_posix()}"
+    else:
+        with contextlib.closing(sqlite3.connect(copied_db(out))) as conn, conn:
+            conn.execute("UPDATE sources SET text = 'other' WHERE hash = ?", (source_hash,))
+        expected = f"source {source_hash} of {copied_db(out).relative_to(out).as_posix()}"
+    collect.write_sums(out)
+    problems = collect.verify(out)
+    assert len(problems) == 1
+    assert problems[0].startswith(expected)
+    assert collect.main(["archive", str(out)]) == 1
