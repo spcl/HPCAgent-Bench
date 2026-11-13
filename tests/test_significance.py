@@ -307,6 +307,16 @@ def test_a_log_t_interval_and_the_sign_flip_test_can_disagree_and_one_constructi
     assert float(stats.ttest_1samp(logs, 0.0).pvalue) > 0.05
 
 
+@pytest.mark.parametrize("counts", [(0, 0), (3, 3), (6, 1), (9, 2), (1, 12), (14, 0)])
+def test_the_solve_rate_p_agrees_with_its_interval(counts: tuple[int, int]) -> None:
+    """The solve-rate p and interval are one test: p < alpha exactly when 0 lies outside the interval (an exact
+    McNemar p beside a Tango interval disagreed near the edge)."""
+    pairs = significance.Discordant(*counts)
+    for alpha in (0.05, 0.1):
+        low, high = significance.rate_interval(pairs, 40, alpha)
+        assert (significance.rate_pvalue(pairs, 40) < alpha) == (not low <= 0.0 <= high), (counts, alpha, low, high)
+
+
 def test_the_solve_rate_interval_inverts_the_score_test_its_tost_reads() -> None:
     """Over a grid of discordant counts the 90% interval of the rate difference holds the observed difference and
     lies inside the margin exactly when the score TOST passes at 0.05; the exact McNemar test stays the test of a
@@ -366,6 +376,8 @@ if __name__ == "__main__":
     test_a_p_of_exactly_alpha_is_not_rejected_and_its_interval_holds_zero()
     test_a_log_t_interval_and_the_sign_flip_test_can_disagree_and_one_construction_cannot()
     test_the_solve_rate_interval_inverts_the_score_test_its_tost_reads()
+    for discordant in [(0, 0), (3, 3), (6, 1), (9, 2), (1, 12), (14, 0)]:
+        test_the_solve_rate_p_agrees_with_its_interval(discordant)
 
 
 def null_logs(step: float, pairs: int = 5) -> list[float]:

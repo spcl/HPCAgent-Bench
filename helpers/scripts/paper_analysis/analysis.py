@@ -205,7 +205,9 @@ def pooled_row(group: str, frame: pd.DataFrame) -> dict[str, object]:
         "rate_points": 100 * (pairs.only_left - pairs.only_right) / n,
         "rate_ci_low": 100 * low,
         "rate_ci_high": 100 * high,
-        "rate_p": significance.paired_proportion(pairs).pvalue,
+        # The p of the test the interval inverts, so the two never disagree on significance.
+        "rate_p": significance.rate_pvalue(pairs, n),
+        "rate_test": "tango-score",
     }
     return out
 

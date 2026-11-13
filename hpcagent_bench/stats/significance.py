@@ -62,6 +62,7 @@ __all__ = [
     "proportion_test",
     "rate_equivalence",
     "rate_interval",
+    "rate_pvalue",
     "scoped",
     "settings",
     "settings_mismatch",
@@ -472,6 +473,14 @@ def rate_interval(pairs: Discordant, n: int, alpha: float) -> tuple[float, float
         return (low + high) / 2.0
 
     return edge(critical), edge(-critical)
+
+
+def rate_pvalue(pairs: Discordant, n: int) -> float:
+    """The two-sided p of no change in solve rate, by the :func:`tango_score` test :func:`rate_interval` inverts: below
+    ``alpha`` exactly when 0 lies outside that interval (at no change, the asymptotic McNemar test)."""
+    if pairs.only_left == pairs.only_right:
+        return 1.0
+    return 2.0 * (1.0 - NormalDist().cdf(abs(tango_score(pairs, n, 0.0))))
 
 
 def rate_equivalence(pairs: Discordant, n: int, *, margin: float, alpha: float | None = None) -> Equivalence:
