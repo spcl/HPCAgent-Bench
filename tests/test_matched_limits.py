@@ -615,6 +615,23 @@ def test_strict_mode_refuses_the_unequal_comparison_and_runs_the_matched_one(
     assert paired_setups.main(["--observations", str(observations(tmp_path, BASE)), *argv]) == 0
 
 
+def test_a_control_from_a_larger_experiment_pairs_on_the_tag_the_treatment_ran(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """The git framing's control is the plain setup of the 40-kernel experiment; the treatment ran a subset. Over
+    everything each ran the treatment is incomplete and the pair is refused; over the declared tag it pairs."""
+    path = observations(tmp_path, BASE)
+    rows = pd.read_csv(path)
+    rows[~((rows.setup == "a") & rows.kernel.isin(KERNELS[4:]))].to_csv(path, index=False)
+    argv = ["--observations", str(path), "--pair", "a,b", "--family", "f", "--out", str(tmp_path / "pairs.csv")]
+    with pytest.raises(SystemExit, match="incomplete tag coverage"):
+        paired_setups.main(argv)
+    tag = tmp_path / "tag.txt"
+    tag.write_text("\n".join(KERNELS[:4]) + "\n", encoding="utf-8")
+    assert paired_setups.main([*argv, "--tag-file", str(tag)]) == 0
+    assert set(pd.read_csv(tmp_path / "pairs.csv").limits_match) == {"identical"}
+
+
 def test_off_writes_the_tables_without_the_limits_columns_and_notes_nothing(
     paired_setups: ModuleType,
     tmp_path: pathlib.Path,

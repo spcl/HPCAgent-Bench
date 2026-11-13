@@ -1108,6 +1108,10 @@ def main(argv: list[str]) -> int:
         print(f"note: {note}", file=sys.stderr)
 
     tag_kernels = declared_tag(args.tag_file, observations)
+    if args.tag_file is not None:
+        # The comparison is over the declared tag: a control that also ran other kernels (the experiment it was
+        # staged for) is paired on the tag's alone.
+        observations = observations[observations.kernel.isin(tag_kernels)]
     if not args.include_incomplete:
         kept, dropped = population.complete_setups(observations[observations.setup.isin(setups)], tag_kernels)
         pairs, notes = excluded_pairs(pairs, kept, dropped, len(tag_kernels))
