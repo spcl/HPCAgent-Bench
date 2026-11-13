@@ -290,18 +290,16 @@ def get_4d_tile_offsets(
     n2: tl.constexpr = tile_dims[2]
     n3: tl.constexpr = tile_dims[3]
     m0, m1, m2, m3 = matrix_dims
-    # A jit call binds constexpr parameters from plain tuples and ints; the stubs demand constexpr objects.
-    tile, mask = get_6d_tile_offsets(
-        0,  # pyright: ignore[reportArgumentType]  # a Python int coordinate becomes a device scalar
-        0,  # pyright: ignore[reportArgumentType]  # a Python int coordinate becomes a device scalar
-        c0,
-        c1,
-        c2,
-        c3,
-        tile_dims=(1, 1, n0, n1, n2, n3),  # pyright: ignore[reportArgumentType]
-        matrix_dims=(1, 1, m0, m1, m2, m3),  # pyright: ignore[reportArgumentType]
+    # AMD workaround: the Triton AMD backend aborts in CanonicalizePointers (gfx90a) on an offset tensor reshaped from
+    # a splat (every tile dim 1). Plain form: get_6d_tile_offsets(0, 0, c0, c1, c2, c3) reshaped to four dimensions.
+    c0 = (c0 + tl.arange(0, n0))[:, None, None, None]
+    c1 = (c1 + tl.arange(0, n1))[None, :, None, None]
+    c2 = (c2 + tl.arange(0, n2))[None, None, :, None]
+    c3 = (c3 + tl.arange(0, n3))[None, None, None, :]
+    return (
+        c0 * m1 * m2 * m3 + c1 * m2 * m3 + c2 * m3 + c3,
+        (c0 < m0) & (c1 < m1) & (c2 < m2) & (c3 < m3),
     )
-    return tl.reshape(tile, *tile_dims), tl.reshape(mask, *tile_dims)
 
 
 # Math core triton.language lacks, written in it so a baseline runs on every backend without libdevice. The rational
