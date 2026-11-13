@@ -206,13 +206,12 @@ def test_a_reused_november_setup_is_held_to_the_global_limit_not_its_recorded_on
     assert revision_reruns.base_for("llr40", caveman.setup) == "experiment"
 
 
-
 def test_the_limit_that_ended_an_episode_is_compared_as_a_limit_not_on_usage(tmp_path: pathlib.Path) -> None:
     """A limit that ended an episode (``timeout``: the wall clock, ``budget``: a token limit) counts as the limit it
-    ran under: equal to the global one, the episode is within, the teardown after its deadline not counted; smaller,
-    it is owed (``limits_smaller``, its own failure included); larger, owed (``limits_exceeded``). A database that
-    records no limits takes them from the setup's launch env; without one, the limit that ended it is unknown, while a
-usage past the global limit is still exceeded."""
+        ran under: equal to the global one, the episode is within, the teardown after its deadline not counted; smaller,
+        it is owed (``limits_smaller``, its own failure included); larger, owed (``limits_exceeded``). A database that
+        records no limits takes them from the setup's launch env; without one, the limit that ended it is unknown, while a
+    usage past the global limit is still exceeded."""
     harness = results_db.Setup("harness20-qwen38-c", "c", "cpu", study="harness20", model="qwen38")
     caveman = results_db.Setup("llr40-qwen38-c-caveman", "c", "cpu", study="llr40", model="qwen38", packet="caveman")
     db = tmp_path / "nov.db"
@@ -241,7 +240,6 @@ usage past the global limit is still exceeded."""
         "tsvc_2_s311": "usage_unknown",
         "fuse_diamond": "limits_exceeded",
     }
-
 
 
 def test_hold_writes_an_analysis_copy_whose_episodes_within_the_global_limit_carry_it(tmp_path: pathlib.Path) -> None:
