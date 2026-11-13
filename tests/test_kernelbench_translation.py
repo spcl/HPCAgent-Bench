@@ -8,7 +8,8 @@ per-kernel would just be red. Asserting NOTHING is worse -- the subtrack is excl
 what lowers and no CI job would notice.
 
 So the assertion is the COUNT: at least :data:`MIN_TRANSLATING` of the ports must emit, compile, run
-and match numpy on C. Raise the floor when the number goes up; it must never come down silently.
+and match numpy on C. Raise the floor when the number goes up; it must never come down silently. The per-push
+sample pins its translating ports by name instead (:data:`SAMPLE_TRANSLATING`), which a rename cannot move.
 
 Each kernel runs in its OWN subprocess. That is not tidiness -- a translator bug that reads off the
 end of an array poisons whatever else shares the process, which is exactly how a 200-kernel
@@ -37,11 +38,32 @@ KERNELBENCH_TAG = "kernelbench"
 #: miscompile fixes (contraction extent, elementwise ufunc arg, parameter write-through).
 MIN_TRANSLATING = 121
 
-#: Per push (``HPCAGENT_BENCH_E2E_SUBSET=1``) the ports whose name hashes into one :data:`SAMPLE_STRIDE`-th, with
-#: its own floor; a dispatched run, all. A hash, not a position, so adding a port never shifts the others' sample.
+#: Per push (``HPCAGENT_BENCH_E2E_SUBSET=1``) the ports whose name hashes into one :data:`SAMPLE_STRIDE`-th; a
+#: dispatched run, all. A hash, not a position, so adding a port never shifts the others' sample.
 SAMPLE = os.environ.get("HPCAGENT_BENCH_E2E_SUBSET", "") == "1"
 SAMPLE_STRIDE = 10
-MIN_TRANSLATING_SAMPLE = 20
+#: The sampled ports that translate today, by NAME: a count floor moves with the sample (a rename hashes a port in or
+#: out), a name does not. Each must still be sampled and translate; ADD a port as it starts translating.
+SAMPLE_TRANSLATING = frozenset(
+    {
+        "conv2d_relu_bias",
+        "conv2d_sub_hswish_maxpool_mish",
+        "convt2d_gap_bias_lse_sum_mul",
+        "cumsum_reverse",
+        "gemm_divide_sum_scaling",
+        "gemm_scale_batch_norm",
+        "gemm_scale_batch_norm_variant_b",
+        "gemm_scaling_hardtanh_gelu",
+        "gru",
+        "layer_norm",
+        "matmul_sum_max_avg_pool_logsumexp_logsumexp",
+        "max_pooling_2d",
+        "min_gpt_causal_attention",
+        "pwconv2d",
+        "resnet18",
+        "squeezenet",
+    }
+)
 
 #: Per-kernel wall clock. Every port that translates finishes within 31 s on one core (measured over all
 #: 250 at preset S); the ones that run longer are the large CNNs (densenet, resnet101, googlenet), none of
@@ -102,7 +124,6 @@ def test_the_subtrack_is_still_registered() -> None:
 @pytest.mark.integration
 def test_at_least_the_pinned_number_of_ports_translate() -> None:
     stems = [stem for stem in kernelbench_stems() if not SAMPLE or sampled(stem)]
-    floor = MIN_TRANSLATING_SAMPLE if SAMPLE else MIN_TRANSLATING
 
     def probe(stem: str) -> tuple[str, bool]:
         try:
@@ -118,11 +139,13 @@ def test_at_least_the_pinned_number_of_ports_translate() -> None:
     # ports can stop translating and this still passes -- which is exactly the silent come-down the
     # docstring says must not happen. Until the floor is tightened, the log is what makes a drop
     # visible.
-    print(f"kernelbench ports translating: {len(passing)}/{len(stems)} (floor {floor})")
+    print(f"kernelbench ports translating: {len(passing)}/{len(stems)}")
     if failing:
         print("not translating: " + " ".join(sorted(failing)))
-    assert len(passing) >= floor, (
-        f"{len(passing)}/{len(stems)} kernelbench ports translate, floor is {floor}. "
+    lost = sorted(SAMPLE_TRANSLATING - set(passing))
+    assert not lost, f"pinned kernelbench ports no longer sampled or translating (a translator regression): {lost}"
+    assert SAMPLE or len(passing) >= MIN_TRANSLATING, (
+        f"{len(passing)}/{len(stems)} kernelbench ports translate, floor is {MIN_TRANSLATING}. "
         f"A DROP means a translator regression -- the first few that stopped working: "
         f"{sorted(set(failing))[:8]}"
     )
