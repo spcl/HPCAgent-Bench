@@ -429,11 +429,12 @@ FRESHENED_AT_SETUP = pytest.StashKey[list[str]]()
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_setup(item: pytest.Item) -> Iterator[None]:
-    """Set aside the re-imports the fixtures made (``tests.fresh_module.fresh``): only the test's own are undone."""
-    yield
+def pytest_runtest_call(item: pytest.Item) -> Iterator[None]:
+    """Set aside the re-imports the fixtures made (``tests.fresh_module.fresh``): only the test's own are undone.
+    At the call, not as a second ``pytest_runtest_setup``: that name is the hardware gate's, which it would replace."""
     item.stash[FRESHENED_AT_SETUP] = list(FRESHENED)
     FRESHENED.clear()
+    yield
 
 
 @pytest.hookimpl(hookwrapper=True)
