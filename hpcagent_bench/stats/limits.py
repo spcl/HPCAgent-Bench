@@ -5,9 +5,8 @@
 A comparison of two setups attributes their difference to the intervention, which holds only when both were allowed
 to spend the same: the same consumed-token cap, the same output-token cap and the same wall clock on every episode
 the comparison reads. The driver records the limits it enforced with each episode (``episodes.token_limit``,
-``output_token_limit``, ``time_limit_s``, where the token limits came from, the setup's ``RESUBMISSION``, and the
-scale and ``launch_kind`` of a resubmission); the extractor carries
-them on the episode row. :func:`setup_limits` reduces them per setup over the episodes an aggregate reads
+``output_token_limit``, ``time_limit_s``, where the token limits came from and the run protocol around them); the
+extractor carries them on the episode row. :func:`setup_limits` reduces them per setup over the episodes an aggregate reads
 (``population.latest_episodes``), :func:`compare` gives a pair its :class:`LimitsMatch`, and :func:`check` applies
 ``budgets.matched_limits``: ``flag`` reports, ``strict`` refuses, ``off`` makes no check and adds no column. The same
 module checks the task set (``budgets.matched_tasks``, :func:`check_tasks`): both setups ran the same kernels.
@@ -38,13 +37,10 @@ if TYPE_CHECKING:
     import pandas as pd
 
 __all__ = [
-    "LAUNCH_KIND_COLUMN",
     "LIMIT_COLUMNS",
     "PAIR_COLUMNS",
     "PROTOCOL_COLUMNS",
     "REPAIR_COLUMNS",
-    "RESUBMIT_KIND",
-    "SCALE_COLUMNS",
     "SETUP_COLUMNS",
     "Cut",
     "Limits",
@@ -72,13 +68,10 @@ __all__ = [
 
 #: The episode-row columns that hold the limits an episode ran under, in :class:`Limits` field order.
 LIMIT_COLUMNS: tuple[str, str, str] = ("episode_token_limit", "episode_output_token_limit", "episode_time_limit_s")
-#: The episode-row columns that hold the scales its submission applied to its setup's own limits.
-SCALE_COLUMNS: tuple[str, str] = ("episode_token_scale", "episode_time_scale")
 #: The episode-row columns that hold the run protocol it ran under, in :class:`Limits` field order after the limits:
-#: where the token limits came from (``common`` or ``experiment``) and the setup's ``RESUBMISSION``.
+#: where the token limits came from (``common`` or ``experiment``), the repair and the auto-submission.
 PROTOCOL_COLUMNS: tuple[str, ...] = (
     "episode_limits_source",
-    "episode_resubmission",
     "episode_crash_relaunch",
     "episode_crash_attempts",
     "episode_reply_cap",
@@ -86,31 +79,22 @@ PROTOCOL_COLUMNS: tuple[str, ...] = (
 )
 #: The episode-row columns of what infrastructure repair cost a setup, totalled per setup in the settings sidecar.
 REPAIR_COLUMNS: tuple[str, ...] = ("episode_resumes", "episode_fresh_relaunches", "tokens_lost")
-#: The episode-row column that says why ``owed run`` launched it (``resubmit``: a second chance under RESUBMISSION).
-LAUNCH_KIND_COLUMN = "episode_launch_kind"
-RESUBMIT_KIND = "resubmit"
 #: What :func:`setup_columns` adds to a per-setup table.
 SETUP_COLUMNS: tuple[str, ...] = (
     "limits",
     "limits_unrecorded_episodes",
-    "extended_episodes",
-    "resubmitted_episodes",
 )
 #: What :func:`pair_columns` adds to a pairs table.
 PAIR_COLUMNS: tuple[str, ...] = (
     "limits_match",
     "limits_a",
     "limits_b",
-    "n_extended_a",
-    "n_extended_b",
-    "n_resubmitted_a",
-    "n_resubmitted_b",
 )
 
 
 class Limits(NamedTuple):
     """The limits one episode ran under (0 = no cap) and the run protocol around them: two episodes whose limits
-    came from different places or whose setups resubmit differently did not run under the same rules."""
+    came from different places or whose setups repair differently did not run under the same rules."""
 
     #: Consumed tokens; resumes included.
     tokens: int
@@ -120,8 +104,6 @@ class Limits(NamedTuple):
     seconds: int
     #: ``common`` or ``experiment`` (an experiment overrode a token limit); ``""`` = not recorded.
     source: str = ""
-    #: The setup's ``RESUBMISSION`` (``off`` or ``<k>x``); ``""`` = not recorded.
-    resubmission: str = ""
     #: How infrastructure failures were repaired: ``AGENT_CRASH_RELAUNCH`` and ``AGENT_CRASH_ATTEMPTS``; ``""`` = not
     #: recorded.
     crash_relaunch: str = ""
@@ -146,7 +128,7 @@ class Limits(NamedTuple):
         return bool(self.source)
 
     def text(self) -> str:
-        """``tokens=<n> output_tokens=<n> seconds=<n> [source=<s> resubmission=<r> crash_relaunch=<m> ...]``, as a
+        """``tokens=<n> output_tokens=<n> seconds=<n> [source=<s> crash_relaunch=<m> ...]``, as a
         table cell states it (the protocol fields only where recorded)."""
         return " ".join(f"{name}={value}" for name, value in zip(self._fields, self, strict=True) if value != "")
 
@@ -175,13 +157,6 @@ class SetupLimits:
     counts: Mapping[Limits, int] = field(default_factory=dict)
     #: Episodes that record no limits.
     unrecorded: int = 0
-    #: Episodes whose limits were scaled above their setup's own (a resubmission at k > 1).
-    extended: int = 0
-    #: Episodes that record no scale: ``extended`` says nothing about them.
-    unscaled: int = 0
-    #: Episodes a resubmission ran (``launch_kind = resubmit``): their answer is a second chance's. Their k-times
-    #: limits are no limits of the setup's own, so they are in no entry of ``counts``.
-    resubmitted: int = 0
     #: Episodes whose limits are recorded but not the run protocol around them (schema 26 and earlier).
     protocol_unrecorded: int = 0
     #: What infrastructure repair cost: resumes, fresh relaunches and the lost tokens, summed.
@@ -192,7 +167,7 @@ class SetupLimits:
     @property
     def episodes(self) -> int:
         """Every episode counted."""
-        return sum(self.counts.values()) + self.unrecorded + self.resubmitted
+        return sum(self.counts.values()) + self.unrecorded
 
     def text(self) -> str:
         """The distinct limits, most episodes first, ``; ``-joined, each with its episode count when there are
@@ -230,8 +205,7 @@ def protocol_texts(frame: "pd.DataFrame", column: str) -> "pd.Series":
 def setup_limits(observations: "pd.DataFrame") -> dict[str, SetupLimits]:
     """Per setup of ``observations``: the limits its episodes recorded, over the run of each (kernel, slot) the
     aggregates read (``population.latest_episodes``), so the check is over the episodes the comparison is made of. A
-    resubmission's k-times limits are left out of the setup's limits (it is counted as ``resubmitted``; its setting
-    is in every other episode's ``resubmission``). A setup with no episode row maps to an empty :class:`SetupLimits`."""
+    setup with no episode row maps to an empty :class:`SetupLimits`."""
     setups = sorted(observations["setup"].dropna().astype(str).unique())
     selected = population.latest_episodes(observations)
     episodes = selected.loc[selected["row_kind"] == RowKind.EPISODE.text]
@@ -239,11 +213,7 @@ def setup_limits(observations: "pd.DataFrame") -> dict[str, SetupLimits]:
     limits = [integers(episodes, column) for column in LIMIT_COLUMNS]
     protocol = [protocol_texts(episodes, column) for column in PROTOCOL_COLUMNS]
     repair = [integers(episodes, column).fillna(0) for column in REPAIR_COLUMNS]
-    resubmitted = texts(episodes, LAUNCH_KIND_COLUMN) == RESUBMIT_KIND
-    scales = [integers(episodes, column) for column in SCALE_COLUMNS]
-    recorded = limits[0].notna() & limits[1].notna() & limits[2].notna() & ~resubmitted
-    scaled = scales[0].notna() & scales[1].notna()
-    extended = (scales[0].fillna(1) > 1) | (scales[1].fillna(1) > 1)
+    recorded = limits[0].notna() & limits[1].notna() & limits[2].notna()
     owner = episodes["setup"].astype(str)
     out: dict[str, SetupLimits] = {}
     for setup in setups:
@@ -256,10 +226,7 @@ def setup_limits(observations: "pd.DataFrame") -> dict[str, SetupLimits]:
             counts[key] = counts.get(key, 0) + 1
         out[setup] = SetupLimits(
             counts=counts,
-            unrecorded=int((mine & ~recorded & ~resubmitted).sum()),
-            extended=int((mine & extended).sum()),
-            unscaled=int((mine & ~scaled).sum()),
-            resubmitted=int((mine & resubmitted).sum()),
+            unrecorded=int((mine & ~recorded).sum()),
             protocol_unrecorded=sum(count for key, count in counts.items() if not key.protocol_recorded),
             resumes=int(repair[0][mine].sum()),
             fresh_relaunches=int(repair[1][mine].sum()),
@@ -427,9 +394,6 @@ def pooled(observations: "pd.DataFrame") -> SetupLimits:
     return SetupLimits(
         counts=dict(counts),
         unrecorded=sum(part.unrecorded for part in parts),
-        extended=sum(part.extended for part in parts),
-        unscaled=sum(part.unscaled for part in parts),
-        resubmitted=sum(part.resubmitted for part in parts),
         protocol_unrecorded=sum(part.protocol_unrecorded for part in parts),
         resumes=sum(part.resumes for part in parts),
         fresh_relaunches=sum(part.fresh_relaunches for part in parts),
@@ -460,51 +424,37 @@ def task_sides(label: str, treated: "pd.DataFrame", control: "pd.DataFrame") -> 
     return {"same_task_set": len(set(served.values())) == 1}
 
 
-def extended_count(limits: SetupLimits) -> int | None:
-    """The setup's episodes run under scaled limits; None when no episode records a scale (not known, never 0)."""
-    return None if limits.episodes == limits.unscaled else limits.extended
-
-
 def setup_columns(frame: "pd.DataFrame", by_setup: Mapping[str, SetupLimits]) -> "pd.DataFrame":
-    """``frame`` (one row per ``setup``) with :data:`SETUP_COLUMNS`: the limits its episodes ran under, how many
-    episodes record none, how many ran under scaled limits and how many were resubmissions."""
+    """``frame`` (one row per ``setup``) with :data:`SETUP_COLUMNS`: the limits its episodes ran under and how many
+    episodes record none."""
     found = [by_setup.get(str(setup), SetupLimits()) for setup in frame["setup"]]
     return frame.assign(
         limits=[limits.text() for limits in found],
         limits_unrecorded_episodes=[limits.unrecorded for limits in found],
-        extended_episodes=[extended_count(limits) for limits in found],
-        resubmitted_episodes=[limits.resubmitted for limits in found],
     )
 
 
 def pair_columns(frame: "pd.DataFrame", by_setup: Mapping[str, SetupLimits]) -> "pd.DataFrame":
     """``frame`` (rows naming ``setup_a`` and ``setup_b``) with :data:`PAIR_COLUMNS`: the pair's
-    :class:`LimitsMatch`, both setups' limits and their scaled and resubmitted episode counts."""
+    :class:`LimitsMatch` and both setups' limits."""
     found_a = [by_setup.get(str(setup), SetupLimits()) for setup in frame["setup_a"]]
     found_b = [by_setup.get(str(setup), SetupLimits()) for setup in frame["setup_b"]]
     return frame.assign(
         limits_match=[compare(a, b).text for a, b in zip(found_a, found_b, strict=True)],
         limits_a=[limits.text() for limits in found_a],
         limits_b=[limits.text() for limits in found_b],
-        n_extended_a=[extended_count(limits) for limits in found_a],
-        n_extended_b=[extended_count(limits) for limits in found_b],
-        n_resubmitted_a=[limits.resubmitted for limits in found_a],
-        n_resubmitted_b=[limits.resubmitted for limits in found_b],
     )
 
 
 def settings_block(by_setup: Mapping[str, SetupLimits]) -> dict[str, dict[str, object]]:
     """Per setup, what a table's settings sidecar states about the rules its episodes ran under: each recorded set of
-    limits with its run protocol (source, resubmission, crash relaunch mode, attempt bound, reply cap, auto-submit) and
-    episode count; the episodes that record none, ran under scaled limits, were resubmissions (whose answer is a
-    second chance's) or record no run protocol; and what infrastructure repair cost (resumes, fresh relaunches,
-    lost tokens)."""
+    limits with its run protocol (source, crash relaunch mode, attempt bound, reply cap, auto-submit) and episode
+    count; the episodes that record none or record no run protocol; and what infrastructure repair cost (resumes,
+    fresh relaunches, lost tokens)."""
     return {
         setup: {
             "limits": [dict(limits._asdict(), episodes=count) for limits, count in sorted(found.counts.items())],
             "unrecorded_episodes": found.unrecorded,
-            "extended_episodes": extended_count(found),
-            "resubmitted_episodes": found.resubmitted,
             "protocol_unrecorded_episodes": found.protocol_unrecorded,
             "resumes": found.resumes,
             "fresh_relaunches": found.fresh_relaunches,

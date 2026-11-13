@@ -106,27 +106,34 @@ class RecordResources(pydantic.BaseModel):
     container_cpus: str = ""
 
 
+#: Keys of a limits block written before limits became fixed per experiment (the removed resubmission): read past.
+RETIRED_LIMIT_KEYS = ("token_scale", "time_scale", "resubmission")
+
+
 class RecordLimits(pydantic.BaseModel):
-    """The limits the driver enforced on the episode (``agent_driver.limits_record``): 0 = no cap. A scale is the
-    multiple of the setup's own limit its submission applied, None where the submission stated none."""
+    """The limits the driver enforced on the episode (``agent_driver.limits_record``): 0 = no cap."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
     max_tokens: Count
     max_output_tokens: Count
     timeout_seconds: Count
-    token_scale: Count | None = None
-    time_scale: Count | None = None
     #: The bound of the infrastructure repair (``AGENT_CRASH_ATTEMPTS``).
     crash_attempts: Count | None = None
     #: The reply cap every request was sent (``CLAUDE_CODE_MAX_OUTPUT_TOKENS``), and what the harness submits for an
     #: episode with no /submit of its own (``AGENT_AUTO_SUBMIT``: ``best_scored``, ``off``; '' = not recorded).
     reply_cap: Count | None = None
     auto_submit: str = ""
-    #: ``common`` or ``experiment`` (a token limit the experiment overrode), and the setup's ``RESUBMISSION``;
-    #: '' where the render stamped none.
+    #: ``common`` or ``experiment`` (a token limit the experiment overrode); '' where the render stamped none.
     source: str = ""
-    resubmission: str = ""
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def drop_retired(cls, data: object) -> object:
+        """An older record's :data:`RETIRED_LIMIT_KEYS`, dropped, so its episode still reads."""
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items() if key not in RETIRED_LIMIT_KEYS}
+        return data
 
 
 class NetworkRecord(pydantic.BaseModel):
@@ -186,6 +193,8 @@ class EpisodeRecord(pydantic.BaseModel):
     launch: Count | None = None
     previous_result: str = ""
     launch_kind: str = ""
+    #: The attempts earlier launches of the episode lost to infrastructure (``ProblemLine.infra_attempts``).
+    infra_attempts: Count | None = None
     tokens: Count | None = None
     output_source: str = ""
     output_delta_shape: str = ""
@@ -253,14 +262,11 @@ def episode_values(record: EpisodeRecord, cancelled: bool = False) -> dict[str, 
         "token_limit": limits.max_tokens if limits else None,
         "output_token_limit": limits.max_output_tokens if limits else None,
         "time_limit_s": limits.timeout_seconds if limits else None,
-        "token_scale": limits.token_scale if limits else None,
-        "time_scale": limits.time_scale if limits else None,
         "previous_attempt_result": None if previous is None else ENDED_BY.get(previous, PREVIOUS_CRASH),
         "launch": record.launch,
         "previous_launch_result": record.previous_result or None,
         "launch_kind": record.launch_kind or None,
         "limits_source": (limits.source or None) if limits else None,
-        "resubmission": (limits.resubmission or None) if limits else None,
         "crash_attempts": limits.crash_attempts if limits else None,
         "reply_cap": limits.reply_cap if limits else None,
         "auto_submit": (limits.auto_submit or None) if limits else None,
