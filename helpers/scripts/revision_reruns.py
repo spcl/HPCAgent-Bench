@@ -19,8 +19,8 @@ revised inputs), then per slot (setup, kernel, slot) of its latest episode:
   without a passing regrade), ``limits_exceeded`` (the episode ran under larger limits than its setup's own and its
   recorded usage went past them: total tokens, generated tokens where recorded, wall clock, attempts) or
   ``usage_unknown`` (it ran under larger limits and its usage cannot be established from the record). A slot under
-  larger limits whose usage stayed within its setup's own is classified as any other. With ``--tag``, a kernel of the
-  tag that a setup never ran is owed too (``missing``).
+  larger limits whose usage stayed within its setup's own is classified as any other. With ``--tag STUDY=TAG``, a
+  kernel of the tag that a setup of the study never ran is owed too (``missing``).
 
 A reused study (:data:`REUSED`) is held to the limits of the experiments.toml experiment of its revision setup, not
 to the limits its runs recorded: an episode that ran under larger ones, or recorded none, is accepted only when its
@@ -297,8 +297,8 @@ def classify(db: pathlib.Path, since_ms: int) -> tuple[list[Slot], int]:
 
 #: The run protocol every paper setup ran under, which its reruns reproduce in place of ``[common]``'s: no
 #: generated-token cap (the 5M ``AGENT_MAX_OUTPUT_TOKENS`` came later), the 32768-token reply cap, and the best correct
-#: /score submitted for an agent that submitted nothing (the driver's teardown promotion since 2026-09-09, 2f857c546) and
-#: its 3 attempts.
+#: /score submitted for an agent that submitted nothing (the driver's teardown promotion since 2026-09-09,
+#: 2f857c546) and its 3 attempts.
 PAPER_PROTOCOL: Mapping[str, int | str] = {
     "AGENT_MAX_OUTPUT_TOKENS": 0,
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": 32768,
@@ -389,13 +389,18 @@ def naming(setup: Mapping[str, object]) -> tuple[str, str]:
     return experiment, tail.removeprefix(f"-{packet}") if packet else tail
 
 
-def missing(slots: Sequence[Slot], kernels: Sequence[str]) -> list[Slot]:
-    """An owed ``missing`` slot for each of ``kernels`` that a setup of ``slots`` holds no slot of (a cell its runs
-    never reached)."""
+def missing(slots: Sequence[Slot], kernels: Mapping[str, Sequence[str]]) -> list[Slot]:
+    """An owed ``missing`` slot for each kernel of ``kernels[setup]`` that ``setup`` holds no slot of in ``slots`` (a
+    cell its runs never reached)."""
     held: dict[str, set[str]] = collections.defaultdict(set)
     for one in slots:
         held[one.setup].add(one.kernel)
-    return [Slot(name, kernel, 1, "owed", "missing") for name, have in sorted(held.items()) for kernel in kernels if kernel not in have]
+    return [
+        Slot(name, kernel, 1, "owed", "missing")
+        for name, have in sorted(held.items())
+        for kernel in kernels.get(name, ())
+        if kernel not in have
+    ]
 
 
 #: Own-limit keys as the env keys a ``LIMITS_CEILING`` file states them under.
@@ -454,14 +459,17 @@ def cmd_select(args: argparse.Namespace) -> int:
         mine, unknown = classify(db, args.since)
         slots += mine
         unrecorded += unknown
-    if args.tag:
-        slots += missing(slots, tags.resolve(args.tag))
+    by_study = dict(one.split("=", 1) for one in args.tag)
+    studies = {name: str(row.get("study") or "") for db in args.db for name, row in setup_rows(db).items()}
+    expected = {name: tags.kernels_of(by_study[study]) for name, study in studies.items() if study in by_study}
+    slots += missing(slots, expected)
     lines = write(args.out, slots, list(args.db))
     counts = collections.Counter(one.klass for one in slots)
     reasons = collections.Counter(one.reason for one in slots if one.klass == "owed")
     print(
-        f"slots {len(slots)}: accepted {counts['accepted']}, unsolved {counts['unsolved']}, pending {counts['pending']}, "
-        f"owed {counts['owed']} ({', '.join(f'{r} {reasons[r]}' for r in OWED_REASONS)}); limits unrecorded {unrecorded}"
+        f"slots {len(slots)}: accepted {counts['accepted']}, unsolved {counts['unsolved']}, "
+        f"pending {counts['pending']}, owed {counts['owed']} "
+        f"({', '.join(f'{r} {reasons[r]}' for r in OWED_REASONS)}); limits unrecorded {unrecorded}"
     )
     for line in lines:
         if "command" in line:
@@ -478,7 +486,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--since", type=since_ms, required=True, help="the final-judge regrade's start (ISO time with zone)"
     )
     select.add_argument("--out", type=pathlib.Path, required=True, help="where the lists and summaries go")
-    select.add_argument("--tag", default="", help="the tag every setup runs in full: a kernel it never ran is owed")
+    select.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        metavar="STUDY=TAG",
+        help="the tag every setup of STUDY runs in full: a kernel it never ran is owed (repeatable)",
+    )
     select.set_defaults(func=cmd_select)
     experiments = sub.add_parser("experiments", help="print the rerun experiments' experiments.toml blocks")
     experiments.set_defaults(func=cmd_experiments)
