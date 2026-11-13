@@ -137,6 +137,15 @@ def run_probe(
     env["DACE_default_build_folder"] = str(build_folder)
     for variable in ("OPENBLAS_DIR", "OPENBLAS_ROOT", "OPENBLAS_HOME", "OpenBLAS_HOME"):
         env.pop(variable, None)
+    if hide_system:
+        # Hiding the system OpenBLAS covers LD_LIBRARY_PATH too: a host OpenBLAS there (a spack test env, the
+        # images' /opt/view/lib) outranks the kernel's RUNPATH at load time, so ldd would name it, not the link.
+        kept = [
+            d
+            for d in env.get("LD_LIBRARY_PATH", "").split(os.pathsep)
+            if d and not any(pathlib.Path(d).glob("libopenblas*"))
+        ]
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(kept)
     if openblas_dir is not None:
         env["OPENBLAS_DIR"] = str(openblas_dir)
     argv = [sys.executable, "-m", "tests.dace_openblas_probe", name, "hide-system" if hide_system else "keep-system"]
