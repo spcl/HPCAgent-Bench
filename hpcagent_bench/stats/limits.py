@@ -123,8 +123,10 @@ class Limits(NamedTuple):
 
     @property
     def protocol(self) -> tuple[str, ...]:
-        """The run protocol around them; all blank on a record from before schema 27."""
-        return tuple(self[3:])
+        """The run protocol around them that a comparison holds equal: where the limits came from, the reply cap and
+        the auto-submission; all blank on a record from before schema 27. How infrastructure failures were repaired
+        (``crash_relaunch``, ``crash_attempts``) changes no agent's budget: recorded and stated, never compared."""
+        return (self.source, self.reply_cap, self.auto_submit)
 
     @property
     def protocol_recorded(self) -> bool:
