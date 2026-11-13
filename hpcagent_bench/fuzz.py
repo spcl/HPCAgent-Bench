@@ -785,7 +785,8 @@ def large_shapes(
                         "large_shapes: %s has no distinct %s draw; timed unclassed", label, size_class.text
                     )
                 except ValueError:
-                    sample = resolve(size_class=size_class)
+                    # Repeats this call's own draw, never an excluded (another route's) input.
+                    sample = resolve(exclude=exclude, size_class=size_class)
         except ValueError:
             continue
         out.append((label, sample))
