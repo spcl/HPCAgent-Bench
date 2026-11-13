@@ -18,7 +18,7 @@ def test_the_rendered_protocol_and_a_packets_mode_pass_and_any_other_value_is_re
     assert env_spec.staged_refusal(blind, "llrblind:qwen38", {"AGENT_SUBMISSION_MODE": "blind"}) == ""
     assert "AGENT_SUBMISSION_MODE=blind" in env_spec.staged_refusal(blind, "llrblind:qwen38", {})
     raised = {**env, "AGENT_MAX_TOKENS": "240000000"}
-    assert "AGENT_MAX_TOKENS=240000000, experiments.toml 120000000" in env_spec.staged_refusal(
+    assert "AGENT_MAX_TOKENS=240000000, experiments.toml 100000000" in env_spec.staged_refusal(
         raised, "llrblind:qwen38", {}
     )
 
