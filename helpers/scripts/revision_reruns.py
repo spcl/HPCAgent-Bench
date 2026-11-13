@@ -16,15 +16,17 @@ revised inputs), then per slot (setup, kernel, slot) of its latest episode:
 * ``owed`` with one reason: ``no_source`` (a passing answer whose source and library were not stored, so it cannot be
   regraded), ``failed_regrade`` (a passing answer the final judge fails), ``task_changed`` (a planted-match kernel
   without a passing regrade), ``limits_exceeded`` (the episode ran under larger limits than its setup's own and its
-  recorded usage went past them: total tokens, generated tokens where recorded, wall clock, attempts) or
-  ``usage_unknown`` (it ran under larger limits and its usage cannot be established from the record). A slot under
-  larger limits whose usage stayed within its setup's own is classified as any other. With ``--tag STUDY=TAG``, a
-  kernel of the tag that a setup of the study never ran is owed too (``missing``).
+  recorded usage went past them: total tokens, generated tokens where recorded, wall clock, attempts),
+  ``limits_smaller`` (a limit smaller than its setup's own ended it) or ``usage_unknown`` (its usage, or the limit
+  that ended it, cannot be established from the record). A slot within its setup's limits is classified as any other.
+  With ``--tag STUDY=TAG``, a kernel of the tag that a setup of the study never ran is owed too (``missing``).
 
 A reused study (:data:`REUSED`) is held to the limits of the experiments.toml experiment of its revision setup (the
-one global limit, ``[common]``), not to the limits its runs recorded: an episode that ran under larger ones, or recorded
-none, is accepted only when its usage stayed within them. Its owed slots rerun under that experiment, with the setup's
-name and study.
+one global limit, ``[common]``), not to the limits its runs recorded, one limit at a time: the limit that ended the
+episode (its result: ``timeout`` the wall clock, ``budget`` a token limit) must equal the global one, its teardown
+after the deadline not counted; every other usage must stay within the global one. A database that records no limits
+(before user_version 22) takes them from the setup's launch env (``--env-dir``, ``.env.<setup>``). Its owed slots
+rerun under that experiment, with the setup's name and study.
 
     python helpers/scripts/revision_reruns.py select --db <results.db> ... --since <ISO time> --out <dir>
 
@@ -46,6 +48,7 @@ from dataclasses import asdict, dataclass
 from hpcagent_bench import tags
 from hpcagent_bench.cluster import env_spec
 from hpcagent_bench.harness import grade_under, results_db
+from hpcagent_bench.results.owed import read_env
 from hpcagent_bench.results.recorded_rows import RERUN_PREFIXES
 
 __all__ = [
@@ -74,7 +77,7 @@ PLANTED = (
     "tsvc_2_s482",
 )
 #: Why a slot is owed, in the order a slot is tested for them.
-OWED_REASONS = ("limits_exceeded", "usage_unknown", "no_source", "failed_regrade", "task_changed", "missing")
+OWED_REASONS = ("limits_exceeded", "limits_smaller", "usage_unknown", "no_source", "failed_regrade", "task_changed", "missing")
 
 #: A reused study -> the experiments its setups are held to and its owed slots and missing cells run under, one for
 #: a single-submission setup and one for a ``-multi`` one: the revision's experiment of the llr40 feedback study
@@ -94,6 +97,7 @@ EPISODE_COLUMNS = (
     "token_scale",
     "time_scale",
     "crash_attempts",
+    "result",
     "returncode",
     "relaunches",
     "wall_ms",
@@ -210,6 +214,64 @@ def usage_within(row: Mapping[str, object], own: Mapping[str, int | None]) -> bo
     return all(checks)
 
 
+def consumed(row: Mapping[str, object]) -> int:
+    """Every attempt's consumed tokens together (0: a record that was never archived)."""
+    return sum(int(str(row[k] or 0)) for k in ("fresh_input_tokens", "cached_input_tokens", "output_tokens"))
+
+
+def ended_by(row: Mapping[str, object], enforced: Mapping[str, int | None]) -> str:
+    """The limit key that ended the episode, by its result ("" when none did): ``timeout`` the wall clock, ``budget``
+    the consumed-token limit when its usage reached it, else the generated-token limit."""
+    if row["result"] == "timeout":
+        return "time_limit_s"
+    if row["result"] == "budget":
+        tokens = capped(enforced.get("token_limit"))
+        return "token_limit" if tokens is not None and consumed(row) >= tokens else "output_token_limit"
+    return ""
+
+
+def limits_verdict(
+    row: Mapping[str, object], enforced: Mapping[str, int | None], held: Mapping[str, int | None]
+) -> str:
+    """"" when the episode ran within ``held`` (the global limit), else its owed reason. The limit that ended it is
+    compared as a limit (``enforced``: what it ran under), so the teardown after its deadline does not count; every
+    other one is compared on usage."""
+    if not consumed(row) or not row["wall_ms"]:
+        return "usage_unknown"
+    used = {
+        "token_limit": consumed(row),
+        "output_token_limit": int(str(row["output_tokens"] or 0)),
+        "time_limit_s": int(str(row["wall_ms"])) / 1000,
+        "crash_attempts": 1 + int(str(row["relaunches"] or 0)),
+    }
+    hit = ended_by(row, enforced)
+    for key, value in used.items():
+        tokens = key in ("token_limit", "output_token_limit")
+        limit = (capped(held[key]) if tokens else held[key]) or float("inf")
+        if key != hit:
+            if value > limit:
+                return "limits_exceeded"
+            continue
+        if enforced.get(key) is None:
+            return "usage_unknown"
+        ran = (capped(enforced[key]) if tokens else enforced[key]) or float("inf")
+        if ran != limit:
+            return "limits_smaller" if ran < limit else "limits_exceeded"
+    return ""
+
+
+def launch_limits(setups: Iterable[str], env_dirs: Sequence[pathlib.Path]) -> dict[str, dict[str, int]]:
+    """setup -> the limits its launch env (``<dir>/.env.<setup>``, the first of ``env_dirs`` holding one) states."""
+    limits: dict[str, dict[str, int]] = {}
+    for setup in setups:
+        for directory in env_dirs:
+            if (path := directory / f".env.{setup}").is_file():
+                env = read_env(path)
+                limits[setup] = {key: int(env[name]) for key, name in CEILING_KEYS.items() if env.get(name)}
+                break
+    return limits
+
+
 def answers(db: pathlib.Path) -> dict[int, dict[str, object]]:
     """episode id -> its last submission (:data:`SUBMISSIONS`)."""
     with results_db.reading(db, finished=results_db.finished_db(db)) as conn:
@@ -242,11 +304,13 @@ def scored(
     return list(chosen.values())
 
 
-def classify(db: pathlib.Path, since_ms: int) -> tuple[list[Slot], int]:
-    """Every slot of ``db``, classified on its scored episode (module docstring), and how many record no limits."""
+def classify(db: pathlib.Path, since_ms: int, env_dirs: Sequence[pathlib.Path] = ()) -> tuple[list[Slot], int]:
+    """Every slot of ``db``, classified on its scored episode (module docstring), and how many record no limits;
+    ``env_dirs`` hold the launch envs of the setups whose episodes record none."""
     rows = episode_rows(db)
     held = reused_limits(db)
     own = own_limits(rows) | held
+    launched = launch_limits(held, env_dirs)
     last = answers(db)
     finals = finals_since(db, since_ms)
     slots, unrecorded = [], 0
@@ -258,7 +322,11 @@ def classify(db: pathlib.Path, since_ms: int) -> tuple[list[Slot], int]:
         regraded = finals.get(int(str(answer["id"]))) if answer else None
         stored = bool(answer and (answer["sourced"] or answer["library"]))
         reason, klass = "", "owed"
-        if larger_limits(row, own[setup]) or (setup in held and row["token_limit"] is None):
+        if setup in held:
+            ran = launched.get(setup, {})
+            enforced = {key: row[key] if isinstance(row[key], int) else ran.get(key) for key in CEILING_KEYS}
+            reason = limits_verdict(row, enforced, held[setup])
+        elif larger_limits(row, own[setup]):
             within = usage_within(row, own[setup])
             reason = "usage_unknown" if within is None else "" if within else "limits_exceeded"
         if reason:
@@ -383,7 +451,7 @@ def cmd_select(args: argparse.Namespace) -> int:
     slots: list[Slot] = []
     unrecorded = 0
     for db in args.db:
-        mine, unknown = classify(db, args.since)
+        mine, unknown = classify(db, args.since, args.env_dir)
         slots += mine
         unrecorded += unknown
     by_study = dict(one.split("=", 1) for one in args.tag)
@@ -413,6 +481,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--since", type=since_ms, required=True, help="the final-judge regrade's start (ISO time with zone)"
     )
     select.add_argument("--out", type=pathlib.Path, required=True, help="where the lists and summaries go")
+    select.add_argument(
+        "--env-dir",
+        type=pathlib.Path,
+        action="append",
+        default=[],
+        help="launch envs (.env.<setup>) of setups whose episodes record no limits (repeatable)",
+    )
     select.add_argument(
         "--tag",
         action="append",
