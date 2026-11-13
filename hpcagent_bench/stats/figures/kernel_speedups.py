@@ -357,7 +357,8 @@ def kernel_intervals(
     """Each of ``kernels``' geomean-speedup CI over every graded episode of ``setup``, as (low, high)."""
     ratios_low: dict[str, float] = {}
     ratios_high: dict[str, float] = {}
-    graded = subset.loc[subset["row_kind"] == RowKind.SUBMISSION.text] if "row_kind" in subset.columns else subset
+    verdicts = (RowKind.SUBMISSION.text, RowKind.ATTEMPT.text)
+    graded = subset.loc[subset["row_kind"].isin(verdicts)] if "row_kind" in subset.columns else subset
     episodes = population.graded_episode_rows(graded, population.SUBMISSION_ORDER)
     if episodes.empty:
         return ratios_low, ratios_high
