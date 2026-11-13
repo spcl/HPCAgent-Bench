@@ -995,14 +995,14 @@ jobs:
         run: |
           sh agent/harness/install_tools.sh "$HOME/.local" uv
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # A stale image is a warning: the images are rebuilt and pushed off CI (containers/images/registry.sh).
       - name: Compare each image's fingerprint with its published label
         shell: bash
         run: |
-          status=0
           for image in judge-agent-amd judge-agent-cpu judge-agent-cuda sglang vllm; do
-            containers/images/build.sh "${image}" --drift | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+            containers/images/build.sh "${image}" --drift | tee -a "$GITHUB_STEP_SUMMARY" \
+              || echo "::warning::${image}: the published image was built from other inputs; rebuild and push it"
           done
-          exit "${status}"
 
   coverage:
     if: ${{!cancelled()}}
