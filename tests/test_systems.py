@@ -239,6 +239,16 @@ def test_job_submit_forwards_the_resolved_resource_extras_through_sbatchs_enviro
     assert not [word for word in command + unset if word.startswith("--export")]
 
 
+def test_job_submit_holds_the_job_with_the_flag_or_submit_shs_hold_knob(tmp_path: pathlib.Path) -> None:
+    """sbatch reads no SBATCH_HOLD, so a held submission is sbatch's own --hold: from `job submit --hold`, or from
+    HOLD=1, the knob submit.sh and the launch ledger already set; neither holds nothing."""
+    script = job_script(tmp_path)
+    for args, knobs in ((("--hold",), {}), ((), {"HOLD": "1"})):
+        assert dry_run(tmp_path, *args, script, **knobs)[1][:2] == ["sbatch", "--hold"], (args, knobs)
+    assert "--hold" not in dry_run(tmp_path, script, HOLD="0")[1]
+    assert "--hold" not in dry_run(tmp_path, script)[1]
+
+
 def dry_run(tmp_path: pathlib.Path, *args: str, **knobs: str) -> tuple[str, list[str]]:
     """The system and the sbatch command ``hpcagent-bench job submit --dry-run <args>`` prints under the CSCS site
     layer (system beverin) and account ``proj``, with no Slurm or HPCAgent-Bench value inherited from the caller. An
@@ -248,7 +258,7 @@ def dry_run(tmp_path: pathlib.Path, *args: str, **knobs: str) -> tuple[str, list
     inherited = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(("SBATCH_", "SLURM_", "HPCAGENT_BENCH_")) and key != "ROLE"
+        if not key.startswith(("SBATCH_", "SLURM_", "HPCAGENT_BENCH_")) and key not in ("ROLE", "HOLD")
     }
     environ = inherited | {
         "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
