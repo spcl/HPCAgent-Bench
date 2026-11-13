@@ -43,6 +43,7 @@ __all__ = [
     "ml_default_domain",
     "parse_shape",
     "shape_dims",
+    "weight_domain",
 ]
 
 if TYPE_CHECKING:
@@ -150,9 +151,21 @@ ML_TRACK = Track.MACHINE_LEARNING
 UNIT_HALF_RANGE = 1.0
 
 
+def weight_domain(gain: str, shape: tuple[int, ...], axes: tuple[int, int]) -> tuple[float, float]:
+    """A layer weight's interval at the draw's own sizes: He, ``sqrt(6 / fan_in)``, for a layer whose output reaches a
+    ReLU-like activation first (He et al., ICCV 2015), else Xavier, ``sqrt(6 / (fan_in + fan_out))`` (Glorot and
+    Bengio, AISTATS 2010). ``axes`` are the ``(out, in)`` axes; the axes after both are the receptive field and the
+    axes before both a stack of layers, as ``torch.nn.init`` counts fans."""
+    out_axis, in_axis = axes
+    receptive = math.prod(shape[max(axes) + 1 :])
+    fan_in, fan_out = shape[in_axis] * receptive, shape[out_axis] * receptive
+    bound = math.sqrt(6.0 / max(fan_in, 1)) if gain == "he" else math.sqrt(6.0 / max(fan_in + fan_out, 1))
+    return (-bound, bound)
+
+
 def ml_default_domain(activation: bool, shape: tuple[int, ...]) -> tuple[float, float]:
-    """The value domain of an ML array the manifest leaves open: activations and vectors in ``[-1, 1]``, weights at
-    PyTorch's fan-in bound ``1/sqrt(fan_in)``, so every layer's output stays O(1)."""
+    """The value domain of an ML array the manifest leaves open (no ``domain``, no ``weight_init``): activations and
+    vectors in ``[-1, 1]``, weights at PyTorch's default bound ``1/sqrt(fan_in)``."""
     if activation or len(shape) < 2:
         return (-UNIT_HALF_RANGE, UNIT_HALF_RANGE)
     bound = UNIT_HALF_RANGE / math.sqrt(max(math.prod(shape[1:]), 1))
@@ -218,6 +231,9 @@ def auto_initialize(
             # The array's own value domain, PER ARRAY (a Cholesky matrix is SPD while its rhs stays free).
             if name in spec.init.domains:
                 array_spec["domain"] = spec.init.domains[name]
+            elif name in spec.init.weight_inits:
+                gain, axes = spec.init.weight_inits[name]
+                array_spec["domain"] = weight_domain(gain, shape, axes)
             elif spec.track is ML_TRACK:
                 array_spec["domain"] = ml_default_domain(not activation_drawn, shape)
             # The hidden rotation moves an ML activation on the track's default interval (hidden.activation_domain).
