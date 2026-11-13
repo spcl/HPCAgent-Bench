@@ -543,6 +543,7 @@ def raised_limits(values: dict[str, str], earlier: Iterable[tuple[str, dict[str,
 def earlier_launches(values: dict[str, str]) -> list[tuple[str, dict[str, str]]]:
     """The launch envs of setup ``values["SETUP"]`` under its ``RUN_ROOT`` (``${VAR}`` and ``${VAR:?}`` resolved from
     the environment, as the job resolves them): every job of the setup that started under the run root."""
+
     def resolve(match: re.Match[str]) -> str:
         if match[1] not in os.environ:
             raise SystemExit(f"RUN_ROOT names ${{{match[1]}}}, which is not set")

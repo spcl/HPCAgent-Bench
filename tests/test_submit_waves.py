@@ -161,10 +161,14 @@ def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_pa
 
 
 #: A stub squeue: this user's queued prep jobs of the experiment ``wave`` -- the prepare job (renders numba,c) and the
-#: c golden job -- as ``<id> <comment>``, for the job name after ``-n``.
+#: c golden job -- as ``<id> <comment>``, for the job name after ``-n``, queued from the submitting checkout (``OPT``).
 QUEUED_SQUEUE = """name=""
 while [ $# -gt 0 ]; do [ "$1" = -n ] && name="$2"; shift; done
-case "${name}" in prepare-wave) echo "55 renders=numba,c" ;; goldens-wave-c) echo "56 goldens" ;; esac
+commit=$(git -C "${OPT}" rev-parse --short=9 HEAD 2>/dev/null || echo unknown)
+case "${name}" in
+    prepare-wave) echo "55 renders=numba,c;commit=${commit}" ;;
+    goldens-wave-c) echo "56 goldens;commit=${commit}" ;;
+esac
 """
 
 
