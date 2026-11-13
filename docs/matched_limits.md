@@ -212,8 +212,10 @@ on every problem) plus its own attempts (the first, each resume and each fresh r
 before the driver wrote a record is named only by its launch problems and counts its one attempt, so a lost job
 spends the cap as a crash does. The attempt a user's job cancel ended (`episode_cancelled`) spends nothing. A run
 whose count reached `AGENT_CRASH_ATTEMPTS` is unsolved and never owed again; the driver records such an end as
-`relaunch_limit` (a repair launched with attempts left counts them from `infra_attempts`). A changed task starts a
-new episode with no carried count.
+`relaunch_limit` (a repair launched with attempts left counts them from `infra_attempts`), and `owed run --class
+infra` refuses it. A changed task starts a new episode with no carried count. A cancelled episode's grades deliver
+nothing (the analysis drops the episode whole), so a job cut off under an episode that had already submitted owes
+that run its repair like any other cancelled one.
 
 **An agent failure is final.** An agent that ended by itself without an answer, an episode a limit stopped and a
 submission voided after grading are unsolved tasks: `owed collect` lists none of them and nothing reruns them, under

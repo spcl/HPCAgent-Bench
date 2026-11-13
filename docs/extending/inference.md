@@ -51,7 +51,7 @@ SGLANG_EXTRA_ARGS = '"--chat-template ${HPCAGENT_BENCH_REPO}/containers/inferenc
 | `INFERENCE_ENGINE` | `sglang` runs `sglang.launch_server`; unset or anything else runs `vllm serve` |
 | `INFERENCE_CE_ENV` | EDF name in `~/.edf`; its image must carry that engine |
 | `VLLM_MODEL`, `VLLM_SERVED_MODEL` | HF repo id (both engines), and the name agents request |
-| `GPUS_PER_NODE`, `INFERENCE_NODES`, `INFERENCE_MODE` | TP size; `pp` splits one model over the nodes, `replicas` runs one server per node |
+| `GPUS_PER_NODE`, `INFERENCE_NODES`, `INFERENCE_MODE`, `INFERENCE_REPLICAS` | TP size; `pp` splits one model over the nodes (`INFERENCE_REPLICAS` pipelines of `INFERENCE_NODES / INFERENCE_REPLICAS` nodes each, default 1), `replicas` runs one server per node |
 | `SGLANG_EXTRA_ARGS`, `VLLM_EXTRA_ARGS` | split on whitespace (`read -r -a`), no quoting; name both parsers |
 | `SGLANG_ATTENTION_BACKEND` | unset appends `--attention-backend aiter`; set empty omits it |
 | `HPCAGENT_BENCH_OPTIMIZER` | checkpoint id; must equal `VLLM_MODEL` and the registry `serves:` |

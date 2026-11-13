@@ -146,3 +146,65 @@ def test_serve_only_serves_from_the_inference_roles_derived_edf(
     assert ("NCCL_NET =" in rendered) is hooks
     assert ('com.hooks.cxi.enabled = "false"' not in rendered) is hooks
     assert f"{run_dir}/shared:/shared" in rendered
+
+
+RUN_CLUSTER = CLUSTER / "run_cluster.sh"
+
+
+@pytest.mark.parametrize(
+    ("nodes", "replicas", "mode", "refused"),
+    [
+        ("8", "2", "pp", False),
+        ("4", "1", "pp", False),
+        ("2", "1", "replicas", False),
+        ("0", "1", "pp", False),
+        ("8", "3", "pp", True),
+        ("8", "0", "pp", True),
+        ("2", "2", "replicas", True),
+    ],
+)
+def test_pipeline_replicas_must_divide_the_inference_nodes(nodes: str, replicas: str, mode: str, refused: bool) -> None:
+    """INFERENCE_REPLICAS splits a pp setup's nodes into equal pipelines; anything else stops the job before a step."""
+    block = lines_between(RUN_CLUSTER, 'INFERENCE_REPLICAS="${INFERENCE_REPLICAS:-1}"', "fi")
+    env = {"INFERENCE_NODES": nodes, "INFERENCE_REPLICAS": replicas, "INFERENCE_MODE": mode}
+    done = bash(f"set -euo pipefail\n{block}", env=env)
+    assert done.returncode == (2 if refused else 0), done.stderr
+
+
+@pytest.mark.parametrize(
+    ("nodes", "replicas", "mode", "endpoints"),
+    [("8", "2", "pp", ["n0", "n4"]), ("4", "1", "pp", ["n0"]), ("2", "1", "replicas", ["n0", "n1"])],
+)
+def test_every_pipeline_serves_from_its_first_node(nodes: str, replicas: str, mode: str, endpoints: list[str]) -> None:
+    """The agents stripe over VLLM_REPLICA_URLS: one URL per pipeline (its rank 0), one per node of a replicas setup."""
+    block = lines_between(RUN_CLUSTER, "    replica_urls=()", "    done")
+    script = (
+        f'set -euo pipefail\ninference_nodes=(n0 n1 n2 n3 n4 n5 n6 n7)\n{block}\nprintf "%s\\n" "${{replica_urls[@]}}"'
+    )
+    env = {"INFERENCE_NODES": nodes, "INFERENCE_REPLICAS": replicas, "INFERENCE_MODE": mode, "VLLM_PORT": "8000"}
+    done = bash(script, env=env)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == [f"http://{node}:8000/v1" for node in endpoints]
+
+
+@pytest.mark.parametrize(
+    ("replicas", "procid", "pipeline"),
+    [("2", "5", "4 1 n4"), ("2", "3", "4 3 n0"), ("2", "4", "4 0 n4"), ("1", "5", "8 5 n0")],
+)
+def test_a_pipeline_rank_joins_its_own_pipeline(replicas: str, procid: str, pipeline: str) -> None:
+    """Two pipelines of four nodes: rank 5 is rank 1 of the second, whose master is its first node (n4)."""
+    block = lines_between(RUN_CLUSTER, "    if (( INFERENCE_REPLICAS > 1 )); then", "    fi")
+    script = (
+        f'set -euo pipefail\nserve() {{\n    local node_rank="${{SLURM_PROCID}}"\n{block}\n'
+        '    echo "${INFERENCE_NODES} ${node_rank} ${VLLM_MASTER_HOST}"\n}\nserve'
+    )
+    env = {
+        "INFERENCE_NODES": "8",
+        "INFERENCE_REPLICAS": replicas,
+        "INFERENCE_NODELIST": "n0,n1,n2,n3,n4,n5,n6,n7",
+        "VLLM_MASTER_HOST": "n0",
+        "SLURM_PROCID": procid,
+    }
+    done = bash(script, env=env)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == pipeline
