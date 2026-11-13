@@ -215,6 +215,8 @@ def test_no_table_may_change_an_episodes_limits_after_its_experiment_set_them(ke
     [
         ({"AGENT_CRASH_RELAUNCH": "retry"}, "resume or fresh"),
         ({"AGENT_CRASH_ATTEMPTS": "x"}, "a whole number"),
+        ({"AGENT_CRASH_ATTEMPTS": "5"}, "1 to 4"),
+        ({"AGENT_CRASH_ATTEMPTS": "0"}, "1 to 4"),
         ({"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32k"}, "a whole number"),
         ({"AGENT_AUTO_SUBMIT": "always"}, "best_scored or off"),
     ],

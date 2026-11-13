@@ -198,17 +198,17 @@ def problem_of(kernel: str, infra_attempts: int | None = None) -> dict[str, obje
 def test_infrastructure_that_used_up_the_episodes_attempts_across_jobs_leaves_it_unsolved(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AGENT_CRASH_ATTEMPTS (3) bounds an episode across jobs. Both kernels' first jobs died before writing a record
-    (one attempt each); the repair of the first lost two more (a crash and its resume), the second's one: the first is
-    unsolved, the second still owed."""
+    """AGENT_CRASH_ATTEMPTS (4) bounds an episode across jobs. Both kernels' first jobs died before writing a record
+    (one attempt each); the repair of the first lost three more (a crash and two resumes), the second's one: the first
+    is unsolved, the second still owed."""
     first_kernel, second_kernel = TAG_KERNELS[:2]
     launch(tmp_path, "100", [problem_of(first_kernel), problem_of(second_kernel)])
     launch(tmp_path, "101", [problem_of(first_kernel, 1), problem_of(second_kernel, 1)])
     jobs = [owed.Job(job, make_job(tmp_path, job, "exp"), "exp") for job in ("100", "101")]
     crashed = {"infra_attempts": 1, "fresh_relaunches": 0}
-    episode(jobs[1].path, 0, first_kernel, 1, 10, cause="infra", relaunches=crashed | {"resumes": 1})
+    episode(jobs[1].path, 0, first_kernel, 1, 10, cause="infra", relaunches=crashed | {"resumes": 2})
     episode(jobs[1].path, 1, second_kernel, 1, 10, cause="infra", relaunches=crashed | {"resumes": 0})
-    assert owed.infra_attempts(job.path for job in jobs) == {owed.Run(first_kernel): 3, owed.Run(second_kernel): 2}
+    assert owed.infra_attempts(job.path for job in jobs) == {owed.Run(first_kernel): 4, owed.Run(second_kernel): 2}
     classes = owed.owed(jobs, TAG_RUNS[:2])
     assert (classes.get(TAG_RUNS[0]), classes.get(TAG_RUNS[1])) == (None, owed.OwedClass.INFRA)
 
@@ -217,11 +217,11 @@ def test_infrastructure_that_used_up_the_episodes_attempts_across_jobs_leaves_it
 def test_a_resumed_and_a_fresh_relaunch_each_spend_one_attempt(
     tmp_path: pathlib.Path, relaunches: dict[str, int]
 ) -> None:
-    """Either launch mode spends an attempt: one carried in, the first and its relaunch reach the cap of 3."""
+    """Either launch mode spends an attempt: two carried in, the first and its relaunch reach the cap of 4."""
     job = make_job(tmp_path, "100", "exp")
     launch(tmp_path, "100", [problem_of(TAG_KERNELS[0], 1)])
-    episode(job, 0, TAG_KERNELS[0], 1, 10, cause="infra", relaunches=relaunches | {"infra_attempts": 1})
-    assert owed.infra_attempts([job]) == {owed.Run(TAG_KERNELS[0]): 3}
+    episode(job, 0, TAG_KERNELS[0], 1, 10, cause="infra", relaunches=relaunches | {"infra_attempts": 2})
+    assert owed.infra_attempts([job]) == {owed.Run(TAG_KERNELS[0]): 4}
     assert owed.owed([owed.Job("100", job, "exp")], TAG_RUNS[:1]) == {}
 
 
@@ -229,11 +229,11 @@ def test_a_resumed_and_a_fresh_relaunch_each_spend_one_attempt(
 def test_the_attempt_a_users_job_cancel_ended_is_not_spent(
     tmp_path: pathlib.Path, cancelled: bool, expected: owed.OwedClass | None
 ) -> None:
-    """Two attempts were lost before; a third that infrastructure ended reaches the cap, one the user cancelled does
-    not."""
+    """Three attempts were lost before; a fourth that infrastructure ended reaches the cap, one the user cancelled
+    does not."""
     job = make_job(tmp_path, "100", "exp")
     launch(tmp_path, "100", [problem_of(TAG_KERNELS[0], 2)])
-    relaunches = {"infra_attempts": 2, "resumes": 0, "fresh_relaunches": 0}
+    relaunches = {"infra_attempts": 3, "resumes": 0, "fresh_relaunches": 0}
     episode(job, 0, TAG_KERNELS[0], 1, 10, cancelled, cause="infra", relaunches=relaunches)
     assert owed.owed([owed.Job("100", job, "exp")], TAG_RUNS[:1]).get(TAG_RUNS[0]) is expected
 
@@ -445,10 +445,10 @@ def test_a_rerun_never_runs_under_other_limits_than_its_launch_recorded(
 
 
 def test_run_refuses_a_repair_of_an_episode_that_used_up_its_attempts(tmp_path: pathlib.Path) -> None:
-    """AGENT_CRASH_ATTEMPTS: a run whose episode infrastructure ended on all three attempts is not relaunched again,
+    """AGENT_CRASH_ATTEMPTS: a run whose episode infrastructure ended on all four attempts is not relaunched again,
     and nothing is staged."""
     argv = staged_rerun(tmp_path)
-    relaunches = {"infra_attempts": 2, "resumes": 0, "fresh_relaunches": 0}
+    relaunches = {"infra_attempts": 3, "resumes": 0, "fresh_relaunches": 0}
     episode(tmp_path / "runs" / "100", 0, TAG_KERNELS[0], 1, 10, cause="infra", relaunches=relaunches)
     with pytest.raises(SystemExit, match="never relaunched again"):
         owed.main([*argv, "--class", "infra"])
