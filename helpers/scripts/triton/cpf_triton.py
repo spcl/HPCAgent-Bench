@@ -14,6 +14,7 @@ builds go to ``WORK/build``; a step that raises is recorded with its error, neve
 
 import argparse
 import contextlib
+import copy
 import inspect
 import json
 import pathlib
@@ -68,7 +69,7 @@ def tile_input(spec: BenchSpec) -> object:
     cpf_canonical.declare_positive(sdfg, cpf_canonical.positive_symbols(spec))
     nonnegative = sorted(cpf_canonical.nonnegative_symbols(spec))
     canonicalize(sdfg, target=Target.GPU.text, nonnegative_symbols=nonnegative)  # pyright: ignore[reportArgumentType]
-    offload_to_gpu(sdfg)  # pyright: ignore[reportArgumentType]
+    offload_to_gpu(sdfg, tile_programs=True)  # pyright: ignore[reportArgumentType]
     return sdfg
 
 
@@ -213,8 +214,19 @@ def dump_kernel(name: str, out: pathlib.Path, width: int) -> dict[str, object]:
             summary["triton"] = tiled
             return summary
         widths = (width,) * map_rank(tiled)
+        try:
+            candidate = copy.deepcopy(tiled)
+            VectorizeGPU(VectorizeConfig(widths=widths, tile_programs=True)).apply_pass(candidate, {})
+        except NotImplementedError as exc:
+            # A map of lower rank than the widest one refuses K-dim tiles (VectorizeMultiDim tiles one rank per
+            # call), so every map takes a one-dim tile instead
+            if not str(exc).startswith("MarkTileDims: map") or "params (< K=" not in str(exc):
+                raise
+            widths = (width,)
+            candidate = copy.deepcopy(tiled)
+            VectorizeGPU(VectorizeConfig(widths=widths, tile_programs=True)).apply_pass(candidate, {})
+        tiled = candidate
         summary["widths"] = list(widths)
-        VectorizeGPU(VectorizeConfig(widths=widths, tile_programs=True)).apply_pass(tiled, {})
         libraries = gpu_library_nodes(tiled)
         with triton_backend(out / "build"):
             compiled = tiled.compile()
