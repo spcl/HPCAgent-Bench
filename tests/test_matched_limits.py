@@ -36,9 +36,9 @@ DOUBLE = limits.Limits(tokens=24_000_000, output_tokens=1_000_000, seconds=28_80
 
 def test_a_mismatch_is_refused_by_default_and_no_config_key_moves_a_limit() -> None:
     budgets = config.current().budgets
-    assert budgets.matched_limits is budgets.matched_tasks is config.MatchedLimits.STRICT
+    assert budgets.matched_limits is budgets.matched_tasks is budgets.matched_grading is config.MatchedLimits.STRICT
     assert config.MatchedLimits.texts() == ("off", "flag", "strict")
-    assert set(config.Budgets.model_fields) == {"matched_limits", "matched_tasks"}
+    assert set(config.Budgets.model_fields) == {"matched_limits", "matched_tasks", "matched_grading"}
 
 
 def test_an_arm_that_overrode_a_limit_never_matches_one_that_did_not() -> None:

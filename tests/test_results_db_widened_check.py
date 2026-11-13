@@ -27,8 +27,13 @@ def stored_sql(db: pathlib.Path, kind: str) -> dict[str, str]:
 
 
 def as_version_28(db: pathlib.Path) -> None:
-    """Make ``db`` a file as user_version 28 wrote it: ``grades.denominator`` without ``triton-gpu``."""
+    """Make ``db`` a file as user_version 28 wrote it: ``grades.denominator`` without ``triton-gpu``, and none of the
+    columns later versions added (``results_db.ADDED``)."""
     with contextlib.closing(sqlite3.connect(db)) as conn:
+        for version in range(OLD_VERSION + 1, results_db.SCHEMA_VERSION + 1):
+            for statement in results_db.ADDED[version]:
+                words = statement.split()
+                conn.execute(f"ALTER TABLE {words[2]} DROP COLUMN {words[5]}")
         conn.execute("PRAGMA writable_schema = ON")
         conn.execute("UPDATE sqlite_master SET sql = replace(sql, ?, ?) WHERE name = ?", (NEW_CHECK, OLD_CHECK, TABLE))
         cookie = int(conn.execute("PRAGMA schema_version").fetchone()[0])
