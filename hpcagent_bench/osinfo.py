@@ -5,6 +5,7 @@
 
 import pathlib
 import platform
+import re
 import signal
 import sys
 from collections.abc import Mapping
@@ -25,6 +26,7 @@ __all__ = [
     "machine",
     "mp_context",
     "node_name",
+    "rocminfo_gpu_name",
     "unblock_sigchld",
 ]
 
@@ -80,10 +82,26 @@ def node_name() -> str:
     return os.environ.get("HPCAGENT_BENCH_HOST") or os.environ.get("SLURMD_NODENAME") or socket.gethostname()
 
 
+#: A ``rocminfo`` agent's device type and marketing name lines.
+ROCMINFO_DEVICE_TYPE = re.compile(r"^\s*Device Type:\s+(\S+)\s*$", re.MULTILINE)
+ROCMINFO_MARKETING_NAME = re.compile(r"^\s*Marketing Name:\s+(.+?)\s*$", re.MULTILINE)
+
+
+def rocminfo_gpu_name(text: str) -> str:
+    """The marketing name of the first GPU agent in ``rocminfo`` output ``text``, or ``""``.
+
+    The agent's Device Type picks the GPU: an APU's CPU agent (MI300A) carries a marketing name too."""
+    for agent in re.split(r"^\*+\s*$", text, flags=re.MULTILINE):
+        kind, name = ROCMINFO_DEVICE_TYPE.search(agent), ROCMINFO_MARKETING_NAME.search(agent)
+        if kind and kind.group(1) == "GPU" and name:
+            return name.group(1)
+    return ""
+
+
 @lru_cache(maxsize=1, typed=True)
 def gpu_model() -> str:
-    """Best-effort GPU model string (``$HPCAGENT_BENCH_GPU``, else ``nvidia-smi``); ``""`` on a CPU-only host.
-    Cached (read once per recorded row)."""
+    """Best-effort GPU model string (``$HPCAGENT_BENCH_GPU``, else ``nvidia-smi``, else ``rocminfo``); ``""`` on a
+    CPU-only host. Cached (read once per recorded row)."""
     import os
     import subprocess
 
@@ -97,9 +115,14 @@ def gpu_model() -> str:
             .strip()
             .splitlines()
         )
+        if out:
+            return out[0].strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        return rocminfo_gpu_name(subprocess.check_output(["rocminfo"], timeout=30).decode(errors="replace"))
     except (OSError, subprocess.SubprocessError):
         return ""
-    return out[0].strip() if out else ""
 
 
 def default_mp_context() -> str:
