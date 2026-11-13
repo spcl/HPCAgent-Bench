@@ -141,6 +141,8 @@ class ArrayDocument(pydantic.BaseModel):
     #: A layer weight's fan bound (``he`` or ``xavier``) and its ``[out, in]`` axes when not ``(out, in, ...)``.
     weight_init: Literal["he", "xavier"] | None = None
     fan_axes: list[int] | None = None
+    #: The held-out away-from-zero draw keeps the values its initializer drew (a planted pattern, a physical state).
+    keep_draw: bool = False
 
 
 class InitDocument(pydantic.BaseModel):

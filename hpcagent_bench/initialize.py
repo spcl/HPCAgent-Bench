@@ -236,9 +236,11 @@ def auto_initialize(
                 array_spec["domain"] = weight_domain(gain, shape, axes)
             elif spec.track is ML_TRACK:
                 array_spec["domain"] = ml_default_domain(not activation_drawn, shape)
-            # The hidden rotation moves an ML activation on the track's default interval (hidden.activation_domain).
+            # The hidden rotation moves an ML activation on the track's default interval (hidden.activation_domain),
+            # unless the manifest keeps its draw (``keep_draw``: relu's all-negative case would answer all zeros).
             on_unit = domain_mod.of(array_spec) == (-UNIT_HALF_RANGE, UNIT_HALF_RANGE)
-            if variant is not None and spec.track is ML_TRACK and not activation_drawn and on_unit:
+            rotates = on_unit and name not in spec.init.keep_draw
+            if variant is not None and spec.track is ML_TRACK and not activation_drawn and rotates:
                 array_spec["domain"] = hidden.activation_domain(variant, UNIT_HALF_RANGE)
             activation_drawn = True
             array_spec.setdefault("array", name)
