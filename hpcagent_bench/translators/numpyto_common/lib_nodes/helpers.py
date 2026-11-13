@@ -106,6 +106,9 @@ def simplify_sub(hi: ast.expr, lo: ast.expr) -> ast.expr | None:
     when the form doesn't match a known simplifying pattern."""
     if ast_eq(hi, lo):
         return ast.Constant(value=0)
+    if isinstance(lo, ast.BinOp) and isinstance(lo.op, ast.Sub) and ast_eq(lo.left, hi):
+        # ``hi - (hi - K)`` -> K: the count of a negative-start slice ``a[-K:]``, whose start resolves to ``n - K``.
+        return lo.right
     if isinstance(hi, ast.BinOp) and isinstance(hi.op, ast.Add):
         # ``(lo + K) - lo`` -> K, at ANY depth of the ``+`` chain. A convolution tap slice spells
         # its upper bound ``ky + (oh - 1) * stride + 1``, which puts ``lo`` one level down where the

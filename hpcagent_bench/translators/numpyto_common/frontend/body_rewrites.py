@@ -153,14 +153,14 @@ class FoldSliceLocals:
         folded: set[str] = set()
         for stmt in body:
             binding = None
-            if (
-                isinstance(stmt, ast.Assign)
-                and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name)
-                and isinstance(stmt.value, ast.Call)
-                and slice_call_args(stmt.value) is not None
-            ):
-                binding = (stmt.targets[0].id, slice_from_call(stmt.value))
+            bound = slice_binding_target(stmt)
+            if bound is not None and isinstance(bound[1], ast.Call):
+                binding = (bound[0], slice_from_call(bound[1]))
+            elif bound is not None and isinstance(bound[1], ast.Name) and bound[1].id in live:
+                # ``iz_sl = in_slice``: an inlined helper that returns its window hands it to the
+                # caller's name through a plain copy, which binds the same window.
+                folded.add(bound[1].id)
+                binding = (bound[0], live[bound[1].id])
             else:
                 folded |= self.rewrite_uses(stmt, live)
             blocks = nested_blocks(stmt)
@@ -203,18 +203,18 @@ class FoldSliceLocals:
 
 
 def slice_bound_names(body: Sequence[ast.stmt]) -> set[str]:
-    """Every name bound to a ``slice(...)`` anywhere inside ``body``, nested blocks included."""
-    out: set[str] = set()
-    for stmt in body:
-        for node in walk_nodes(stmt):
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and slice_call_args(node.value) is not None
-            ):
-                out.add(node.targets[0].id)
-    return out
+    """Every name that may be bound to a window anywhere inside ``body``, nested blocks included."""
+    return {bound[0] for stmt in body for node in walk_nodes(stmt) if (bound := slice_binding_target(node)) is not None}
+
+
+def slice_binding_target(node: ast.AST) -> tuple[str, ast.expr] | None:
+    """``(name, value)`` when ``node`` may bind a window to ``name``: ``name = slice(...)``, or
+    ``name = other`` (a copy, which binds a window when ``other`` holds one)."""
+    if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+        return None
+    if isinstance(node.value, ast.Name) or slice_call_args(node.value) is not None:
+        return node.targets[0].id, node.value
+    return None
 
 
 def slice_call_args(value: ast.expr) -> list[ast.expr] | None:
@@ -254,25 +254,32 @@ def drop_dead_slice_bindings(fn: ast.FunctionDef, folds: set[str]) -> None:
     A surviving binding is not harmless: the backends have no slice object at all, so it would be
     emitted as an unsupported call rather than quietly ignored.
     """
-    live = {n.id for n in walk_nodes(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in folds}
+    dropped = True
 
     def prune(body: Sequence[ast.stmt]) -> list[ast.stmt]:
+        nonlocal dropped
         out: list[ast.stmt] = []
         for stmt in body:
             map_blocks(stmt, prune, ALL_BLOCK_FIELDS)
+            bound = slice_binding_target(stmt)
             if (
-                isinstance(stmt, ast.Assign)
-                and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id in folds
-                and stmt.targets[0].id not in live
-                and slice_call_args(stmt.value) is not None
+                bound is not None
+                and bound[0] in folds
+                and bound[0] not in live
+                and (not isinstance(bound[1], ast.Name) or bound[1].id in folds)
             ):
+                dropped = True
                 continue
             out.append(stmt)
         return out
 
-    fn.body = prune(fn.body)
+    # A dropped copy ``iz_sl = in_slice`` was the last reader of the window it copied: repeat until none is left.
+    while dropped:
+        dropped = False
+        live = {
+            n.id for n in walk_nodes(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in folds
+        }
+        fn.body = prune(fn.body)
 
 
 class ListRepeatToFull(ast.NodeTransformer):

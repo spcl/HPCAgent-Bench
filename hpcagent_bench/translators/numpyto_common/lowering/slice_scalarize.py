@@ -468,7 +468,13 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         # Adjacent index arrays broadcast into ONE block of result axes (separated ones were front-placed above).
         run_rank = max((self.advanced_rank(d) for d in dims), default=0)
         block: list[tuple[ast.Name, ast.expr]] | None = None
-        align = max(0, len(lhs_slice_iters) - run_rank - basic_axis_count(dims))
+        # Source axes past the last index are implicit full slices, result axes like any other:
+        # ``t[:, -1]`` on a 5-D temp has four, and leaving the three trailing ones out of the
+        # alignment bound its ``:`` to the innermost iter.
+        source_axes_consumed = sum(1 for d in dims if not (isinstance(d, ast.Constant) and d.value is None))
+        source_shape = self.array_shapes.get(rhs_name)
+        implicit = max(0, len(source_shape) - source_axes_consumed) if source_shape is not None else 0
+        align = max(0, len(lhs_slice_iters) - run_rank - basic_axis_count(dims) - implicit)
         idx_nodes: list[ast.expr] = []
         rhs_slice_idx = 0
         # ``axis`` below is the SOURCE axis a dim reads, not its position in ``dims``: a newaxis
@@ -519,14 +525,12 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         # the source array has 4 axes -- the 4th axis is implicit (all
         # of it). Pad ``idx_nodes`` with the remaining LHS iters so the
         # emitted Subscript covers every source axis.
-        source_axes_consumed = sum(1 for d in dims if not (isinstance(d, ast.Constant) and d.value is None))
-        source_shape = self.array_shapes.get(rhs_name)
         if source_shape is not None:
-            while source_axes_consumed < len(source_shape) and rhs_slice_idx < len(lhs_slice_iters):
-                ivar_node, unused = lhs_slice_iters[rhs_slice_idx]
+            while source_axes_consumed < len(source_shape) and align + rhs_slice_idx < len(lhs_slice_iters):
+                ivar_node, lhs_start = lhs_slice_iters[align + rhs_slice_idx]
                 rhs_slice_idx += 1
                 source_axes_consumed += 1
-                idx_nodes.append(name_(ivar_node.id))
+                idx_nodes.append(self.iter_minus_start(ivar_node, lhs_start))
         new_slice = idx_nodes[0] if len(idx_nodes) == 1 else ast.Tuple(elts=idx_nodes, ctx=ast.Load())
         return ast.Subscript(value=node.value, slice=new_slice, ctx=node.ctx)
 

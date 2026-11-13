@@ -2,6 +2,7 @@
 
 import ast
 import copy
+import itertools
 from collections.abc import Iterator, Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_call, walk_nodes
@@ -35,7 +36,7 @@ __all__ = [
     "reject_view_writes_between_bind_and_use",
     "subarray_alias_candidates",
     "view_alias_candidates",
-    "write_back_reshape_views",
+    "write_back_views",
 ]
 
 
@@ -318,6 +319,20 @@ def reshape_view_of(stmt: ast.stmt) -> tuple[str, str] | None:
     return (stmt.targets[0].id, base.id) if isinstance(base, ast.Name) else None
 
 
+def slice_view_of(stmt: ast.stmt, shapes: dict[str, tuple[str, ...]]) -> tuple[str, str, ast.Subscript] | None:
+    """``(view, base, window)`` when ``stmt`` is ``view = base[lo:hi:k, ...]``, a slice on every axis of a known array:
+    the rank-preserving view the whole-array pass materialises as a copy (:func:`is_rank_preserving_slice_view`)."""
+    if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+        return None
+    value = stmt.value
+    if not (isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name)):
+        return None
+    shape = shapes.get(value.value.id)
+    if not shape or not is_rank_preserving_slice_view(value, shapes, len(shape)):
+        return None
+    return stmt.targets[0].id, value.value.id, value
+
+
 def stores_through(stmt: ast.stmt, name: str) -> bool:
     """Whether ``stmt`` writes array ``name`` in place: a subscript store or an augmented assignment to it."""
     return any(
@@ -332,33 +347,53 @@ def mentions(stmt: ast.stmt, name: str) -> bool:
     return any(isinstance(n, ast.Name) and n.id == name for n in walk_nodes(stmt))
 
 
-def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) -> None:
-    """Carry stores through a reshape view back to the array it views.
+def rebinds(stmt: ast.stmt, name: str) -> bool:
+    """Whether ``stmt`` is a plain assignment that rebinds ``name``."""
+    return isinstance(stmt, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in stmt.targets)
 
-    ``outg = np.reshape(out, shape)`` is a view in numpy: ``outg[...] += x`` writes ``out``. The emitter lowers a
-    reshape as a copy, so every statement of the view's block that stores through it is followed by the copy
-    back, ``out[:] = np.reshape(outg, shape(out))`` (conv_transposed_1d lost every tap's contribution without it),
-    and one that writes the base in place while the view is used later by the copy forward,
-    ``outg[:] = np.reshape(out, shape(outg))``. A simple statement evaluates its right side before it stores, so
-    the copies stand for the view around it; a loop or branch that stores through one name and reads the other is
+
+def write_back_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) -> None:
+    """Carry stores through a view back to the array it views.
+
+    ``outg = np.reshape(out, shape)`` and ``outg = out[:, g * c:(g + 1) * c]`` are views in numpy: ``outg[...] += x``
+    writes ``out``. The emitter lowers both as a copy, so every statement of the view's block that stores through
+    it is followed by the copy back, ``out[:] = np.reshape(outg, shape(out))`` or ``out[:, g * c:(g + 1) * c] =
+    outg`` (conv_transposed_1d and grouped conv lost every tap's contribution without it), and one that writes the
+    base in place while the view is used later by the copy forward, ``outg[:] = np.reshape(out, shape(outg))`` or
+    ``outg[:] = out[:, g * c:(g + 1) * c]``. A simple statement evaluates its right side before it stores, so the
+    copies stand for the view around it; a loop or branch that stores through one name and reads the other is
     refused. Rebinding either name ends the view (``x = np.reshape(x, ...)`` rebinds its own base and is no view
-    to carry back).
+    to carry back). A slice view nothing writes through is left alone: the view folds compose its reads.
     """
 
-    def copy(dst: str, src: str, after: ast.stmt) -> ast.stmt:
-        dims = ast.Tuple(elts=[ast.parse(d, mode="eval").body for d in shapes[dst]], ctx=ast.Load())
-        target = ast.Subscript(value=name_(dst), slice=ast.Slice(), ctx=ast.Store())
-        back = ast.Assign(targets=[target], value=numpy_call("reshape", [name_(src), dims]))
-        return ast.fix_missing_locations(ast.copy_location(back, after))
+    def copy_into(dst: str, src: str, window: ast.Subscript | None, after: ast.stmt) -> ast.stmt:
+        """``dst[:] = np.reshape(src, shape(dst))`` for a reshape view; for a slice view ``window``, the
+        window itself on the base side: ``base[window] = view`` or ``view[:] = base[window]``."""
+        whole = ast.Subscript(value=name_(dst), slice=ast.Slice(), ctx=ast.Store())
+        if window is None:
+            dims = ast.Tuple(elts=[ast.parse(d, mode="eval").body for d in shapes[dst]], ctx=ast.Load())
+            stmt = ast.Assign(targets=[whole], value=numpy_call("reshape", [name_(src), dims]))
+        elif isinstance(window.value, ast.Name) and window.value.id == dst:
+            into = ast.Subscript(value=name_(dst), slice=copy.deepcopy(window.slice), ctx=ast.Store())
+            stmt = ast.Assign(targets=[into], value=name_(src))
+        else:
+            stmt = ast.Assign(targets=[whole], value=copy.deepcopy(window))
+        return ast.fix_missing_locations(ast.copy_location(stmt, after))
 
     def scan(stmts: list[ast.stmt]) -> None:
         for i, bind in enumerate(stmts):
             for block in child_blocks_of(bind):
                 scan(block)
+            window = None
             matched = reshape_view_of(bind)
+            sliced = slice_view_of(bind, shapes) if matched is None else None
+            # Only a slice view written through is carried: a read-only one is left to the folds.
+            if sliced is not None and any(stores_through(s, sliced[0]) for s in stmts[i + 1 :]):
+                matched, window = sliced[:2], sliced[2]
             if matched is None or matched[1] not in shapes or matched[0] == matched[1]:
                 continue
             view, base = matched
+            bounds = {n.id for n in walk_nodes(window.slice) if isinstance(n, ast.Name)} if window else set()
             j = i + 1
             while j < len(stmts):
                 stmt = stmts[j]
@@ -366,16 +401,24 @@ def write_back_reshape_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) 
                     isinstance(n, ast.Name) and n.id in matched for n in stmt.targets
                 ):
                     break  # either name rebound: no longer this view of that array
+                if bounds & names_stored_in([stmt]):
+                    # A copy would re-read the window's bounds, which no longer say where the view sits.
+                    live = list(itertools.takewhile(lambda s: not rebinds(s, view), stmts[j:]))
+                    if any(mentions(s, view) for s in live) and any(
+                        stores_through(s, view) or stores_through(s, base) for s in live
+                    ):
+                        raise NotImplementedError(f"a bound of view {view!r} is rebound while the view is in use")
+                    break
                 stored = [n for n in (view, base) if stores_through(stmt, n)]
                 if stored and any(child_blocks_of(stmt)) and mentions(stmt, base if stored[0] == view else view):
-                    raise NotImplementedError(f"{stored[0]!r} is written in a block that reads its reshape alias")
+                    raise NotImplementedError(f"{stored[0]!r} is written in a block that reads its view alias")
                 if stored == [view]:
-                    stmts.insert(j + 1, copy(base, view, stmt))
+                    stmts.insert(j + 1, copy_into(base, view, window, stmt))
                     j += 1
                 elif stored == [base] and any(mentions(later, view) for later in stmts[j + 1 :]):
-                    if view not in shapes:
+                    if window is None and view not in shapes:
                         raise NotImplementedError(f"{base!r} is written in place while its view {view!r} is used")
-                    stmts.insert(j + 1, copy(view, base, stmt))
+                    stmts.insert(j + 1, copy_into(view, base, window, stmt))
                     j += 1
                 j += 1
 

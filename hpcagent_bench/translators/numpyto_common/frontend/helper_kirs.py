@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.frontend.axes import reject_symbolic_axis, reject_unsupported_slices
-from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import native_desugar
+from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import FoldSliceLocals, native_desugar
 from hpcagent_bench.translators.numpyto_common.frontend.callsite import (
     ReplaceStmts,
     build_callsite_stmts,
@@ -555,6 +555,8 @@ class HelperKirBuilder:
             # A built owner never passes through the loop again, so its spliced tuples fold here.
             oa, osc, osy = self.scope_of(owner)
             desugar_helper_tuples(owner, oa, osc, osy)
+            # The spliced ``src, dst = (slice(..), slice(..))`` binds windows only once split.
+            FoldSliceLocals().apply(owner)
             reject_symbolic_axis(owner)
             reject_unsupported_slices(owner)
             self.rewrote(owner)

@@ -100,7 +100,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.views import (
     PadImplicitTrailingSlices,
     fold_slice_view_aliases,
     fold_subarray_aliases,
-    write_back_reshape_views,
+    write_back_views,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.whole_array import WholeArrayAssignRewriter
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
@@ -624,8 +624,8 @@ def lp_libnode_expand(ctx: LoweringContext) -> None:
     # AFTER the FFT idiom match (which consumes its own reshape chains) so the
     # single expand_reshape path serves lulesh's varargs spelling.
     ReshapeMethodRewriter().visit(tree)
-    # A reshape is lowered as a copy; a store through the reshaped name must still reach the array it views.
-    write_back_reshape_views(tree, ctx.lib_shape_table)
+    # A reshape or a slice view is lowered as a copy; a store through the view must still reach the array it views.
+    write_back_views(tree, ctx.lib_shape_table)
     # ... and the reduction methods, for the same reason: one function-form path per op instead of
     # a receiver-shape special case in every expander.
     ArrayMethodRewriter(set(ctx.original_kir.sparse or {})).visit(tree)

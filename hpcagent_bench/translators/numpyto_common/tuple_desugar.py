@@ -356,7 +356,9 @@ class TupleDesugar:
         if isinstance(node, ast.Name) and node.id in env.tuples:
             return list(env.tuples[node.id])
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            left, right = self.tuple_of(node.left, env), self.tuple_of(node.right, env)
+            # A concatenated list is a sequence built at compile time, never an array literal:
+            # ``[(0, 0), (0, 0)] + [(p, p) for i in range(3)]`` is np.pad's pad-width list.
+            left, right = self.concat_operand(node.left, env), self.concat_operand(node.right, env)
             return None if left is None or right is None else left + right
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
             # `is not None`, never `or`: a 0-repeat is the empty tuple, which is falsy but correct.
@@ -387,6 +389,12 @@ class TupleDesugar:
             if sliced is not None:
                 return sliced
         return self.shape_tuple(node)
+
+    def concat_operand(self, node: ast.expr, env: Env) -> list[ast.expr] | None:
+        """The elements one side of a ``+`` concatenation contributes: a compile-time tuple's, or a
+        list literal's of any kind."""
+        elements = self.tuple_of(node, env)
+        return list(node.elts) if elements is None and isinstance(node, ast.List) else elements
 
     def slice_of(self, node: ast.Subscript, env: Env) -> list[ast.expr] | None:
         """``x.shape[2:]`` -- a SLICE of a compile-time tuple is still one.
