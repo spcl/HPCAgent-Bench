@@ -132,7 +132,7 @@ hpcagent_bench/cluster/env_layers.sh render experiment:qwen38 > experiments/.env
 
 A submitter renders a base, applies the setup's keys and writes `.env.<setup>`. `submit_setup_job`
 (`hpcagent_bench/cluster/submit_common.sh`) snapshots it read-only to `.rendered/<setup>-<UTC time>-<hash>.env` with its
-problems file and submits the snapshot as `CLUSTER_ENV_FILE`, so a later render cannot reach a
+problems file and submits the snapshot as `services.sbatch`'s argument, so a later render cannot reach a
 queued job.
 
 Key variables (full lists: `[common]`, `run_cluster.sh`):
