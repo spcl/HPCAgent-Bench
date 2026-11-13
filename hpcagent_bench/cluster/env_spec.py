@@ -339,6 +339,19 @@ def targets(spec: dict[str, Experiment] | None = None) -> list[str]:
     return [f"{name}:{model.value}" for name in (load_spec() if spec is None else spec) for model in Model]
 
 
+def staged_refusal(staged: Mapping[str, str], target: str, packet: Mapping[str, str]) -> str:
+    """Why staged setup env ``staged`` breaks the run protocol of ``target`` (``<experiment>:<model>``); "" when it
+    keeps it: each :data:`PROTOCOL_KEYS` value is what experiments.toml renders for ``target``, or what the setup's
+    packet env ``packet`` sets (the blind packet's submission mode). A deadline that cuts the wall clock is refused."""
+    want = render(target) | {key: value for key, value in packet.items() if key in PROTOCOL_KEYS}
+    off = [
+        f"{key}={staged.get(key, '(unset)')}, experiments.toml {want.get(key, '(unset)')}"
+        for key in sorted(PROTOCOL_KEYS)
+        if staged.get(key) != want.get(key)
+    ]
+    return f"{target}: the staged run protocol differs: {'; '.join(off)}" if off else ""
+
+
 def as_text(env: dict[str, str]) -> str:
     """One ``KEY=VALUE`` line per key, the form a job sources."""
     return "".join(f"{key}={value}\n" for key, value in env.items())
@@ -353,6 +366,10 @@ def main() -> int:
     hardware.add_argument("--model", help="the model served on our nodes (omit for a hosted model)")
     sub.add_parser("serve", help="print serve-only.sbatch's overrides")
     sub.add_parser("list", help="print every experiment:model")
+    staged = sub.add_parser("check-staged", help="refuse a staged setup env whose run protocol is not its experiment's")
+    staged.add_argument("env", type=pathlib.Path)
+    staged.add_argument("target", help="<experiment>:<model>")
+    staged.add_argument("packet", nargs="*", help="the setup's packet env, KEY=VALUE")
     args = parser.parse_args()
     match args.command:
         case "render":
@@ -363,6 +380,10 @@ def main() -> int:
             sys.stdout.write(as_text(env_of(TABLES["serve"], "serve")))
         case "list":
             sys.stdout.write("".join(f"{target}\n" for target in targets()))
+        case "check-staged":
+            packet = {match[1]: match[2] for line in args.packet if (match := ASSIGNMENT.match(line))}
+            if refusal := staged_refusal(assignments(args.env), args.target, packet):
+                raise SystemExit(f"{args.env.name}: {refusal}")
     return 0
 
 
