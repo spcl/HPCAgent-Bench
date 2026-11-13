@@ -92,7 +92,7 @@ PAIR_COLUMNS = (
     "p_adjusted",
     "verdict",
     # whether both setups' episodes ran under the same recorded limits (hpcagent_bench.stats.limits:
-    # identical, differ or unrecorded), each setup's limits, and its resubmitted episodes
+    # identical, differ or unrecorded) and each setup's limits
     *limits.PAIR_COLUMNS,
 )
 
@@ -214,13 +214,13 @@ SETUP_COLUMNS = (
     "mean_tokens_ci_high",
     "n_token_kernels",
     "cpf_uptake",
-    # the limits the setup's episodes ran under, the episodes that record none, ran scaled or were resubmissions
+    # the limits the setup's episodes ran under and the episodes that record none
     *limits.SETUP_COLUMNS,
 )
 
 #: The impact table's limits columns, absent under ``budgets.matched_limits = off``: the setup's own (per-setup
 #: table), then the treatment row's pair verdict (pairs table).
-IMPACT_LIMIT_COLUMNS = ("limits", "extended_episodes", "resubmitted_episodes", "limits_match")
+IMPACT_LIMIT_COLUMNS = ("limits", "limits_match")
 
 #: The intervention impact table (spec section 10).
 IMPACT_COLUMNS = (
@@ -291,8 +291,6 @@ IMPACT_SETUP_COLUMNS = {
     "mean_tokens_ci_low": "mean_tokens_ci_low",
     "mean_tokens_ci_high": "mean_tokens_ci_high",
     "limits": "limits",
-    "extended_episodes": "extended_episodes",
-    "resubmitted_episodes": "resubmitted_episodes",
 }
 
 #: Pairs-table leg -> impact-table column prefix, and the pairs-table column behind each suffix.
@@ -363,12 +361,6 @@ COUNT_COLUMNS = frozenset(
         "repeats_min",
         "sensitivity_n_pairs",
         "limits_unrecorded_episodes",
-        "extended_episodes",
-        "n_extended_a",
-        "n_extended_b",
-        "resubmitted_episodes",
-        "n_resubmitted_a",
-        "n_resubmitted_b",
     }
 )
 
@@ -1210,7 +1202,7 @@ def main(argv: list[str]) -> int:
         "episodes": args.episodes,
         "iteration_counts": list(args.iteration_counts),
         "observations": [observation_input(path) for path in args.observations],
-        # The limits, their source and the resubmission setting each setup's episodes ran under (stats/limits.py).
+        # The limits, their source and the run protocol each setup's episodes ran under (stats/limits.py).
         "setups": limits.settings_block(
             episode_limits or limits.setup_limits(observations[observations.setup.isin(setups)])
         ),

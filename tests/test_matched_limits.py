@@ -3,7 +3,7 @@
 """Matched limits (docs/matched_limits.md): the limits an episode ran under are recorded with it, reach the
 observations table, and every paired comparison states whether its two setups' limits are identical
 (``budgets.matched_limits``: ``flag`` reports, ``strict`` refuses, ``off`` leaves the tables as they were). Two arms
-whose limits came from different places, or that resubmit differently, never match (the owed side is in
+whose limits came from different places, or that repair differently, never match (the owed side is in
 test_owed.py).
 """
 
@@ -41,41 +41,24 @@ def test_a_mismatch_is_refused_by_default_and_no_config_key_moves_a_limit() -> N
     assert set(config.Budgets.model_fields) == {"matched_limits", "matched_tasks"}
 
 
-def test_an_arm_that_overrode_a_limit_or_resubmits_never_matches_one_that_did_not() -> None:
-    """Same three limits, different rules: an experiment override (``limits_source``) or a resubmission setting
-    differs, so the pair is ``differ`` and its resubmitted episodes are counted."""
-    common = BASE._replace(source="common", resubmission="off")
+def test_an_arm_that_overrode_a_limit_never_matches_one_that_did_not() -> None:
+    """Same three limits, different rules: an experiment override (``limits_source``) differs, so the pair is
+    ``differ``."""
+    common = BASE._replace(source="common")
     rows = setup_rows("a", [common, common]) + setup_rows("b", [common._replace(source="experiment")] * 2)
-    rows += setup_rows("c", [common._replace(resubmission="2x")] * 2)
-    rows[-1][limits.LAUNCH_KIND_COLUMN] = limits.RESUBMIT_KIND
     found = limits.setup_limits(pd.DataFrame(rows))
-    assert limits.compare(found["a"], found["b"]) is limits.compare(found["a"], found["c"]) is limits.LimitsMatch.DIFFER
-    assert (found["a"].resubmitted, found["c"].resubmitted) == (0, 1)
+    assert limits.compare(found["a"], found["b"]) is limits.LimitsMatch.DIFFER
     assert "source=experiment" in found["b"].text()
-    assert limits.settings_block(found)["c"]["resubmitted_episodes"] == 1
 
 
 #: Limits as a schema-28 database records them under the [common] run protocol.
 PROTOCOL = BASE._replace(
     source="common",
-    resubmission="off",
     crash_relaunch="resume",
     crash_attempts="3",
     reply_cap="32768",
     auto_submit="best_scored",
 )
-
-
-def test_two_arms_that_both_resubmit_match_whatever_they_resubmitted() -> None:
-    """A resubmission's k-times limits are not its setup's limits: two arms with RESUBMISSION='2x', one kernel
-    resubmitted at 2x in one of them, ran under the same rules."""
-    twice = PROTOCOL._replace(resubmission="2x")
-    rows = setup_rows("a", [twice, twice]) + setup_rows("b", [twice, twice])
-    resubmitted = task("a", "k9", DOUBLE._replace(**{name: getattr(twice, name) for name in twice._fields[3:]}), 2)
-    rows.append(resubmitted | {limits.LAUNCH_KIND_COLUMN: limits.RESUBMIT_KIND})
-    found = limits.setup_limits(pd.DataFrame(rows))
-    assert (found["a"].resubmitted, found["a"].counts) == (1, {twice: 2})
-    assert limits.compare(found["a"], found["b"]) is limits.LimitsMatch.IDENTICAL
 
 
 def test_a_database_before_schema_27_never_matches_one_after_it_and_strict_says_why() -> None:
@@ -118,13 +101,13 @@ def test_arms_repaired_under_different_settings_do_not_match_and_the_sidecar_sta
 
 
 def test_the_driver_records_the_limits_it_enforces(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The record reads the caps where the driver reads them, and a scale only where the submission stated one."""
+    """The record reads the caps where the driver reads them, and states no scale: limits never change for an
+    episode, whatever the environment says."""
     monkeypatch.setenv("AGENT_MAX_TOKENS", "24000000")
     monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", "1000000")
     monkeypatch.setenv("AGENT_TIMEOUT_SECONDS", "28800")
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_TOKEN_SCALE", "2")
     monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "16384")
-    monkeypatch.delenv("HPCAGENT_BENCH_RECORD_TIME_SCALE", raising=False)
     assert agent_driver.limits_record() == {
         "max_tokens": 24_000_000,
         "max_output_tokens": 1_000_000,
@@ -133,10 +116,14 @@ def test_the_driver_records_the_limits_it_enforces(monkeypatch: pytest.MonkeyPat
         "reply_cap": 16384,
         "auto_submit": agent_driver.AGENT_AUTO_SUBMIT.text,
         "source": "",
-        "resubmission": "",
-        "token_scale": 2,
-        "time_scale": None,
     }
+
+
+def test_an_older_record_that_states_a_scale_still_reads() -> None:
+    """A limits block written before limits became fixed per experiment carries the retired scale keys: read past,
+    so its episode is not lost."""
+    older = {"max_tokens": 1, "max_output_tokens": 1, "timeout_seconds": 1, "token_scale": 2, "resubmission": "2x"}
+    assert episodes.RecordLimits.model_validate(older).max_tokens == 1
 
 
 def test_no_cap_is_recorded_as_zero_not_as_unrecorded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -195,8 +182,6 @@ def test_an_episodes_limits_reach_its_row_and_its_observation(
     monkeypatch.setenv("AGENT_MAX_TOKENS", str(DOUBLE.tokens))
     monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", str(DOUBLE.output_tokens))
     monkeypatch.setenv("AGENT_TIMEOUT_SECONDS", str(DOUBLE.seconds))
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_TOKEN_SCALE", "2")
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_TIME_SCALE", "2")
     job_dir = tmp_path / str(JOB)
     shard(job_dir)
     record = episodes.read_record(driver_record(job_dir, 0, [127, 0]))
@@ -210,11 +195,9 @@ def test_an_episodes_limits_reach_its_row_and_its_observation(
     with results_db.reading(out) as conn:
         stored = dict(conn.execute("SELECT * FROM episodes WHERE label = ?", (LABEL,)).fetchone())
     assert (stored["token_limit"], stored["output_token_limit"], stored["time_limit_s"]) == tuple(DOUBLE)[:3]
-    assert (stored["token_scale"], stored["time_scale"]) == (2, 2)
     assert stored["previous_attempt_result"] == "api_timeout"
     (row,) = episode_rows(out)
     assert tuple(row[column] for column in limits.LIMIT_COLUMNS) == tuple(DOUBLE)[:3]
-    assert tuple(row[column] for column in limits.SCALE_COLUMNS) == (2, 2)
     assert row["episode_previous_attempt_result"] == "api_timeout"
 
 
@@ -263,7 +246,7 @@ def test_a_record_without_limits_leaves_them_unrecorded(tmp_path: pathlib.Path) 
 
     (row,) = episode_rows(out)
 
-    assert [row[column] for column in (*limits.LIMIT_COLUMNS, *limits.SCALE_COLUMNS)] == [""] * 5
+    assert [row[column] for column in limits.LIMIT_COLUMNS] == [""] * 3
 
 
 def version_21_file(path: pathlib.Path) -> None:
@@ -296,12 +279,11 @@ def test_a_version_21_file_reads_its_limits_as_unrecorded_and_upgrades_when_writ
 # --- the check: per setup, per pair, flag and strict ---
 
 
-def task(setup: str, kernel: str, ran: limits.Limits | None, scale: int | None = 1) -> dict[str, object]:
+def task(setup: str, kernel: str, ran: limits.Limits | None) -> dict[str, object]:
     """One episode observation row of ``setup`` on ``kernel`` under ``ran`` (None: no limits recorded)."""
     recorded = dict(zip(limits.LIMIT_COLUMNS, ran[:3] if ran is not None else ("", "", ""), strict=True))
     blank = ("",) * len(limits.PROTOCOL_COLUMNS)
     recorded |= dict(zip(limits.PROTOCOL_COLUMNS, ran[3:] if ran is not None else blank, strict=True))
-    scales = dict.fromkeys(limits.SCALE_COLUMNS, "" if scale is None or ran is None else scale)
     return {
         "run_root": "stamp",
         "job": "j1",
@@ -311,12 +293,11 @@ def task(setup: str, kernel: str, ran: limits.Limits | None, scale: int | None =
         "kernel": kernel,
         "ts_ms": 900,
         **recorded,
-        **scales,
     }
 
 
-def setup_rows(setup: str, ran: list[limits.Limits | None], scale: int | None = 1) -> list[dict[str, object]]:
-    return [task(setup, f"k{index}", one, scale) for index, one in enumerate(ran)]
+def setup_rows(setup: str, ran: list[limits.Limits | None]) -> list[dict[str, object]]:
+    return [task(setup, f"k{index}", one) for index, one in enumerate(ran)]
 
 
 def test_two_setups_under_one_budget_are_identical() -> None:
@@ -337,11 +318,10 @@ def test_a_setup_under_twice_the_budget_differs_and_the_note_names_both() -> Non
     assert BASE.text() in note
 
 
-def test_one_extended_episode_makes_its_setup_differ_and_is_counted() -> None:
-    """A resubmission under scaled limits inside a setup: its episodes no longer share one budget."""
-    rows = [*setup_rows("a", [BASE, BASE]), task("a", "k9", DOUBLE, scale=2), *setup_rows("b", [BASE, BASE, BASE])]
+def test_one_episode_under_other_limits_makes_its_setup_differ() -> None:
+    """An episode under other limits inside a setup: its episodes no longer share one budget."""
+    rows = [*setup_rows("a", [BASE, BASE]), task("a", "k9", DOUBLE), *setup_rows("b", [BASE, BASE, BASE])]
     found = limits.setup_limits(pd.DataFrame(rows))
-    assert (found["a"].extended, found["b"].extended) == (1, 0)
     assert found["a"].counts == {BASE: 2, DOUBLE: 1}
     assert limits.compare(found["a"], found["b"]) is limits.LimitsMatch.DIFFER
 
@@ -351,12 +331,9 @@ def test_unrecorded_limits_are_never_called_identical() -> None:
     assert found["a"].unrecorded == 1
     assert limits.compare(found["a"], found["b"]) is limits.LimitsMatch.UNRECORDED
     old = limits.setup_limits(
-        pd.DataFrame(setup_rows("a", [None]) + setup_rows("b", [None])).drop(
-            columns=[*limits.LIMIT_COLUMNS, *limits.SCALE_COLUMNS]
-        )
+        pd.DataFrame(setup_rows("a", [None]) + setup_rows("b", [None])).drop(columns=list(limits.LIMIT_COLUMNS))
     )
     assert limits.compare(old["a"], old["b"]) is limits.LimitsMatch.UNRECORDED
-    assert limits.extended_count(old["a"]) is None
 
 
 def test_a_recorded_difference_stands_whatever_else_is_missing() -> None:
@@ -367,10 +344,9 @@ def test_a_recorded_difference_stands_whatever_else_is_missing() -> None:
 def test_the_check_reads_the_run_the_aggregates_read() -> None:
     """A kernel's superseded first run does not count: the comparison is made of the latest run."""
     first = task("a", "k0", BASE) | {"job": "j1", "ts_ms": 100}
-    rerun = task("a", "k0", DOUBLE, scale=2) | {"job": "j2", "ts_ms": 200}
+    rerun = task("a", "k0", DOUBLE) | {"job": "j2", "ts_ms": 200}
     found = limits.setup_limits(pd.DataFrame([first, rerun]))
     assert found["a"].counts == {DOUBLE: 1}
-    assert found["a"].extended == 1
 
 
 def test_strict_refuses_a_pair_whose_limits_differ_or_are_unrecorded() -> None:
@@ -503,7 +479,7 @@ def paired_setups_fixture() -> ModuleType:
     return module_at(paths.ROOT / "statistics" / "paired_setups.py", "paired_setups")
 
 
-def graded_episode(setup: str, kernel: str, ran: limits.Limits | None, scale: int | None = 1) -> list[dict]:
+def graded_episode(setup: str, kernel: str, ran: limits.Limits | None) -> list[dict]:
     """One agent on one kernel as extraction writes it: its accepted submission and its episode row."""
     common = {"run_root": "stamp", "job": "j1", "episode_id": f"{setup}.n0.p{kernel}.w0", "setup": setup}
     submission = common | {
@@ -519,7 +495,7 @@ def graded_episode(setup: str, kernel: str, ran: limits.Limits | None, scale: in
         "timing_reduction": "mw4x5",
         "denominator": "best-of(numba,c)",
     }
-    episode = task(setup, kernel, ran, scale) | {
+    episode = task(setup, kernel, ran) | {
         "optimizer": "",
         "speedup": "",
         "tokens": 100.0,
@@ -533,11 +509,11 @@ def graded_episode(setup: str, kernel: str, ran: limits.Limits | None, scale: in
     return [submission, episode]
 
 
-def observations(tmp_path: pathlib.Path, treated: limits.Limits | None, scale: int | None = 1) -> pathlib.Path:
+def observations(tmp_path: pathlib.Path, treated: limits.Limits | None) -> pathlib.Path:
     """A control ``b`` under :data:`BASE` and a treatment ``a`` under ``treated``, six kernels each."""
     rows: list[dict] = []
     for kernel in KERNELS:
-        rows += graded_episode("a", kernel, treated, scale)
+        rows += graded_episode("a", kernel, treated)
         rows += graded_episode("b", kernel, BASE)
     path = tmp_path / "observations.csv"
     pd.DataFrame(rows).to_csv(path, index=False)
@@ -556,21 +532,19 @@ def test_every_pair_row_states_that_its_limits_are_identical(paired_setups: Modu
     pairs, setups = tables(paired_setups, observations(tmp_path, BASE), tmp_path)
     assert set(pairs.limits_match) == {"identical"}
     assert set(pairs.limits_a) == set(pairs.limits_b) == {BASE.text()}
-    assert (setups.loc["a", "extended_episodes"], setups.loc["a", "limits_unrecorded_episodes"]) == (0, 0)
+    assert setups.loc["a", "limits_unrecorded_episodes"] == 0
 
 
-def test_a_pair_under_unequal_limits_is_flagged_and_its_extended_episodes_counted(
+def test_a_pair_under_unequal_limits_is_flagged(
     paired_setups: ModuleType,
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
-    pairs, setups = tables(paired_setups, observations(tmp_path, DOUBLE, scale=2), tmp_path)
+    pairs = tables(paired_setups, observations(tmp_path, DOUBLE), tmp_path)[0]
     assert set(pairs.limits_match) == {"differ"}
     assert (set(pairs.limits_a), set(pairs.limits_b)) == ({DOUBLE.text()}, {BASE.text()})
-    assert (set(pairs.n_extended_a), set(pairs.n_extended_b)) == ({len(KERNELS)}, {0})
-    assert (setups.loc["a", "extended_episodes"], setups.loc["b", "extended_episodes"]) == (len(KERNELS), 0)
     assert "note: pair a,b -- limits differ" in capsys.readouterr().err
 
 
@@ -578,11 +552,11 @@ def test_the_impact_table_states_each_setups_limits_and_the_pairs_verdict(
     paired_setups: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
-    argv = ["--observations", str(observations(tmp_path, DOUBLE, scale=2)), "--pair", "a,b", "--family", "f"]
+    argv = ["--observations", str(observations(tmp_path, DOUBLE)), "--pair", "a,b", "--family", "f"]
     assert paired_setups.main([*argv, "--impact-out", str(tmp_path / "impact.csv")]) == 0
     impact = pd.read_csv(tmp_path / "impact.csv").set_index("setup")
     assert (impact.loc["a", "limits"], impact.loc["b", "limits"]) == (DOUBLE.text(), BASE.text())
-    assert (impact.loc["a", "extended_episodes"], impact.loc["a", "limits_match"]) == (len(KERNELS), "differ")
+    assert impact.loc["a", "limits_match"] == "differ"
     assert pd.isna(impact.loc["b", "limits_match"])  # the control row carries no pair
     monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "off")
     assert paired_setups.main([*argv, "--impact-out", str(tmp_path / "impact.csv")]) == 0
@@ -594,14 +568,13 @@ def test_observations_without_limits_read_as_unrecorded(
 ) -> None:
     """A database from before the limits were recorded is read with ``flag`` (``strict`` refuses it)."""
     path = observations(tmp_path, BASE)
-    pd.read_csv(path).drop(columns=[*limits.LIMIT_COLUMNS, *limits.SCALE_COLUMNS]).to_csv(path, index=False)
+    pd.read_csv(path).drop(columns=list(limits.LIMIT_COLUMNS)).to_csv(path, index=False)
     with pytest.raises(SystemExit, match="strict refuses"):
         tables(paired_setups, path, tmp_path)
     monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
     pairs, setups = tables(paired_setups, path, tmp_path)
     assert set(pairs.limits_match) == {"unrecorded"}
     assert setups.loc["a", "limits_unrecorded_episodes"] == len(KERNELS)
-    assert pd.isna(setups.loc["a", "extended_episodes"])
 
 
 def test_strict_mode_refuses_the_unequal_comparison_and_runs_the_matched_one(
@@ -624,7 +597,7 @@ def test_off_writes_the_tables_without_the_limits_columns_and_notes_nothing(
     """``off`` is the table of a release without the limits: the flagged table is that one plus the limits
     columns, so every other cell is the same and the unequal pair goes unnoted."""
     monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "flag")
-    path = observations(tmp_path, DOUBLE, scale=2)
+    path = observations(tmp_path, DOUBLE)
     flagged_pairs, flagged_setups = tables(paired_setups, path, tmp_path)
     capsys.readouterr()
     monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "off")
@@ -643,7 +616,7 @@ def test_off_writes_the_tables_without_the_limits_columns_and_notes_nothing(
 def late_answer(tmp_path: pathlib.Path) -> pathlib.Path:
     """The fixture of :func:`observations` under unequal limits, where the treated setup's answer to ``k1`` came
     after 3 M tokens and five hours: past the control's 12 M / 4 h wall clock, inside its own 24 M / 8 h."""
-    path = observations(tmp_path, DOUBLE, scale=2)
+    path = observations(tmp_path, DOUBLE)
     frame = pd.read_csv(path)
     start = 1_000_000
     frame.loc[frame.row_kind == "episode", "ts_ms"] = start

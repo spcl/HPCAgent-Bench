@@ -171,10 +171,10 @@ def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -
         pytest.param("115200", {}, "115200", "", id="no-known-limit"),
     ],
 )
-def test_a_resubmissions_wall_clock_is_clamped_to_the_partition_limit_less_staging(
+def test_a_wall_clock_is_clamped_to_the_partition_limit_less_staging(
     tmp_path: pathlib.Path, seconds: str, knobs: dict[str, str], want: str, note: str
 ) -> None:
-    """``owed run`` clamps k times the wall clock to (23 - 3) h = 20 h, a --time the partition grants, and says so;
+    """A wall clock past the partition clamps to (23 - 3) h = 20 h, a --time the partition grants, and says so;
     under the limit, or with no limit the environment or system names, the time is kept."""
     result = run_common(tmp_path, f"clamp_time {seconds}", {"STAGING_HOURS": "3", **knobs})
     assert result.returncode == 0, result.stderr
@@ -189,7 +189,6 @@ def test_a_resubmissions_wall_clock_is_clamped_to_the_partition_limit_less_stagi
         "AGENT_MAX_TOKENS",
         "AGENT_MAX_OUTPUT_TOKENS",
         "AGENT_TIMEOUT_SECONDS",
-        "RESUBMISSION",
         "AGENT_CRASH_RELAUNCH",
         "AGENT_CRASH_ATTEMPTS",
         "CLAUDE_CODE_MAX_OUTPUT_TOKENS",

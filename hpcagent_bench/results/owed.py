@@ -5,13 +5,12 @@
 ``owed collect`` reads every job directory under the run roots: a run is delivered when a job graded it (not as a
 ``score_error`` or ``adhoc`` grade) or when its latest episode ended without a judge fault after it by the agent's own
 cause (``agent``), by infrastructure past its last allowed attempt (``relaunch_limit``) or by a limit (``limit``): an
-unsolved task. A grade of an episode the job cancelled delivers nothing: the analysis drops such an episode whole
-(:func:`hpcagent_bench.results.studies.drop_cancelled_episode_rows`). Otherwise it is owed as ``infra`` (a repair,
-at most :data:`MAX_RERUNS` of them per run), as ``task`` when a final grade found its task changed since, and, only
-when the setup's ``RESUBMISSION`` is ``<k>x``, a limit-stopped run that is no resubmission itself is owed as
-``resubmit`` (docs/matched_limits.md). ``owed run --class`` reruns one setup's owed runs of one class from its
-last launch env and filtered problems via ``submit_common.sh``: ``resubmit`` under k times the setup's limits, the
-others under the setup's own; every problem states its launch, how the one before ended and its ``launch_kind``.
+unsolved task, final (docs/matched_limits.md). A grade of an episode the job cancelled delivers nothing: the analysis
+drops such an episode whole (:func:`hpcagent_bench.results.studies.drop_cancelled_episode_rows`). Otherwise it is owed
+as ``infra`` (a repair, while the episode has attempts left under ``AGENT_CRASH_ATTEMPTS``: :func:`infra_attempts`)
+or as ``task`` when a final grade found its task changed since. ``owed run --class`` reruns one setup's owed runs of
+one class from its last launch env and filtered problems via ``submit_common.sh``, under the setup's own limits;
+every problem states its launch, how the one before ended and its ``launch_kind``.
 """
 
 import argparse
@@ -28,7 +27,13 @@ from collections.abc import Iterable, Sequence
 from typing import NamedTuple
 
 from hpcagent_agent.coded import Coded
-from hpcagent_agent.driver.agent_driver import CANCELLED_MARKER, RC_TIMEOUT, RC_TOKEN_BUDGET, AttemptCause
+from hpcagent_agent.driver.agent_driver import (
+    AGENT_CRASH_ATTEMPTS,
+    CANCELLED_MARKER,
+    RC_TIMEOUT,
+    RC_TOKEN_BUDGET,
+    AttemptCause,
+)
 
 from hpcagent_bench import tags
 from hpcagent_bench.cluster import merge_results
@@ -43,7 +48,6 @@ __all__ = [
     "BUDGET_RETURNCODES",
     "LAUNCH_DIR",
     "LIMIT_KEYS",
-    "MAX_RERUNS",
     "NO_RECORD",
     "SUBMIT_SCRIPT",
     "TASK_CHANGED_FINALS",
@@ -55,11 +59,13 @@ __all__ = [
     "cmd_collect",
     "cmd_run",
     "collect_jobs",
+    "crash_attempts",
     "db_rows",
     "delivered",
     "delivered_at",
     "episode_class",
     "faulted_at",
+    "infra_attempts",
     "designed_runs",
     "job_setup",
     "latest_classes",
@@ -71,12 +77,10 @@ __all__ = [
     "parse_run",
     "problem_run",
     "read_env",
+    "record_attempts",
     "regrade_dbs",
-    "repairs",
     "rerun_limits",
     "rerun_problems",
-    "resubmission",
-    "resubmission_scale",
     "selected",
     "shard_rows",
     "task_changed",
@@ -90,19 +94,12 @@ BUDGET_RETURNCODES = frozenset({RC_TIMEOUT, RC_TOKEN_BUDGET})
 #: What run_cluster.sh stages for a job's agents, beside the job's run directory.
 LAUNCH_DIR = ".agent-launch"
 
-#: How many infrastructure repairs (``owed run --class infra``, each a fresh episode in a new job) one run gets: a run
-#: whose repair also ended by infrastructure is owed nothing more and stays without an answer.
-MAX_RERUNS = 1
-
 
 class OwedClass(Coded):
     """Why a kernel is owed, the ``launch_kind`` its rerun records."""
 
-    #: A limit stopped it before an answer and the setup's ``RESUBMISSION`` is on: rerun once, under k times its
-    #: limits, its tokens counted on top of the first launch's.
-    RESUBMIT = enum.auto()
     #: Infrastructure left it without an episode the agent ended: a repair under the setup's own limits, the earlier
-    #: launch void.
+    #: launch void, while the episode has attempts left under ``AGENT_CRASH_ATTEMPTS`` (:func:`infra_attempts`).
     INFRA = enum.auto()
     #: The kernel's task changed since the run and the submission failed every input: a fresh run as it was.
     TASK = enum.auto()
@@ -250,28 +247,23 @@ def faulted_at(job_dir: pathlib.Path) -> dict[Run, int]:
     return {Run(str(kernel), int(str(slot))): int(str(ts)) for kernel, slot, ts in rows}
 
 
-def episode_class(
-    cause: str, returncode: int | None, cancelled: bool, resubmit: bool = False, resubmitted: bool = False
-) -> OwedClass | None:
+def episode_class(cause: str, returncode: int | None, cancelled: bool) -> OwedClass | None:
     """How an undelivered episode is owed, None when it owes nothing: the agent's own end, a limit and
-    infrastructure past the last allowed attempt are an unsolved task; a limit is owed as ``resubmit`` only when
-    the setup resubmits (``resubmit``) and the episode is no resubmission itself (``resubmitted``); anything else
-    infrastructure ended is owed. A record from before causes (``cause`` blank) reads by its returncode."""
+    infrastructure past the last allowed attempt are an unsolved task, final; anything else infrastructure ended is
+    owed. A record from before causes (``cause`` blank) reads by its returncode."""
     if cancelled:
         return OwedClass.INFRA
-    if cause in (AttemptCause.AGENT.text, AttemptCause.RELAUNCH_LIMIT.text):
+    if cause in (AttemptCause.AGENT.text, AttemptCause.RELAUNCH_LIMIT.text, AttemptCause.LIMIT.text):
         return None
-    if cause == AttemptCause.LIMIT.text or (not cause and returncode in BUDGET_RETURNCODES):
-        return OwedClass.RESUBMIT if resubmit and not resubmitted else None
+    if not cause and returncode in BUDGET_RETURNCODES:
+        return None
     return OwedClass.INFRA
 
 
-def latest_classes(job_dirs: Iterable[pathlib.Path], resubmit: bool = False) -> dict[Run, tuple[int, OwedClass | None]]:
+def latest_classes(job_dirs: Iterable[pathlib.Path]) -> dict[Run, tuple[int, OwedClass | None]]:
     """run -> the start (``final_attempt_start_ms``, else the file's mtime) and :func:`episode_class` of its latest
-    episode (``resubmit``: the setup's ``RESUBMISSION`` is on). A run is resubmitted once: any launch of it that was a
-    resubmission, its infrastructure repairs included, means a limit stops it for good."""
+    episode."""
     latest: dict[Run, tuple[int, EpisodeEnd]] = {}
-    resubmitted: set[Run] = set()
     for job_dir in job_dirs:
         for path in job_dir.glob(episodes.RECORD_GLOB):
             record = episodes.read_record(path)
@@ -279,13 +271,46 @@ def latest_classes(job_dirs: Iterable[pathlib.Path], resubmit: bool = False) -> 
             if record is None or not kernel:
                 continue
             run = Run(kernel, slot_of(record.episode_id))
-            if record.launch_kind == OwedClass.RESUBMIT.text:
-                resubmitted.add(run)
             order = record.final_attempt_start_ms or int(path.stat().st_mtime * 1000)
             if run not in latest or order >= latest[run][0]:
                 cancelled = (path.parent / CANCELLED_MARKER).exists()
                 latest[run] = (order, EpisodeEnd(record.cause, record.returncode, cancelled))
-    return {run: (order, episode_class(*end, resubmit, run in resubmitted)) for run, (order, end) in latest.items()}
+    return {run: (order, episode_class(*end)) for run, (order, end) in latest.items()}
+
+
+def record_attempts(record: episodes.EpisodeRecord) -> int:
+    """The attempts one launch ran: its first plus every resume and fresh relaunch (a launch whose agent never ran
+    still spent its one); a record from before resumes were counted reads its transcripts."""
+    if record.resumes is None or record.fresh_relaunches is None:
+        return max(record.attempts, 1)
+    return 1 + record.resumes + record.fresh_relaunches
+
+
+def infra_attempts(job_dirs: Iterable[pathlib.Path]) -> dict[Run, int]:
+    """run -> the attempts its episode lost to infrastructure up to its latest launch (``job_dirs`` oldest first):
+    what that launch carried in (``infra_attempts``, stamped by ``owed run``) plus its own attempts. A launch whose
+    job ended before it wrote a record (only its launch problems name it) lost its one attempt; the attempt a user's
+    job cancel ended (``episode_cancelled``) is no loss. Read only for a run owed as ``infra``, whose latest launch
+    infrastructure ended or a judge fault voided, so every attempt of it counts."""
+    spent: dict[Run, int] = {}
+    for job_dir in job_dirs:
+        problems = launch_problems(job_dir)
+        for problem in read_lines(problems) if problems else ():
+            spent[problem_run(problem)] = (problem.infra_attempts or 0) + 1
+        latest: dict[Run, int] = {}
+        for path in job_dir.glob(episodes.RECORD_GLOB):
+            record = episodes.read_record(path)
+            kernel = kernel_stem(record.kernel or "") if record is not None else ""
+            if record is None or not kernel:
+                continue
+            run = Run(kernel, slot_of(record.episode_id))
+            order = record.final_attempt_start_ms or int(path.stat().st_mtime * 1000)
+            if latest.get(run, order) > order:
+                continue
+            latest[run] = order
+            cancelled = (path.parent / CANCELLED_MARKER).exists()
+            spent[run] = (record.infra_attempts or 0) + record_attempts(record) - int(cancelled)
+    return spent
 
 
 class EpisodeEnd(NamedTuple):
@@ -330,22 +355,11 @@ def designed_runs(jobs: Sequence[Job], tag_kernels: Sequence[str]) -> list[Run]:
     return [Run(kernel, slot) for kernel in tag_kernels for slot in sorted(slots)]
 
 
-def repairs(job_dirs: Iterable[pathlib.Path]) -> collections.Counter[Run]:
-    """How many episodes of each run an infrastructure repair started (``launch_kind`` infra) over ``job_dirs``."""
-    started: collections.Counter[Run] = collections.Counter()
-    for job_dir in job_dirs:
-        for path in job_dir.glob(episodes.RECORD_GLOB):
-            record = episodes.read_record(path)
-            kernel = kernel_stem(record.kernel or "") if record is not None else ""
-            if record is not None and kernel and record.launch_kind == OwedClass.INFRA.text:
-                started[Run(kernel, slot_of(record.episode_id))] += 1
-    return started
-
-
 def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Path] = ()) -> dict[Run, OwedClass]:
     """Every run of ``runs`` the identity owes, in order, with its class: undelivered and not ended by the agent
-    (``infra`` if never started or a judge fault came after its latest episode started, while it had fewer than
-    :data:`MAX_RERUNS` repairs), or not delivered after a task-changed final grade (``task``)."""
+    (``infra`` if never started or a judge fault came after its latest episode started), or not delivered after a
+    task-changed final grade (``task``). A run whose episode infrastructure already ended on every attempt the
+    setup allows (``AGENT_CRASH_ATTEMPTS``, counted across jobs by :func:`infra_attempts`) is unsolved, not owed."""
     done: dict[Run, int] = {}
     faults: dict[Run, int] = {}
     for job in jobs:
@@ -355,8 +369,9 @@ def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Pa
             faults[run] = max(faults.get(run, ts), ts)
     shards = [shard for job in jobs for shard in merge_results.judge_shards(job.path)]
     changed = task_changed([*shards, *regrades], jobs[0].setup) if jobs else {}
-    classes = latest_classes((job.path for job in jobs), bool(jobs) and resubmission(jobs[-1].path) > 0)
-    repaired = repairs(job.path for job in jobs)
+    classes = latest_classes(job.path for job in jobs)
+    spent = infra_attempts(job.path for job in jobs)
+    cap = crash_attempts(jobs[-1].path) if jobs else AGENT_CRASH_ATTEMPTS
     result: dict[Run, OwedClass] = {}
     for run in runs:
         if run in changed and done.get(run, changed[run]) <= changed[run]:
@@ -365,7 +380,7 @@ def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Pa
             start, owed_class = classes.get(run, (0, OwedClass.INFRA))
             if owed_class is None and faults.get(run, -1) >= start:
                 owed_class = OwedClass.INFRA
-            if owed_class is OwedClass.INFRA and repaired[run] >= MAX_RERUNS:
+            if owed_class is OwedClass.INFRA and spent.get(run, 0) >= cap:
                 owed_class = None
             if owed_class is not None:
                 result[run] = owed_class
@@ -433,21 +448,12 @@ def launch_problems(job_dir: pathlib.Path) -> pathlib.Path | None:
     return problems if problems.is_file() else None
 
 
-def resubmission_scale(value: str) -> int:
-    """``RESUBMISSION`` as a scale: 0 for ``off`` (or unset), k for ``<k>x``."""
-    value = value.strip() or "off"
-    if value == "off":
-        return 0
-    if not (value.endswith("x") and value[:-1].isdigit() and int(value[:-1]) > 0):
-        raise SystemExit(f"RESUBMISSION={value!r}: off or <k>x")
-    return int(value[:-1])
-
-
-def resubmission(job_dir: pathlib.Path) -> int:
-    """The scale the setup of ``job_dir`` resubmits at (:func:`resubmission_scale` of its launch env; 0 when it
-    has none or no launch env)."""
+def crash_attempts(job_dir: pathlib.Path) -> int:
+    """The attempts infrastructure may end an episode of the setup of ``job_dir`` on (``AGENT_CRASH_ATTEMPTS`` of its
+    launch env; the driver's default when it has none)."""
     env = job_dir.parent / LAUNCH_DIR / job_dir.name / ".env"
-    return resubmission_scale(read_env(env).get("RESUBMISSION", "")) if env.is_file() else 0
+    value = read_env(env).get("AGENT_CRASH_ATTEMPTS", "") if env.is_file() else ""
+    return int(value) if value.isdigit() else AGENT_CRASH_ATTEMPTS
 
 
 def launch_files(job_dir: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
@@ -470,27 +476,18 @@ def rerun_problems(problems: pathlib.Path, runs: set[Run]) -> list[str]:
     return kept
 
 
-#: The limits a rerun pins: the setup's own, times the resubmission scale.
+#: The limits a rerun pins: the setup's own, as its launch env holds them.
 LIMIT_KEYS = ("AGENT_MAX_TOKENS", "AGENT_MAX_OUTPUT_TOKENS", "AGENT_TIMEOUT_SECONDS")
 
-#: Refuses a resubmission whose k-times wall clock the partition would not grant (it would run under less than k
-#: and record k), records the limits it runs under and submits it (or reports it) the way submit.sh does.
+#: Records the limits a rerun runs under and submits it (or reports it) the way submit.sh does.
 SUBMIT_SCRIPT = """
 set -euo pipefail
-env_file=$1 setup=$2 problems=$3 cluster=$4 scale=$5
+env_file=$1 setup=$2 problems=$3 cluster=$4
 . "${cluster}/env.sh"
 . "${cluster}/setup_nodes.sh"
 . "${cluster}/pin_env_kv.sh"
 . "${cluster}/submit_common.sh"
 agent=$(sed -n 's/^AGENT_TIMEOUT_SECONDS=//p' "${env_file}" | tail -1)
-if (( scale != 1 )); then
-    granted=$(clamp_time "${agent}")
-    (( granted == agent )) || {
-        echo "RESUBMISSION=${scale}x needs ${agent} s per agent, past the ${granted} s the partition grants: resubmit at a smaller k" >&2
-        rm -f "${env_file}" "${problems}"
-        exit 2
-    }
-fi
 tokens=$(sed -n 's/^AGENT_MAX_TOKENS=//p' "${env_file}" | tail -1)
 for kv in "AGENT_TIMEOUT_SECONDS=${agent}" "HPCAGENT_BENCH_RECORD_AGENT_TIMEOUT_SECONDS=${agent}" \\
         "HPCAGENT_BENCH_RECORD_AGENT_MAX_TOKENS=${tokens}"; do
@@ -501,15 +498,12 @@ submit_setup_job "${env_file}" "${setup}" "${walltime}" "" "" ", ${walltime}"
 """
 
 
-def rerun_limits(values: dict[str, str], scale: int) -> dict[str, str]:
-    """The limits a rerun from launch env ``values`` pins: the setup's own (the env's, divided by the scale a
-    resubmission recorded in it) times ``scale``, with that scale recorded."""
-    carried = int(values.get("HPCAGENT_BENCH_RECORD_TOKEN_SCALE") or 1)
+def rerun_limits(values: dict[str, str]) -> dict[str, str]:
+    """The limits a rerun from launch env ``values`` pins: the setup's own, never changed for an episode."""
     missing = [key for key in LIMIT_KEYS if not values.get(key, "").isdigit()]
     if missing:
         raise SystemExit(f"the launch env names no {', '.join(missing)}")
-    limits = {key: str(int(values[key]) // carried * scale) for key in LIMIT_KEYS}
-    return limits | {"HPCAGENT_BENCH_RECORD_TOKEN_SCALE": str(scale), "HPCAGENT_BENCH_RECORD_TIME_SCALE": str(scale)}
+    return {key: values[key] for key in LIMIT_KEYS}
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -522,24 +516,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not runs:
         raise SystemExit(f"{args.kernels_file} lists no run")
     owed_class = OwedClass.parse(args.owed_class)
-    kind, scale = owed_class.text, 1
-    replaced = {problem_run(problem): problem.launch_kind or "" for problem in read_lines(problems_path)}
-    repaired = {replaced.get(run, "") == OwedClass.RESUBMIT.text for run in runs}
-    if owed_class is not OwedClass.RESUBMIT and True in repaired:
-        # A repair of a resubmission is that resubmission again: same kind, the replaced launch's own scale.
-        if False in repaired:
-            raise SystemExit(
-                f"{args.kernels_file}: some runs replace a resubmission and some do not; rerun them as two lists"
-            )
-        kind, scale = OwedClass.RESUBMIT.text, int(values.get("HPCAGENT_BENCH_RECORD_TOKEN_SCALE") or 1)
-    elif owed_class is OwedClass.RESUBMIT:
-        # Off by default: a second chance under its own or larger limits is the experiment's declared choice.
-        scale = resubmission_scale(values.get("RESUBMISSION", ""))
-        if not scale:
-            raise SystemExit(
-                f"{setup}: RESUBMISSION is off ({env_path}); a limit-stopped kernel stays unsolved. An experiment "
-                "resubmits only when experiments.toml sets RESUBMISSION = '<k>x' on it"
-            )
     # Each rerun problem states which launch of its run it is, how the one before ended and why it runs: the jobs
     # of this setup under the run root are the launches (their launch env names the setup; no shard is opened).
     launched = [
@@ -551,32 +527,35 @@ def cmd_run(args: argparse.Namespace) -> int:
     ]
     job_dirs = [args.job_dir.parent / path.parent.name for path in launched]
     history = launch_history(job_dirs)
-    if kind == OwedClass.INFRA.text:
-        spent = repairs(job_dirs)
-        capped = sorted(run.line() for run in runs if spent[run] >= MAX_RERUNS)
+    # A repair continues its episode's attempt count; a changed task starts a new episode.
+    spent = infra_attempts(job_dirs)
+    if owed_class is OwedClass.INFRA:
+        cap = crash_attempts(args.job_dir)
+        capped = sorted(run.line() for run in runs if spent.get(run, 0) >= cap)
         if capped:
             raise SystemExit(
-                f"{setup}: {capped} already had {MAX_RERUNS} infrastructure repair(s); a run is repaired at most "
-                f"{MAX_RERUNS} time(s) (owed.MAX_RERUNS)"
+                f"{setup}: {capped} already lost {cap} attempts to infrastructure (AGENT_CRASH_ATTEMPTS): unsolved, "
+                "never relaunched again"
             )
     lines = [
         json.dumps(
-            json.loads(line)
+            {key: value for key, value in json.loads(line).items() if key != "infra_attempts"}
             | dict(zip(("launch", "previous_result"), history[run], strict=True))
-            | {"launch_kind": kind},
+            | {"launch_kind": owed_class.text}
+            | ({"infra_attempts": spent.get(run, 0)} if owed_class is OwedClass.INFRA else {}),
             sort_keys=True,
         )
         for line in rerun_problems(problems_path, runs)
         for run in [problem_run(ProblemLine.model_validate_json(line))]
     ]
     experiments = args.repo / "experiments"
-    stem = f"{setup}-owed-{args.kernels_file.stem}-{owed_class.text}" + (f"{scale}x" if scale > 1 else "")
+    stem = f"{setup}-owed-{args.kernels_file.stem}-{owed_class.text}"
     problems = experiments / f"problems-{stem}.jsonl"
     env = experiments / f".env.{stem}"
     problems.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
     per_node = int(values.get("AGENTS_PER_NODE") or 40)
     agent_nodes = min(int(values.get("AGENT_NODES") or 1), math.ceil(len(lines) / per_node))
-    pinned = {"PROBLEMS_FILE": problems.name, "AGENT_NODES": str(agent_nodes)} | rerun_limits(values, scale)
+    pinned = {"PROBLEMS_FILE": problems.name, "AGENT_NODES": str(agent_nodes)} | rerun_limits(values)
     kept = [line for line in env_path.read_text(encoding="utf-8").splitlines() if line.partition("=")[0] not in pinned]
     env.write_text("".join(f"{line}\n" for line in [*kept, *(f"{k}={v}" for k, v in pinned.items())]), encoding="utf-8")
     return subprocess.run(
@@ -589,7 +568,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             setup,
             problems.name,
             str(args.repo / "hpcagent_bench" / "cluster"),
-            str(scale),
         ],
         cwd=experiments,
         env={**os.environ, "SUBMIT": "1" if args.submit else "0"},
@@ -633,7 +611,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="owed_class",
         choices=OwedClass.texts(),
         required=True,
-        help="why the runs are owed (owed collect --class): resubmit runs under RESUBMISSION's k times the limits",
+        help="why the runs are owed (owed collect --class)",
     )
     run.add_argument(
         "--repo",

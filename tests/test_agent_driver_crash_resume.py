@@ -117,9 +117,11 @@ def run_agent(
     env: tuple[tuple[str, str], ...] = capture.BASE_ENV,
     start_watchers: Callable[..., list[threading.Thread]] | None = None,
     crash_relaunch: str = "resume",
+    infra_attempts: int = 0,
 ) -> ModuleType:
     """One run_agent with ``spawn`` in place of the agent process (and ``start_watchers`` in place of the watchers,
-    when given) and ``crash_relaunch`` as ``AGENT_CRASH_RELAUNCH``; returns the driver it ran."""
+    when given), ``crash_relaunch`` as ``AGENT_CRASH_RELAUNCH`` and ``infra_attempts`` as the attempts earlier launches
+    lost (an ``owed run`` stamp, when nonzero); returns the driver it ran."""
     shutil.copytree(FIXTURES / "templates", root / "shared")
     with capture.isolated(root, env):
         driver = capture.load_driver(DRIVER)
@@ -137,6 +139,8 @@ def run_agent(
         if start_watchers is not None:
             driver.start_watchers = start_watchers
         problem = {"id": 7, "kernel": capture.KERNEL, "language": "c", "task": capture.TASK}
+        if infra_attempts:
+            problem["infra_attempts"] = infra_attempts
         driver.run_agent(problem, 2, capture.NODE_DIR, list(capture.JUDGES), 7, 3)
     return driver
 
@@ -439,6 +443,20 @@ def test_infrastructure_past_the_last_allowed_attempt_ends_the_episode_as_relaun
     record = json.loads((tmp_path / capture.WORKDIR / "tokens.json").read_text(encoding="utf-8"))
     assert (record["cause"], record["resumes"], record["fresh_relaunches"]) == ("relaunch_limit", 2, 0)
     assert record["limits"]["crash_attempts"] == 3
+
+
+@pytest.mark.parametrize("crash_relaunch", ["resume", "fresh"])
+def test_attempts_an_earlier_launch_lost_count_against_the_episodes_attempt_limit(
+    tmp_path: pathlib.Path, crash_relaunch: str
+) -> None:
+    """An ``owed`` repair whose earlier launch lost one attempt has two left, resumed or fresh alike: one shared cap."""
+    lost = [init_line(), *turn("msg_a1", 1000, 100), result("API Error: Connection error.", is_error=True, turns=1)]
+    launches: list[tuple[list[str], pathlib.Path]] = []
+    driver = run_agent(tmp_path, repeating_spawner([lost], launches), crash_relaunch=crash_relaunch, infra_attempts=1)
+    assert len(launches) == driver.AGENT_CRASH_ATTEMPTS - 1 == 2
+    assert ledger_causes(tmp_path)[-1] == (False, "relaunch_limit")
+    record = json.loads((tmp_path / capture.WORKDIR / "tokens.json").read_text(encoding="utf-8"))
+    assert (record["cause"], record["infra_attempts"]) == ("relaunch_limit", 1)
 
 
 def runner_record(root: pathlib.Path) -> dict[str, object]:

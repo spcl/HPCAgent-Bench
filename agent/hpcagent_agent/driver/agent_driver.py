@@ -97,7 +97,6 @@ __all__ = [
     "LAUNCH_PROBLEM_KEYS",
     "KNOWLEDGE_TOOLS",
     "KNOWLEDGE_USAGE_NAME",
-    "LIMIT_SCALE_KEYS",
     "MATERIAL_DIR_ENV",
     "MCP_SERVER_NAME",
     "METRICS_TIMEOUT_SECONDS",
@@ -249,13 +248,13 @@ __all__ = [
     "pin",
     "previous_attempt_returncode",
     "problem_env_file",
+    "problem_infra_attempts",
     "problem_slot",
     "problem_text",
     "promote_at_agent_exit",
     "read_new_lines",
     "read_setup_overlay",
     "refuse_unreachable_services",
-    "recorded_scale",
     "remove_entries",
     "render_prompt",
     "report_aggregate_throughput",
@@ -629,7 +628,8 @@ if AGENT_START_CONCURRENCY < 1:
     raise SystemExit(f"AGENT_START_CONCURRENCY={AGENT_START_CONCURRENCY} would never start an agent: it must be >= 1")
 
 #: Attempts of an episode that infrastructure keeps ending (:func:`closing_crashed`): the first plus at most
-#: ``AGENT_CRASH_ATTEMPTS - 1`` resumes or fresh restarts together. A timeout is not a crash: relaunching it would
+#: ``AGENT_CRASH_ATTEMPTS - 1`` resumes, fresh restarts and ``owed`` reruns in new jobs together
+#: (:func:`problem_infra_attempts` carries the count across jobs). A timeout is not a crash: relaunching it would
 #: grant a second budget its peers never had. An agent resumes its own session in its own workspace
 #: (``Harness.resume_point``); one with nothing to resume from, or under ``AGENT_CRASH_RELAUNCH=fresh``, starts over.
 #: Past the last attempt the episode ends unsolved with cause ``relaunch_limit`` (never owed again).
@@ -1088,6 +1088,13 @@ def problem_slot(problem: Problem) -> int | None:
     """The 1-based run slot ``make_problems.py --repeat`` gave the problem; None for a problem of no designed repeat."""
     slot = problem.get("slot")
     return slot if isinstance(slot, int) and not isinstance(slot, bool) and slot >= 1 else None
+
+
+def problem_infra_attempts(problem: Problem) -> int:
+    """The attempts earlier launches of this episode lost to infrastructure (``owed run`` stamps ``infra_attempts``),
+    which :data:`AGENT_CRASH_ATTEMPTS` bounds together with this launch's own; 0 for a first launch."""
+    spent = problem.get("infra_attempts")
+    return spent if isinstance(spent, int) and not isinstance(spent, bool) and spent > 0 else 0
 
 
 def identity_env(problem_index: int, worker_index: int, slot: int | None = None, kernel: str = "") -> dict[str, str]:
@@ -1689,23 +1696,10 @@ def final_attempt_start_of(workdir: pathlib.Path) -> int:
         return 0
 
 
-#: The submission's budget scales a record carries, each from ``HPCAGENT_BENCH_RECORD_<KEY>``; None when unset.
-LIMIT_SCALE_KEYS = ("token_scale", "time_scale")
-
-
-def recorded_scale(key: str) -> int | None:
-    """The scale ``HPCAGENT_BENCH_RECORD_<KEY>`` states (what the submission multiplied the setup's own limit by);
-    None when unset or unreadable, which reads as "not recorded", never as 1."""
-    try:
-        return max(1, int(os.environ.get(f"HPCAGENT_BENCH_RECORD_{key.upper()}", "")))
-    except ValueError:
-        return None
-
-
 def limits_record() -> dict[str, object]:
     """The limits THIS driver enforces on an episode, for its cost record: read where the caps themselves are read,
     so the record cannot state a budget other than the one that ran. A comparison of two setups needs them per
-    episode (a rerun may run under a larger budget than its setup's)."""
+    episode."""
     limits: dict[str, object] = {
         "max_tokens": budget_tokens(),
         "max_output_tokens": budget_output_tokens(),
@@ -1713,11 +1707,9 @@ def limits_record() -> dict[str, object]:
         "crash_attempts": AGENT_CRASH_ATTEMPTS,
         "reply_cap": harnesses.context_policy(os.environ).reply,
         "auto_submit": AGENT_AUTO_SUBMIT.text,
-        # Where the token limits came from and the setup's RESUBMISSION, as the render stamped them (env_spec).
+        # Where the token limits came from, as the render stamped it (env_spec).
         "source": os.environ.get("HPCAGENT_BENCH_RECORD_LIMITS_SOURCE", ""),
-        "resubmission": os.environ.get("HPCAGENT_BENCH_RECORD_RESUBMISSION", ""),
     }
-    limits.update({key: recorded_scale(key) for key in LIMIT_SCALE_KEYS})
     return limits
 
 
@@ -3126,6 +3118,8 @@ def run_agent(
     tokens_path = workdir / harness.tokens_name
     state: AgentState = {"tokens": 0, "exceeded": False, "submitted": False}
     mcp_attempts = crash_attempts = 1
+    # Attempts earlier launches of this episode lost to infrastructure: the attempt cap is the episode's, not the job's.
+    infra_before = problem_infra_attempts(problem)
     # Sessions continued after the harness ended on a reply cut at the reply cap: no crash attempt, no allowance.
     reply_cap_continuations = 0
     # The WALL CLOCK is the PROBLEM's (no relaunch gets a new clock). The TOKEN caps run across resumes (a resumed leg
@@ -3201,9 +3195,10 @@ def run_agent(
             else:
                 process = start_runner(command, agent_dir, environment, log, cpus, memory_bytes)
             if process is None and crash_attempts == 1:
-                # The agent never ran: the episode is not run, and `owed` reruns it in a new job.
+                # The agent never ran: the episode is not run, and `owed` reruns it in a new job while the cap allows.
                 returncode, attempt_crashed, relaunching = RC_MCP_UNAVAILABLE, False, False
-                cause = AttemptCause.INFRA
+                capped_out = infra_before + 1 >= AGENT_CRASH_ATTEMPTS
+                cause = AttemptCause.RELAUNCH_LIMIT if capped_out else AttemptCause.INFRA
             elif process is None:
                 # A later attempt of an episode that ran: an infrastructure failure like any other, bounded by the
                 # attempt limit and the clock. The episode keeps the returncode its last run ended on.
@@ -3214,7 +3209,7 @@ def run_agent(
                     AttemptCause.LIMIT
                     if spent
                     else AttemptCause.RELAUNCH_LIMIT
-                    if crash_attempts >= AGENT_CRASH_ATTEMPTS
+                    if infra_before + crash_attempts >= AGENT_CRASH_ATTEMPTS
                     else AttemptCause.INFRA
                 )
                 relaunching = cause is AttemptCause.INFRA
@@ -3239,7 +3234,7 @@ def run_agent(
                         returncode, attempt_crashed = RC_SUBMITTED, False
                     closing = harness.closing(workdir)
                     cause = attempt_cause(returncode, closing)
-                    exhausted = attempt_crashed and crash_attempts >= AGENT_CRASH_ATTEMPTS and not spent
+                    exhausted = attempt_crashed and infra_before + crash_attempts >= AGENT_CRASH_ATTEMPTS and not spent
                     if exhausted:
                         cause = AttemptCause.RELAUNCH_LIMIT
                     if attempt_crashed and spent:
@@ -3303,7 +3298,7 @@ def run_agent(
                 note_relaunch(
                     log,
                     returncode,
-                    crash_attempts,
+                    infra_before + crash_attempts,
                     out_of_clock=bool(spent and attempt_crashed),
                     relaunching=relaunching,
                 )
@@ -3376,7 +3371,7 @@ def run_agent(
 #: runs as its own driver process under that setup's environment plus a worker token.
 FUSED_PROBLEM_KEYS = ("env_file", "setup")
 #: What a rerun in a new job stamps on its problems (``hpcagent_bench.problem_file.ProblemLine``).
-LAUNCH_PROBLEM_KEYS = ("launch", "previous_result", "launch_kind")
+LAUNCH_PROBLEM_KEYS = ("launch", "previous_result", "launch_kind", "infra_attempts")
 #: The child's argv flag: ``agent_driver.py --fused-problem <problem index> <worker index> <agents>``.
 FUSED_PROBLEM_FLAG = "--fused-problem"
 #: Where the resolved setup overlays live (a fused job only).
