@@ -153,8 +153,15 @@ RUN_CLUSTER = CLUSTER / "run_cluster.sh"
 
 @pytest.mark.parametrize(
     ("nodes", "replicas", "mode", "refused"),
-    [("8", "2", "pp", False), ("4", "1", "pp", False), ("2", "1", "replicas", False), ("0", "1", "pp", False),
-     ("8", "3", "pp", True), ("8", "0", "pp", True), ("2", "2", "replicas", True)],
+    [
+        ("8", "2", "pp", False),
+        ("4", "1", "pp", False),
+        ("2", "1", "replicas", False),
+        ("0", "1", "pp", False),
+        ("8", "3", "pp", True),
+        ("8", "0", "pp", True),
+        ("2", "2", "replicas", True),
+    ],
 )
 def test_pipeline_replicas_must_divide_the_inference_nodes(nodes: str, replicas: str, mode: str, refused: bool) -> None:
     """INFERENCE_REPLICAS splits a pp setup's nodes into equal pipelines; anything else stops the job before a step."""
@@ -171,7 +178,9 @@ def test_pipeline_replicas_must_divide_the_inference_nodes(nodes: str, replicas:
 def test_every_pipeline_serves_from_its_first_node(nodes: str, replicas: str, mode: str, endpoints: list[str]) -> None:
     """The agents stripe over VLLM_REPLICA_URLS: one URL per pipeline (its rank 0), one per node of a replicas setup."""
     block = lines_between(RUN_CLUSTER, "    replica_urls=()", "    done")
-    script = f'set -euo pipefail\ninference_nodes=(n0 n1 n2 n3 n4 n5 n6 n7)\n{block}\nprintf "%s\\n" "${{replica_urls[@]}}"'
+    script = (
+        f'set -euo pipefail\ninference_nodes=(n0 n1 n2 n3 n4 n5 n6 n7)\n{block}\nprintf "%s\\n" "${{replica_urls[@]}}"'
+    )
     env = {"INFERENCE_NODES": nodes, "INFERENCE_REPLICAS": replicas, "INFERENCE_MODE": mode, "VLLM_PORT": "8000"}
     done = bash(script, env=env)
     assert done.returncode == 0, done.stderr
