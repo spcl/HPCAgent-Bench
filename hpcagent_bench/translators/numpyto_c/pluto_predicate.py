@@ -18,8 +18,10 @@ Two forms, both exact:
   ``if`` stood, into an integer flag, and every assignment is guarded by flags alone. The flags are
   scalars written every iteration, so Pluto sees their dependence and keeps that loop in order.
 
-An ``if`` whose branches hold anything but assignments and nested ``if``s (a ``break``, a loop, a
-call statement) is left as it is, and stays outside the scop.
+A branch may also hold a ``for`` over a ``range`` whose bounds read no array (TSVC s275 guards a whole
+column recurrence): the loop stays and its assignments are guarded, so the enclosing loop joins the
+scop. An ``if`` whose branches hold anything else (a ``break``, a data-bounded loop, a call statement)
+is left as it is, and stays outside the scop.
 """
 
 import ast
@@ -38,12 +40,14 @@ __all__ = [
     "conj",
     "convert",
     "convertible",
+    "guarded_loop",
     "if_convert",
     "inline",
     "load",
     "names_read",
     "negate",
     "predicated",
+    "static_range",
     "tests_read",
     "written",
 ]
@@ -72,6 +76,8 @@ def written(stmts: Iterable[ast.stmt]) -> set[str]:
                 out.add(name)
         elif isinstance(stmt, ast.If):
             out |= written(stmt.body) | written(stmt.orelse)
+        elif isinstance(stmt, ast.For):
+            out |= names_read(stmt.target) | written(stmt.body)
     return out
 
 
@@ -81,12 +87,27 @@ def tests_read(stmts: Iterable[ast.stmt]) -> set[str]:
     for stmt in stmts:
         if isinstance(stmt, ast.If):
             out |= names_read(stmt.test) | tests_read(stmt.body) | tests_read(stmt.orelse)
+        elif isinstance(stmt, ast.For):
+            out |= tests_read(stmt.body)
     return out
+
+
+def static_range(loop: ast.For) -> bool:
+    """True for ``for <name> in range(...)`` whose bounds read no array element and call nothing."""
+    rng = loop.iter
+    return (
+        isinstance(loop.target, ast.Name)
+        and not loop.orelse
+        and isinstance(rng, ast.Call)
+        and isinstance(rng.func, ast.Name)
+        and rng.func.id == "range"
+        and not any(isinstance(n, (ast.Subscript, ast.Call)) for arg in rng.args for n in walk_nodes(arg))
+    )
 
 
 def convertible(stmts: Iterable[ast.stmt]) -> bool:
     """True when every statement is a single-target assignment, an augmented one, a ``pass``, or a
-    nested ``if`` of the same kind."""
+    nested ``if`` or :func:`static_range` loop of the same kind."""
     for stmt in stmts:
         if isinstance(stmt, ast.Assign):
             if len(stmt.targets) != 1 or base_name(stmt.targets[0]) is None:
@@ -96,6 +117,9 @@ def convertible(stmts: Iterable[ast.stmt]) -> bool:
                 return False
         elif isinstance(stmt, ast.If):
             if not (convertible(stmt.body) and convertible(stmt.orelse)):
+                return False
+        elif isinstance(stmt, ast.For):
+            if not (static_range(stmt) and convertible(stmt.body)):
                 return False
         elif not isinstance(stmt, ast.Pass):
             return False
@@ -135,12 +159,21 @@ def predicated(stmt: ast.stmt, guard: ast.expr) -> ast.Assign:
     )
 
 
+def guarded_loop(loop: ast.For, body: list[ast.stmt]) -> ast.For:
+    """``loop`` with its body replaced by the guarded ``body``."""
+    out = copy.copy(loop)
+    out.body = body or [ast.Pass()]
+    return out
+
+
 def inline(stmts: Iterable[ast.stmt], guard: ast.expr) -> list[ast.stmt]:
     """INLINE form: each assignment guarded by the conjunction of its tests, in source order."""
     out: list[ast.stmt] = []
     for stmt in stmts:
         if isinstance(stmt, ast.If):
             out += inline(stmt.body, conj(guard, stmt.test)) + inline(stmt.orelse, conj(guard, negate(stmt.test)))
+        elif isinstance(stmt, ast.For):
+            out.append(guarded_loop(stmt, inline(stmt.body, guard)))
         elif not isinstance(stmt, ast.Pass):
             out.append(predicated(stmt, guard))
     return out
@@ -160,6 +193,8 @@ class Flagger:
         for stmt in stmts:
             if isinstance(stmt, ast.If):
                 out += self.split(stmt, guard)
+            elif isinstance(stmt, ast.For):
+                out.append(guarded_loop(stmt, self.branch(stmt.body, guard)))
             elif not isinstance(stmt, ast.Pass):
                 out.append(predicated(stmt, guard) if guard is not None else stmt)
         return out

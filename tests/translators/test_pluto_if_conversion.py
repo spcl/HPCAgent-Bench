@@ -201,6 +201,68 @@ def test_the_inline_form_computes_what_a_conditional_sum_computes() -> None:
     run_both(src, "csum", lambda rng: (rng.standard_normal(32), np.zeros(1), 32))
 
 
+def test_a_guarded_column_recurrence_joins_the_scop_with_its_outer_loop() -> None:
+    """TSVC s275: the test guards a whole inner loop. Before, only that inner, serial loop was a scop and
+    ppcg found nothing parallel to offload; the guard now reaches the loop's assignment through a flag,
+    so the parallel outer loop is inside the region too."""
+    text = pluto_c(
+        "import numpy as np\n"
+        "def s275(bb, aa, N):\n"
+        "    for i in range(N):\n"
+        "        if aa[0, i] > 0.0:\n"
+        "            for j in range(1, N):\n"
+        "                aa[j, i] = aa[j - 1, i] + bb[j, i]\n",
+        "s275",
+        ["bb"],
+        ["aa"],
+        {"aa": "(N, N)", "bb": "(N, N)"},
+    )
+    (body,) = regions(text)
+    flag = f"{FLAG_PREFIX}0"
+    assert re.search(r"for \(int64_t i = 0;.*\n\s*" + rf"{flag} = \(\(aa\[0\]\[i\] > 0\.0\) \? 1 : 0\);", body)
+    assert re.search(rf"aa\[j\]\[i\] = \({flag} \? ", body)
+    assert "if (" not in body
+
+
+def test_the_flagged_form_computes_what_a_guarded_inner_loop_computes() -> None:
+    src = textwrap.dedent("""
+        def s275(aa, bb, n):
+            for i in range(n):
+                if aa[0, i] > 0.0:
+                    for j in range(1, n):
+                        aa[j, i] = aa[j - 1, i] + bb[j, i]
+    """)
+    run_both(src, "s275", lambda rng: (rng.standard_normal((12, 12)), rng.standard_normal((12, 12)), 12))
+
+
+def test_the_inline_form_computes_what_a_guarded_inner_loop_computes() -> None:
+    src = textwrap.dedent("""
+        def move_ifs(a, src, cond, n):
+            for i in range(n):
+                if cond[i] > 0.0:
+                    for j in range(n):
+                        a[i, j] = src[i, j] * 2.0
+                else:
+                    for j in range(1, n):
+                        a[i, j] = a[i, j - 1] + 1.0
+    """)
+    run_both(
+        src,
+        "move_ifs",
+        lambda rng: (rng.standard_normal((9, 9)), rng.standard_normal((9, 9)), rng.standard_normal(9), 9),
+    )
+
+
+def test_a_loop_bounded_by_data_keeps_its_guard() -> None:
+    """A trip count read from memory is outside the model whether guarded or not, so the ``if`` stays."""
+    tree = ast.parse(
+        "def f(a, ptr, n):\n    for i in range(n):\n        if a[i] > 0:\n"
+        "            for e in range(ptr[i], ptr[i + 1]):\n                a[e] = 0.0\n"
+    )
+    assert if_convert(tree, subscripted) == []
+    assert any(isinstance(node, ast.If) for node in ast.walk(tree))
+
+
 @pytest.mark.parametrize("statement", ["break", "print(i)"])
 def test_an_if_holding_anything_but_assignments_is_left_alone(statement: str) -> None:
     tree = ast.parse(f"def f(a, n):\n    for i in range(n):\n        if a[i] > 0:\n            {statement}\n")
