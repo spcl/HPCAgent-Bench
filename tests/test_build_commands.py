@@ -160,6 +160,15 @@ def test_a_wedged_compile_fails_the_build_and_leaves_nothing_running(
     assert "timed out after 1s and was killed" in log
     stat = pathlib.Path(f"/proc/{(tmp_path / 'child').read_text().strip()}/stat")
     deadline = time.monotonic() + 10.0
-    while stat.exists() and stat.read_text().split()[2] != "Z" and time.monotonic() < deadline:
+    while process_state(stat) not in {None, "Z"} and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert not stat.exists() or stat.read_text().split()[2] == "Z"
+    assert process_state(stat) in {None, "Z"}
+
+
+def process_state(stat: pathlib.Path) -> str | None:
+    """The state letter ``/proc/<pid>/stat`` holds, or None once the process is reaped (it may go between any two
+    reads: an exists() check first leaves a window in which the read raises)."""
+    try:
+        return stat.read_text().split()[2]
+    except (FileNotFoundError, ProcessLookupError):
+        return None
