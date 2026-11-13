@@ -183,6 +183,7 @@ scratchpad/
 .env
 hpcagent_bench/harness/hidden_tests/secret_seeds.json
 .claude/
+!tests/fixtures/transcripts/**/.claude/
 helpers/scripts/cscs/env.toml
 *.pem
 *.key
