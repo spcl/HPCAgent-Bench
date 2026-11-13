@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Triton QuaTrEx RGF: every block product is one batched complex Triton matmul over the NE energy points
-(independent solves); the block inverses are torch.linalg.inv, and the block recurrences run in torch."""
+(independent solves), the block inverses are one batched CuPy inverse, and the block recurrences run in torch.
 
+Library: cupy.linalg.inv for the batched (NE, BS, BS) block inverses
+"""
+
+import cupy
 import torch
 import triton
 import triton.language as tl
@@ -82,6 +86,11 @@ def mm(x, y, hx=False, hy=False):
     return out
 
 
+def inv(x):
+    """Batched inverse through CuPy (cuBLAS/cuSOLVER), zero-copy both ways over DLPack."""
+    return torch.from_dlpack(cupy.linalg.inv(cupy.from_dlpack(x)))
+
+
 def dagger(x):
     return x.conj().transpose(-1, -2)
 
@@ -111,7 +120,7 @@ def quatrex_rgf(
     xg_d = [None] * NB
 
     # Forward sweep: left-connected retarded, lesser and greater blocks.
-    xr = torch.linalg.inv(a_diag[:, 0])
+    xr = inv(a_diag[:, 0])
     xr_d[0] = xr
     xl_d[0] = mm(mm(xr, sigma_lesser_diag[:, 0]), xr, hy=True)
     xg_d[0] = mm(mm(xr, sigma_greater_diag[:, 0]), xr, hy=True)
@@ -119,7 +128,7 @@ def quatrex_rgf(
         j = i + 1
         lo = a_lower[:, i]
         t1 = mm(lo, xr_d[i])
-        xr = torch.linalg.inv(a_diag[:, j] - mm(t1, a_upper[:, i]))
+        xr = inv(a_diag[:, j] - mm(t1, a_upper[:, i]))
         xr_d[j] = xr
         for s_diag, s_upper, x_d in (
             (sigma_lesser_diag, sigma_lesser_upper, xl_d),

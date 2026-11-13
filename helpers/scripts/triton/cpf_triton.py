@@ -6,7 +6,7 @@
 
 Per kernel, under ``WORK/<kernel>/``: ``canonical.<ext>`` (+ ``canonical_device.<ext>``), the CPF render of the
 GPU canonical SDFG with one ``// par`` / ``// seq`` hint per loop and map; ``triton.py``, the kernel text of the
-canonical SDFG after ``VectorizeGPU`` compiled under ``compiler.backend=python`` and
+canonicalized, offloaded SDFG (without the CUDA tail of ``finalize_for_target``) after ``VectorizeGPU`` compiled under ``compiler.backend=python`` and
 ``compiler.python.tile_dialect=triton``; and ``summary.json``: the parallel form, each step's verdict, and whether
 the generated program matched the NumPy reference at preset S. ``WORK/summary.json`` collects every kernel. DaCe
 builds go to ``WORK/build``; a step that raises is recorded with its error, never fixed here.
@@ -50,6 +50,26 @@ def canonical_of(spec: BenchSpec, cache_root: pathlib.Path) -> object:
     sdfg = cpf_canonical.canonical_sdfg(spec, impl, key, cache_root, PRECISION, Target.GPU)[0]
     if isinstance(sdfg, cpf_canonical.RenderFailure):
         return f"canonicalize: {sdfg.verdict.text}: {sdfg.error}"
+    return sdfg
+
+
+def tile_input(spec: BenchSpec) -> object:
+    """The SDFG a tile backend vectorizes: canonicalized and offloaded, without ``finalize_for_target``, whose GPU
+    stage specializes the kernels for CUDA threads (thread-block tiles, warp partials, ``__syncthreads``)."""
+    from dace.transformation.passes.canonicalize.finalize import offload_to_gpu
+    from dace.transformation.passes.canonicalize.pipeline import canonicalize
+
+    impl = cpf_canonical.emit_program(spec)
+    if isinstance(impl, cpf_canonical.RenderFailure):
+        return f"emit: {impl.verdict.text}: {impl.error}"
+    sdfg = cpf_canonical.parse_program(spec, impl, PRECISION)
+    if isinstance(sdfg, cpf_canonical.RenderFailure):
+        return f"parse: {sdfg.verdict.text}"
+    cpf_canonical.declare_small(sdfg, cpf_canonical.small_symbols(spec))
+    cpf_canonical.declare_positive(sdfg, cpf_canonical.positive_symbols(spec))
+    nonnegative = sorted(cpf_canonical.nonnegative_symbols(spec))
+    canonicalize(sdfg, target=Target.GPU.text, nonnegative_symbols=nonnegative)  # pyright: ignore[reportArgumentType]
+    offload_to_gpu(sdfg, tile_programs=True)  # pyright: ignore[reportArgumentType]
     return sdfg
 
 
@@ -105,6 +125,20 @@ def triton_backend(build: pathlib.Path) -> Iterator[None]:
         dace.config.set_temporary("default_build_folder", value=str(build)),
     ):
         yield
+
+
+def gpu_library_nodes(sdfg: object) -> list[str]:
+    """The kinds of the GPU-scheduled library nodes of ``sdfg``, which the Python backend expands to CuPy calls."""
+    from dace import dtypes, nodes
+    from dace.libraries.tileops.nodes.tile_op import TileOp
+
+    found = sdfg.all_nodes_recursive()  # pyright: ignore[reportAttributeAccessIssue]
+    kinds = {
+        type(n).__name__
+        for n, owner in found
+        if isinstance(n, nodes.LibraryNode) and not isinstance(n, TileOp) and n.schedule in dtypes.GPU_SCHEDULES
+    }
+    return sorted(kinds)
 
 
 def map_rank(sdfg: object) -> int:
@@ -174,17 +208,38 @@ def dump_kernel(name: str, out: pathlib.Path, width: int) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001 -- a refused render is a finding
         summary["canonical"] = f"render: {type(exc).__name__}: {exc}"[:400]
         summary["form"] = parallel_form(sdfg, "")
-    widths = (width,) * map_rank(sdfg)
-    summary["widths"] = list(widths)
-    tiled = copy.deepcopy(sdfg)
     try:
-        VectorizeGPU(VectorizeConfig(widths=widths, tile_programs=True)).apply_pass(tiled, {})
+        tiled = tile_input(spec)
+        if isinstance(tiled, str):
+            summary["triton"] = tiled
+            return summary
+        widths = (width,) * map_rank(tiled)
+        try:
+            candidate = copy.deepcopy(tiled)
+            VectorizeGPU(VectorizeConfig(widths=widths, tile_programs=True)).apply_pass(candidate, {})
+        except NotImplementedError as exc:
+            # A map of lower rank than the widest one refuses K-dim tiles (VectorizeMultiDim tiles one rank per
+            # call), so every map takes a one-dim tile instead
+            if not str(exc).startswith("MarkTileDims: map") or "params (< K=" not in str(exc):
+                raise
+            widths = (width,)
+            candidate = copy.deepcopy(tiled)
+            VectorizeGPU(VectorizeConfig(widths=widths, tile_programs=True)).apply_pass(candidate, {})
+        tiled = candidate
+        summary["widths"] = list(widths)
+        libraries = gpu_library_nodes(tiled)
         with triton_backend(out / "build"):
             compiled = tiled.compile()
         text = compiled.path.read_text(encoding="utf-8")  # pyright: ignore[reportAttributeAccessIssue]
         start = text.find("\ndef kernel_")
         (folder / "triton.py").write_text(text[start:] if start >= 0 else text, encoding="utf-8")
-        summary["triton"] = "compiled" if start >= 0 else "compiled, no tile kernel (host code only)"
+        if start >= 0:
+            summary["triton"] = "compiled"
+        elif libraries:
+            # The backend runs a GPU library node as a CuPy call, as CUDA runs it as a CUB or cuBLAS one
+            summary["triton"] = f"compiled, CuPy library call ({', '.join(libraries)})"
+        else:
+            summary["triton"] = "compiled, no tile kernel (host code only)"
     except Exception as exc:  # noqa: BLE001 -- a backend failure is a finding, not fixed here
         summary["triton"] = f"{type(exc).__name__}: {exc}"[:400]
         (folder / "triton_error.txt").write_text(traceback.format_exc(), encoding="utf-8")

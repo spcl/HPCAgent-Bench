@@ -156,11 +156,12 @@ def raise_stack_limit() -> None:
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
-def run_child(name: str, preset: str, datatype: str, repeat: int, log_dir: pathlib.Path) -> dict[str, object]:
+def run_child(
+    name: str, preset: str, datatype: str, repeat: int, log_dir: pathlib.Path, lock: str = ""
+) -> dict[str, object]:
     """``measure_one`` in a fresh process (its log under ``log_dir``); a crash, OOM or timeout is a failed row."""
     env = {**os.environ, **flags.openmp_launch_env()}
     log = log_dir / f"{name}.{preset}.log"
-    shared = gpu_busy()
     command = [
         sys.executable,
         str(pathlib.Path(__file__).resolve()),
@@ -172,6 +173,8 @@ def run_child(name: str, preset: str, datatype: str, repeat: int, log_dir: pathl
         "--repeat",
         str(repeat),
     ]
+    if lock:
+        command = ["flock", "-w", "7200", lock, *command]
     try:
         with log.open("w", encoding="utf-8") as sink:
             done = subprocess.run(
@@ -191,7 +194,6 @@ def run_child(name: str, preset: str, datatype: str, repeat: int, log_dir: pathl
     oom = "OutOfMemoryError" in text or "out of memory" in text.lower()
     if rows:
         row = json.loads(rows[-1])
-        row["gpu_shared"] = shared
         if oom and not row.get("validated"):
             row["failure"] = "OOM (the harness holds several device copies)"
         return row
@@ -237,7 +239,7 @@ def run(args: argparse.Namespace) -> int:
                     "failure": f"skipped: {size:.1f} GB of arrays > {args.max_gb:g} GB device budget",
                 }
             else:
-                row = run_child(name, preset, args.datatype, args.repeat, log_dir)
+                row = run_child(name, preset, args.datatype, args.repeat, log_dir, args.lock)
             results[key] = row
             results_path.write_text(json.dumps(results, indent=1, sort_keys=True), encoding="utf-8")
             print(
@@ -344,6 +346,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sweep.add_argument("--logs", required=True, help="directory for the per-child logs")
     sweep.add_argument("--datatype", default="float64")
     sweep.add_argument("--repeat", type=int, default=3)
+    sweep.add_argument("--lock", default="", help="a lock file each child takes (flock), one heavy job at a time")
     sweep.add_argument("--max-gb", type=float, default=5.0, help="skip a preset whose arrays exceed this (GB)")
     sweep.add_argument("--skip-done", action="store_true", help="skip (kernel, preset) pairs already validated")
     sweep.add_argument("--stop-on-fail", action="store_true", help="skip a kernel's larger presets after a failure")
@@ -354,7 +357,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     render.add_argument("--cpf", default="", help="the summary.json cpf_triton.py wrote (adds the DaCe columns)")
     args = parser.parse_args(argv)
     if args.command == "one":
-        row = measure_one(args.kernel, args.preset, args.datatype, args.repeat)
+        shared = gpu_busy()  # before this child touches the GPU, so it sees only other processes
+        row = {**measure_one(args.kernel, args.preset, args.datatype, args.repeat), "gpu_shared": shared}
         print("EVIDENCE " + json.dumps(row), flush=True)
         return 0
     return run(args) if args.command == "run" else table(args)

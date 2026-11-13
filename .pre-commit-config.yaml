@@ -151,6 +151,8 @@ repos:
         entry: python helpers/scripts/checks/check_names.py
         language: system
         files: '\.py$'
+        # Generated sources keep their generator's names (DaCe's _loop_it_0); format and lint skip them too.
+        exclude: '_generated\.py$'
       # Scientific-computing kernel names follow <app>_<computation>[_<variant>], and no two manifests run
       # the same computation under different names unless kernel_names_allowlist.txt declares the pair.
       - id: hpcagent_bench-kernel-names
