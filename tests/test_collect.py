@@ -4,6 +4,7 @@
 
 import contextlib
 import hashlib
+import json
 import pathlib
 import shutil
 import sqlite3
@@ -14,7 +15,7 @@ import pytest
 
 from hpcagent_bench.categories import SourceMode
 from hpcagent_bench.harness import grade_under, results_db, sandbox
-from hpcagent_bench.results import collect, convert_v0, data_guard
+from hpcagent_bench.results import collect, convert_v0, data_guard, transcripts
 from hpcagent_bench.results.collect import DataSource
 from tests.sqlite_closing import connect
 from tests.test_convert_v0 import v0_shard
@@ -71,6 +72,13 @@ TRANSCRIPTS = {
     f"{WORKER}/.experiments/exp-1.c": "void k(void) {}\n",
     f"{WORKER}/results.tsv": "exp\tspeedup\n",
 }
+#: The transcript files of the fixture's episode (a Claude Code one: no ``tokens.json`` names its harness, its log
+#: does): a default copy holds their extract instead, ``--full-transcripts`` both.
+FULL = (f"{WORKER}/claude.log", f"{WORKER}/home/.claude/projects/p/session.jsonl")
+#: The files of the episode every copy holds whole.
+KEPT = tuple(rel for rel in TRANSCRIPTS if rel not in FULL)
+#: Where a copy holds the fixture's episode's extract, relative to its job.
+EXTRACT = f"{WORKER}/{transcripts.EXTRACT_NAME}"
 #: Files holding a key or a token, by name: never copied.
 SECRETS = {
     ".env": "VLLM_API_KEY=planted\n",
@@ -127,16 +135,18 @@ def test_copy_collects_every_kind_and_leaves_sources_untouched(sources: pathlib.
     copied = {p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()}
     assert copied >= {
         "runs/runs/camp-1/900/judge/rank-0/hpcagent_bench0.db",
-        *(f"runs/runs/camp-1/900/{rel}" for rel in TRANSCRIPTS),
+        *(f"runs/runs/camp-1/900/{rel}" for rel in (*KEPT, EXTRACT)),
         "runs/runs/camp-1/900/observations/curve.bin",
         "db/regrades/w1/regrade-cells-0.db",
         "SHA256SUMS",
         "SOURCES.tsv",
         "env.sh",
         "COMMIT",
+        "TRANSCRIPTS",
     }
     assert not any("900/home/" in c or c.endswith("worklist.jsonl") for c in copied)
-    assert n == 3 + len(TRANSCRIPTS)
+    assert not any(c.endswith(tuple(FULL)) for c in copied)
+    assert n == 3 + len(KEPT)
     with connect(out / "runs/runs/camp-1/900/judge/rank-0/hpcagent_bench0.db") as conn:
         assert conn.execute("select x from submissions").fetchall() == [(42,)]
     assert collect.verify(out) == []
@@ -241,6 +251,7 @@ def graded_run(runs: pathlib.Path) -> tuple[str, str, str]:
     job = runs / "camp-1" / "901"
     (job / WORKER).mkdir(parents=True)
     (job / WORKER / "claude.log").write_text('{"type": "result"}\n')
+    (job / WORKER / "tokens.json").write_text("{}")
     agent = job / "shared" / "agent-0"
     for name, data in (
         ("libgemm.so", b"\x7fELF graded"),
@@ -326,7 +337,7 @@ def test_a_regrade_of_the_copy_links_the_agent_libraries_the_copy_holds(
     assert collect.verify(out) == []
 
 
-@pytest.mark.parametrize("damage", ["library", "source", "agent", "transcript"])
+@pytest.mark.parametrize("damage", ["library", "source", "agent", "transcript", "extract"])
 def test_verify_refuses_a_copy_without_a_graded_answer(
     sources: pathlib.Path, tmp_path: pathlib.Path, damage: str
 ) -> None:
@@ -347,6 +358,9 @@ def test_verify_refuses_a_copy_without_a_graded_answer(
     elif damage == "transcript":
         shutil.rmtree(out / "runs/runs/camp-1/901" / WORKER)
         expected = f"transcript of an episode of {rel}: runs/runs/camp-1/901/{WORKER} not in the copy"
+    elif damage == "extract":
+        (out / "runs/runs/camp-1/901" / EXTRACT).unlink()
+        expected = f"transcript of an episode of {rel}: runs/runs/camp-1/901/{EXTRACT} not in the copy"
     else:
         with contextlib.closing(sqlite3.connect(copied_db(out))) as conn, conn:
             conn.execute("UPDATE sources SET text = 'other' WHERE hash = ?", (source_hash,))
@@ -459,16 +473,26 @@ def test_archive_never_removes_a_protected_root_itself(
     assert tree_digest(sources) == before
 
 
-def test_copy_keeps_every_transcript_and_log_and_no_secret(sources: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """Every file of an episode's worker directory is in the copy with its bytes, whatever its type (a harness log, a
-    Claude Code session under the agent's home, a workflow's experiment log and file); no file named as a secret is,
-    nor the agent's home caches or an environment; the copy verifies."""
+@pytest.mark.parametrize("full", [False, True])
+def test_copy_keeps_every_transcript_and_log_and_no_secret(
+    sources: pathlib.Path, tmp_path: pathlib.Path, full: bool
+) -> None:
+    """Every file of an episode's worker directory but its transcripts is in the copy with its bytes, whatever its type
+    (the episode's record, a workflow's experiment log and file), with the extract of its transcripts (the stream log
+    and the Claude Code session under the agent's home), naming each by its sha256; with ``--full-transcripts`` the
+    transcripts too, byte for byte. No file named as a secret is, nor the agent's home caches or an environment; the
+    copy verifies."""
     out = tmp_path / "data"
-    collect.copy(roots(sources), out)
+    collect.copy(roots(sources), out, full_transcripts=full)
     job, kept = sources / "runs/camp-1/900", out / "runs/runs/camp-1/900"
-    assert {rel: (kept / rel).read_bytes() for rel in TRANSCRIPTS} == {
-        rel: (job / rel).read_bytes() for rel in TRANSCRIPTS
-    }
+    whole = TRANSCRIPTS if full else KEPT
+    assert {rel: (kept / rel).read_bytes() for rel in whole} == {rel: (job / rel).read_bytes() for rel in whole}
+    assert [rel for rel in FULL if (kept / rel).exists()] == ([*FULL] if full else [])
+    header = transcripts.read(kept / EXTRACT)[0]
+    assert header["sources"] == [
+        {"path": rel.removeprefix(f"{WORKER}/"), "bytes": len((job / rel).read_bytes()), "sha256": sha(job / rel)}
+        for rel in FULL
+    ]
     assert [rel for rel in (*SECRETS, *UNCOLLECTED) if (kept / rel).exists()] == []
     assert not any(b"planted" in p.read_bytes() for p in out.rglob("*") if p.is_file())
     assert collect.verify(out) == []
@@ -488,3 +512,52 @@ def test_archive_removes_nothing_while_a_transcript_in_a_root_is_not_in_the_copy
     with pytest.raises(SystemExit, match="nothing removed"):
         collect.main(["archive", "--remove-sources", str(out)])
     assert tree_digest(sources) == before
+
+
+def sha(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("change", ["missing", "grew"])
+def test_a_full_copy_is_removed_only_with_every_transcript_file_as_it_is_now(
+    sources: pathlib.Path, tmp_path: pathlib.Path, change: str
+) -> None:
+    """A ``--full-transcripts`` copy holds every transcript file byte for byte and verifies; the roots are not removed
+    while the copy lacks one (its checksum list rewritten) or one in a root grew after the copy."""
+    graded_run(sources / "runs")
+    out = tmp_path / "data"
+    collect.copy(roots(sources), out, full_transcripts=True)
+    log = "runs/camp-1/901/" + FULL[0]
+    assert (out / "runs" / log).read_bytes() == (sources / log).read_bytes()
+    assert collect.verify(out) == []
+    if change == "missing":
+        (out / "runs" / log).unlink()
+        collect.write_sums(out)
+        assert collect.verify(out) == []
+    else:
+        with (sources / log).open("a") as grown:
+            grown.write('{"type": "assistant"}\n')
+    before = tree_digest(sources)
+    with pytest.raises(SystemExit, match="nothing removed"):
+        collect.main(["archive", "--remove-sources", str(out)])
+    assert tree_digest(sources) == before
+
+
+def test_an_episode_of_a_harness_without_an_extractor_is_refused_unless_kept_whole(
+    sources: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """An episode of a harness no extractor reads (the OpenAI runner) fails a default copy before anything is
+    written, naming the harness; ``--full-transcripts`` collects its transcript whole, and the copy verifies."""
+    worker = sources / "runs/camp-1/900/agents/node-0/problem-1-worker-1"
+    worker.mkdir(parents=True)
+    (worker / "tokens.json").write_text(json.dumps({"identity": {"harness": "openai"}}))
+    (worker / "openai.items.jsonl").write_text('{"output": []}\n')
+    with pytest.raises(SystemExit, match="harness 'openai' has no transcript extractor"):
+        collect.copy(roots(sources), tmp_path / "refused")
+    assert not (tmp_path / "refused").exists()
+    out = tmp_path / "data"
+    collect.copy(roots(sources), out, full_transcripts=True)
+    kept = out / "runs/runs/camp-1/900/agents/node-0/problem-1-worker-1"
+    assert (kept / "openai.items.jsonl").read_bytes() == (worker / "openai.items.jsonl").read_bytes()
+    assert not (kept / transcripts.EXTRACT_NAME).exists()
+    assert collect.verify(out) == []
