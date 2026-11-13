@@ -241,7 +241,8 @@ def resolve_ranges(
             out[name] = value  # declared config knob: never scaled
         elif constant_across_presets(parameters, name):
             # A value identical in every preset is a knob, not a size: kept degenerate, never perturbed.
-            out[name] = [value, value] if isinstance(value, int) else value
+            # bool is an int subclass: [False, False] would draw 0, which a model's flag argument refuses.
+            out[name] = [value, value] if isinstance(value, int) and not isinstance(value, bool) else value
         elif isinstance(value, int) and value > 1:
             lo = max(1, int(value * lo_m))
             out[name] = [lo, max(lo, int(value * hi_m))]

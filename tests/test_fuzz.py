@@ -245,6 +245,16 @@ def test_without_config_names_a_constant_collapses_to_a_degenerate_range() -> No
     assert r["multrec_limit"] == [512, 512]
 
 
+def test_a_boolean_constant_across_presets_is_drawn_as_that_boolean() -> None:
+    """``bias: false`` in every preset stays ``False``: drawn as ``0``, a torch model's flag refuses to bind."""
+    params = {preset: {"N": n, "bias": False} for preset, n in (("S", 16), ("M", 64), ("L", 256), ("XL", 1024))}
+    resolved = fuzz.resolve_ranges(params)
+    assert resolved["bias"] is False
+    with config.overridden("fuzz.anchor", "XL"):
+        drawn = [fuzz.sample_params(params, iteration=it)["bias"] for it in range(5)]
+    assert all(value is False for value in drawn), drawn
+
+
 def test_config_names_keep_the_declared_value_across_fuzz_iterations() -> None:
     # The bounds below are the XL band, so the draw is pinned to the XL anchor rather than read from
     # whatever ``fuzz.anchor`` the process holds (``spec.resolve_preset`` sets it per preset token).
