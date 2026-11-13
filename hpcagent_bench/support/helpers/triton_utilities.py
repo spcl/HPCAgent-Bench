@@ -15,6 +15,9 @@ import triton
 import triton.language as tl
 
 __all__ = [
+    "atan",
+    "atan2",
+    "cbrt",
     "chained_affine",
     "chained_sum",
     "complex_div",
@@ -22,6 +25,7 @@ __all__ = [
     "complex_mul",
     "complex_mul2",
     "derive_launch_arguments",
+    "div_rn",
     "get_1d_tile_offsets",
     "get_2d_tile_offsets",
     "get_4d_tile_offsets",
@@ -40,7 +44,10 @@ __all__ = [
     "micro_matmul",
     "next_epoch",
     "persistent_zeros",
+    "power",
     "powers_of_2",
+    "sqrt_rn",
+    "tanh",
     "unary_noop",
     "use_grid",
 ]
@@ -295,6 +302,95 @@ def get_4d_tile_offsets(
         matrix_dims=(1, 1, m0, m1, m2, m3),  # pyright: ignore[reportArgumentType]
     )
     return tl.reshape(tile, *tile_dims), tl.reshape(mask, *tile_dims)
+
+
+# Math core triton.language lacks, written in it so a baseline runs on every backend without libdevice. The rational
+# approximations are Cephes' (atan.c, tanh.c); each is within a few ulp of NumPy in float64.
+
+
+@triton.jit
+def div_rn(x: tl.tensor, y: tl.tensor) -> tl.tensor:
+    """The correctly rounded quotient in float32 and float64: ``tl.div_rn`` takes float32 only, and ``/`` is already
+    correctly rounded in float64."""
+    if x.dtype == tl.float32:
+        return tl.div_rn(x, y)
+    return x / y
+
+
+@triton.jit
+def sqrt_rn(x: tl.tensor) -> tl.tensor:
+    """The correctly rounded square root in float32 and float64: ``tl.sqrt_rn`` takes float32 only, and
+    ``tl.sqrt`` is already correctly rounded in float64."""
+    if x.dtype == tl.float32:
+        return tl.sqrt_rn(x)
+    return tl.sqrt(x)
+
+
+@triton.jit
+def atan(x: tl.tensor) -> tl.tensor:
+    """arctan(x), reduced to [0, 0.66] by tan(pi/4 + t) and tan(pi/2 - t), then a rational approximation."""
+    a = tl.abs(x)
+    big = a > 2.414213562373095
+    mid = (a > 0.66) & (a <= 2.414213562373095)
+    z = tl.where(big, -1.0 / a, tl.where(mid, (a - 1.0) / (a + 1.0), a))
+    # Offsets in x's precision: a where() of two Python floats would be float32.
+    zero = tl.zeros_like(a)
+    base = tl.where(big, zero + 1.5707963267948966, tl.where(mid, zero + 0.7853981633974483, zero))
+    tail = tl.where(big, zero + 6.123233995736766e-17, tl.where(mid, zero + 3.061616997868383e-17, zero))
+    zz = z * z
+    p = (
+        ((-8.750608600031904122785e-1 * zz - 1.615753718733365076637e1) * zz - 7.500855792314704667340e1) * zz
+        - 1.228866684490136173410e2
+    ) * zz - 6.485021904942025371773e1
+    q = (
+        (((zz + 2.485846490142306297962e1) * zz + 1.650270098316988542046e2) * zz + 4.328810604912902668951e2) * zz
+        + 4.853903996359136964868e2
+    ) * zz + 1.945506571482613964425e2
+    r = base + (tail + (z * zz * p / q + z))
+    return tl.where(x < 0, -r, r)
+
+
+@triton.jit
+def atan2(y: tl.tensor, x: tl.tensor) -> tl.tensor:
+    """The angle of finite (x, y) in [-pi, pi], the signs of zeros kept as numpy.arctan2 keeps them."""
+    pi = tl.zeros_like(y) + 3.141592653589793
+    below = (y < 0) | ((y == 0) & (1.0 / y < 0))
+    half_turn = tl.where(below, -pi, pi)
+    r = atan(y / x)
+    r = tl.where(x < 0, r + half_turn, r)
+    # On the y axis y / x is +-inf whatever the sign of a zero x: the angle is +-pi / 2 by y alone.
+    r = tl.where(x == 0, 0.5 * half_turn, r)
+    on_zero = tl.where(1.0 / x < 0, half_turn, tl.where(below, -0.0 * pi, 0.0 * pi))
+    return tl.where((x == 0) & (y == 0), on_zero, r)
+
+
+@triton.jit
+def cbrt(x: tl.tensor) -> tl.tensor:
+    """The real cube root: exp(log|x| / 3), one Newton step, the sign of x; 0, inf and nan stay as they are."""
+    a = tl.abs(x)
+    y = tl.exp(tl.log(a) / 3.0)
+    y = y - (y * y * y - a) / (3.0 * y * y)
+    return tl.where((a == 0) | (a * 0.0 != 0.0), x, tl.where(x < 0, -y, y))
+
+
+@triton.jit
+def tanh(x: tl.tensor) -> tl.tensor:
+    """tanh(x): a rational approximation below 0.625, else (1 - e^-2|x|) / (1 + e^-2|x|) with the sign of x."""
+    a = tl.abs(x)
+    zz = x * x
+    small = x + x * zz * (
+        (-9.64399179425052238628e-1 * zz - 9.92877231001918586564e1) * zz - 1.61468768441708447952e3
+    ) / (((zz + 1.12811678491632931402e2) * zz + 2.23548839060100448583e3) * zz + 4.84406305325125486048e3)
+    e = tl.exp(-2.0 * a)
+    large = (1.0 - e) / (1.0 + e)
+    return tl.where(a < 0.625, small, tl.where(x < 0, -large, large))
+
+
+@triton.jit
+def power(x: tl.tensor, y: tl.tensor) -> tl.tensor:
+    """x ** y for x >= 0, as exp(y log x), so its relative error grows as |y log x| ulp: 0 ** y is 0 for y > 0 and
+    inf for y < 0, x ** 0 is 1."""
+    return tl.where(y == 0, 1.0, tl.exp(y * tl.log(x)))
 
 
 @triton.jit
