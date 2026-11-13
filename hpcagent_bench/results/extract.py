@@ -722,6 +722,7 @@ GRADING_SETTINGS: tuple[str, ...] = (
     "inputs_general",
     "inputs_noise",
     "inputs_shortcut_probe",
+    "fuzz_shapes",
     "gates",
 )
 

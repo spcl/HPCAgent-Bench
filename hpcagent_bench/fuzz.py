@@ -38,6 +38,7 @@ __all__ = [
     "ParameterTable",
     "Sentinel",
     "SizeClass",
+    "anchor_row",
     "apply_func",
     "apply_size_class",
     "as_expr",
@@ -216,6 +217,17 @@ def constant_across_presets(parameters: ParameterTable, name: str) -> bool:
     return len(seen) > 1 and all(v == seen[0] for v in seen)
 
 
+def anchor_row(parameters: ParameterTable, anchor: Preset | None = None) -> Mapping[str, FuzzValue]:
+    """The rung row the fuzz draws around: ``anchor`` (default ``fuzz.anchor``), falling back XL, L, first preset."""
+    rung = anchor or config.current().fuzz.anchor
+    return (
+        parameters.get(rung.text)
+        or parameters.get(Preset.XL.text)
+        or parameters.get(Preset.L.text)
+        or next(iter(parameters.values()))
+    )
+
+
 def resolve_ranges(
     parameters: ParameterTable,
     size_cap: int | None = None,
@@ -232,13 +244,7 @@ def resolve_ranges(
     # Anchored on the rung, not spanning [L, XL]: a wide log-uniform range would mostly time problems too small to
     # show parallelism. Timed draws take the upper half, so they sit in [0.75, 1.00] x anchor.
     fuzz_cfg = config.current().fuzz
-    anchor = anchor or fuzz_cfg.anchor
-    base = (
-        parameters.get(anchor.text)
-        or parameters.get(Preset.XL.text)
-        or parameters.get(Preset.L.text)
-        or next(iter(parameters.values()))
-    )
+    base = anchor_row(parameters, anchor)
     lo_m, hi_m = fuzz_cfg.xl_lo_mult, fuzz_cfg.xl_hi_mult
     out: dict[str, FuzzValue] = {}
     for name, value in base.items():
