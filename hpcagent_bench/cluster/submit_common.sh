@@ -2,7 +2,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # submit.sh's plumbing: stage a setup's env from its experiments.toml base, then either report what would run
-# (SUBMIT=0) or submit it as services.sbatch's CLUSTER_ENV_FILE. Sourced, not executed; the caller has
+# (SUBMIT=0) or submit it as services.sbatch's argument. Sourced, not executed; the caller has
 # sourced setup_nodes.sh and pin_env_kv.sh.
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
@@ -136,9 +136,9 @@ setup_file_suffix() {
 }
 
 # refuse_if_queue_references <env-path> [problems-path]
-# Refuses when a PENDING or RUNNING job of this user reads <env-path> as its CLUSTER_ENV_FILE (sacct's
-# SubmitLine), or <problems-path> as that job's PROBLEMS_FILE (resolved against the env's own
-# directory). Both files are written before sbatch, even on a dry run, so without this a later
+# Refuses when a PENDING or RUNNING job of this user reads <env-path> as its env (sacct's SubmitLine: services.sbatch's
+# argument, or the CLUSTER_ENV_FILE of a job submitted before it), or <problems-path> as that job's PROBLEMS_FILE
+# (resolved against the env's own directory). Both files are written before sbatch, even on a dry run, so without this a later
 # submission could rewrite what a queued job has not read yet. Both paths must be absolute. A failing squeue or sacct
 # leaves the check undone, which it says: a site without accounting has no sacct to refuse on.
 refuse_if_queue_references() {
@@ -163,7 +163,8 @@ refuse_if_queue_references() {
             echo "refusing to write ${problems_path}: job ${jid} is PENDING/RUNNING and reads it via ${cef}" >&2
             return 2
         fi
-    done < <(sed -n 's/^\([0-9]\+\)|.*CLUSTER_ENV_FILE=\([^[:space:]]*\).*/\1|\2/p' <<<"${lines}")
+    done < <(sed -n -e 's/^\([0-9]\+\)|.*CLUSTER_ENV_FILE=\([^[:space:]]*\).*/\1|\2/p' \
+        -e 's/^\([0-9]\+\)|.*services\.sbatch[[:space:]]\+\([^[:space:]]\+\).*/\1|\2/p' <<<"${lines}")
 }
 
 # deadline_setup <deadline> <margin-seconds> -- a wave that must END before <deadline>: sets
@@ -320,7 +321,7 @@ job_dependency() {
 
 # submit_setup_job <env> <setup> <walltime> [dependency] [begin] [detail]
 # SUBMIT=1 submits a read-only snapshot of <env> and its problems file (snapshot_env) as
-# services.sbatch's CLUSTER_ENV_FILE, with --dependency=<dependency> (job_dependency), held until <begin>,
+# services.sbatch's argument, with --dependency=<dependency> (job_dependency), held until <begin>,
 # at --nice=NICE (default the site layer's HPCAGENT_BENCH_NICE), held with HOLD=1, and sets SUBMITTED_JOB_ID to the
 # job id; anything else only reports and sets SUBMITTED_JOB_ID to <setup>, what a later wave's dry run names.
 # An afterok that fails cancels the job (--kill-on-invalid-dep): pending forever, it would block a resubmit of its
@@ -358,7 +359,7 @@ submit_setup_job() {
     # CLUSTER_SCRIPT_DIR: under sbatch BASH_SOURCE is a spooled copy, so the job finds run_cluster.sh through this.
     jid=$(unset CPF_DROPIN_DIR HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR HPCAGENT_BENCH_CPF_HINTS
         export CLUSTER_SCRIPT_DIR="${CLUSTER_DIR}"
-        sbatch_retry "${args[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" "${CLUSTER_DIR}/services.sbatch") || return 2
+        sbatch_retry "${args[@]}" "${CLUSTER_DIR}/services.sbatch" "${PWD}/${snapshot}") || return 2
     # --parsable prints <id> or <id>;<cluster>; a dependency names the id alone.
     SUBMITTED_JOB_ID="${jid%%;*}"
     echo "submitted ${setup} -> ${jid} (${nodes} nodes${detail}) env ${snapshot}"

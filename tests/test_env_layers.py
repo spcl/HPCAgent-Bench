@@ -325,7 +325,7 @@ def test_a_second_submission_never_touches_the_first_snapshot(tmp_path: pathlib.
 
 
 def test_the_job_gets_the_snapshot_not_the_setup_env(tmp_path: pathlib.Path) -> None:
-    """submit_setup_job hands sbatch the snapshot as CLUSTER_ENV_FILE."""
+    """submit_setup_job hands sbatch the snapshot as services.sbatch's argument."""
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir()
     # appends: the agent job's sbatch is followed by its chained finalize-grade job's
@@ -348,9 +348,10 @@ def test_the_job_gets_the_snapshot_not_the_setup_env(tmp_path: pathlib.Path) -> 
         "HPCAGENT_BENCH_SCRATCH": str(tmp_path / "scratch"),
     }
     subprocess.run([bash(), str(probe)], env=env, cwd=tmp_path, capture_output=True, text=True, check=True)
-    exported = [arg for arg in (tmp_path / "sbatch.args").read_text().splitlines() if "CLUSTER_ENV_FILE=" in arg]
-    assert len(exported) == 1
-    path = pathlib.Path(exported[0].split("CLUSTER_ENV_FILE=", 1)[1])
+    args = (tmp_path / "sbatch.args").read_text().splitlines()
+    scripts = [index for index, arg in enumerate(args) if arg.endswith("/services.sbatch")]
+    assert len(scripts) == 1
+    path = pathlib.Path(args[scripts[0] + 1])
     assert path.parent == tmp_path / ".rendered"
     assert flat(path.read_text())["SETUP"] == "a"
 
