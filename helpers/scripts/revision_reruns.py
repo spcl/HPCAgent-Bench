@@ -21,10 +21,11 @@ revised inputs), then per slot (setup, kernel, slot) of its latest episode:
   that ended it, cannot be established from the record). A slot within its setup's limits is classified as any other.
   With ``--tag STUDY=TAG``, a kernel of the tag that a setup of the study never ran is owed too (``missing``).
 
-A reused study (:data:`REUSED`) is held to the limits of the experiments.toml experiment of its revision setup (the
-one global limit, ``[common]``), not to the limits its runs recorded, one limit at a time: the limit that ended the
-episode (its result: ``timeout`` the wall clock, ``budget`` a token limit) must equal the global one, its teardown
-after the deadline not counted; every other usage must stay within the global one. A database that records no limits
+A reused study (:data:`REUSED`) is held to the budget of the experiments.toml experiment of its revision setup (every
+arm compared inside one experiment has the same budget), not to the limits its runs recorded, one limit at a time:
+the limit that ended the episode (its result: ``timeout`` the wall clock, ``budget`` a token limit) must equal the
+experiment's, its teardown after the deadline not counted; every other usage must stay within the experiment's. A
+database that records no limits
 (before user_version 22) takes them from the setup's launch env (``--env-dir``, ``.env.<setup>``). Its owed slots
 rerun under that experiment, with the setup's name and study.
 
@@ -62,6 +63,7 @@ __all__ = [
     "Slot",
     "base_for",
     "classify",
+    "held_envs",
     "hold",
     "command",
     "main",
@@ -95,11 +97,11 @@ OWED_REASONS = (
 #: A reused study -> the experiments its setups are held to and its owed slots and missing cells run under, one for
 #: a single-submission setup and one for a ``-multi`` one: the revision's experiment of the llr40 feedback study
 #: (llr40-blind-20261111v1rc), of harness20 (harness20-20261110h20) and of llr40 (the caveman setups of
-#: llr40-20261103), each under the one global limit. Reruns keep the setup's name and study.
+#: llr40-20261103), each at the budget its November runs had. Reruns keep the setup's name and study.
 REUSED: Mapping[str, tuple[str, str]] = {
     "llr-focus40-blind": ("llrblind", "llrblind-multi"),
     "harness20": ("harness", "harness"),
-    "llr40": ("experiment", "experiment"),
+    "llr40": ("llr40", "llr40"),
 }
 
 #: Episode columns the classification reads, NULL where a database before their user_version lacks them.
@@ -150,14 +152,21 @@ class Slot:
     reason: str = ""
 
 
+def held_envs(db: pathlib.Path) -> dict[str, dict[str, str]]:
+    """setup -> the rendered env of the experiment it is held to, for each setup of ``db`` whose study is
+    :data:`REUSED`."""
+    return {
+        name: env_spec.render(f"{base_for(str(row['study']), name)}:{row.get('model')}")
+        for name, row in setup_rows(db).items()
+        if str(row.get("study") or "") in REUSED
+    }
+
+
 def reused_limits(db: pathlib.Path) -> dict[str, dict[str, int | None]]:
-    """setup -> the limits of the experiment it is held to, for each setup of ``db`` whose study is :data:`REUSED`."""
-    held: dict[str, dict[str, int | None]] = {}
-    for name, row in setup_rows(db).items():
-        if str(row.get("study") or "") in REUSED:
-            env = env_spec.render(f"{base_for(str(row['study']), name)}:{row.get('model')}")
-            held[name] = {key: int(env[CEILING_KEYS[key]]) for key in CEILING_KEYS}
-    return held
+    """setup -> the limits of the experiment it is held to (:func:`held_envs`)."""
+    return {
+        name: {key: int(env[CEILING_KEYS[key]]) for key in CEILING_KEYS} for name, env in held_envs(db).items()
+    }
 
 
 def episode_rows(db: pathlib.Path) -> list[dict[str, object]]:
@@ -246,7 +255,7 @@ def ended_by(row: Mapping[str, object], enforced: Mapping[str, int | None]) -> s
 def limits_verdict(
     row: Mapping[str, object], enforced: Mapping[str, int | None], held: Mapping[str, int | None]
 ) -> str:
-    """The episode's owed reason, empty when it ran within ``held`` (the global limit). The limit that ended it is
+    """The episode's owed reason, empty when it ran within ``held`` (its experiment's budget). The limit that ended it is
     compared as a limit (``enforced``: what it ran under), so the teardown after its deadline does not count; every
     other one is compared on usage."""
     if not consumed(row) or not row["wall_ms"]:
@@ -277,19 +286,19 @@ def held_reason(row: Mapping[str, object], enforced: Mapping[str, int | None], h
     """Why an episode :func:`limits_verdict` passes runs under ``held``, as :data:`HELD_TABLE` records it."""
     hit = ended_by(row, enforced)
     if hit:
-        return f"ended at the global {hit}"
+        return f"ended at the experiment's {hit}"
     caps = [key for key in ("token_limit", "output_token_limit", "time_limit_s") if enforced.get(key) is not None]
     ran = {key: capped(enforced[key]) or float("inf") for key in caps}
     limit = {key: capped(held[key]) or float("inf") for key in caps}
     if any(ran[key] > limit[key] for key in caps):
-        return "ran under a higher limit, its usage within the global one"
+        return "ran under a higher limit, its usage within the experiment's"
     if any(ran[key] < limit[key] for key in caps):
         return "ran under a lower limit and ended on its own"
-    return "ran under the global limit" if caps else "recorded no limits, its usage within the global one"
+    return "ran under the experiment's limits" if caps else "recorded no limits, its usage within the experiment's"
 
 
 #: The held limits of the reused episodes, in the analysis database :func:`hold` writes: the limits and protocol each
-#: episode recorded before it was held to the global limit, and why it is within it.
+#: episode recorded before it was held to its experiment's budget, and why it is within it.
 HELD_TABLE = """
 CREATE TABLE held_limits (
     episode_id         INTEGER PRIMARY KEY,
@@ -304,17 +313,17 @@ CREATE TABLE held_limits (
 
 
 def hold(db: pathlib.Path, into: pathlib.Path, env_dirs: Sequence[pathlib.Path] = ()) -> collections.Counter[str]:
-    """Copy ``db`` to ``into`` (a new file) and hold every episode of a reused setup that ran within the global limit
-    (:func:`limits_verdict`) to it: its limits become the global ones, its limits source ``common``, and an
-    unrecorded reply cap or auto-submission the global protocol's (every November run's own defaults); what it
-    recorded and why it is within go to ``held_limits``. Owed episodes keep what they recorded. Returns the reasons'
+    """Copy ``db`` to ``into`` (a new file) and hold every episode of a reused setup that ran within its experiment's
+    budget (:func:`limits_verdict`) to it: its limits and limits source become the experiment's, and an unrecorded
+    reply cap or auto-submission the experiment's (every November run's own defaults); what it recorded and why it is
+    within go to ``held_limits``. Owed episodes keep what they recorded. Returns the reasons'
     counts."""
     if into.exists():
         raise SystemExit(f"hold: {into} exists; hold writes a new analysis database, never a source")
     rows = episode_rows(db)
+    envs = held_envs(db)
     held = reused_limits(db)
     launched = launch_limits(held, env_dirs)
-    common = env_spec.env_of(env_spec.TABLES["common"], "common", protocol=True)
     shutil.copyfile(db, into)
     reasons: collections.Counter[str] = collections.Counter()
     with contextlib.closing(sqlite3.connect(into)) as conn, conn:
@@ -336,14 +345,15 @@ def hold(db: pathlib.Path, into: pathlib.Path, env_dirs: Sequence[pathlib.Path] 
             )
             conn.execute(
                 "UPDATE episodes SET token_limit = ?, output_token_limit = ?, time_limit_s = ?, "
-                "limits_source = 'common', reply_cap = COALESCE(reply_cap, ?), "
+                "limits_source = ?, reply_cap = COALESCE(reply_cap, ?), "
                 "auto_submit = COALESCE(NULLIF(auto_submit, ''), ?) WHERE id = ?",
                 (
                     held[setup]["token_limit"],
                     held[setup]["output_token_limit"],
                     held[setup]["time_limit_s"],
-                    int(common["CLAUDE_CODE_MAX_OUTPUT_TOKENS"]),
-                    common["AGENT_AUTO_SUBMIT"],
+                    envs[setup][env_spec.LIMITS_SOURCE_ENV],
+                    int(envs[setup]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"]),
+                    envs[setup]["AGENT_AUTO_SUBMIT"],
                     row["id"],
                 ),
             )
