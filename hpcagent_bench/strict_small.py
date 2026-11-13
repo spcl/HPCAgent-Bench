@@ -77,14 +77,23 @@ def _dtype_eps(dtype: np.dtype) -> float:
 
 
 def finite_l2_norm(values: object, *, xp: types.ModuleType = np, chunk: int = STRICT_CHUNK) -> float:
-    """The L2 norm of ``values``' finite elements, chunked: one declared source's share of a rounding scale."""
+    """The L2 norm of ``values``' finite elements, chunked: one declared source's share of a rounding scale.
+
+    Summed in float64 whatever the source dtype, each element divided by the largest finite magnitude first (as
+    LAPACK's ``dnrm2`` scales), so neither an fp16 source past 256 nor an fp64 one past 1e154 overflows to inf."""
     flat = xp.asarray(values).reshape(-1)
+    wide = xp.complex128 if flat.dtype.kind == "c" else xp.float64
+    step = max(int(chunk), 1)
+    spans = range(0, int(flat.size), step)
+    parts = (flat[start : start + step].astype(wide) for start in spans)
+    scale = max((finite_peak(part, part, xp) for part in parts), default=0.0)
+    if scale == 0.0:
+        return 0.0
     total = 0.0
-    for start in range(0, int(flat.size), max(int(chunk), 1)):
-        part = flat[start : start + chunk]
-        with np.errstate(over="ignore"):
-            total += float(xp.sum(xp.where(xp.isfinite(part), xp.abs(part) ** 2, 0.0)))
-    return math.sqrt(total)
+    for start in spans:
+        part = flat[start : start + step].astype(wide)
+        total += float(xp.sum(xp.where(xp.isfinite(part), xp.abs(part / scale) ** 2, 0.0)))
+    return scale * math.sqrt(total)
 
 
 class L2Sums(NamedTuple):

@@ -53,6 +53,15 @@ def test_matching_nan_and_inf_positions_agree() -> None:
     assert (ok, err, detail) == (True, 0.0, "")
 
 
+def test_a_complex_nan_in_another_component_is_a_position_mismatch() -> None:
+    """``isnan`` of a complex value is true for a NaN in either part: the parts are compared on their own, so
+    ``nan+1j`` against ``2+nanj`` is a NaN position mismatch, not two agreeing NaNs."""
+    want = np.array([complex(np.nan, 1.0)])
+    assert nonfinite_mismatch(want, np.array([complex(2.0, np.nan)])) is not None
+    assert nonfinite_mismatch(want, np.array([complex(np.nan, 1.0)])) is None
+    assert nonfinite_mismatch(np.array([complex(INF, 1.0)]), np.array([complex(1.0, INF)])) == "Inf position mismatch"
+
+
 def test_below_atol_is_close_despite_a_huge_relative_error() -> None:
     # atol is the point of the denominator floor: 1e-20 vs 2e-20 is a 100% relative error but far
     # below any meaningful absolute scale.
