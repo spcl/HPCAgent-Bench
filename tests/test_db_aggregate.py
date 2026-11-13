@@ -345,7 +345,7 @@ def test_memory_backed_storage_is_refused(tmp_path: pathlib.Path) -> None:
     assert memory_dir is not None, "no tmpfs under tmp_path, the temp dir or /dev/shm in /proc/mounts"
     config.set_override("record.db_path", str(memory_dir / "hpcagent_bench.db"))
     try:
-        with pytest.raises(ValueError, match="memory-backed"):
+        with config.overridden("record.allow_memory_db", False), pytest.raises(ValueError, match="memory-backed"):
             recording.base_db_path()
     finally:
         config.clear_override("record.db_path")
