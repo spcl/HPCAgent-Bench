@@ -121,12 +121,19 @@ def tile_copy(dst, src, t, H, W, BX: tl.constexpr, BY: tl.constexpr):
 
 @triton.jit
 def channel_flow_kernel(
-    u, v, p, u2, v2, p2, b, partial, barrier, consts, nit, H, W, BX: tl.constexpr, BY: tl.constexpr, PB: tl.constexpr
+    u, v, p, uu, vv, pp, b, partial, barrier, consts, nit, H, W, BX: tl.constexpr, BY: tl.constexpr, PB: tl.constexpr
 ):
+    """``uu``, ``vv`` and ``pp`` hold two (H, W) planes each, the first a copy of u, v and p; the current planes are
+    copied back at the end.
+
+    AMD workaround: the Triton AMD backend aborts in CanonicalizePointers (gfx90a) on pointers swapped through the
+    convergence while loop, so the ping-pong is a plane parity offset on one base. Plain form: separate u, u2 buffers
+    and ``u_cur, u_nxt = u_nxt, u_cur``."""
     pid = tl.program_id(0)
     programs = tl.num_programs(0)
     tiles = tl.cdiv(W, BX) * tl.cdiv(H, BY)
     lanes = tl.arange(0, PB)
+    plane = H * W
 
     acc = tl.load(consts + 6) * 0.0
     for t in range(pid, tiles, programs):
@@ -138,22 +145,24 @@ def channel_flow_kernel(
     tolerance = tl.load(consts + 6)
     udiff = tolerance * 0.0 + 1.0
     slot = 1
-    u_cur, u_nxt, v_cur, v_nxt, p_cur, p_nxt = u, u2, v, v2, p, p2
     u_odd = 0
     p_odd = 0
     while udiff > tolerance:
+        u_cur = u_odd * plane
+        u_nxt = (1 - u_odd) * plane
         for t in range(pid, tiles, programs):
-            build_b(u_cur, v_cur, b, consts, t, H, W, BX, BY)
+            build_b(uu + u_cur, vv + u_cur, b, consts, t, H, W, BX, BY)
         grid_sync(barrier)
         for sweep in range(nit):
             for t in range(pid, tiles, programs):
-                pressure_sweep(p_nxt, p_cur, b, consts, t, H, W, BX, BY)
+                pressure_sweep(pp + (1 - p_odd) * plane, pp + p_odd * plane, b, consts, t, H, W, BX, BY)
             grid_sync(barrier)
-            p_cur, p_nxt = p_nxt, p_cur
             p_odd = 1 - p_odd
         acc = tolerance * 0.0
         for t in range(pid, tiles, programs):
-            acc += update_uv(u_nxt, v_nxt, u_cur, v_cur, p_cur, consts, t, H, W, BX, BY)
+            acc += update_uv(
+                uu + u_nxt, vv + u_nxt, uu + u_cur, vv + u_cur, pp + p_odd * plane, consts, t, H, W, BX, BY
+            )
         tl.store(partial + slot * PB + pid, acc)
         grid_sync(barrier)
         sum_next = tl.sum(
@@ -162,17 +171,12 @@ def channel_flow_kernel(
         udiff = (sum_next - sum_curr) / sum_next
         sum_curr = sum_next
         slot = 1 - slot
-        u_cur, u_nxt = u_nxt, u_cur
-        v_cur, v_nxt = v_nxt, v_cur
         u_odd = 1 - u_odd
 
-    if u_odd == 1:
-        for t in range(pid, tiles, programs):
-            tile_copy(u, u2, t, H, W, BX, BY)
-            tile_copy(v, v2, t, H, W, BX, BY)
-    if p_odd == 1:
-        for t in range(pid, tiles, programs):
-            tile_copy(p, p2, t, H, W, BX, BY)
+    for t in range(pid, tiles, programs):
+        tile_copy(u, uu + u_odd * plane, t, H, W, BX, BY)
+        tile_copy(v, vv + u_odd * plane, t, H, W, BX, BY)
+        tile_copy(p, pp + p_odd * plane, t, H, W, BX, BY)
 
 
 def channel_flow(nit, u, v, dt, dx, dy, p, rho, nu, F):
@@ -183,13 +187,16 @@ def channel_flow(nit, u, v, dt, dx, dy, p, rho, nu, F):
     # rho, nu, dt, dx, dy, F, tolerance: a pointer, since a scalar argument would be passed as fp32
     consts = torch.tensor([rho, nu, dt, dx, dy, F, TOLERANCE], dtype=u.dtype, device=u.device)
     barrier = persistent_zeros("channel_flow.barrier", 1, torch.int32, u.device)
+    planes = []
+    for x in (u, v, p):
+        pair = torch.empty((2, H, W), dtype=x.dtype, device=x.device)
+        pair[0].copy_(x)
+        planes.append(pair)
     channel_flow_kernel[(programs,)](
         u,
         v,
         p,
-        torch.empty_like(u),
-        torch.empty_like(v),
-        torch.empty_like(p),
+        *planes,
         torch.empty_like(u),
         torch.empty(2 * pb, dtype=u.dtype, device=u.device),
         barrier,

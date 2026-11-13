@@ -166,8 +166,7 @@ def initialize_heads(b, heads, N: tl.constexpr, COUNT: tl.constexpr, BLOCK: tl.c
 @triton.jit
 def build_sorted_bins(
     b,
-    heads,
-    next_particle,
+    links,
     uxp,
     uyp,
     uzp,
@@ -204,23 +203,26 @@ def build_sorted_bins(
         ic, wc = deposition_shape(cn, 0, ORDER, False)
         bc = ic + tl.load(lo + 2)
     bucket = (ba * NY + bb) * NZ + bc
+    # AMD workaround: the Triton AMD backend aborts in CanonicalizePointers.cpp:1375 on a select between pointers
+    # (gfx90a), so links = [next_particle | heads] and the walk selects an index on that one base. Plain form:
+    # link = tl.where(complete, heads, heads + bucket), then tl.where(following, next_particle + current, link).
     complete = ~valid
     while tl.sum((~complete).to(tl.int32), 0) > 0:
         # A padded lane's dummy coordinates can imply an out-of-range bucket
         # for a shifted origin. Its unmasked CAS must still use a valid address.
-        link = tl.where(complete, heads, heads + bucket)
-        current = tl.atomic_add(link, 0, mask=~complete, sem="acquire")
+        link = tl.where(complete, COUNT, COUNT + bucket)
+        current = tl.atomic_add(links + link, 0, mask=~complete, sem="acquire")
         following = (~complete) & (current < particle)
         while tl.sum(following.to(tl.int32), 0) > 0:
-            link = tl.where(following, next_particle + current, link)
-            loaded = tl.atomic_add(next_particle + current, 0, mask=following, sem="acquire")
+            link = tl.where(following, current, link)
+            loaded = tl.atomic_add(links + current, 0, mask=following, sem="acquire")
             current = tl.where(following, loaded, current)
             following = (~complete) & (current < particle)
-        tl.store(next_particle + particle, current, ~complete)
+        tl.store(links + particle, current, ~complete)
         # CAS has no mask argument. Completed lanes compare against an impossible
         # list value so they cannot insert twice or publish an out-of-range ID.
         expected = tl.where(complete, -1, current)
-        previous = tl.atomic_cas(link, expected, particle, sem="acq_rel")
+        previous = tl.atomic_cas(links + link, expected, particle, sem="acq_rel")
         complete = complete | (previous == current)
 
 
@@ -429,8 +431,7 @@ def esirkepov_kernel(
     Jx,
     Jy,
     Jz,
-    heads,
-    next_particle,
+    links,
     ion,
     mask,
     uxp,
@@ -466,13 +467,15 @@ def esirkepov_kernel(
 ):
     """The bin heads, the sorted bins and every colour in one persistent cooperative launch; a grid barrier separates
     the phases and the colours, which keeps the stream order of the separate launches."""
+    next_particle = links
+    heads = links + COUNT
     pid = tl.program_id(0)
     programs = tl.num_programs(0)
     for b in range(pid, tl.cdiv(NX * NY * NZ, 256), programs):
         initialize_heads(b, heads, NX * NY * NZ, COUNT, 256)
     grid_sync(barrier)
     for b in range(pid, tl.cdiv(COUNT, 128), programs):
-        build_sorted_bins(b, heads, next_particle, uxp, uyp, uzp, xp, yp, zp, dinv, xyzmin, lo, COUNT, NY, NZ, DIM, ORDER,
+        build_sorted_bins(b, links, uxp, uyp, uzp, xp, yp, zp, dinv, xyzmin, lo, COUNT, NY, NZ, DIM, ORDER,
                           DT, RELATIVE, GEOM, 128)  # fmt: skip
     grid_sync(barrier)
     width: tl.constexpr = ORDER + 3
@@ -526,8 +529,8 @@ def warpx_esirkepov_deposition(
         return
     dim = 3 if geometry == 3 else (2 if geometry in (1, 2) else 1)
     nx, ny, nz = Jx.shape[0], Jx.shape[1] if dim >= 2 else 1, Jx.shape[2] if dim == 3 else 1
-    heads = torch.empty((nx * ny * nz,), dtype=torch.int32, device=Jx.device)
-    following = torch.empty((count,), dtype=torch.int32, device=Jx.device)
+    # The per-particle next links, then the bin heads.
+    links = torch.empty((count + nx * ny * nz,), dtype=torch.int32, device=Jx.device)
     width = order + 3
     colours = (width, width if dim >= 2 else 1, width if dim == 3 else 1)
     block = triton.next_power_of_2(width**dim * (2 * modes - 1))
@@ -538,8 +541,7 @@ def warpx_esirkepov_deposition(
         Jx,
         Jy,
         Jz,
-        heads,
-        following,
+        links,
         ion_lev,
         reduced_particle_shape_mask,
         uxp,
