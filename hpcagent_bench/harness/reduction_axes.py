@@ -254,8 +254,8 @@ _TABLE: dict[str, Any] | None = None
 
 def table_entry(short_name: str, fingerprint: Callable[[str], str]) -> dict[str, Any] | None:
     """The table entry for ``short_name`` (``roles`` and ``kappa``), or ``None`` when the table has none or its
-    fingerprint is stale (the reference, initializer or manifest args changed since it was measured): the symbolic
-    rule then stands."""
+    fingerprint is stale (the reference, initializer, manifest args or S rung changed since it was measured): the
+    symbolic rule then stands."""
     global _TABLE
     if _TABLE is None:
         _TABLE = load_table()
