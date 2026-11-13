@@ -40,6 +40,11 @@ Environment: `SGLANG_USE_AITER=1`, `SGLANG_ROCM_FUSED_DECODE_MLA=0`, `SGLANG_SET
 The pool has not been measured against a working set; if the hit rate falls under load, serve fewer
 conversations, since the fraction has no headroom left.
 
+One pipeline serves 20 agents (24 request slots and decode graphs; the fraction leaves no room for a larger
+pool). More agents are served by more pipelines in the same job: `INFERENCE_NODES=8 INFERENCE_REPLICAS=2` runs
+two `pp=4` pipelines on consecutive nodes, each answering on its first node, and the driver stripes the agents over
+them by problem index (`AGENTS_PER_NODE=40` on one agent node: 20 per pipeline).
+
 ## Rules
 
 - Serve on SGLang (engine numbers are re-measured when agent tuning is done).
