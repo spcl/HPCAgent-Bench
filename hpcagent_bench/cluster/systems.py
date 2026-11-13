@@ -106,7 +106,7 @@ JOB_REQUIRED = ("account", "gpus_per_node")
 LAYOUT_FIELDS = ("ntasks", "ntasks_per_node", "cpus_per_task")
 #: Values a job needs that are no ``sbatch`` option: name -> (flag, environment variable). A resource limit's variable
 #: is the name the job itself applies it through, so a resolved value reaches the job even when the submitting shell
-#: never set it (``job submit`` rides ``sbatch --export``; the experiment submitter pins it into the setup env).
+#: never set it (``job submit`` sets it in sbatch's environment; the experiment submitter pins it into the setup env).
 EXTRAS: dict[str, tuple[str, str]] = {
     "hardware": ("--hardware", "HPCAGENT_BENCH_HARDWARE"),
     "max_time_hours": ("--max-time-hours", "HPCAGENT_BENCH_MAX_TIME_HOURS"),
@@ -317,17 +317,14 @@ def sbatch_command(
     values: Mapping[str, str],
     script_args: Sequence[str],
     logs: pathlib.Path | None = None,
-    exports: Mapping[str, str] | None = None,
 ) -> list[str]:
     """``sbatch`` with every resolved field as an option, its Slurm output under ``logs`` when given (a
     script's own ``%x-%j.out`` lands wherever sbatch ran, the checkout included), then ``script`` and its
-    arguments. ``exports`` rides ``--export=ALL`` (sbatch's default): the resolved :data:`EXTRAS` the job reads
-    from its environment, forwarded even when the submitting shell did not set them."""
+    arguments. Never ``--export``: Slurm cancels a job submitted with one at its start; a value the job reads from
+    its environment is set in sbatch's own, which sbatch's default (``ALL``) forwards."""
     output = [f"--output={logs}/%x-%j.out", f"--error={logs}/%x-%j.err"] if logs is not None else []
-    export = [f"--export=ALL,{','.join(f'{name}={value}' for name, value in exports.items())}"] if exports else []
     return [
         "sbatch",
-        *export,
         *(f"{FIELDS[field][0]}={value}" for field, value in values.items()),
         *output,
         script,
@@ -365,9 +362,10 @@ def main(argv: Sequence[str]) -> int:
     logs = paths.scratch_dir() / "logs"
     if not args.dry_run:
         logs.mkdir(parents=True, exist_ok=True)
-    command = sbatch_command(str(args.script), options, args.script_args, logs, exports)
-    print(f"# system {resolved.system or 'none'}: {shlex.join(command)}", file=sys.stderr)
-    return 0 if args.dry_run else subprocess.run(command, check=False).returncode
+    command = sbatch_command(str(args.script), options, args.script_args, logs)
+    shown = ["env", *(f"{name}={value}" for name, value in exports.items()), *command] if exports else command
+    print(f"# system {resolved.system or 'none'}: {shlex.join(shown)}", file=sys.stderr)
+    return 0 if args.dry_run else subprocess.run(command, check=False, env=os.environ | exports).returncode
 
 
 def options_main(argv: Sequence[str]) -> int:

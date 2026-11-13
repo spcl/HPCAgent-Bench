@@ -218,21 +218,25 @@ def test_repeated_print_names_print_one_value_per_line(monkeypatch: pytest.Monke
     assert printed(["--print", "hardware", "--print", "mem"]).splitlines() == ["gfx", ""]
 
 
-def test_job_submit_exports_the_resolved_resource_extras(tmp_path: pathlib.Path) -> None:
-    """The four resource limits are the job's own values: `job submit` forwards every set one under its variable
-    (sbatch's --export), so a system's entry or a flag reaches the job without the submitting shell setting it."""
+def test_job_submit_forwards_the_resolved_resource_extras_through_sbatchs_environment(tmp_path: pathlib.Path) -> None:
+    """The four resource limits are the job's own values: `job submit` sets every set one under its variable in
+    sbatch's environment (forwarded by sbatch's default), never as --export (Slurm cancels such a job at its start),
+    so a system's entry or a flag reaches the job without the submitting shell setting it."""
     script = job_script(tmp_path)
     command = dry_run(
         tmp_path, "--agent-memory-gb", "24", "--agent-cpus", "8",
         "--container-memory", "200G", "--container-cpus", "32", script,
     )[1]  # fmt: skip
-    assert (
-        "--export=ALL,AGENT_MEMORY_CAP_GB=24,HPCAGENT_BENCH_AGENT_CPUS=8,"
-        "HPCAGENT_BENCH_CONTAINER_MEMORY=200G,HPCAGENT_BENCH_CONTAINER_CPUS=32"
-    ) in command
-    assert not [word for word in dry_run(tmp_path, script)[1] if word.startswith("--export")], (
-        "an unset limit is not exported"
-    )
+    assert command[: command.index("sbatch")] == [
+        "env",
+        "AGENT_MEMORY_CAP_GB=24",
+        "HPCAGENT_BENCH_AGENT_CPUS=8",
+        "HPCAGENT_BENCH_CONTAINER_MEMORY=200G",
+        "HPCAGENT_BENCH_CONTAINER_CPUS=32",
+    ]
+    unset = dry_run(tmp_path, script)[1]
+    assert unset[0] == "sbatch", "an unset limit is not forwarded"
+    assert not [word for word in command + unset if word.startswith("--export")]
 
 
 def dry_run(tmp_path: pathlib.Path, *args: str, **knobs: str) -> tuple[str, list[str]]:
