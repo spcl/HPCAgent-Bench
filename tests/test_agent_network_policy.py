@@ -17,6 +17,7 @@ import tempfile
 import threading
 from collections.abc import Iterator
 from types import ModuleType
+from typing import ClassVar
 
 import pydantic
 import pytest
@@ -535,6 +536,112 @@ def test_a_closed_gate_stops_forwarding(tmp_path: pathlib.Path, judge: str) -> N
             client.connect(net_relay.socket_path(handle, 0))
     finally:
         os.close(handle)
+
+
+class Recording(http.server.BaseHTTPRequestHandler):
+    """A stand-in inference engine on one keep-alive connection: records every path it is asked for."""
+
+    protocol_version = "HTTP/1.1"
+    paths: ClassVar[list[str]] = []
+
+    def answer(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        type(self).paths.append(self.path)
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(BODY)))
+        self.end_headers()
+        self.wfile.write(BODY)
+
+    do_GET = do_POST = answer
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 -- the base class's signature
+        return
+
+
+@pytest.fixture(name="engine")
+def engine_fixture() -> Iterator[net_relay.Endpoint]:
+    """A live stand-in inference engine (:class:`Recording`) on this host's loopback."""
+    Recording.paths = []
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Recording)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield net_relay.Endpoint("127.0.0.1", server.server_address[1])
+    server.shutdown()
+    server.server_close()
+
+
+def exchange(sockets: pathlib.Path, index: int, requests: bytes) -> bytes:
+    """What a client sending ``requests`` into relay socket ``index`` under ``sockets`` reads back (dialled through
+    the open directory: a test's temporary path can exceed what a socket address holds)."""
+    handle = os.open(sockets, os.O_PATH | os.O_DIRECTORY)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(10)
+        try:
+            client.connect(net_relay.socket_path(handle, index))
+        finally:
+            os.close(handle)
+        client.sendall(requests)
+        client.shutdown(socket.SHUT_WR)
+        seen = b""
+        while data := client.recv(65536):
+            seen += data
+    return seen
+
+
+def test_an_inference_endpoint_answers_its_api_and_ends_the_connection_at_any_other_path(
+    tmp_path: pathlib.Path, engine: net_relay.Endpoint
+) -> None:
+    """sglang serves /abort_request, /pause_generation and /flush_cache beside its API, unauthenticated: one worker
+    could stop every agent's generations. The relay passes /v1/ requests, one after another on a kept-alive
+    connection, and drops the first request for anything else and everything after it."""
+    body = b'{"model": "m"}'
+    requests = (
+        b"GET /v1/models HTTP/1.1\r\nHost: e\r\n\r\n"
+        + b"POST /v1/chat/completions HTTP/1.1\r\nHost: e\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body)
+        + b"POST /abort_request HTTP/1.1\r\nHost: e\r\nContent-Length: 2\r\n\r\n{}"
+        + b"GET /v1/models HTTP/1.1\r\nHost: e\r\n\r\n"
+    )
+    gate = net_relay.Outside(tmp_path / net_relay.DIR_NAME, [engine], {engine: net_relay.INFERENCE_PATH})
+    try:
+        seen = exchange(tmp_path / net_relay.DIR_NAME, 0, requests)
+    finally:
+        gate.close()
+    assert Recording.paths == ["/v1/models", "/v1/chat/completions"]
+    assert seen.count(BODY) == 2
+
+
+def test_the_driver_filters_the_model_but_not_the_judge(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, judge: str, engine: net_relay.Endpoint
+) -> None:
+    """The judge serves /score, /submit and /profile; only the inference services are held to /v1/."""
+    monkeypatch.setenv("RUN_DIR", str(tmp_path))
+    network = driver.open_worker_network(tmp_path / "w", {"judge": judge, "model": f"http://{engine.text}"})
+    sockets = tmp_path / "w" / net_relay.DIR_NAME
+    try:
+        assert exchange(sockets, 0, b"GET /score HTTP/1.0\r\n\r\n").endswith(BODY)
+        assert exchange(sockets, 1, b"GET /flush_cache HTTP/1.0\r\n\r\n") == b""
+        assert exchange(sockets, 1, b"GET /v1/models HTTP/1.0\r\n\r\n").endswith(BODY)
+    finally:
+        network.close()
+    assert Recording.paths == ["/v1/models"]
+
+
+@pytest.mark.parametrize(
+    "request_head",
+    [
+        pytest.param(b"POST /v1/../abort_request HTTP/1.1\r\nHost: e", id="dot-segment"),
+        pytest.param(b"POST /v1/%2e%2e/abort_request HTTP/1.1\r\nHost: e", id="escaped"),
+        pytest.param(b"POST http://e/abort_request HTTP/1.1\r\nHost: e", id="absolute-form"),
+        pytest.param(b"GET /v1/models HTTP/1.1\nHost: e\n\nPOST /abort_request HTTP/1.1", id="bare-newlines"),
+        pytest.param(b"POST /v1/x HTTP/1.1\r\nTransfer-Encoding: chunked", id="chunked"),
+        pytest.param(b"POST /v1/x HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 40", id="two-lengths"),
+        pytest.param(b"POST /v1/x HTTP/1.1\r\nContent-Length : 40", id="spaced-name"),
+    ],
+)
+def test_a_request_two_parsers_could_read_differently_is_refused(request_head: bytes) -> None:
+    """The relay frames each request itself: a head the engine could split, route or frame otherwise than the relay
+    does would smuggle a second request past it."""
+    assert net_relay.request_body_length(request_head, net_relay.INFERENCE_PATH) is None
+    assert net_relay.request_body_length(b"POST /v1/x?a=b HTTP/1.1\r\nContent-Length: 4", "/v1/") == 4
 
 
 def test_the_relays_url_arithmetic() -> None:
