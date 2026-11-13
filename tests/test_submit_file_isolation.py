@@ -208,22 +208,27 @@ def test_extra_env_kv_pins_any_other_key(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("limit", "walltime", "note"),
-    [("23", "23:00:00", "need --time 43:00:00, past the 23 h time limit: capped to 23:00:00"), ("", "43:00:00", "")],
+    ("agents", "limit", "status", "walltime", "note"),
+    [
+        ("20", "23", 2, "", ".env.some-setup: 40 kernels need --time 43:00:00, past the 23 h time limit: refused"),
+        ("20", "", 0, "43:00:00", ""),
+        ("40", "23", 0, "23:00:00", ""),
+    ],
 )
-def test_the_job_time_is_capped_at_the_partition_limit(
-    tmp_path: pathlib.Path, limit: str, walltime: str, note: str
+def test_a_setup_past_the_partition_limit_is_refused_never_capped(
+    tmp_path: pathlib.Path, agents: str, limit: str, status: int, walltime: str, note: str
 ) -> None:
-    """Two 20 h batches (40 kernels, 20 agents) plus staging are 43 h; sbatch refuses a --time past the partition's
-    limit, so the job asks for the limit and the cap is stated. Without a known limit nothing is capped."""
-    env = tmp_path / "setup.env"
-    env.write_text("AGENT_TIMEOUT_SECONDS=72000\nAGENTS_PER_NODE=20\nAGENT_NODES=1\n")
+    """Two 20 h batches (40 kernels, 20 agents) plus staging are 43 h: a job capped at the 23 h limit would cut its
+    second batch short while recording the full limit, so staging refuses it, naming the setup and the time it needs.
+    One batch (40 agents) fits; without a known limit nothing is refused."""
+    env = tmp_path / ".env.some-setup"
+    env.write_text(f"AGENT_TIMEOUT_SECONDS=72000\nAGENTS_PER_NODE={agents}\nAGENT_NODES=1\n")
     result = run_common(
         tmp_path,
         f". {CLUSTER_DIR / 'setup_nodes.sh'}\njob_walltime {env} 40",
         {"STAGING_HOURS": "3", "HPCAGENT_BENCH_MAX_TIME_HOURS": limit},
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == status, result.stderr
     assert result.stdout.strip() == walltime
     assert note in result.stderr
     assert bool(result.stderr) == bool(note)

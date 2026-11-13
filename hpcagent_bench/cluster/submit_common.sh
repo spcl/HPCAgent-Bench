@@ -107,16 +107,16 @@ clamp_time() {
     printf '%s\n' "${seconds}"
 }
 
-# job_walltime <env> <kernels> -> the job's --time: setup_walltime, capped at the same max_time_hours (sbatch refuses
-# a --time past the partition's limit). A capped job ends before its last agent batch has had
-# AGENT_TIMEOUT_SECONDS, which the note on stderr says, in a dry run too.
+# job_walltime <env> <kernels> -> the job's --time: setup_walltime. A setup that needs more than the partition's
+# max_time_hours is refused, never capped: a capped job would end before its last agent batch had
+# AGENT_TIMEOUT_SECONDS, while every episode still records the full limit.
 job_walltime() {
     local walltime limit
     walltime=$(setup_walltime "$1" "$2") || return 2
     limit=$(job_options --print max_time_hours) || return 2
     if [[ -n "${limit}" ]] && (( 10#${walltime%%:*} > limit )); then
-        echo "job_walltime: $2 kernels of $1 need --time ${walltime}, past the ${limit} h time limit: capped to $(hms $(( limit * 3600 ))), which cuts the last agent batch short (more AGENT_NODES or a split tag fit every batch)" >&2
-        walltime=$(hms $(( limit * 3600 )))
+        echo "job_walltime: ${1##*/}: $2 kernels need --time ${walltime}, past the ${limit} h time limit: refused (more AGENTS_PER_NODE x AGENT_NODES, so every kernel runs in one batch, or a split tag)" >&2
+        return 2
     fi
     printf '%s\n' "${walltime}"
 }
@@ -330,7 +330,7 @@ submit_setup_job() {
     local env="$1" setup="$2" walltime="$3" dependency="${4:-}" begin="${5:-}" detail="${6:-}" nodes snapshot jid resolved
     local -a options
     SUBMITTED_JOB_ID=""
-    nodes=$(setup_nodes "${env}")
+    nodes=$(setup_nodes "${env}") || return 2
     # A relaunch never raises a limit: refused, dry run too, against every launch of the setup under its run root and
     # against LIMITS_CEILING (an env of the setup's own limits, as revision_reruns.py writes for a paper setup).
     "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.results.owed check-limits "${env}" \

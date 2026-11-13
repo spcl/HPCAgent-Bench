@@ -458,6 +458,32 @@ def test_run_refuses_a_repair_of_an_episode_that_used_up_its_attempts(tmp_path: 
     assert not list((tmp_path / "repo" / "experiments").glob("problems-*"))
 
 
+@pytest.mark.parametrize(
+    ("commit", "dirty", "refused"), [("head", False, False), ("other", False, True), ("head", True, True)]
+)
+def test_run_refuses_a_checkout_other_than_the_staged_commit(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, commit: str, dirty: bool, refused: bool
+) -> None:
+    """A repair runs the code of the setup it repairs: the launch env's HPCAGENT_BENCH_RECORD_COMMIT must be the
+    checkout's HEAD, with nothing uncommitted."""
+    no_site_limits(tmp_path, monkeypatch)
+    argv = staged_rerun(tmp_path)
+    repo = pathlib.Path(argv[argv.index("--repo") + 1])
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    for step in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "stub"]):
+        subprocess.run([*git, *step], check=True)
+    head = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    with (tmp_path / "runs" / owed.LAUNCH_DIR / "100" / ".env").open("a") as env:
+        env.write(f"HPCAGENT_BENCH_RECORD_COMMIT={head[:9] if commit == 'head' else '0' * 9}\n")
+    if dirty:
+        (repo / "hpcagent_bench" / "cluster" / "env.sh").write_text("# edited\n")
+    if refused:
+        with pytest.raises(SystemExit, match="staged at"):
+            owed.main([*argv, "--class", "infra"])
+    else:
+        assert owed.main([*argv, "--class", "infra"]) == 0
+
+
 def test_run_needs_the_class_its_runs_are_owed_for(tmp_path: pathlib.Path) -> None:
     with pytest.raises(SystemExit):
         owed.main(staged_rerun(tmp_path))

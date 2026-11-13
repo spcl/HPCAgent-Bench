@@ -4,11 +4,19 @@
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 setup_nodes() {
-    local env_file="$1" inference agent judge
+    local env_file="$1" inference agent judge replicas mode
     [[ -s "${env_file}" ]] || { echo "setup_nodes: missing env file ${env_file}" >&2; return 2; }
     inference="$(grep -oP '^INFERENCE_NODES=\K[0-9]+' "${env_file}" || true)"
     agent="$(grep -oP '^AGENT_NODES=\K[0-9]+' "${env_file}" || true)"
     judge="$(grep -oP '^JUDGE_NODES=\K[0-9]+' "${env_file}" || true)"
+    # run_cluster.sh's rule for INFERENCE_REPLICAS, at staging: a bad pin is refused before the job queues for days
+    replicas="$(grep -oP '^INFERENCE_REPLICAS=\K[0-9]+' "${env_file}" || true)"
+    mode="$(grep -oP '^INFERENCE_MODE=\K\S+' "${env_file}" || true)"
+    if [[ "${mode}" == replicas ]] && (( ${replicas:-1} != 1 )) \
+        || (( ${replicas:-1} < 1 || ${inference:-2} % ${replicas:-1} != 0 )); then
+        echo "setup_nodes: ${env_file##*/}: INFERENCE_REPLICAS=${replicas} must be a pp setup's divisor of INFERENCE_NODES=${inference:-2}" >&2
+        return 2
+    fi
     echo $(( ${inference:-2} + ${agent:-1} + ${judge:-1} ))
 }
 

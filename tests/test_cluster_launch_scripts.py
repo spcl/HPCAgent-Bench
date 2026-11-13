@@ -208,3 +208,41 @@ def test_a_pipeline_rank_joins_its_own_pipeline(replicas: str, procid: str, pipe
     done = bash(script, env=env)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == pipeline
+
+
+@pytest.mark.parametrize(
+    ("env", "nodes"),
+    [
+        ("INFERENCE_NODES=8\nINFERENCE_REPLICAS=2\nAGENT_NODES=1\nJUDGE_NODES=1\n", "10"),
+        ("INFERENCE_NODES=4\nAGENT_NODES=1\nJUDGE_NODES=1\n", "6"),
+        ("INFERENCE_NODES=8\nINFERENCE_REPLICAS=3\nAGENT_NODES=1\nJUDGE_NODES=1\n", ""),
+        ("INFERENCE_NODES=2\nINFERENCE_MODE=replicas\nINFERENCE_REPLICAS=2\n", ""),
+    ],
+)
+def test_staging_refuses_pipeline_replicas_that_do_not_divide_the_inference_nodes(
+    tmp_path: pathlib.Path, env: str, nodes: str
+) -> None:
+    """setup_nodes (every staged setup's node count) applies run_cluster.sh's INFERENCE_REPLICAS rule at staging."""
+    staged = tmp_path / ".env.some-setup"
+    staged.write_text(env)
+    done = bash(f"set -euo pipefail\n. {CLUSTER / 'setup_nodes.sh'}\nsetup_nodes {staged}")
+    assert (done.returncode, done.stdout.strip()) == ((0, nodes) if nodes else (2, ""))
+    assert ("INFERENCE_REPLICAS" in done.stderr) is not bool(nodes)
+
+
+@pytest.mark.parametrize(
+    ("recorded", "snapshot", "refused"),
+    [("0123456789", "0123456789abcdef", False), ("", "0123456789abcdef", False), ("0123456789", "fedcba987654", True)],
+)
+def test_a_job_refuses_a_checkout_other_than_its_staged_commit(recorded: str, snapshot: str, refused: bool) -> None:
+    """A checkout that moved under a pending job (or a rerun staged elsewhere) stops the job before any step."""
+    block = lines_between(RUN_CLUSTER, 'if [[ -n "${SLURM_JOB_ID:-}" && -n "${HPCAGENT_BENCH_RECORD_COMMIT', "fi")
+    env = {
+        "SLURM_JOB_ID": "1",
+        "REPO_DIR": "/repo",
+        "HPCAGENT_BENCH_RECORD_COMMIT": recorded,
+        "HPCAGENT_BENCH_SNAPSHOT_COMMIT": snapshot,
+    }
+    done = bash(f"set -euo pipefail\n{block}", env=env)
+    assert done.returncode == (2 if refused else 0), done.stderr
+    assert ("staged at" in done.stderr) is refused
