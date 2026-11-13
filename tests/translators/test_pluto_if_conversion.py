@@ -263,6 +263,26 @@ def test_a_loop_bounded_by_data_keeps_its_guard() -> None:
     assert any(isinstance(node, ast.If) for node in ast.walk(tree))
 
 
+def test_a_guarded_loop_whose_bound_the_branch_sets_keeps_its_guard() -> None:
+    """The guarded loop would run when the test fails too, over a trip count only the taken branch defines."""
+    tree = ast.parse(
+        "def f(a, n):\n    for i in range(n):\n        if a[i] > 0.0:\n"
+        "            m = i + 1\n            for j in range(m):\n                a[j] = 0.0\n"
+    )
+    assert if_convert(tree, subscripted) == []
+    assert any(isinstance(node, ast.If) for node in ast.walk(tree))
+
+
+def test_a_guarded_loop_whose_index_is_read_after_it_keeps_its_guard() -> None:
+    """The guarded loop would set ``j`` when the test fails too, and ``b[i, 0]`` reads it."""
+    tree = ast.parse(
+        "def f(a, b, n):\n    j = -1\n    for i in range(n):\n        if a[i] > 0.0:\n"
+        "            for j in range(n):\n                b[i, j] = 1.0\n        b[i, 0] = j\n"
+    )
+    assert if_convert(tree, subscripted) == []
+    assert any(isinstance(node, ast.If) for node in ast.walk(tree))
+
+
 @pytest.mark.parametrize("statement", ["break", "print(i)"])
 def test_an_if_holding_anything_but_assignments_is_left_alone(statement: str) -> None:
     tree = ast.parse(f"def f(a, n):\n    for i in range(n):\n        if a[i] > 0:\n            {statement}\n")

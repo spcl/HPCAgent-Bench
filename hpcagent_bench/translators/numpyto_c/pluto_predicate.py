@@ -20,8 +20,9 @@ Two forms, both exact:
 
 A branch may also hold a ``for`` over a ``range`` whose bounds read no array (TSVC s275 guards a whole
 column recurrence): the loop stays and its assignments are guarded, so the enclosing loop joins the
-scop. An ``if`` whose branches hold anything else (a ``break``, a data-bounded loop, a call statement)
-is left as it is, and stays outside the scop.
+scop. Such a loop runs on both outcomes of the test, so an ``if`` whose branches write a variable one
+of their loop bounds reads, or whose loop index is read outside the loops it indexes, is left alone. An ``if`` whose branches hold anything else (a ``break``, a
+data-bounded loop, a call statement) is left as it is, and stays outside the scop.
 """
 
 import ast
@@ -37,6 +38,7 @@ __all__ = [
     "FLAG_PREFIX",
     "Flagger",
     "IfConverter",
+    "bounds_read",
     "conj",
     "convert",
     "convertible",
@@ -44,6 +46,8 @@ __all__ = [
     "if_convert",
     "inline",
     "load",
+    "loop_locals",
+    "loop_targets",
     "names_read",
     "negate",
     "predicated",
@@ -90,6 +94,39 @@ def tests_read(stmts: Iterable[ast.stmt]) -> set[str]:
         elif isinstance(stmt, ast.For):
             out |= tests_read(stmt.body)
     return out
+
+
+def bounds_read(stmts: Iterable[ast.stmt]) -> set[str]:
+    """Every variable a loop bound among the statements reads, less the targets of the loops enclosing it."""
+    out: set[str] = set()
+    for stmt in stmts:
+        if isinstance(stmt, ast.If):
+            out |= bounds_read(stmt.body) | bounds_read(stmt.orelse)
+        elif isinstance(stmt, ast.For):
+            out |= names_read(stmt.iter) | (bounds_read(stmt.body) - names_read(stmt.target))
+    return out
+
+
+def loop_targets(stmts: Iterable[ast.stmt]) -> set[str]:
+    """The index of every loop among the statements, through nested ``if``s and loops."""
+    out: set[str] = set()
+    for stmt in stmts:
+        if isinstance(stmt, ast.If):
+            out |= loop_targets(stmt.body) | loop_targets(stmt.orelse)
+        elif isinstance(stmt, ast.For):
+            out |= names_read(stmt.target) | loop_targets(stmt.body)
+    return out
+
+
+def loop_locals(tree: ast.AST) -> set[str]:
+    """The names every occurrence of which lies inside a loop indexed by that name."""
+    covered: set[int] = set()
+    for loop in walk_nodes(tree):
+        if isinstance(loop, ast.For) and isinstance(loop.target, ast.Name):
+            index = loop.target.id
+            covered |= {id(n) for n in walk_nodes(loop) if isinstance(n, ast.Name) and n.id == index}
+    names = [node for node in walk_nodes(tree) if isinstance(node, ast.Name)]
+    return {node.id for node in names} - {node.id for node in names if id(node) not in covered}
 
 
 def static_range(loop: ast.For) -> bool:
@@ -226,10 +263,11 @@ def convert(node: ast.If, fresh: Callable[[], str], flags: list[str]) -> list[as
 class IfConverter(ast.NodeTransformer):
     """Rewrites every convertible value-dependent ``if`` that sits inside a ``for`` loop."""
 
-    __slots__ = ("depth", "flags", "fresh", "value_dependent")
+    __slots__ = ("depth", "flags", "fresh", "loop_local", "value_dependent")
 
-    def __init__(self, value_dependent: Callable[[ast.expr], bool], taken: set[str]) -> None:
+    def __init__(self, value_dependent: Callable[[ast.expr], bool], taken: set[str], loop_local: set[str]) -> None:
         self.value_dependent = value_dependent
+        self.loop_local = loop_local
         self.depth = 0
         self.flags: list[str] = []
         counter = itertools.count()
@@ -242,7 +280,16 @@ class IfConverter(ast.NodeTransformer):
         return node
 
     def visit_If(self, node: ast.If) -> object:
-        if self.depth and self.value_dependent(node.test) and convertible(node.body) and convertible(node.orelse):
+        # A guarded loop runs whether or not its test held: its trip count may not be a value the test guards,
+        # and its index may not be read after it.
+        if (
+            self.depth
+            and self.value_dependent(node.test)
+            and convertible(node.body)
+            and convertible(node.orelse)
+            and not (bounds_read([node]) & written([node]))
+            and loop_targets([node]) <= self.loop_local
+        ):
             return convert(node, self.fresh, self.flags)
         self.generic_visit(node)
         return node
@@ -251,7 +298,7 @@ class IfConverter(ast.NodeTransformer):
 def if_convert(tree: ast.AST, value_dependent: Callable[[ast.expr], bool]) -> list[str]:
     """Rewrite ``tree`` in place; returns the flag locals introduced, each an integer."""
     taken = {node.id for node in walk_nodes(tree) if isinstance(node, ast.Name)}
-    converter = IfConverter(value_dependent, taken)
+    converter = IfConverter(value_dependent, taken, loop_locals(tree))
     converter.visit(tree)
     ast.fix_missing_locations(tree)
     return converter.flags
