@@ -29,6 +29,7 @@ after the deadline not counted; every other usage must stay within the global on
 rerun under that experiment, with the setup's name and study.
 
     python helpers/scripts/revision_reruns.py select --db <results.db> ... --since <ISO time> --out <dir>
+    python helpers/scripts/revision_reruns.py hold --db <results.db> --into <analysis.db> [--env-dir <dir>]
 
 writes ``<dir>/owed/<setup>.txt`` (one ``<kernel> [<slot>]`` per owed slot: the reruns launch only from it),
 ``<dir>/owed/<setup>.limits.env`` (the setup's own limits, the rerun's ``LIMITS_CEILING``), ``<dir>/slots.jsonl``
@@ -38,9 +39,12 @@ the counts and the commands. A database from before user_version 22 records no l
 
 import argparse
 import collections
+import contextlib
 import datetime
 import json
 import pathlib
+import shutil
+import sqlite3
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -58,6 +62,7 @@ __all__ = [
     "Slot",
     "base_for",
     "classify",
+    "hold",
     "command",
     "main",
     "missing",
@@ -258,6 +263,85 @@ def limits_verdict(
         if ran != limit:
             return "limits_smaller" if ran < limit else "limits_exceeded"
     return ""
+
+
+def held_reason(
+    row: Mapping[str, object], enforced: Mapping[str, int | None], held: Mapping[str, int | None]
+) -> str:
+    """Why an episode :func:`limits_verdict` passes runs under ``held``, as :data:`HELD_TABLE` records it."""
+    hit = ended_by(row, enforced)
+    if hit:
+        return f"ended at the global {hit}"
+    caps = [key for key in ("token_limit", "output_token_limit", "time_limit_s") if enforced.get(key) is not None]
+    ran = {key: capped(enforced[key]) or float("inf") for key in caps}
+    limit = {key: capped(held[key]) or float("inf") for key in caps}
+    if any(ran[key] > limit[key] for key in caps):
+        return "ran under a higher limit, its usage within the global one"
+    if any(ran[key] < limit[key] for key in caps):
+        return "ran under a lower limit and ended on its own"
+    return "ran under the global limit" if caps else "recorded no limits, its usage within the global one"
+
+
+#: The held limits of the reused episodes, in the analysis database :func:`hold` writes: the limits and protocol each
+#: episode recorded before it was held to the global limit, and why it is within it.
+HELD_TABLE = """
+CREATE TABLE held_limits (
+    episode_id         INTEGER PRIMARY KEY,
+    token_limit        INTEGER,
+    output_token_limit INTEGER,
+    time_limit_s       INTEGER,
+    limits_source      TEXT,
+    reply_cap          INTEGER,
+    auto_submit        TEXT,
+    reason             TEXT NOT NULL
+)"""
+
+
+def hold(db: pathlib.Path, into: pathlib.Path, env_dirs: Sequence[pathlib.Path] = ()) -> collections.Counter[str]:
+    """Copy ``db`` to ``into`` (a new file) and hold every episode of a reused setup that ran within the global limit
+    (:func:`limits_verdict`) to it: its limits become the global ones, its limits source ``common``, and an
+    unrecorded reply cap or auto-submission the global protocol's (every November run's own defaults); what it
+    recorded and why it is within go to ``held_limits``. Owed episodes keep what they recorded. Returns the reasons'
+    counts."""
+    if into.exists():
+        raise SystemExit(f"hold: {into} exists; hold writes a new analysis database, never a source")
+    rows = episode_rows(db)
+    held = reused_limits(db)
+    launched = launch_limits(held, env_dirs)
+    common = env_spec.env_of(env_spec.TABLES["common"], "common", protocol=True)
+    shutil.copyfile(db, into)
+    reasons: collections.Counter[str] = collections.Counter()
+    with contextlib.closing(sqlite3.connect(into)) as conn, conn:
+        conn.execute(HELD_TABLE)
+        for row in rows:
+            setup = str(row["setup"])
+            if setup not in held:
+                continue
+            ran = launched.get(setup, {})
+            enforced = {key: row[key] if isinstance(row[key], int) else ran.get(key) for key in CEILING_KEYS}
+            if limits_verdict(row, enforced, held[setup]):
+                continue
+            reason = held_reason(row, enforced, held[setup])
+            reasons[reason] += 1
+            conn.execute(
+                "INSERT INTO held_limits SELECT id, token_limit, output_token_limit, time_limit_s, limits_source, "
+                "reply_cap, auto_submit, ? FROM episodes WHERE id = ?",
+                (reason, row["id"]),
+            )
+            conn.execute(
+                "UPDATE episodes SET token_limit = ?, output_token_limit = ?, time_limit_s = ?, "
+                "limits_source = 'common', reply_cap = COALESCE(reply_cap, ?), "
+                "auto_submit = COALESCE(NULLIF(auto_submit, ''), ?) WHERE id = ?",
+                (
+                    held[setup]["token_limit"],
+                    held[setup]["output_token_limit"],
+                    held[setup]["time_limit_s"],
+                    int(common["CLAUDE_CODE_MAX_OUTPUT_TOKENS"]),
+                    common["AGENT_AUTO_SUBMIT"],
+                    row["id"],
+                ),
+            )
+    return reasons
 
 
 def launch_limits(setups: Iterable[str], env_dirs: Sequence[pathlib.Path]) -> dict[str, dict[str, int]]:
@@ -472,6 +556,14 @@ def cmd_select(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hold(args: argparse.Namespace) -> int:
+    reasons = hold(args.db, args.into, args.env_dir)
+    print(f"held {sum(reasons.values())} episodes in {args.into}:")
+    for reason, count in sorted(reasons.items()):
+        print(f"  {count:4d}  {reason}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -496,6 +588,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="the tag every setup of STUDY runs in full: a kernel it never ran is owed (repeatable)",
     )
     select.set_defaults(func=cmd_select)
+    held = sub.add_parser("hold", help="write an analysis copy whose reused episodes within the limit are held to it")
+    held.add_argument("--db", type=pathlib.Path, required=True, help="the results DB of the reused runs")
+    held.add_argument("--into", type=pathlib.Path, required=True, help="the analysis copy to write (must not exist)")
+    held.add_argument("--env-dir", type=pathlib.Path, action="append", default=[], help="launch envs (as select)")
+    held.set_defaults(func=cmd_hold)
     args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     return int(args.func(args))
 
