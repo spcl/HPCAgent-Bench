@@ -23,6 +23,7 @@ from _pytest._code.code import ExceptionChainRepr, ReprExceptionInfo
 from hpcagent_bench import flags, modules
 from hpcagent_bench.categories import Language
 from tests.dace_build_isolation import pin_per_worker_dace_build_folder
+from tests.fresh_module import FRESHENED, restore_freshened
 from tests.request_allowances import every_request_allowed as allowing_every_request
 
 # The suite is the outermost launch of every process it starts, so it sets the OpenMP environment grading
@@ -421,6 +422,28 @@ def restore_config_overrides() -> Iterator[None]:
     snapshot = config.override_snapshot()
     yield
     config.restore_overrides(snapshot)
+
+
+#: The re-imports made while a test's fixtures were set up (a module-scoped fixture's included), kept across its call.
+FRESHENED_AT_SETUP = pytest.StashKey[list[str]]()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item: pytest.Item) -> Iterator[None]:
+    """Set aside the re-imports the fixtures made (``tests.fresh_module.fresh``): only the test's own are undone."""
+    yield
+    item.stash[FRESHENED_AT_SETUP] = list(FRESHENED)
+    FRESHENED.clear()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Iterator[None]:
+    """Once every fixture is finalized (``monkeypatch`` has put the environment back), execute each module the test
+    re-imported under its own environment once more. Left as the test built it, the submit tool keeps that test's
+    spent marker, and every later test of the worker that submits is told it already did."""
+    yield
+    restore_freshened()
+    FRESHENED.extend(item.stash.get(FRESHENED_AT_SETUP, []))
 
 
 @pytest.fixture(scope="module", autouse=True)

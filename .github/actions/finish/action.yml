@@ -28,6 +28,6 @@ runs:
       uses: actions/upload-artifact@v6
       with:
         name: coverage-${{ inputs.coverage }}
-        path: .coverage*
+        path: ${{ runner.temp }}/coverage/.coverage*
         include-hidden-files: true
         if-no-files-found: ignore

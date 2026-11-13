@@ -45,6 +45,14 @@ runs:
         fi
         echo "apparmor_restrict_unprivileged_userns: $(cat "$knob" 2>/dev/null || echo absent)"
 
+    - name: Coverage data outside the checkout
+      shell: bash
+      run: |
+        # A sealed judge child sees the checkout (and /tmp) read-only or private, so coverage's per-process data file
+        # goes where every child, the sealed ones under their own user included, can write it.
+        mkdir -p -m 1777 "$RUNNER_TEMP/coverage"
+        echo "COVERAGE_FILE=$RUNNER_TEMP/coverage/.coverage" >> "$GITHUB_ENV"
+
     - name: Native toolchain + OpenBLAS + FFTW
       shell: bash
       run: |

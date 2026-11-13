@@ -4,6 +4,7 @@
 unsupported requests, recorded conversion time, and the same casts per MPI rank."""
 
 import shutil
+import subprocess
 
 import ml_dtypes
 import numpy as np

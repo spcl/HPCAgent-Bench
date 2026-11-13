@@ -63,12 +63,25 @@ WHERE: dict[str, str] = {
 }
 
 
+#: Modules :func:`fresh` executed under a test's environment, which :func:`restore_freshened` executes again.
+FRESHENED: list[str] = []
+
+
 def fresh(name: str) -> ModuleType:
     """``name`` (a dotted module, or a bare name from :data:`WHERE`) executed anew under the current
     environment. Reloaded in place when already imported, so a sibling holding it sees the new state."""
     dotted = WHERE.get(name, name)
+    if dotted not in FRESHENED:
+        FRESHENED.append(dotted)
     loaded = sys.modules.get(dotted)
     return importlib.reload(loaded) if loaded is not None else importlib.import_module(dotted)
+
+
+def restore_freshened() -> None:
+    """Execute every module :func:`fresh` loaded once more, under the environment the test has given back: a
+    module-level constant one test's environment set (the submit tool's spent marker) must not reach the next."""
+    while FRESHENED:
+        importlib.reload(sys.modules[FRESHENED.pop(0)])
 
 
 #: The driver package's directory, for tests that read a driver source as text.
