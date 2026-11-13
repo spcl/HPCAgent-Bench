@@ -12,6 +12,7 @@ import pathlib
 import sys
 import tempfile
 from collections.abc import Generator
+from typing import Literal
 
 import pydantic
 
@@ -137,6 +138,9 @@ class ArrayDocument(pydantic.BaseModel):
     #: A sign domain name, or a ``[low, high]`` pair kept in the type the manifest spells it in.
     domain: str | list[int | float] | None = None
     index_array: bool = False
+    #: A layer weight's fan bound (``he`` or ``xavier``) and its ``[out, in]`` axes when not ``(out, in, ...)``.
+    weight_init: Literal["he", "xavier"] | None = None
+    fan_axes: list[int] | None = None
 
 
 class InitDocument(pydantic.BaseModel):
