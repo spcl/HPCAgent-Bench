@@ -1,0 +1,4 @@
+# Repeat study (paper tab:repeat-plan): 20 episodes per model at temperature 1 and 0 on three kernels of Git-SciComp.
+edge_laplacian
+kmp
+fv3_dycore
