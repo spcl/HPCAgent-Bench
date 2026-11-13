@@ -401,6 +401,8 @@ def shard_verdict(
     if length is not None and not exact and ungradeable(eps_acc, floor_length, rtol):
         raise refusal(growth, rtol, length)
     atol_eff = effective_atol(atol, ref_inf, growth, relative_atol=relative_atol)
+    # The L2 sums in units of the output's inf-norm (reduced over the ranks above), so no square overflows.
+    unit = ref_inf if ref_inf > 0.0 else 1.0
     max_err, bad = 0.0, 0
     sums = L2Sums(0.0, 0.0, 0.0)
     signs = SignMismatches(0, -1)
@@ -428,7 +430,7 @@ def shard_verdict(
         if strict_small is not None:
             # float64 sums, as the host comparator's: a float32 square underflows a small output's error to 0.
             wide_e, wide_a = e.to(torch.float64), a.to(torch.float64)
-            sums = sums.plus(l2_sums(wide_e, wide_a, rtol=rtol, band_atol=atol_eff, xp=torch))
+            sums = sums.plus(l2_sums(wide_e, wide_a, rtol=rtol, band_atol=atol_eff, xp=torch, unit=unit))
             if threshold is not None:
                 part = sign_mismatches(
                     wide_e, wide_a, threshold=threshold, rtol=rtol, band_atol=atol_eff, complex_inputs=False, xp=torch
@@ -448,7 +450,8 @@ def shard_verdict(
     if strict_small is not None and not exact:
         whole = L2Sums(ref_inf, ref_sq, err_sq)
         # The rounding the output inherits from its declared sources: the floor's growth times their L2 norm.
-        refused = l2_reason(whole, rtol=rtol, l2_factor=strict_small.l2_factor, inherited=growth * math.sqrt(src_sq))
+        inherited = growth * math.sqrt(src_sq)
+        refused = l2_reason(whole, rtol=rtol, l2_factor=strict_small.l2_factor, inherited=inherited, unit=unit)
         if refused is None and threshold is not None and ref_inf > 0.0:
             # The first flip's index is this shard's, if any; the count is the output's.
             allowed = int(mismatch_fraction * total_all) - int(bad_all)

@@ -43,6 +43,7 @@ __all__ = [
     "SignMismatches",
     "StrictSmall",
     "finite_l2_norm",
+    "finite_peak",
     "l2_reason",
     "l2_sums",
     "sign_mismatches",
@@ -99,31 +100,41 @@ class L2Sums(NamedTuple):
         return L2Sums(max(self.scale, other.scale), self.ref_sq + other.ref_sq, self.err_sq + other.err_sq)
 
 
-def l2_sums(ce: object, ca: object, *, rtol: float, band_atol: float | None, xp: types.ModuleType) -> L2Sums:
+def l2_sums(
+    ce: object, ca: object, *, rtol: float, band_atol: float | None, xp: types.ModuleType, unit: float = 1.0
+) -> L2Sums:
     """:class:`L2Sums` of one flat chunk of reference ``ce`` and answer ``ca`` in array module ``xp`` (numpy, cupy
-    or torch). ``abs()**2`` of a complex is ``|z|^2`` without a sqrt; an overflow saturates to inf, which fails."""
+    or torch), the two sums of squares in units of ``unit`` (the whole output's inf-norm, so no square of an fp64
+    value above ~1.3e154 overflows; :func:`l2_reason` takes the same ``unit``). ``abs()**2`` of a complex is
+    ``|z|^2`` without a sqrt."""
     finite = xp.isfinite(ce) & xp.isfinite(ca)
     with np.errstate(invalid="ignore", over="ignore"):
         in_band = finite if band_atol is None else finite & xp.isclose(ca, ce, rtol=rtol, atol=band_atol)
         return L2Sums(
             float(xp.max(xp.where(finite, xp.abs(ce), 0.0))),
-            float(xp.sum(xp.where(finite, xp.abs(ce) ** 2, 0.0))),
-            float(xp.sum(xp.where(in_band, xp.abs(xp.subtract(ca, ce)) ** 2, 0.0))),
+            float(xp.sum(xp.where(finite, (xp.abs(ce) / unit) ** 2, 0.0))),
+            float(xp.sum(xp.where(in_band, (xp.abs(xp.subtract(ca, ce)) / unit) ** 2, 0.0))),
         )
 
 
-def l2_reason(sums: L2Sums, *, rtol: float, l2_factor: float, inherited: float = 0.0) -> str | None:
+def finite_peak(ce: object, ca: object, xp: types.ModuleType) -> float:
+    """The largest ``|ce|`` among the elements finite in both of a non-empty chunk ``ce`` and ``ca`` (0.0 for none)."""
+    finite = xp.isfinite(ce) & xp.isfinite(ca)
+    return float(xp.max(xp.where(finite, xp.abs(ce), 0.0)))
+
+
+def l2_reason(sums: L2Sums, *, rtol: float, l2_factor: float, inherited: float = 0.0, unit: float = 1.0) -> str | None:
     """The relative L2 check on a whole output's :class:`L2Sums`: ``strict_small_l2`` or ``None``.
 
     A reference with no finite magnitude passes (the L2 error would be 0/0; the atol band is the contract). The
     denominator falls back to the inf-norm when the sum of squares underflows the scale away (an array of ~1e-200
     elements), so the ratio is a real number (inf on an overflowed error). An output computed from much larger
     quantities inherits their rounding (channel_flow's v, 1e-7 of the u that drives it): ``inherited`` adds that
-    eps-sized term, 0.0 leaves the bound at ``l2_factor * rtol``."""
+    eps-sized term, 0.0 leaves the bound at ``l2_factor * rtol``. ``unit`` is the one :func:`l2_sums` summed in."""
     if sums.scale == 0.0:
         return None
-    norm = max(math.sqrt(sums.ref_sq), sums.scale)
-    error = math.sqrt(sums.err_sq)
+    norm = max(math.sqrt(sums.ref_sq) * unit, sums.scale)
+    error = math.sqrt(sums.err_sq) * unit
     ratio = error / norm
     if ratio <= l2_factor * (rtol + inherited / norm):
         return None
@@ -239,12 +250,14 @@ def strict_small_reason(
         raise ValueError(f"sign_margin (None or > 0) and l2_factor (> 0), got {sign_margin!r}, {l2_factor!r}")
     step = max(int(chunk), 1)
     starts = range(0, int(rf.size), step)
+    # The squares in units of the whole output's finite inf-norm: a first pass, then the sums.
+    unit = max((finite_peak(rf[start : start + step], vf[start : start + step], xp) for start in starts), default=0.0)
+    unit = unit if unit > 0.0 else 1.0
     sums = L2Sums(0.0, 0.0, 0.0)
     for start in starts:
-        sums = sums.plus(
-            l2_sums(rf[start : start + step], vf[start : start + step], rtol=rtol, band_atol=band_atol, xp=xp)
-        )
-    reason = l2_reason(sums, rtol=rtol, l2_factor=l2_factor, inherited=inherited)
+        chunk_e, chunk_a = rf[start : start + step], vf[start : start + step]
+        sums = sums.plus(l2_sums(chunk_e, chunk_a, rtol=rtol, band_atol=band_atol, xp=xp, unit=unit))
+    reason = l2_reason(sums, rtol=rtol, l2_factor=l2_factor, inherited=inherited, unit=unit)
     if reason is not None or sign_margin is None or sums.scale == 0.0:
         return reason
     threshold = sign_margin * (float(growth) if growth is not None else _dtype_eps(r.dtype)) * sums.scale
