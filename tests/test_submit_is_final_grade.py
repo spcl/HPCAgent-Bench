@@ -362,6 +362,19 @@ def test_only_a_submission_of_an_older_protocol_is_owed_a_final_grade(
     assert grade_under.final_graded(db) == {item.grade_id for item in listed if item.episode_id == RUN}
 
 
+def test_a_final_grade_before_stale_before_is_owed_again(tmp_path: pathlib.Path, cells: list[dict[str, Any]]) -> None:
+    """A regrade under a changed judge (``worklist --stale-before``) lists the answer its final grade already timed;
+    a final grade recorded at or after the moment still counts."""
+    record_submit(tmp_path, RUN, Scorer(*[fake_result(2.0)] * INPUTS))
+    db = pathlib.Path(record_db(tmp_path))
+    assert grade_under.build_owed_worklist([db], [])[0] == []
+    later = recording.now_ms() + 60_000
+    owed, _ = grade_under.build_owed_worklist([db], [], stale_before_ms=later)
+    assert [item.episode_id for item in owed] == [RUN]
+    assert grade_under.build_owed_worklist([db], [], stale_before_ms=later - 3_600_000)[0] == []
+    assert grade_under.iso_ms("2026-11-13T20:00:00+01:00") == 1_794_596_400_000
+
+
 def test_a_deferred_entry_is_synced_to_disk_before_it_is_answered(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
