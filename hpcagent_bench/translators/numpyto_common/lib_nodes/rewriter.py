@@ -833,6 +833,20 @@ class LibNodeRewriter(ast.NodeTransformer):
             return [*prelude, node]
         return node
 
+    def visit_Return(self, node: ast.Return) -> ast.AST | list[ast.stmt]:
+        """A kept helper's ``return <value>``: a registered call in it is hoisted and lowered as an
+        assignment's is. ``return -np.mean(log_probs[rows, targets])`` reached the backend whole:
+        C refused the bare ``np.mean``, and Fortran rendered the zipped gather as an outer-product
+        section (cross_entropy_loss)."""
+        if node.value is None:
+            return node
+        self.generic_visit(node)
+        node.value, prelude = self.hoist_value(node.value)
+        prelude = self.lower_prelude_calls(prelude)
+        if prelude:
+            return [*prelude, node]
+        return node
+
 
 def canonicalize_call_assign(node: ast.Assign) -> None:
     """Put a registered call where its expander fires. ``D[:] = np.repeat(...)`` / ``D[:, :] =

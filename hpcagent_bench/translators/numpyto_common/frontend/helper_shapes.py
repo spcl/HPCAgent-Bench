@@ -11,7 +11,12 @@ from hpcagent_bench.translators.numpyto_common.frontend.callsite import (
     shape_symbols,
     value_names,
 )
-from hpcagent_bench.translators.numpyto_common.frontend.helper_params import DescEntry, DescKey, infer_helper_params
+from hpcagent_bench.translators.numpyto_common.frontend.helper_params import (
+    DescEntry,
+    DescKey,
+    infer_helper_params,
+    rename_shadowing_bindings,
+)
 from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import bind_call_constants, literal_call_arg
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import assigns_to, local_array_def, resolve_array_ref
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc, descs
@@ -456,9 +461,14 @@ def helper_call_local(
     if len(call.args) != len(pnames):
         return None
     consts = {pn: a for pn, a in zip(pnames, call.args, strict=False) if literal_call_arg(a)}
+    hfn = copy.deepcopy(hfn)
     if consts:
-        hfn = copy.deepcopy(hfn)
         bind_call_constants(hfn, consts)
+    # The helper's names, renamed off the caller's as build_helper_kirs renames them: the return
+    # extent keeps every caller-held name, so an unrenamed helper local (a pool's ``od = d // k``
+    # beside the caller's ``od``) respelled the pooled extent as the caller's unpooled one.
+    rename_shadowing_bindings(hfn, call.args, owner_fn, known, site_held)
+    pnames = [a.arg for a in hfn.args.args]
     returned = helper_return_shape_from_body(hfn, pnames, call.args, known, sca_by, sym_by, owner_fn)
     if returned is None:
         return None
