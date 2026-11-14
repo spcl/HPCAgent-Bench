@@ -81,7 +81,7 @@ class ManifestFreeBench(Benchmark):
         self.bname = bname
         self.bdata: dict[Any, Any] = {}
         #: The three argument lists ``CallPlan`` reads; a manifest-free bench has no arguments to marshal.
-        self.spec = types.SimpleNamespace(input_args=(), array_args=(), output_args=())
+        self.spec = types.SimpleNamespace(input_args=(), array_args=(), output_args=(), module_name=bname)
 
 
 def no_impl(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401
@@ -612,11 +612,23 @@ def test_build_call_stamps_the_kernel_the_gate_will_ask_about(monkeypatch: pytes
     before timing that still sees one."""
     framework = PlutoFramework.__new__(PlutoFramework)
     framework.fname = "pluto"
-    monkeypatch.setattr(PlutoFramework, "native_base", lambda self, bench: "pagerank")
+    # A sparse kernel's sources carry its layout (amg_setup_csr); the oracle answers to the manifest key alone.
+    monkeypatch.setattr(PlutoFramework, "native_base", lambda self, bench: "pagerank_csr")
 
-    framework.build_call(ManifestFreeBench(), no_impl, {})
+    framework.build_call(ManifestFreeBench("pagerank"), no_impl, {})
 
     assert framework.gate_kernel == "pagerank"
+
+
+def test_the_native_stem_of_a_sparse_kernel_is_its_default_layouts() -> None:
+    """The wrapper builds ``amg_setup_csr`` (``BenchSpec.native_base`` of the default layout); a column reading
+    ``module_name`` alone looked for ``amg_setup_fp*_pluto_binding.json`` and declined every sparse kernel."""
+    from hpcagent_bench.spec import load_spec
+
+    framework = PlutoFramework.__new__(PlutoFramework)
+    bench = types.SimpleNamespace(spec=load_spec("amg_setup"))
+
+    assert framework.native_base(bench) == "amg_setup_csr"
 
 
 def test_the_column_refuses_to_time_a_kernel_the_oracle_calls_a_miscompile(monkeypatch: pytest.MonkeyPatch) -> None:
