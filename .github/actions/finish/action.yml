@@ -21,7 +21,7 @@ runs:
       if: ${{ always() && env.CCACHE_KEY != '' }}
       uses: actions/cache/save@v5
       with:
-        path: ~/.ccache
+        path: ~/.cache/ccache
         key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
     - name: Upload coverage data
       if: ${{ always() && inputs.coverage != '' }}

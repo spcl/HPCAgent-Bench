@@ -213,9 +213,11 @@ runs:
         # -march=native hashes identically on every runner, so the key carries the CPU model and
         # flags: a foreign-uarch hit SIGILLs.
         set -euo pipefail
+        # Under the cache home: a sealed build's root is read-only but for its private cover of the cache home
+        # (seal.cache_home), so it compiles through a cache of its own instead of failing on a shared one.
         echo "/usr/lib/ccache" >> "$GITHUB_PATH"
-        echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
-        CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
+        echo "CCACHE_DIR=$HOME/.cache/ccache" >> "$GITHUB_ENV"
+        CCACHE_DIR="$HOME/.cache/ccache" ccache --set-config max_size=1G
         cpu_key=$(awk -F': ' '/^(model name|flags)/ {print $2}' /proc/cpuinfo | head -2 | sha256sum | cut -c1-12)
         test -n "$cpu_key" || { echo "could not derive a CPU key" >&2; exit 1; }
         echo "CPU_KEY=$cpu_key" >> "$GITHUB_ENV"
@@ -226,7 +228,7 @@ runs:
       if: ${{ inputs.ccache != '' }}
       uses: actions/cache/restore@v5
       with:
-        path: ~/.ccache
+        path: ~/.cache/ccache
         key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
         restore-keys: ${{ env.CCACHE_KEY }}-
     - name: ccache reset counters
