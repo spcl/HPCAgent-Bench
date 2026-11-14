@@ -33,7 +33,8 @@ wherever numpy runs, without the harness stack.
 
 import math
 import types
-from typing import NamedTuple
+from collections.abc import Callable, Sequence
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -41,12 +42,14 @@ __all__ = [
     "STRICT_CHUNK",
     "L2Sums",
     "SignMismatches",
+    "SpanMap",
     "StrictSmall",
     "finite_l2_norm",
     "finite_peak",
     "l2_reason",
     "l2_sums",
     "sign_mismatches",
+    "serial_spans",
     "sign_reason",
     "strict_small_reason",
 ]
@@ -58,6 +61,15 @@ class StrictSmall(NamedTuple):
 
     sign_margin: float | None
     l2_factor: float
+
+
+#: How a chunked pass runs ``work`` over its slices: the results in slice order.
+type SpanMap = Callable[[Sequence[slice], Callable[[slice], Any]], list[Any]]
+
+
+def serial_spans(spans: Sequence[slice], work: Callable[[slice], Any]) -> list[Any]:
+    """``work`` on every slice, in order, on the calling thread."""
+    return [work(span) for span in spans]
 
 
 #: Elements per slice of the chunked passes, matching the comparator's own working set
@@ -216,6 +228,7 @@ def strict_small_reason(
     inherited: float = 0.0,
     xp: types.ModuleType = np,
     chunk: int = STRICT_CHUNK,
+    over: SpanMap = serial_spans,
 ) -> str | None:
     """Why ``val`` fails the strict small-element gate against ``ref``, or ``None``.
 
@@ -237,7 +250,8 @@ def strict_small_reason(
     ``rounding_scale``): ``growth * ||sources||_2``, the comparator's floor formula with the sources' norm for the
     output's own peak. The L2 error must hold within ``l2_factor * (rtol * ||ref||_2 + inherited)``; ``0.0`` (an
     output with no declared sources) is the plain relative bound.
-    ``xp`` is the operands' array module (numpy, or cupy on a device grade).
+    ``xp`` is the operands' array module (numpy, or cupy on a device grade). ``over`` runs each chunked pass over
+    its slices, in order (the comparator's threaded ``over_spans``); the sums fold in slice order whatever it is.
 
     Complex elements are checked componentwise: the real and imaginary parts each meet the sign floor
     and agree in sign on their own (the comparator's +-Inf sign check convention), so a rounding-sized
@@ -258,29 +272,33 @@ def strict_small_reason(
     if not ((sign_margin is None or sign_margin > 0) and l2_factor > 0):
         raise ValueError(f"sign_margin (None or > 0) and l2_factor (> 0), got {sign_margin!r}, {l2_factor!r}")
     step = max(int(chunk), 1)
-    starts = range(0, int(rf.size), step)
+    spans = [slice(start, start + step) for start in range(0, int(rf.size), step)]
     # The squares in units of the whole output's finite inf-norm: a first pass, then the sums.
-    unit = max((finite_peak(rf[start : start + step], vf[start : start + step], xp) for start in starts), default=0.0)
+    unit = max(over(spans, lambda span: finite_peak(rf[span], vf[span], xp)), default=0.0)
     unit = unit if unit > 0.0 else 1.0
     sums = L2Sums(0.0, 0.0, 0.0)
-    for start in starts:
-        chunk_e, chunk_a = rf[start : start + step], vf[start : start + step]
-        sums = sums.plus(l2_sums(chunk_e, chunk_a, rtol=rtol, band_atol=band_atol, xp=xp, unit=unit))
+    for part_sums in over(
+        spans, lambda span: l2_sums(rf[span], vf[span], rtol=rtol, band_atol=band_atol, xp=xp, unit=unit)
+    ):
+        sums = sums.plus(part_sums)
     reason = l2_reason(sums, rtol=rtol, l2_factor=l2_factor, inherited=inherited, unit=unit)
     if reason is not None or sign_margin is None or sums.scale == 0.0:
         return reason
     threshold = sign_margin * (float(growth) if growth is not None else _dtype_eps(r.dtype)) * sums.scale
     signs = SignMismatches(0, -1)
     complex_inputs = bool(np.iscomplexobj(rf))
-    for start in starts:
-        part = sign_mismatches(
-            rf[start : start + step],
-            vf[start : start + step],
+    parts = over(
+        spans,
+        lambda span: sign_mismatches(
+            rf[span],
+            vf[span],
             threshold=threshold,
             rtol=rtol,
             band_atol=band_atol,
             complex_inputs=complex_inputs,
             xp=xp,
-        )
-        signs = signs.plus(part, start)
+        ),
+    )
+    for span, part in zip(spans, parts, strict=True):
+        signs = signs.plus(part, span.start)
     return sign_reason(signs, total=int(rf.size), threshold=threshold, allowed=allowed_sign_mismatches)

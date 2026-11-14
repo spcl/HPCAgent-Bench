@@ -434,6 +434,7 @@ def compare_arrays(
                 growth=growth,
                 inherited=0.0 if source_norm is None else growth * source_norm,
                 xp=xp,
+                over=lambda spans, work: over_spans(spans, work, xp),
             )
             if reason is not None:
                 return ArrayVerdict(False, float("inf"), reason)
