@@ -21,6 +21,10 @@ def test_the_rendered_protocol_and_a_packets_mode_pass_and_any_other_value_is_re
     assert "AGENT_MAX_TOKENS=240000000, experiments.toml 50000000" in env_spec.staged_refusal(
         raised, "llrblind:qwen38", {}
     )
+    # a packet (a plugin's included) sets the submission mode only, never a limit
+    assert "AGENT_MAX_TOKENS=240000000, experiments.toml 50000000" in env_spec.staged_refusal(
+        raised, "llrblind:qwen38", {"AGENT_MAX_TOKENS": "240000000"}
+    )
 
 
 def test_a_deadline_that_cuts_the_wall_clock_is_refused_at_staging(tmp_path: pathlib.Path) -> None:
