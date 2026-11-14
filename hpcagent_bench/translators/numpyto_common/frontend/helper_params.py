@@ -268,7 +268,11 @@ def bound_names(pnames: list[str], args: Sequence[ast.expr], params: set[str]) -
 
 
 def rename_shadowing_bindings(
-    hfn: ast.FunctionDef, args: Sequence[ast.expr], owner_fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]
+    hfn: ast.FunctionDef,
+    args: Sequence[ast.expr],
+    owner_fn: ast.FunctionDef,
+    arr_by: dict[str, ArrayDesc],
+    held: set[str] | None = None,
 ) -> None:
     """Rename each parameter or local of ``hfn`` that shares a name with one of its CALLER's names.
 
@@ -284,11 +288,15 @@ def rename_shadowing_bindings(
     ABI. A parameter the call binds to the caller name it shares means the same thing on both sides.
 
     Only names an extent can be spelled in count: an array is never one, so neither the caller's
-    arrays nor the helper's array parameters are renamed.
+    arrays nor the helper's array parameters are renamed. ``held``, when the caller passes it, is the
+    set of names the call site holds (the extent chase has it), so no caller name is re-resolved.
     """
     arg_shapes = [resolve_array_ref(owner_fn, arg, arr_by) for arg in args]
-    caller = {a.arg for a in owner_fn.args.args} | set(collect_assigned_names(owner_fn.body))
-    caller = {n for n in caller if resolve_array_ref(owner_fn, ast.Name(id=n, ctx=ast.Load()), arr_by) is None}
+    if held is None:
+        caller = {a.arg for a in owner_fn.args.args} | set(collect_assigned_names(owner_fn.body))
+        caller = {n for n in caller if resolve_array_ref(owner_fn, ast.Name(id=n, ctx=ast.Load()), arr_by) is None}
+    else:
+        caller = held - set(arr_by)
     for resolved in arg_shapes:
         if resolved is not None:
             caller.update(ident for dim in resolved[0] for ident in DIM_IDENT_RE.findall(str(dim)))

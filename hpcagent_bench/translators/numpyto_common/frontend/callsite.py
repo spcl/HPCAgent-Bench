@@ -92,6 +92,9 @@ def sole_local_binding(hfn: ast.FunctionDef, name: str) -> ast.expr | None:
     ``hfn``'s OWN scope only. A nested def is a separate scope that may reuse the name -- resnet101
     binds ``oh`` in ``_conv2d`` and again in the 1x1 helper nested inside it -- and an ``ast.walk``
     counts both, calls the name ambiguous, and refuses a call the caller could make.
+
+    A tuple unpack of a tuple binds each name to its own element (``kd, kh, kw = k, k, k`` in
+    convt3d_bn_avgpool_avgpool's pool); any other unpack binds it to nothing the caller can name.
     """
     found: list[ast.expr] = []
     for node in scope_nodes(hfn):
@@ -99,6 +102,14 @@ def sole_local_binding(hfn: ast.FunctionDef, name: str) -> ast.expr | None:
             target = node.targets[0]
             if isinstance(target, ast.Name) and target.id == name:
                 found.append(node.value)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                at = [i for i, elt in enumerate(target.elts) if isinstance(elt, ast.Name) and elt.id == name]
+                if not at:
+                    continue
+                value = node.value
+                if not (isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts)):
+                    return None
+                found.extend(value.elts[i] for i in at)
         elif isinstance(node, (ast.AugAssign, ast.For)):
             bound = node.target
             if isinstance(bound, ast.Name) and bound.id == name:

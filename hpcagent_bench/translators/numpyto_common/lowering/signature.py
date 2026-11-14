@@ -255,9 +255,14 @@ def helper_returns_int(hkir: KernelIR) -> bool:
     ``_select_bin`` returns the bin index it accumulated, so a literal-only test typed the
     Fortran dummy REAL(8) while the caller's actual is the INTEGER(8) it indexes bins with --
     gfortran rejects the call, and the C leg returned a double used as a subscript.
+
+    An integer PARAMETER the body never rebinds is an integer too: ``_ceil_div(a, b)`` returning
+    ``-(-a // b)`` over two int64 arguments came back REAL(8), and ``max(0, <that>)`` mixed kinds.
     """
     rets = [n.value for n in walk_nodes(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
-    return bool(rets) and all(integer_valued_expression(v, hkir.tree) for v in rets)
+    params = {s.name for s in hkir.symbols} | {s.name for s in hkir.scalars if dtypes.is_integer(s.dtype)}
+    assumed = frozenset(n for n in params if not integer_bindings(hkir.tree, n))
+    return bool(rets) and all(integer_valued_expression(v, hkir.tree, assumed) for v in rets)
 
 
 def retype_int_helper_scalars(helper: KernelIR) -> None:

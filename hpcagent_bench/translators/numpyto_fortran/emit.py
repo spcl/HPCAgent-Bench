@@ -1062,7 +1062,7 @@ class FortranBodyEmitter(BaseEmitter):
             and fortran_safe(node.value.func.id) in self._helper_out
         ):
             name = fortran_safe(node.value.func.id)
-            call_args = [self.emit_expr(a) for a in node.value.args]
+            call_args = [self.emit_helper_arg(a) for a in node.value.args]
             # Coerced for the same reason the X = h(...) path coerces: the dummy's declared KIND is
             # the authority, and a predicate actual is LOGICAL(4) against a logical(c_bool) dummy.
             types = self._helper_param_types.get(name)
@@ -1481,6 +1481,14 @@ class FortranBodyEmitter(BaseEmitter):
             rhs = f"({rhs}) + 1"
         return f"{indent}{lhs} = {unprotected(rhs)}"
 
+    def emit_helper_arg(self, node: ast.expr) -> str:
+        """One actual argument of a helper call. A whole array is passed as it is stored: the dummy
+        is declared in the array's own dtype, so an fp8 / bf16 array is never wrapped in the
+        promote a value READ takes (a scalar conversion applied to an array is a rank mismatch)."""
+        if isinstance(node, ast.Name) and node.id in self.array_shapes and node.id not in self._size1_arrays:
+            return node.id
+        return self.emit_expr(node)
+
     def emit_helper_call_assign(self, node: ast.Assign, target: ast.expr, indent: str) -> str:
         """``X = helper(args)`` with helper emitted as a subroutine taking its result through an
         out-param -> ``call helper(...)`` with X spliced into the result dummy's ABI slot (it sorts
@@ -1491,7 +1499,7 @@ class FortranBodyEmitter(BaseEmitter):
             raise NotImplementedError("a helper call assignment calls a named helper")
         name = fortran_safe(call.func.id)
         slot = self._helper_ret_slot[name]
-        call_args = [self.emit_expr(a) for a in call.args]
+        call_args = [self.emit_helper_arg(a) for a in call.args]
         call_args.insert(slot, self.emit_expr(target))
         # ABI-aligned with call_args now that the result sits in its slot; the result dummy is
         # intent(out) and must stay a bare name, so it is never wrapped.
@@ -3955,11 +3963,14 @@ def rename_helper_to_fortran_safe(hkir: KernelIR, siblings: list[KernelIR]) -> t
     """
     case_map = fortran_case_map(hkir)
     htree = copy.deepcopy(hkir.tree)
-    # Fortran-only IfExp->if/else hoist (see hoist_ifexp_stmts), same as the top-level kernel tree.
+    # The kernel tree's steps, in its order: tuple targets split, IfExp->if/else hoist (see
+    # hoist_ifexp_stmts), nested helper calls lifted, then the rename.
+    TupleTargetSplitter().visit(htree)
     htree.body, ifexp_temps = hoist_ifexp(htree.body)
     hcall_temps: dict[str, str] = {}
     htree.body = hoist_nested_helper_calls(htree.body, {h.kernel_name for h in siblings}, [0], hcall_temps)
-    FortranRenameTemps(case_map=case_map).visit(htree)
+    renamer = FortranRenameTemps(case_map=case_map)
+    renamer.visit(htree)
     ast.fix_missing_locations(htree)
 
     def safe(n: str) -> str:
@@ -3982,8 +3993,14 @@ def rename_helper_to_fortran_safe(hkir: KernelIR, siblings: list[KernelIR]) -> t
         symbols=r_symbols,
         input_args=[safe(p) for p in hkir.input_args],
         return_kind=r_return,
+        # A temp sized by an enclosing loop's iterator names the renamed DO variable (rebind_loop_tokens).
         zeros_locals={
-            safe(k): tuple(fortran_safe_token(t, case_map) for t in v) if v else v for k, v in hkir.zeros_locals.items()
+            safe(k): tuple(
+                rebind_loop_tokens(fortran_safe_token(t, case_map), renamer.marker_loop_scopes.get(safe(k))) for t in v
+            )
+            if v
+            else v
+            for k, v in hkir.zeros_locals.items()
         },
         zeros_fills={safe(k): v for k, v in hkir.zeros_fills.items()},
         reassign_shapes={
