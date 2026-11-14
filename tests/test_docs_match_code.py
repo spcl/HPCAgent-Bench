@@ -6,12 +6,12 @@ import argparse
 import dataclasses
 import pathlib
 import re
-import subprocess
 
 import pytest
 
 from hpcagent_bench import cli, config, modules, paths, prompt_build
 from hpcagent_bench.harness.prompts import PromptConfig
+from tests.tracked_files import tracked_files
 
 PROMPTS_DIR = paths.ROOT / "hpcagent_bench/harness/prompts"
 #: Every contributor doc: the README, docs/, experiments/, containers/ and the package's own docs. Skill pages
@@ -225,9 +225,7 @@ def test_every_documented_env_name_has_a_reader() -> None:
     """A documented ``HPCAGENT_BENCH_*`` variable is a config key's env name, a listed non-config name, or a
     name some tracked non-doc file uses; a documented prefix (``HPCAGENT_BENCH_MPI_GANG_*``) prefixes one. A
     renamed or removed variable otherwise leaves the docs telling an operator to set a name nothing reads."""
-    tracked = subprocess.run(
-        ["git", "ls-files"], cwd=paths.ROOT, capture_output=True, text=True, check=True
-    ).stdout.split()
+    tracked = tracked_files(paths.ROOT)
     used: set[str] = set()
     for relative in tracked:
         path = paths.ROOT / relative

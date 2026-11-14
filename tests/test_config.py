@@ -5,7 +5,6 @@ that take their defaults from it."""
 
 import pathlib
 import re
-import subprocess
 import sys
 from collections.abc import Callable
 from typing import get_args
@@ -32,6 +31,7 @@ from hpcagent_bench.harness import (
     timing,
 )
 from hpcagent_bench.harness.requests_api import Location
+from tests.tracked_files import tracked_files
 
 REPO = paths.ROOT
 
@@ -143,7 +143,7 @@ def test_get_of_an_unknown_key_raises() -> None:
 
 def test_every_env_name_in_the_repository_is_a_key_or_listed_as_non_config() -> None:
     """A launcher or layer that exports a name the model does not know would stop every config read."""
-    tracked = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
+    tracked = tracked_files(REPO)
     names: set[str] = set()
     for relative in tracked:
         path = REPO / relative
