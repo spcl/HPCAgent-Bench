@@ -153,7 +153,8 @@ def bind_derived_symbols(sdfg: "SDFG", recipes: Sequence[tuple[str, str]], abi: 
         if name in abi:
             continue
         sdfg.replace_dict({name: f"({recipe})"})
-        sdfg.symbols.pop(name, None)
+        if name in sdfg.symbols:
+            sdfg.remove_symbol(name)
         bound.append(name)
     return tuple(reversed(bound))
 

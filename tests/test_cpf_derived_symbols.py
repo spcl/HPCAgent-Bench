@@ -21,11 +21,13 @@ def sized_sdfg() -> dace.SDFG:
     sdfg.add_array("x", ["N"], dace.float64)
     sdfg.add_transient("h", ["k"], dace.float64)
     state = sdfg.add_state()
+    state.add_mapped_tasklet("fill", {"i": "0:k"}, {}, "out = 1.0", {"out": dace.Memlet("h[i]")}, external_edges=True)
     state.add_mapped_tasklet(
-        "fill", {"i": "0:k"}, {}, "out = 1.0", {"out": dace.Memlet("h[i]")}, external_edges=True
-    )
-    state.add_mapped_tasklet(
-        "copy", {"i": "0:N"}, {"inp": dace.Memlet("h[0]")}, "out = inp", {"out": dace.Memlet("x[i]")},
+        "copy",
+        {"i": "0:N"},
+        {"inp": dace.Memlet("h[0]")},
+        "out = inp",
+        {"out": dace.Memlet("x[i]")},
         external_edges=True,
     )
     return sdfg
