@@ -121,6 +121,11 @@ def is_call_to(stmt: ast.stmt, name: str) -> bool:
     )
 
 
+def is_docstring(stmt: ast.stmt) -> bool:
+    """A bare constant expression: no code."""
+    return isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
+
+
 def is_sync(stmt: ast.stmt) -> bool:
     return is_call_to(stmt, SYNC)
 
@@ -321,7 +326,7 @@ class Rewriter:
         """What only the lead thread runs: a compound statement, an array store, a call statement. A scalar
         assignment runs on every thread."""
         if isinstance(stmt, ast.Expr):
-            return not isinstance(stmt.value, ast.Constant)
+            return not is_docstring(stmt)
         if statement_blocks(stmt):
             return True
         if isinstance(stmt, ast.Assign):
@@ -440,8 +445,9 @@ def kernelize(kir: KernelIR) -> Kernelized:
     # the body orders nothing.
     while body and (is_sync(body[-1]) or is_call_to(body[-1], LOAD)):
         body.pop()
-    if body and is_sync(body[0]):
-        body.pop(0)
+    first = next((k for k, stmt in enumerate(body) if not is_docstring(stmt)), None)
+    if first is not None and is_sync(body[first]):
+        body.pop(first)
     fn.body = body or [ast.Pass()]
     ast.fix_missing_locations(fn)
     return Kernelized(hoisted=hoisted, parallel=bool(chosen), frame_slots=max(rewriter.slots, 1))
