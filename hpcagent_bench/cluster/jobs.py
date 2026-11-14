@@ -130,24 +130,15 @@ def task_slots() -> int:
     return max(1, len(native_call.numa_nodes(cores)))
 
 
-#: Where the NVIDIA driver lists its GPUs, and the KFD topology (one node per CPU or AMD GPU agent).
-NVIDIA_GPUS_DIR = pathlib.Path("/proc/driver/nvidia/gpus")
-KFD_NODES_DIR = pathlib.Path("/sys/class/kfd/kfd/topology/nodes")
+#: Where the NVIDIA driver lists its GPUs, and the KFD topology (:func:`osinfo.driver_gpu_count`).
+NVIDIA_GPUS_DIR = osinfo.NVIDIA_GPUS_DIR
+KFD_NODES_DIR = osinfo.KFD_NODES_DIR
 
 
 def node_has_gpus() -> bool:
     """Whether a GPU driver lists a device on this node: read from procfs/sysfs, never by loading a runtime (a slot
     worker forked from this process must not inherit one)."""
-    if NVIDIA_GPUS_DIR.is_dir() and any(NVIDIA_GPUS_DIR.iterdir()):
-        return True
-    for properties in KFD_NODES_DIR.glob("*/properties"):
-        try:
-            fields = dict(line.split(maxsplit=1) for line in properties.read_text().splitlines() if " " in line)
-        except OSError:
-            continue
-        if fields.get("simd_count", "0").strip() != "0":
-            return True
-    return False
+    return osinfo.driver_gpu_count(NVIDIA_GPUS_DIR, KFD_NODES_DIR) > 0
 
 
 def export_slots(environ: MutableMapping[str, str], slots: int) -> None:
