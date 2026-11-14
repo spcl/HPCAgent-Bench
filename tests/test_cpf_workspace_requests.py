@@ -10,6 +10,7 @@ import pytest
 from hpcagent_agent.driver import agent_driver
 from hpcagent_agent.tools import http_json
 
+from hpcagent_bench import fuzz
 from hpcagent_bench.cpf import bridge as cpf_bridge
 from hpcagent_bench.cpf import cache as cpf_cache
 from hpcagent_bench.cpf import prerender as cpf_prerender
@@ -44,6 +45,14 @@ def test_the_size_is_spelled_over_the_binding_names() -> None:
     """The SDFG speaks the emitted spelling (``gamma_`` for a manifest ``gamma``, a sympy name); the judge binds the manifest's."""
     binding = scalar_binding("N", "gamma")
     assert cpf_bridge.binding_workspace_bytes("8*N*gamma_ + 64", binding, {"gamma": "gamma_"}) == "8*N*gamma + 64"
+
+
+def test_an_integer_square_root_size_is_spelled_and_evaluated_exactly() -> None:
+    """guarded_dep_sqrt_split sizes a workspace by DaCe's int_sqrt; the judge evaluates the size the bridge spells."""
+    spelled = cpf_bridge.binding_workspace_bytes("8*int_sqrt(N - 1) + 8", scalar_binding("N"), {})
+    assert spelled == "8 * isqrt(N - 1) + 8"
+    assert [fuzz.eval_int(spelled, {"N": n}) for n in (1, 2, 17, 10**12 + 1)] == [8, 16, 40, 8 * 10**6 + 8]
+    assert fuzz.eval_int("isqrt(N - 2)", {"N": 1}) == -1
 
 
 def test_a_form_without_a_workspace_requests_none() -> None:

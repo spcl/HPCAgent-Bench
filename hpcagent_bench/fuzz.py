@@ -10,6 +10,7 @@ import bisect
 import enum
 import functools
 import logging
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, TypeGuard
@@ -309,7 +310,7 @@ class Sentinel(Coded):
 _UNRESOLVED: Final = Sentinel.UNRESOLVED
 MAX_RESAMPLE = 1000
 #: The only functions :func:`safe_eval` may call.
-_EVAL_FUNCS = frozenset({"min", "max", "int", "abs", "round", "len", "bool", "float"})
+_EVAL_FUNCS = frozenset({"min", "max", "int", "abs", "round", "len", "bool", "float", "isqrt"})
 
 #: Permitted binary / unary / comparison operators; anything else is rejected in :func:`safe_eval`.
 BINOPS: tuple[type[ast.operator], ...] = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)
@@ -389,6 +390,12 @@ def apply_func(name: str, args: list[FuzzValue], expr: str) -> FuzzValue:
         return float(first) if isinstance(first, str) else float(as_number(first, expr))
     if name == "int":
         return int(first) if isinstance(first, str) else int(as_number(first, expr))
+    if name == "isqrt":
+        # DaCe's int_sqrt (a CPF workspace size): the floor of sqrt(n), exact on every integer; -1 for a negative n.
+        number = as_number(first, expr)
+        if not isinstance(number, int) or isinstance(number, bool):
+            raise TypeError(f"isqrt() of a non-integer in {expr!r}: {number!r}")
+        return math.isqrt(number) if number >= 0 else -1
     raise ValueError(f"disallowed call in {expr!r}")
 
 
