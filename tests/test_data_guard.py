@@ -7,6 +7,7 @@ import hashlib
 import os
 import pathlib
 import subprocess
+import tarfile
 from collections.abc import Iterator
 
 import pytest
@@ -252,3 +253,63 @@ def test_unsealed_lifts_the_seal_for_one_write_and_seals_again(finished_job: pat
     with data_guard.unsealed(finished_job):
         pass
     assert os.access(finished_job, os.W_OK)
+
+
+def test_archive_tars_the_workspaces_and_keeps_what_a_regrade_a_merge_and_an_audit_read(
+    finished_job: pathlib.Path,
+) -> None:
+    """A merged, sealed job's agent workspace and worker scratch move into one verified tar; the agent's ``lib``, a
+    library a grade names (outside ``lib``), the served task copies, the worker's own records and logs and Claude's
+    session transcripts stay, with the library digest a regrade checks unchanged; the run is sealed again. With
+    ``MERGE_FAILED`` beside the DB nothing moves."""
+    from hpcagent_bench.harness import sandbox
+
+    run = finished_job
+    agent = run / "shared" / "agent-0"
+    worker = run / "agents" / "node-0" / "problem-0-worker-0"
+    archived = {
+        agent / "gemm.c": "the last saved answer",
+        agent / "build" / "obj" / "gemm.o": "object",
+        worker / "home" / ".claude" / "file-history" / "s" / "v1": "backup",
+        worker / "home" / ".cache" / "pip" / "wheel": "cache",
+    }
+    kept = {
+        agent / "bin" / "libgraded.so": "graded library",
+        run / "shared" / "tasks" / "gemm" / "gemm_numpy.py": "served baseline",
+        worker / "tokens.json": "{}",
+        worker / "claude.log": "transcript",
+        worker / "home" / ".claude" / "projects" / "p" / "session.jsonl": "session",
+    }
+    for path, text in {**archived, **kept}.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    (agent / "latest").symlink_to("gemm.c")
+    with contextlib.closing(results_db.open_db(run / "results.db")) as conn:
+        results_db.ensure_setup(conn, results_db.Setup("s", "c", "cpu"))
+        episode = results_db.ensure_episode(conn, "s", "s.n0.p0.w0", 123)
+        stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "task_hash": "test-task"}
+        grade, _ = results_db.add_grade(conn, episode, "gemm", "submit", ts_ms=1, values=stamp)
+        library = f"{sandbox.DEFAULT_SHARED_DIR}/agent-0/bin/libgraded.so"
+        conn.execute("UPDATE grades SET library = ? WHERE id = ?", (library, grade))
+        conn.commit()
+    digest = sandbox.library_digest(agent)
+    (run / "MERGE_FAILED").write_text("")
+    with pytest.raises(SystemExit, match="no merged"):
+        data_guard.archive(run)
+    (run / "MERGE_FAILED").unlink()
+    data_guard.seal(run, writable=False)
+
+    assert data_guard.archive(run, dry_run=True) == data_guard.archive(run) > len(archived)
+
+    with tarfile.open(run / "workspaces.tar") as tar:
+        for path, text in archived.items():
+            member = tar.extractfile(path.relative_to(run).as_posix())
+            assert member is not None and member.read().decode() == text
+        assert tar.getmember("shared/agent-0/latest").linkname == "gemm.c"
+        assert not {"shared/agent-0/lib/libtuned.so", "shared/agent-0/bin/libgraded.so"} & set(tar.getnames())
+    assert not any(path.exists() for path in archived) and not (agent / "latest").is_symlink()
+    assert all(path.read_text() == text for path, text in kept.items())
+    assert (agent / "lib" / "libtuned.so").is_file() and sandbox.library_digest(agent) == digest
+    assert not os.access(run, os.W_OK) and not os.access(run / "workspaces.tar", os.W_OK)
+    with pytest.raises(SystemExit, match="exists"):
+        data_guard.archive(run)
