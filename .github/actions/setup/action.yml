@@ -251,10 +251,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # The `cpu` extra is the complete install (frameworks, judge, agent clients, dev tools), torch from
-        # PyTorch's CPU index and dace at the pinned commit, exactly as uv.lock records them.
+        # Everything the tests import: the `cpu` extra (frameworks, judge, agent clients, dev tools; torch from
+        # PyTorch's CPU index, dace at the pinned commit), the `gym` extra and the `harbor` group, exactly as uv.lock
+        # records them. A missing one turns its tests into silent skips.
         # shellcheck disable=SC2086 -- sync-args is a flag list
-        uv sync --frozen --extra cpu --python "$(command -v python)" ${{ inputs.sync-args }}
+        uv sync --frozen --extra cpu --extra gym --group harbor --all-packages --python "$(command -v python)" ${{ inputs.sync-args }}
         echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
         echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
         # dace must be the pinned commit: a dependency that caps dace would otherwise swap in a PyPI release.
