@@ -91,8 +91,9 @@ def test_pin_threads_pins_to_one_thread_per_physical_core_when_enabled(monkeypat
     [
         pytest.param("24", 1, 0, 24, False, id="one-slot-full-width"),
         pytest.param("24", 1, 0, 1, True, id="one-slot-pinned-to-one-core"),
-        pytest.param("96", 4, 2, 24, False, id="four-slots-quarter-each"),
-        pytest.param("96", 4, 2, 12, True, id="four-slots-half-a-quarter"),
+        pytest.param("24", 4, 2, 24, False, id="four-slots-quarter-each"),
+        pytest.param("24", 4, 2, 12, True, id="four-slots-half-a-quarter"),
+        pytest.param("96", 4, 2, 24, True, id="four-slots-launched-over-all-four"),
     ],
 )
 def test_a_timed_child_narrower_than_its_slot_is_refused(
