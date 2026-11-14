@@ -90,7 +90,6 @@ __all__ = [
     "SET_MEMPOLICY_SYSCALL",
     "SETTLE_DECLS",
     "SPILL_BYTES",
-    "TEAM_CALLS",
     "THREAD_CREATION_FAILURES",
     "TIMED_DONE_MARKER",
     "TIMED_REP_S",
@@ -754,14 +753,6 @@ def check_slot_cores() -> None:
         )
 
 
-#: Each of :data:`flags.THREADED_RUNTIMES`' team getter and setter: its team is fixed when it loads.
-TEAM_CALLS: Mapping[str, tuple[str, str]] = {
-    "libopenblas": ("openblas_get_num_threads", "openblas_set_num_threads"),
-    "libgomp": ("omp_get_max_threads", "omp_set_num_threads"),
-    "libomp": ("omp_get_max_threads", "omp_set_num_threads"),
-}
-
-
 def check_loaded_team(team: int) -> None:
     """Team == slot: every threaded runtime already loaded in this child (OpenMP, BLAS) runs ``team`` threads, the
     slot's cores (fewer for a measurement that asks for fewer), before the first call; one that cannot is refused.
@@ -771,17 +762,16 @@ def check_loaded_team(team: int) -> None:
     and on its slots too (a test run, a local judge) loads wider: the team is narrowed to the slot's, since a
     team wider than the slot oversubscribes its cores and libgomp, which sized its spin throttle on the judge's
     whole mask, spins at each barrier through the scheduler's slices. A narrower one cannot be raised: in a forked
-    child of a used pool that hangs."""
-    for path in flags.loaded_threaded_runtimes():
-        runtime = ctypes.CDLL(str(path))
-        calls = next(calls for prefix, calls in TEAM_CALLS.items() if path.name.startswith(prefix))
-        get, put = (runtime[name] for name in calls)  # ctypes looks the symbol up by name
-        if get() > team:
-            put(team)
-        if (runs := get()) != team:
+    child of a used pool that hangs. A runtime built for fewer threads than the slot (OpenBLAS's ``NUM_THREADS``)
+    runs all it can, the team no launch can widen."""
+    for runtime in flags.loaded_threaded_runtimes():
+        if runtime.team() > team:
+            runtime.set_team(team)
+        want = min(team, runtime.cap or team)
+        if (runs := runtime.team()) != want:
             raise OpenMPLaunchEnvError(
-                f"{path.name}, loaded before the grade, runs {runs} threads, not the slot's {team}: its parent "
-                f"loaded it with {LAUNCH_WIDTH_ENV} below the grading width"
+                f"{runtime.path.name}, loaded before the grade, runs {runs} threads, not the slot's {want}: its "
+                f"parent loaded it with {LAUNCH_WIDTH_ENV} below the grading width"
             )
 
 

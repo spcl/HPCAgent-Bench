@@ -48,7 +48,7 @@ __all__ = [
     "NATIVE_LOW_OPT",
     "NO_SCALE",
     "NUMBA_LOW_OPT",
-    "ONE_THREAD_SETTERS",
+    "ONE_THREAD_ENV",
     "ORACLE_NUMBA_ENV",
     "PLUTO",
     "PLUTO_EXTRA_FLAGS",
@@ -1170,21 +1170,18 @@ def run_dace_backend(
     return "FAIL:crash:" + (proc.stderr or proc.stdout)[-160:].replace("\n", " ")
 
 
-#: The thread-count setters of the threaded runtimes a forked child can inherit.
-ONE_THREAD_SETTERS = ("openblas_set_num_threads", "omp_set_num_threads")
+#: The thread counts a runtime reads when it loads, each 1 in the oracle's forked child (a pthread OpenBLAS ignores
+#: OMP_NUM_THREADS); numba's pool is sized in its own leg (:data:`ORACLE_NUMBA_ENV`).
+ONE_THREAD_ENV = dict.fromkeys(("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "BLIS_NUM_THREADS"), "1")
 
 
 def pin_one_thread() -> None:
-    """Run every BLAS and OpenMP runtime mapped into this forked child on one thread: a parallel region in a forked
-    child of the parent's pool waits forever on threads the fork did not copy."""
-    for path in flags.loaded_threaded_runtimes():
-        lib = ctypes.CDLL(str(path))
-        for name in ONE_THREAD_SETTERS:
-            try:
-                setter = lib[name]  # a CDLL resolves symbols on lookup
-            except AttributeError:
-                continue  # this runtime has no such setter
-            setter(1)
+    """Run every BLAS and OpenMP runtime of this forked child on one thread: one mapped already (a parallel region in
+    a forked child of the parent's pool waits forever on threads the fork did not copy) and one the call loads (an
+    fftw+openmp kernel's libgomp would size its pool off the parent's width, a whole slot per oracle child)."""
+    os.environ.update(ONE_THREAD_ENV)
+    for runtime in flags.loaded_threaded_runtimes():
+        runtime.set_team(1)
 
 
 def invoke_isolated(
