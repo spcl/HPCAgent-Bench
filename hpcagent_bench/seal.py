@@ -384,6 +384,9 @@ def enter(plan: SealPlan) -> None:
     except OSError as exc:
         raise seal_worker.SealError(f"seal: cannot drop to a nested user namespace: {exc}") from exc
     os.chdir(plan.workdir if pathlib.Path(plan.workdir).is_dir() else "/")
+    # cupy keeps the kernels it compiles (a device input draw's RNG) under $CUPY_CACHE_DIR, else ~/.cupy, which the
+    # read-only root refuses: the cache home is this child's private, writable cover.
+    os.environ["CUPY_CACHE_DIR"] = os.path.join(cache_home(), "cupy")
 
 
 def scrub_environment() -> None:
