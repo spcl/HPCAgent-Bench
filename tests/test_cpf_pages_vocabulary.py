@@ -9,7 +9,7 @@ from dace.codegen.targets.experimental_cuda_helpers import scope_strategies
 from dace.transformation.passes import loop_specialization as guards
 from dace.transformation.passes.canonicalize import annotate_loop_kinds as kinds
 from dace.transformation.passes.canonicalize import segment_confined_loops as segments
-from dace.transformation.passes.cpu_specialization import sequentialize_small_axes as cpu_costs
+from dace.transformation.passes.cpu_specialization import decide_cpu_parallel_axes as cpu_costs
 from dace.transformation.passes.gpu_specialization import block_tile_kernels, promote_warp_tiles
 
 from hpcagent_bench import modules, paths
