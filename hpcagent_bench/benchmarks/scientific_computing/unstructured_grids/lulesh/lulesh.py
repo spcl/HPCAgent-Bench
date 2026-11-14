@@ -135,8 +135,13 @@ def kernel_arguments(
     zl = z[nodelist]
     volo = _calc_elem_volume(xl, yl, zl).astype(datatype)
     elemMass = volo.copy()
+    # One corner at a time, so no two adds of a step hit one node: a device add.at is an atomic scatter whose sum
+    # order varies. The corner order 6, 7, 5, 4, 2, 3, 1, 0 visits each node's elements in ascending element index,
+    # the order of the host add.at, so both devices produce the same bytes.
     nodalMass = xp.zeros(numNode, dtype=datatype)
-    xp.add.at(nodalMass, nodelist, (volo / 8.0)[:, None] * xp.ones((1, 8), dtype=datatype))
+    eighth = volo / 8.0
+    for corner in (6, 7, 5, 4, 2, 3, 1, 0):
+        nodalMass[nodelist[:, corner]] += eighth
 
     # Node-centred state
     xd = xp.zeros(numNode, dtype=datatype)
