@@ -6,7 +6,7 @@ nothing, that hands no array to a helper writing it, and that runs inside no oth
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import ALL_BLOCK_FIELDS, walk_nodes
 from hpcagent_bench.translators.numpyto_common.parallelism import (
     bare_store_names,
     index_exprs,
@@ -45,6 +45,7 @@ __all__ = [
     "prange_safe",
     "range_loop",
     "scalar_literal",
+    "statement_blocks",
     "unaliased",
     "unit_step",
     "private_scalars",
@@ -186,6 +187,17 @@ def range_loop(node: ast.AST) -> bool:
     )
 
 
+def statement_blocks(stmt: ast.stmt) -> list[list[ast.stmt]]:
+    """The statement lists ``stmt`` holds: its bodies, branches and ``finally`` (:data:`ALL_BLOCK_FIELDS`), each
+    ``except`` handler's body and each ``match`` case's."""
+    blocks = [value for field, value in ast.iter_fields(stmt) if field in ALL_BLOCK_FIELDS and isinstance(value, list)]
+    if isinstance(stmt, (ast.Try, ast.TryStar)):
+        blocks += [handler.body for handler in stmt.handlers]
+    if isinstance(stmt, ast.Match):
+        blocks += [case.body for case in stmt.cases]
+    return blocks
+
+
 def leaves_the_loop(loop: ast.For) -> bool:
     """A ``break`` / ``continue`` of ``loop`` itself or a ``return`` anywhere in its body: a prange body is one
     iteration with no way out."""
@@ -195,12 +207,8 @@ def leaves_the_loop(loop: ast.For) -> bool:
             if isinstance(stmt, ast.Return) or (own and isinstance(stmt, (ast.Break, ast.Continue))):
                 return True
             inner = own and not isinstance(stmt, (ast.For, ast.While))
-            for block in (getattr(stmt, "body", None), getattr(stmt, "orelse", None), getattr(stmt, "finalbody", None)):
-                if isinstance(block, list) and walk(block, inner):
-                    return True
-            for handler in getattr(stmt, "handlers", []):
-                if walk(handler.body, inner):
-                    return True
+            if any(walk(block, inner) for block in statement_blocks(stmt)):
+                return True
         return False
 
     return walk(loop.body, True) or walk(loop.orelse, False)
@@ -424,12 +432,8 @@ def outermost_safe_loops(
         if isinstance(stmt, ast.For) and prange_safe(stmt, fn, ranks, mutates, params):
             found.append(stmt)
             continue
-        for field in ("body", "orelse", "finalbody"):
-            block = getattr(stmt, field, None)
-            if isinstance(block, list):
-                found += outermost_safe_loops(block, fn, ranks, mutates, params)
-        for handler in getattr(stmt, "handlers", []):
-            found += outermost_safe_loops(handler.body, fn, ranks, mutates, params)
+        for block in statement_blocks(stmt):
+            found += outermost_safe_loops(block, fn, ranks, mutates, params)
     return found
 
 
