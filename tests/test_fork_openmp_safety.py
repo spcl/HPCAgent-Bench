@@ -234,6 +234,7 @@ def test_pausing_is_safe_when_no_openmp_runtime_is_loaded() -> None:
 
 
 @pytest.mark.integration
+@isolated  # its poisoning region sets this process's team to POOL_THREADS: every later grade here would refuse
 def test_the_pause_drops_the_thread_count_for_the_default_runtime(tmp_path: pathlib.Path) -> None:
     """The DIRECT observable of tear-down -- not the weaker inference 'a forked child did not
     hang'. After a poisoning parallel region libgomp holds a thread per core; pause_openmp_pools()

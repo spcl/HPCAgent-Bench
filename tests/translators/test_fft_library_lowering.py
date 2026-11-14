@@ -3,6 +3,8 @@
 """A whole-array 1-D ``np.fft.fft``/``ifft`` lowers to one FFTW plan call on C, C++ and Fortran: the hoisted
 result temp stays complex and the Fortran marker survives renaming; a round trip matches numpy."""
 
+import ctypes
+import ctypes.util
 import os
 import pathlib
 import subprocess
@@ -11,12 +13,14 @@ import numpy as np
 import pytest
 
 from hpcagent_bench import languages
+from hpcagent_bench import numerical_oracle as no
 from hpcagent_bench.categories import Language
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 from hpcagent_bench.translators.numpyto_fortran.intrinsics import renders_natively as fortran_renders_natively
+from tests.own_process import isolated
 from tests.translators.op_oracle import assert_all_ok, native, parse_source, run_op
 
 NATIVE = ("c", "cpp", "fortran")
@@ -56,21 +60,16 @@ def fft_library_available(lang: str) -> bool:
     return bool(languages.library_build_flags(Language.parse(lang), ["fftw"])[1])
 
 
-#: 8388608 (fft_1d's own "M" preset, 2**23): a standalone (non-pytest) ctypes call into this
-#: exact fft_op hangs past a 480s timeout when
-#: OMP_NUM_THREADS/OPENBLAS_NUM_THREADS/MKL_NUM_THREADS/BLIS_NUM_THREADS are all unset (see
-#: numerical_oracle.py's setdefault block, and test_thread_caps_are_set_before_any_native_call
-#: below); under pytest, with those capped, the same call runs in well under a second.
-def test_thread_caps_are_set_before_any_native_call() -> None:
-    """Guard against the fft_1d hang: importing ``op_oracle`` (which imports
-    ``numerical_oracle``, this module's own import above) must cap every one of OMP_NUM_THREADS /
-    MKL_NUM_THREADS / OPENBLAS_NUM_THREADS / BLIS_NUM_THREADS to 1 as a side effect, BEFORE any
-    ctypes call into a compiled .so runs. Without this, a fftw+openmp-linked or BLAS-linked kernel
-    and numpy's own bundled BLAS each size a thread pool off the visible core count while the
-    process's actual CPU affinity is much smaller, and real work sits under CFS throttling that
-    turns a ~13s call into something that never returns within any sane timeout."""
-    for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "BLIS_NUM_THREADS"):
-        assert os.environ.get(name) == "1", f"{name} not capped: {os.environ.get(name)!r}"
+#: 8388608 (fft_1d's own "M" preset, 2**23): a ctypes call into this exact fft_op on an fftw+openmp pool sized off
+#: the visible cores hangs past a 480s timeout; the oracle runs it in a forked child pinned to one thread.
+@pytest.mark.skipif(ctypes.util.find_library("gomp") is None, reason="libgomp required")
+@isolated  # it sets this process's team to 2: a later grade here would be refused
+def test_the_oracle_runs_its_native_call_on_one_thread() -> None:
+    """Guard against the fft_1d hang without a process-wide cap: the oracle's forked child runs every loaded OpenMP
+    and BLAS runtime on one thread, whatever width the parent loaded it at."""
+    gomp = ctypes.CDLL(ctypes.util.find_library("gomp"))
+    gomp.omp_set_num_threads(2)  # the parent's own width, wider than the child's
+    assert no.forked_status(lambda: str(gomp.omp_get_max_threads()), 60.0) == "1"
 
 
 @pytest.mark.parametrize("n", [16, 17, 97, 1024, 8388608])  # pow2 + non-pow2, small + past one radix
