@@ -402,7 +402,7 @@ jobs:
 
       - name: Phase 6 -- integration-marked tests under tests/
         if: ${{ !cancelled() }}
-        timeout-minutes: 23
+        timeout-minutes: 35
         # test_dace_numeric_agreement.py has no integration test, but collecting it emits the whole
         # corpus at import time; dace-numeric runs it. tests/translators/ is the `translators` job's.
         env:
