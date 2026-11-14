@@ -47,6 +47,7 @@ __all__ = [
     "require_parallelizable",
     "scalar_accumulators",
     "scalars_live_after",
+    "statements_after",
     "subscript_idx_safe",
     "written_arrays",
     "written_partition_consistent",
@@ -290,9 +291,18 @@ def scalars_live_after(root: ast.AST, node: ast.For) -> set[str]:
     "After" is everything that can run next inside the enclosing function: the rest of each block
     on the way up, and the whole body again of every enclosing loop (its next iteration). A loop
     that is not under ``root`` has nothing known after it, so nothing is reported."""
+    after = statements_after(root, node)
+    if after is None:
+        return set()
+    return {name for name in body_scalars(node) if reads_before_write(after, {name}, set())}
+
+
+def statements_after(root: ast.AST, node: ast.stmt) -> list[ast.stmt] | None:
+    """What can run after ``node`` inside the enclosing function (see :func:`scalars_live_after`), or ``None``
+    when ``node`` is not under ``root``."""
     path = enclosing_blocks(root, node)
     if path is None:
-        return set()
+        return None
     after: list[ast.stmt] = []
     for block, pos, owner in reversed(path):
         if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
@@ -303,7 +313,7 @@ def scalars_live_after(root: ast.AST, node: ast.For) -> set[str]:
             after += [ast.Expr(value=owner.test), *owner.body]
         elif isinstance(owner, (ast.For, ast.AsyncFor)):
             after += owner.body
-    return {name for name in body_scalars(node) if reads_before_write(after, {name}, set())}
+    return after
 
 
 def bare_axes(sub: ast.Subscript, idx: str) -> set[int]:
