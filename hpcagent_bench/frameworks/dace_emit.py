@@ -16,6 +16,7 @@ import dataclasses
 import importlib
 import os
 import pathlib
+import re
 import shlex
 from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any, Protocol
@@ -187,6 +188,23 @@ def emit_program_sources(
     return write_code_objects(objects, out_dir)
 
 
+#: The head of a GPU pair's ``.build`` unit: what the pair needs besides its two sources (:func:`build_needs`).
+BUILD_HEADER = (
+    "# {entry}: device pointers for the arrays, workspace bytes {workspace}, libraries {libraries}.\n"
+    "# The offload architecture is the emitting host's; on another GPU, run `dace emit` there.\n"
+)
+BUILD_HEADER_RE = re.compile(r"^# \S+: device pointers for the arrays, workspace bytes (.+), libraries (.+)\.$", re.M)
+
+
+def build_needs(build: str) -> tuple[str | None, tuple[str, ...]]:
+    """``(workspace bytes, libraries)`` a ``.build`` unit's :data:`BUILD_HEADER` names; ``None`` for no workspace."""
+    found = BUILD_HEADER_RE.search(build)
+    if found is None:
+        raise ValueError("a GPU pair's .build unit carries no build header")
+    workspace, libraries = found.groups()
+    return (None if workspace == "0" else workspace), (() if libraries == "none" else tuple(libraries.split(", ")))
+
+
 def device_units(spec: "BenchSpec", sdfg: "SDFG", target: str) -> list[Unit]:
     """The offloaded ``sdfg`` as the self-contained pair DaCe renders (``dace.codegen.cpf``, no DaCe runtime): the
     host unit ``<name>.cpp``, whose entry is the judge's C ABI symbol for ``spec``, the device unit
@@ -219,10 +237,8 @@ def device_units(spec: "BenchSpec", sdfg: "SDFG", target: str) -> list[Unit]:
         build = "\n".join(shlex.join(argv) for argv in commands)
     except (KeyError, FileNotFoundError) as exc:
         build = f"# no {target} compiler is configured on this host: {exc}"
-    header = (
-        f"# {form.entry}: device pointers for the arrays, workspace bytes {form.workspace_bytes}, "
-        f"libraries {', '.join(form.libraries) or 'none'}.\n"
-        "# The offload architecture is the emitting host's; on another GPU, run `dace emit` there.\n"
+    header = BUILD_HEADER.format(
+        entry=form.entry, workspace=form.workspace_bytes, libraries=", ".join(form.libraries) or "none"
     )
     return [
         Unit(name, form.code, pathlib.Path(host).suffix[1:]),
