@@ -7,11 +7,13 @@ import hashlib
 import os
 import pathlib
 import subprocess
+import sys
 import tarfile
 from collections.abc import Iterator
 
 import pytest
 
+from hpcagent_bench import run_layout
 from hpcagent_bench.results import data_guard
 from hpcagent_bench.results import extract as observations_extract
 from hpcagent_bench.harness import results_db
@@ -289,7 +291,7 @@ def test_archive_tars_the_workspaces_and_keeps_what_a_regrade_a_merge_and_an_aud
         episode = results_db.ensure_episode(conn, "s", "s.n0.p0.w0", 123)
         stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "task_hash": "test-task"}
         grade, _ = results_db.add_grade(conn, episode, "gemm", "submit", ts_ms=1, values=stamp)
-        library = f"{sandbox.DEFAULT_SHARED_DIR}/agent-0/bin/libgraded.so"
+        library = f"{run_layout.DEFAULT_SHARED_DIR}/agent-0/bin/libgraded.so"
         conn.execute("UPDATE grades SET library = ? WHERE id = ?", (library, grade))
         conn.commit()
     digest = sandbox.library_digest(agent)
@@ -313,3 +315,13 @@ def test_archive_tars_the_workspaces_and_keeps_what_a_regrade_a_merge_and_an_aud
     assert not os.access(run, os.W_OK) and not os.access(run / "workspaces.tar", os.W_OK)
     with pytest.raises(SystemExit, match="exists"):
         data_guard.archive(run)
+
+
+def test_archive_runs_on_the_host_under_the_jobs_container_plugin_dirs(finished_job: pathlib.Path) -> None:
+    """run_cluster.sh archives on the host with ``HPCAGENT_BENCH_PLUGIN_DIRS`` naming the image's plugin mounts, which
+    do not exist there: the archive never loads a plugin, so it never reads those manifests."""
+    env = {**os.environ, "HPCAGENT_BENCH_PLUGIN_DIRS": str(finished_job / "opt" / "hpcagent-bench-plugins" / "absent")}
+    archive = [sys.executable, "-m", "hpcagent_bench.results.data_guard", "archive", "--dry-run", str(finished_job)]
+    done = subprocess.run(archive, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert "entries to move" in done.stdout
