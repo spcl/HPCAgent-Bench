@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
+from hpcagent_bench.translators.numpyto_common.frontend.inlining import collect_assigned_names
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import resolve_array_ref
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc, descs
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import DIM_IDENT_RE
@@ -27,6 +28,7 @@ __all__ = [
     "name_param",
     "reject_subscripted_scalar_params",
     "rename_dims",
+    "rename_shadowing_bindings",
     "resolved_array_param",
     "subscript_param",
     "widen_counting_scalar_params",
@@ -263,6 +265,55 @@ def bound_names(pnames: list[str], args: Sequence[ast.expr], params: set[str]) -
         if pname in params and isinstance(arg, ast.Name) and arg.id != pname:
             renamed.setdefault(arg.id, pname)
     return renamed
+
+
+def rename_shadowing_bindings(
+    hfn: ast.FunctionDef, args: Sequence[ast.expr], owner_fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]
+) -> None:
+    """Rename each parameter or local of ``hfn`` that shares a name with one of its CALLER's names.
+
+    Extents cross the call in both directions spelled in names: an array argument's arrive in the
+    caller's vocabulary (:func:`bound_names` translates only the names the call passes, the free ones
+    are threaded in as extra symbols under the same names), and the return buffer's are respelled for
+    the caller, keeping every name the caller holds. A helper binding one of those names reads its
+    own value in place of the caller's, or hands its own to the caller.
+    conv2d_sub_tanh_sub_avgpool's ``_avgpool2d(x4, kernel_size_pool, ...)`` sized ``x4`` -- spelled
+    in the conv's ``kernel_size`` -- by the pool's ``kernel_size`` parameter, and
+    convt3d_bn_avgpool_avgpool's pooled ``od`` sized the caller's buffer by the caller's unpooled
+    ``od``. The helper's binding is the one renamed: its names are private, the caller's are the
+    ABI. A parameter the call binds to the caller name it shares means the same thing on both sides.
+
+    Only names an extent can be spelled in count: an array is never one, so neither the caller's
+    arrays nor the helper's array parameters are renamed.
+    """
+    arg_shapes = [resolve_array_ref(owner_fn, arg, arr_by) for arg in args]
+    caller = {a.arg for a in owner_fn.args.args} | set(collect_assigned_names(owner_fn.body))
+    caller = {n for n in caller if resolve_array_ref(owner_fn, ast.Name(id=n, ctx=ast.Load()), arr_by) is None}
+    for resolved in arg_shapes:
+        if resolved is not None:
+            caller.update(ident for dim in resolved[0] for ident in DIM_IDENT_RE.findall(str(dim)))
+    keep = {
+        a.arg
+        for a, v, resolved in zip(hfn.args.args, args, arg_shapes, strict=False)
+        if resolved is not None or (isinstance(v, ast.Name) and v.id == a.arg)
+    }
+    own = {a.arg for a in hfn.args.args} | set(collect_assigned_names(hfn.body))
+    clash = sorted((caller & own) - keep)
+    if not clash:
+        return
+    taken = own | caller | {n.id for n in walk_nodes(hfn) if isinstance(n, ast.Name)}
+    fresh: dict[str, str] = {}
+    for name in clash:
+        k = 1
+        while f"{name}_{k}" in taken:
+            k += 1
+        fresh[name] = f"{name}_{k}"
+        taken.add(fresh[name])
+    for a in hfn.args.args:
+        a.arg = fresh.get(a.arg, a.arg)
+    for node in walk_nodes(hfn):
+        if isinstance(node, ast.Name) and node.id in fresh:
+            node.id = fresh[node.id]
 
 
 def rename_dims(dim: str, renamed: dict[str, str]) -> str:
