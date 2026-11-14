@@ -184,6 +184,16 @@ def test_the_cpu_profile_asks_for_nothing_gpu_only(verify: ModuleType, gpu_only:
     assert gpu_only not in targets, gpu_only
 
 
+@pytest.mark.parametrize(("profile", "checked"), [("judge", True), ("judge-cuda", False)])
+def test_the_amd_judge_holds_likwid_and_the_gh200_judge_does_not_ask_for_it(
+    verify: ModuleType, profile: str, checked: bool
+) -> None:
+    """likwid is part of the AMD image's profiler set (Ubuntu packages it for amd64 only, so the aarch64 GH200 image
+    has none): the AMD judge's verify fails without likwid-perfctr, the GH200 judge's never asks for it."""
+    targets = {check.target for check in verify.checks(profile) if check.kind == "exe"}
+    assert ("likwid-perfctr" in targets) is checked, targets
+
+
 def test_the_gh200_serving_profile_checks_the_engine_and_the_hook_fabric(verify: ModuleType) -> None:
     names = {check.name for check in verify.checks("vllm-cuda")}
     assert {"vllm", "triton", "libfabric", "libcxi", "torch"} <= names, names
