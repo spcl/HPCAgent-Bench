@@ -256,6 +256,14 @@ def const_value(node: ast.expr) -> object:
 NO_VALUE = object()
 
 
+def exact_tuple(node: ast.expr) -> tuple[object, ...] | None:
+    """The values of a tuple display of int/bool/str literals (compared exactly), else ``None``."""
+    if not isinstance(node, ast.Tuple):
+        return None
+    values = tuple(const_value(e) for e in node.elts)
+    return values if all(isinstance(v, (bool, int, str)) for v in values) else None
+
+
 def static_bool(node: ast.expr) -> bool | None:
     v = const_value(node)
     return None if v is NO_VALUE else bool(v)
@@ -835,6 +843,11 @@ class Folder(ast.NodeTransformer):
                 return ast.copy_location(ast.Constant(value=decide(lv, rv)), node)
             if isinstance(node.ops[0], (ast.Eq, ast.NotEq)) and isinstance(lv, str) and isinstance(rv, str):
                 return ast.copy_location(ast.Constant(value=decide(lv, rv)), node)
+            # Tuple equality is exact element-wise equality: ``output_size == (1, 1, 1)`` once a
+            # literal tuple argument has been bound in.
+            lt, rt = exact_tuple(left), exact_tuple(right)
+            if isinstance(node.ops[0], (ast.Eq, ast.NotEq)) and lt is not None and rt is not None:
+                return ast.copy_location(ast.Constant(value=decide(lt, rt)), node)
         return node
 
     def is_none(self, left: ast.expr, right: ast.expr) -> bool | None:

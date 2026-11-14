@@ -11,6 +11,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.inlining import collect_
 from hpcagent_bench.translators.numpyto_common.frontend.none_folding import FoldStaticNoneBranches
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import resolve_array_ref
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
+from hpcagent_bench.translators.numpyto_common.tuple_desugar import desugar_tuples
 
 __all__ = [
     "bind_call_constants",
@@ -204,6 +205,12 @@ def bind_call_constants(hfn: ast.FunctionDef, consts: dict[str, ast.expr]) -> No
         substitute_names(hfn, direct)
     for name in reversed(seeded):
         hfn.body.insert(0, ast.Assign(targets=[store_(name)], value=copy.deepcopy(consts[name])))
+    if seeded:
+        # A seed is only an assignment until the tuple fold carries it into the guards that read it:
+        # ``_adaptive_avg_pool3d``'s ``if isinstance(output_size, int)`` and ``if output_size ==
+        # (1, 1, 1)`` decide only then, and an undecided pair leaves two returns of different extent
+        # and the seeded parameter still read -- so still passed, as a tuple no backend can emit.
+        desugar_tuples(hfn)
     if consts:
         FoldStaticNoneBranches().visit(hfn)
         # Same pruning one step wider: the substitution decides ordinary guards too, and

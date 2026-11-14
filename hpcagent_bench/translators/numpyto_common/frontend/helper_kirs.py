@@ -24,6 +24,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.helper_params import (
     infer_helper_params,
     mark_written_outputs,
     reject_subscripted_scalar_params,
+    rename_shadowing_bindings,
     widen_counting_scalar_params,
 )
 from hpcagent_bench.translators.numpyto_common.frontend.helper_shapes import (
@@ -377,6 +378,7 @@ class HelperKirBuilder:
         fold_default_args(
             hfn, [a.arg for a in hfn.args.args[: len(call.args)]] + [kw.arg for kw in call.keywords if kw.arg]
         )
+        rename_shadowing_bindings(hfn, call.args, owner_fn, oarr_by)
         pnames = [a.arg for a in hfn.args.args]
         return Site(
             hdef=hdef,
