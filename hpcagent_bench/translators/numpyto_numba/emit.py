@@ -11,7 +11,9 @@ Numba types a large subset of numpy plus plain loops, so a dense kernel keeps it
 * a ``max`` / ``min`` / ``eye`` call runs through a serial module function and an overlapping slice store
   stores a copy (:mod:`numpyto_numba.parfor`); ``parallel=True`` is dropped only for a form neither fix
   takes (an overlapping ``@=``, a starred unsafe call);
-* every loop stays a ``range``: the emit never writes ``nb.prange``;
+* in a ``parallel=True`` build, the outermost proven independent unit-step ``range`` loop of every loop nest
+  becomes ``nb.prange`` (:mod:`numpyto_numba.prange`), and so does a sparse CSR matvec's row loop; a loop that
+  cannot be proven independent stays a serial ``range``, and a function running inside a prange is a serial build;
 * an augmented store of a reshaped operand is spelled out as a plain store, which numba's parfor
   pass broadcasts correctly (:func:`numpyto_numba.parfor.spell_out_reshape_augassigns`);
 * a ``functools.lru_cache`` / ``cache`` decorator is dropped (:func:`without_memo_decorators`).
@@ -35,6 +37,7 @@ from hpcagent_bench.translators.numpyto_numba.parfor import (
     spell_out_overlapping_augassigns,
     spell_out_reshape_augassigns,
 )
+from hpcagent_bench.translators.numpyto_numba.prange import parallelize_range_loops
 from hpcagent_bench.translators.numpyto_numba.sparse import rewrite_sparse_matmuls
 
 __all__ = [
@@ -219,7 +222,12 @@ def emit_numba(numpy_source: str, fastmath: bool = False, kir: KernelIR | None =
     #    helper is never compiled; a called one must be njit to be callable from
     #    nopython code, so decorating all top-level defs is both correct and free.
     #    The helpers the parfor fixes add must run serial, so they get no ``parallel=True``.
+    #    In a parallel build the outermost proven loop of every nest is a ``nb.prange`` first
+    #    (:func:`parallelize_range_loops`); a function that runs inside one is a serial build too.
     serial = routed | ({copier} if copier is not None else set())
+    if parallel:
+        out, nested = parallelize_range_loops(out, frozenset(serial), None if kir is None else {kir.kernel_name: ranks})
+        serial |= nested
     out = re.sub(
         r"(?m)^def\s+(\w+)\(", lambda m: f"{njit_decorator(parallel and m[1] not in serial, fastmath)}\n{m[0]}", out
     )
