@@ -775,7 +775,7 @@ def check_loaded_team(team: int) -> None:
     for path in flags.loaded_threaded_runtimes():
         runtime = ctypes.CDLL(str(path))
         calls = next(calls for prefix, calls in TEAM_CALLS.items() if path.name.startswith(prefix))
-        get, put = (getattr(runtime, name) for name in calls)
+        get, put = (runtime[name] for name in calls)  # ctypes looks the symbol up by name
         if get() > team:
             put(team)
         if (runs := get()) != team:
