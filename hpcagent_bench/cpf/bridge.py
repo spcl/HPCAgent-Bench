@@ -61,6 +61,7 @@ __all__ = [
     "RenderRecord",
     "RenderedForm",
     "abi_parameters",
+    "bind_derived_symbols",
     "bind_pinned_config",
     "child_lines",
     "clean_form",
@@ -72,7 +73,9 @@ __all__ = [
     "exact_abi_signature",
     "force_abi_symbols",
     "form_keys",
+    "generated_literal",
     "generated_renames",
+    "generated_symbol_defs",
     "gpu_codegen_pinned",
     "main",
     "mirror_chain",
@@ -110,20 +113,49 @@ def render_timeout_s() -> float:
     return config.current().timeouts.cpf_render_s
 
 
-def generated_renames(path: pathlib.Path) -> dict[str, str]:
-    """``{manifest name: emitted name}`` the dace emitter recorded for respelled arguments (``field`` ->
-    ``__field``)."""
+def generated_literal(path: pathlib.Path, name: str) -> object:
+    """The literal the dace emitter assigned to module-level ``name`` in ``path``, or ``None``."""
     if not path.is_file():
-        return {}
+        return None
     for node in ast.parse(path.read_text()).body:
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "__hpcagent_bench_renames__"
+            and node.targets[0].id == name
         ):
             return ast.literal_eval(node.value)
-    return {}
+    return None
+
+
+def generated_renames(path: pathlib.Path) -> dict[str, str]:
+    """``{manifest name: emitted name}`` the dace emitter recorded for respelled arguments (``field`` ->
+    ``__field``)."""
+    renames = generated_literal(path, "__hpcagent_bench_renames__")
+    return renames if isinstance(renames, dict) else {}
+
+
+def generated_symbol_defs(path: pathlib.Path) -> list[tuple[str, str]]:
+    """``[(symbol, recipe)]`` the dace emitter recorded for a size the body computes (gmres's ``m = min(100, N)``),
+    each recipe over the entry's arguments and the symbols before it, in the emitted spelling."""
+    recipes = generated_literal(path, "__hpcagent_bench_symbol_defs__")
+    return [(str(name), str(recipe)) for name, recipe in recipes] if isinstance(recipes, list) else []
+
+
+def bind_derived_symbols(sdfg: "SDFG", recipes: Sequence[tuple[str, str]], abi: Sequence[str]) -> tuple[str, ...]:
+    """Substitute every derived size symbol the native ABI has no slot for by its recipe, so the entry computes it
+    from the arguments it does take (the recipes in reverse: a later one may name an earlier symbol).
+
+    :returns: the symbols substituted.
+    """
+    bound = []
+    for name, recipe in reversed(recipes):
+        if name in abi:
+            continue
+        sdfg.replace_dict({name: f"({recipe})"})
+        sdfg.symbols.pop(name, None)
+        bound.append(name)
+    return tuple(reversed(bound))
 
 
 def returned_slots(path: pathlib.Path, entry: str) -> tuple[str | None, ...]:
@@ -553,6 +585,7 @@ def render_canonical(
     renames = generated_renames(impl)
     emitted_args = [renames.get(arg.name, arg.name) for arg in native.args]
     abi_args = [*emitted_args, WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
+    bind_derived_symbols(sdfg, generated_symbol_defs(impl), abi_args)
     bind_pinned_config(sdfg, spec.pinned_config)
     outputs = [renames.get(name, name) for name in spec.output_args]
     drop_returned_arguments(sdfg, abi_args, outputs, returned_slots(impl, spec.func_name))
