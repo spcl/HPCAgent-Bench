@@ -71,17 +71,19 @@ def test_overlapping_stores_compute_numpys_answer_in_parallel(tmp_path: pathlib.
         np.testing.assert_array_equal(g, w)
 
 
-#: Calls the parfor pass answers differently from numpy (NaN dropped, ``eye`` read back square).
+#: Calls the parfor pass answers differently from numpy (NaN dropped, ``eye`` read back square, ``linspace``
+#: off in the last bit).
 UNSAFE_CALLS = textwrap.dedent(
     """
     import numpy as np
 
 
-    def f(a, out, eye_out):
+    def f(a, out, eye_out, grid_out):
         out[0] = np.max(a)
         out[1] = a.min()
         out[2] = np.amin(np.abs(a + 1.0))
         eye_out[:, :] = np.eye(eye_out.shape[0], eye_out.shape[1]) * 2.0
+        grid_out[:] = np.linspace(-2.1, 0.9, grid_out.shape[0])
     """
 )
 
@@ -93,6 +95,7 @@ def test_unsafe_calls_go_through_serial_functions_and_the_body_stays_parallel() 
     assert "out[1] = serial_min(a)" in emitted
     assert "out[2] = serial_amin(np.abs(a + 1.0))" in emitted
     assert "serial_eye(eye_out.shape[0], eye_out.shape[1]) * 2.0" in emitted
+    assert "grid_out[:] = serial_linspace(-2.1, 0.9, grid_out.shape[0])" in emitted
     assert "@nb.njit(cache=True)\ndef serial_max(a0):\n" in emitted
     assert "    return np.amin(a0)\n" in emitted
     assert "@nb.njit(cache=True)\ndef serial_min(obj):\n" in emitted
@@ -102,10 +105,11 @@ def test_unsafe_calls_go_through_serial_functions_and_the_body_stays_parallel() 
 def test_routed_unsafe_calls_compute_numpys_answer(tmp_path: pathlib.Path) -> None:
     a = np.random.default_rng(9).standard_normal(100_000)
     a[77] = np.nan  # numpy propagates it through max and min
-    got, want = run_both(tmp_path, UNSAFE_CALLS, (a, np.zeros(3), np.zeros((300, 500))))
+    got, want = run_both(tmp_path, UNSAFE_CALLS, (a, np.zeros(3), np.zeros((300, 500)), np.zeros(1001)))
     np.testing.assert_array_equal(got[1], want[1])
     assert np.isnan(got[1][0]) and np.isnan(got[1][1])
     np.testing.assert_array_equal(got[2], want[2])
+    np.testing.assert_array_equal(got[3], want[3])
 
 
 def test_only_a_form_no_fix_takes_drops_parallel() -> None:

@@ -34,8 +34,10 @@ __all__ = [
 ]
 
 #: Whole-array calls the parfor pass answers differently from numpy (numba 0.65+): ``max`` / ``min`` drop
-#: NaN, and a rectangular ``eye(m, n)`` fused with a following parallel loop is read back as square.
-PARFOR_UNSAFE_CALLS = frozenset({"max", "min", "amax", "amin", "eye", "identity"})
+#: NaN, a rectangular ``eye(m, n)`` fused with a following parallel loop is read back as square, and
+#: ``linspace`` computes ``start + delta * (i / div)`` with no pinned endpoint where numpy computes
+#: ``i * (delta / div) + start`` and ends on ``stop``, a last-bit difference on some samples.
+PARFOR_UNSAFE_CALLS = frozenset({"max", "min", "amax", "amin", "eye", "identity", "linspace"})
 
 
 def parfor_unsafe_calls(tree: ast.AST) -> list[ast.Call]:
