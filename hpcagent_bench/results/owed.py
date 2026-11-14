@@ -565,23 +565,36 @@ def cmd_check_limits(args: argparse.Namespace) -> int:
     return 0
 
 
-def refuse_other_commit(repo: pathlib.Path, values: dict[str, str]) -> None:
+def refuse_other_commit(repo: pathlib.Path, values: dict[str, str], *, on_main: bool = False) -> str:
     """Refuses a rerun staged from a checkout other than the commit its launch env records (or one with
     uncommitted changes): the repair must run the code of the setup it repairs (run_cluster.sh checks it again at job
-    start)."""
+    start). ``on_main`` (``owed run --on-main``) admits instead a clean checkout at ``origin/main`` that descends from
+    that commit, so a repair runs the campaign's latest fixes; the rerun records the commit it runs.
+
+    :returns: the commit the rerun records (``""`` when the launch env records none)."""
     staged = values.get("HPCAGENT_BENCH_RECORD_COMMIT", "")
     if not staged:
-        return
+        return ""
     git = ("git", "-C", str(repo))
     head = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=False).stdout.strip()
     dirty = subprocess.run(
         [*git, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, check=False
     ).stdout.strip()
-    if not head.startswith(staged) or dirty:
-        raise SystemExit(
-            f"{repo} is at {head or 'no commit'}{' with uncommitted changes' if dirty else ''}; the setup was staged at "
-            f"{staged}: rerun from a clean checkout of that commit"
-        )
+    if head.startswith(staged) and not dirty:
+        return staged
+    if on_main and head and not dirty:
+        main = subprocess.run(
+            [*git, "rev-parse", "origin/main"], capture_output=True, text=True, check=False
+        ).stdout.strip()
+        descends = subprocess.run([*git, "merge-base", "--is-ancestor", staged, head], check=False).returncode == 0
+        if head == main and descends:
+            print(f"owed run --on-main: staged at {staged}, rerun at origin/main {head}", file=sys.stderr)
+            return head
+    raise SystemExit(
+        f"{repo} is at {head or 'no commit'}{' with uncommitted changes' if dirty else ''}; the setup was staged at "
+        f"{staged}: rerun from a clean checkout of that commit"
+        + ("" if on_main else ", or from a clean origin/main that descends from it with --on-main")
+    )
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -590,7 +603,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     setup = values.get("SETUP", "")
     if not setup:
         raise SystemExit(f"{env_path} names no SETUP")
-    refuse_other_commit(args.repo, values)
+    commit = refuse_other_commit(args.repo, values, on_main=args.on_main)
     runs = {parse_run(line) for line in args.kernels_file.read_text(encoding="utf-8").splitlines() if line.strip()}
     if not runs:
         raise SystemExit(f"{args.kernels_file} lists no run")
@@ -635,6 +648,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     per_node = int(values.get("AGENTS_PER_NODE") or 40)
     agent_nodes = min(int(values.get("AGENT_NODES") or 1), math.ceil(len(lines) / per_node))
     pinned = {"PROBLEMS_FILE": problems.name, "AGENT_NODES": str(agent_nodes)} | rerun_limits(values)
+    if commit:
+        pinned["HPCAGENT_BENCH_RECORD_COMMIT"] = commit
     kept = [line for line in env_path.read_text(encoding="utf-8").splitlines() if line.partition("=")[0] not in pinned]
     env.write_text("".join(f"{line}\n" for line in [*kept, *(f"{k}={v}" for k, v in pinned.items())]), encoding="utf-8")
     return subprocess.run(
@@ -700,6 +715,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="the checkout whose experiments/ stages and submits (default $HPCAGENT_BENCH_REPO, set by hpcagent_bench/cluster/env.sh)",
     )
     run.add_argument("--submit", action="store_true", help="submit; without it the job is only reported")
+    run.add_argument(
+        "--on-main",
+        action="store_true",
+        help="rerun from a clean origin/main that descends from the staged commit (records the commit it runs)",
+    )
     run.set_defaults(func=cmd_run)
     check = sub.add_parser("check-limits", help="refuse a setup env that raises a limit of an earlier launch")
     check.add_argument("env", type=pathlib.Path, help="the staged setup env (RUN_ROOT and SETUP name its launches)")
