@@ -10,11 +10,12 @@ import contextlib
 import json
 import pathlib
 import sqlite3
+import subprocess
 
 import pytest
 
 from helpers.scripts import revision_reruns
-from hpcagent_bench import tags
+from hpcagent_bench import paths, spec, tags
 from hpcagent_bench.cluster import env_spec
 from hpcagent_bench.harness import denominator, grade_under, results_db
 from tests import results_seed
@@ -37,19 +38,22 @@ def seed(
     limits: tuple[int, int] = OWN,
     usage: tuple[int, int] = (1_000_000, 3_600_000),
     setup: results_db.Setup = SETUP,
+    ran: dict[str, results_db.Value] | None = None,
 ) -> None:
     """One slot of ``kernel``: its episode under ``limits`` with ``usage`` (consumed tokens, wall ms), its last
     submission (``passed``, ``failed`` or ``none``: only a /score), and a final grade since the regrade's start
-    that passed (True), failed (False) or none (None)."""
+    that passed (True), failed (False) or none (None); ``ran`` adds columns to the episode's own grade."""
     label = f"{setup.setup}.n0.p{index}.w{index}"
     text = f"int k{index};" if source else None
     if answer == "none":
-        results_seed.score(db, label, kernel, 10, 1.0, setup=setup)
+        results_seed.score(db, label, kernel, 10, 1.0, setup=setup, **(ran or {}))
         submit = 0
     elif answer == "passed":
-        submit = results_seed.submission(db, label, kernel, 10, setup=setup, source=text)
+        submit = results_seed.submission(db, label, kernel, 10, setup=setup, source=text, **(ran or {}))
     else:
-        submit = results_seed.grade(db, label, kernel, "submit", 10, setup=setup, source=text, build_ok=1, correct=0)
+        submit = results_seed.grade(
+            db, label, kernel, "submit", 10, setup=setup, source=text, build_ok=1, correct=0, **(ran or {})
+        )
     if final is not None:
         results_seed.grade(
             db,
@@ -113,6 +117,35 @@ def test_every_slot_is_classified_from_the_regrade_and_its_own_limits(tmp_path: 
     slots, unrecorded = revision_reruns.classify(paper_db(tmp_path), SINCE_MS)
     assert {one.kernel: (one.klass, one.reason) for one in slots} == EXPECTED
     assert unrecorded == 0
+
+
+def test_a_slot_whose_kernel_sizes_moved_since_its_episode_ran_is_owed_whatever_its_regrade(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sizes an episode ran at are its grades' recorded sizes fingerprint, else the manifest's at the commit they
+    were graded at (a November grade records no sizes). Unmoved, the slot is classified as any other; moved, it is
+    owed as task_changed even when its regrade passed or the agent failed."""
+    head = subprocess.run(
+        ["git", "-C", str(paths.ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    db = tmp_path / "sizes.db"
+    seed(db, 0, "jacobi_2d", final=True, ran={"sizes_hash": spec.sizes_fingerprint("jacobi_2d")})
+    seed(db, 1, "gemm", final=True, ran={"sizes_hash": "sizes-before"})
+    seed(db, 2, "syr2k", final=True, ran={"commit_sha": head})
+    seed(db, 3, "atax", answer="failed", ran={"commit_sha": head})
+
+    def classes() -> dict[str, tuple[str, str]]:
+        return {one.kernel: (one.klass, one.reason) for one in revision_reruns.classify(db, SINCE_MS)[0]}
+
+    changed = ("owed", "task_changed")
+    assert classes() == {
+        "jacobi_2d": ("accepted", ""),
+        "gemm": changed,
+        "syr2k": ("accepted", ""),
+        "atax": ("unsolved", ""),
+    }
+    monkeypatch.setattr(spec, "sizes_fingerprint", lambda kernel: "sizes-after")  # every manifest resized since HEAD
+    assert classes() == dict.fromkeys(("jacobi_2d", "gemm", "syr2k", "atax"), changed)
 
 
 def test_a_final_grade_before_the_regrade_decides_nothing(tmp_path: pathlib.Path) -> None:
