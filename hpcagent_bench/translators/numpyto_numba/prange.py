@@ -274,7 +274,9 @@ def written_in_body(loop: ast.For, mutates: dict[str, frozenset[str]], params: d
     handed (a writing helper, ``out=``, a mutating method)."""
     body = ast.Module(body=list(loop.body), type_ignores=[])
     written = written_arrays(body)
-    written |= {n.target.id for n in walk_nodes(body) if isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name)}
+    written |= {
+        n.target.id for n in walk_nodes(body) if isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name)
+    }
     for n in walk_nodes(body):
         if isinstance(n, ast.Call):
             written |= names_written_by_call(n, mutates, params)
@@ -284,7 +286,8 @@ def written_in_body(loop: ast.For, mutates: dict[str, frozenset[str]], params: d
 def numba_reduction(loop: ast.For, fn: ast.FunctionDef) -> str | None:
     """The accumulator of a reduction numba's prange carries (:data:`PRANGE_REDUCTION_OPS`), proven by
     :func:`loop_reduction`, or ``None``. The accumulator must be a scalar: every binding of it outside the loop
-    is a numeric literal (``s = 0.0``, ``m = -np.inf``), and it is not a parameter."""
+    is a numeric literal (``s = 0.0``, ``m = -np.inf``), and it is not a parameter. The body updates it once:
+    numba refuses a second update (tsvc_2_s319's two ``sum_val = sum_val + ...``)."""
     found = loop_reduction(loop)
     if found is None or found[0] not in PRANGE_REDUCTION_OPS:
         return None
@@ -292,6 +295,8 @@ def numba_reduction(loop: ast.For, fn: ast.FunctionDef) -> str | None:
     if acc in {a.arg for a in fn.args.args}:
         return None
     combines = [n for n in walk_nodes(ast.Module(body=list(loop.body), type_ignores=[])) if binds_name(n, acc)]
+    if len(combines) != 1:
+        return None  # numba's parfor reduction takes ONE update of the accumulator per iteration.
     if op in ("max", "min") and not all(
         isinstance(n, ast.Assign)
         and isinstance(n.value, ast.Call)
@@ -391,15 +396,18 @@ def prange_safe(
         return False
     private = private_scalars(loop)
     live = scalars_live_after(fn, loop)
-    if live or not loop_is_parallel_safe(without_updates(loop, private)):
+    probe = without_updates(loop, private)
+    if live or not loop_is_parallel_safe(probe):
         acc = numba_reduction(loop, fn)
         if acc is None or acc in private or live - {acc}:
             return False
-        if not loop_is_parallel_safe(without_updates(loop, private | {acc})):
+        probe = without_updates(loop, private | {acc})
+        if not loop_is_parallel_safe(probe):
             return False
     if index_live_after(fn, loop):
         return False
-    return all(unaliased(fn, name, ranks) for name in written_in_body(loop, mutates, params))
+    # The probe's writes: a private scalar's or the accumulator's update is not an array store.
+    return all(unaliased(fn, name, ranks) for name in written_in_body(probe, mutates, params))
 
 
 def outermost_safe_loops(
@@ -428,7 +436,9 @@ def outermost_safe_loops(
 def module_calls(node: ast.AST, functions: set[str]) -> set[str]:
     """The module functions called anywhere under ``node``."""
     return {
-        n.func.id for n in walk_nodes(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in functions
+        n.func.id
+        for n in walk_nodes(node)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in functions
     }
 
 
@@ -479,7 +489,11 @@ def parallelize_range_loops(
     tree = ast.parse(src)
     fns = {fn.name: fn for fn in tree.body if isinstance(fn, ast.FunctionDef)}
     mutates, params = written_parameters(tree)
-    aliased = {n.func.id for n in walk_nodes(tree) if isinstance(n, ast.Call) and hands_a_written_array_twice(n, mutates, params)}
+    aliased = {
+        n.func.id
+        for n in walk_nodes(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and hands_a_written_array_twice(n, mutates, params)
+    }
     chosen = {
         name: outermost_safe_loops(fn.body, fn, (ranks or {}).get(name, {}), mutates, params)
         for name, fn in fns.items()
@@ -500,9 +514,14 @@ def parallelize_range_loops(
                 frontier += calls[callee]
     ordered = set(callers_first(calls))
     chosen = {name: found for name, found in chosen.items() if name in ordered}
-    loops = [loop for name, found in chosen.items() if name not in nested for loop in found]
-    for loop in sorted(loops, key=lambda n: (n.iter.func.lineno, n.iter.func.col_offset), reverse=True):
-        func = loop.iter.func
+    heads = [
+        loop.iter.func
+        for name, found in chosen.items()
+        if name not in nested
+        for loop in found
+        if isinstance(loop.iter, ast.Call)
+    ]
+    for func in sorted(heads, key=lambda f: (f.lineno, f.col_offset), reverse=True):
         off = abs_offset(src, func.lineno, func.col_offset)
         if src[off : off + 5] == "range":
             src = src[:off] + "nb.prange" + src[off + 5 :]
