@@ -180,6 +180,7 @@ __all__ = [
     "is_shape_subscript",
     "is_symbol_expr",
     "kwarg_value",
+    "localize_rebound_inputs",
     "loop_induction_symbols",
     "loop_target_ranks",
     "materialize_strided_helper_args",
@@ -4200,6 +4201,41 @@ def rebind_boundary(block: Sequence[ast.stmt], start: int, sources: set[str]) ->
     return len(block)
 
 
+def localize_rebound_inputs(fn_ast: ast.FunctionDef, inputs: set[str]) -> None:
+    """Give each input array parameter the body REBINDS a local name of its own, in place.
+
+    numpy rebinding a parameter name leaves the caller's array alone; dace's frontend spells the
+    same assignment as a copy INTO the argument. chebyshev_filter_subspace's ``X, Y, sigma = Y,
+    Ynew, sigma_new`` then wrote the caller's ``X``, which the ABI declares const. When the first
+    statement storing the name is a top-level binding, it dominates every later use: that binding
+    and everything after it take the local name, and the argument stays a read. Otherwise (a
+    rebinding in a loop or a branch) the local is a copy bound at entry and every use reads it. A
+    parameter also written through an element or slice store keeps its name: numpy writes the
+    caller's array there, which a copy would not.
+    """
+    stored = {node.id for node in walk_nodes(fn_ast) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
+    rebound = sorted((inputs & stored) - written_through(fn_ast))
+    if not rebound:
+        return
+    taken = {node.id for node in walk_nodes(fn_ast) if isinstance(node, ast.Name)} | {a.arg for a in fn_ast.args.args}
+    for name in rebound:
+        local = fresh_version(name, 1, taken)
+        start = rebind_boundary(fn_ast.body, 0, {name})
+        first = fn_ast.body[start]
+        if value_binding(first) == name and isinstance(first, ast.Assign):
+            first.targets[0] = ast.copy_location(store_(local), first.targets[0])
+            renamed = fn_ast.body[start + 1 :]
+        else:
+            renamed = fn_ast.body[:]
+            at = len(fn_ast.body) - len(without_docstring(fn_ast.body))
+            fn_ast.body.insert(at, ast.parse(f"{local} = np.copy({name})").body[0])
+        for stmt in renamed:
+            for node in walk_nodes(stmt):
+                if isinstance(node, ast.Name) and node.id == name:
+                    node.id = local
+    ast.fix_missing_locations(fn_ast)
+
+
 def splice_before_rebind(block: list[ast.stmt], start: int, nm: str, rhs: ast.expr, sources: set[str]) -> None:
     """Splice ``rhs`` into ``nm``'s uses from ``start`` up to the first later store of a name it
     reads: those uses run before that store, so they still read the value ``nm`` was bound to. A
@@ -4961,6 +4997,8 @@ def render_program(
     # Tuple assignment first, so the shape passes below see the subscript spelling they resolve.
     fn_ast = SplitTupleAssign().visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
+    # A rebound input parameter is a numpy name rebind, which dace would spell as a write INTO it.
+    localize_rebound_inputs(fn_ast, {a.name for a in kir.arrays if not a.is_output})
     # Before every .shape pass: what dace has no replacement for becomes a callback, and the
     # lowerings below spell their extents as .shape reads for those passes to resolve like any other.
     declared_ranks = {nm: len(dims) for nm, dims in arr_shapes.items()}
