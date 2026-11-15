@@ -253,8 +253,11 @@ apply_hardware() {
     fi
     pin_env_kv "${env}" "HPCAGENT_BENCH_HARDWARE=${hardware}" || return 2
     [[ "${hardware}" != "${base}" ]] || return 0
-    local served=(--model "${model}") pins
-    ! grep -qx 'INFERENCE_SOURCE=service' "${env}" || served=()
+    # Only a model served on our nodes (INFERENCE_SOURCE node, the default) has a per-hardware serving layer; a
+    # hosted service and a tuner (none) run no engine, so the hardware layer alone moves them.
+    local served=(--model "${model}") pins source
+    source="$(sed -n 's/^INFERENCE_SOURCE=//p' "${env}" | tail -1)"
+    [[ "${source:-node}" == node ]] || served=()
     pins="$(env_spec hardware "${hardware}" "${served[@]}")" || { echo "apply_hardware: ${model} has no ${hardware} config" >&2; return 2; }
     sed -i -E "s/^([A-Z_]*CE_ENV=.*)-${base}-/\1-${hardware}-/" "${env}"
     while IFS= read -r kv; do
