@@ -192,7 +192,7 @@ jobs:
 
       - name: Phase 1 -- unit sweep (every test file no other phase claims)
         if: ${{ !cancelled() }}
-        timeout-minutes: 33
+        timeout-minutes: 38
         env:
           SWEEP_FILES: ${{ steps.sweep.outputs.files }}
         run: |

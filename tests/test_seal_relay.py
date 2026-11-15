@@ -23,6 +23,8 @@ def relayed_status(sig: int) -> int:
             child = os.fork()
             if child == 0:
                 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+                if sig != signal.SIGKILL:  # a handler inherited from the test runner (xdist's SIGTERM) would catch it
+                    signal.signal(sig, signal.SIG_DFL)
                 os.kill(os.getpid(), sig)
                 os._exit(0)
             seal.relay(child)
