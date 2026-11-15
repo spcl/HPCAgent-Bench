@@ -11,6 +11,8 @@ import subprocess
 import pytest
 
 from hpcagent_bench import paths
+from hpcagent_bench.cluster import jobs
+from hpcagent_bench.harness import judge_scheduler, native_call
 from tests.bash_stub import bash_stub
 
 REPO = paths.ROOT
@@ -163,6 +165,30 @@ def test_a_core_mask_keys_a_core_by_socket_too(tmp_path: pathlib.Path) -> None:
         check=False,
     )
     assert (done.returncode, done.stdout.strip()) == (0, "0xf0"), done.stderr
+
+
+def test_a_step_loads_its_runtimes_at_its_widest_domains_cores(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An uneven split, one core of the first NUMA domain and every CPU of the second: the step's team is the second
+    domain's physical cores, the count jobs.slot_width takes, so the wide slot's child narrows it rather than being
+    refused for a runtime loaded at the first domain's one core."""
+    domains = [sorted(cpus) for cpus in judge_scheduler.node_cpus().values() if cpus]
+    if len(domains) < 2:
+        pytest.skip("needs two NUMA domains")
+    cpus = {domains[0][0], *domains[1]}
+    bash_stub(tmp_path / "bin", "python", 'echo "${OMP_NUM_THREADS:-}"')
+    step = f'. {CLUSTER / "job_step.sh"}; bash -c "${{JOB_STEP_SCRIPT}}" _'
+    done = subprocess.run(
+        ["taskset", "-c", ",".join(map(str, sorted(cpus))), "bash", "-c", step],
+        env={**os.environ, "JOB_STEP_PYTHON": str(tmp_path / "bin" / "python")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: cpus)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == str(jobs.slot_width()) == str(len(native_call.grading_cpus(None)) - 1)
 
 
 @pytest.mark.parametrize("shape", [{}, {"GANG_NODES": "2"}], ids=["shards", "gangs"])
