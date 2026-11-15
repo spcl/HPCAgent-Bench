@@ -132,3 +132,26 @@ def test_a_constant_numpy_expression_is_folded_out_of_the_entry() -> None:
     for name in lifted:
         assert sdfg.arrays[name].transient
         assert np.array_equal(sdfg.constants_prop[name][1], np.arange(3)[None, :])
+
+
+N = dace.symbol("N")
+
+
+@dace.program
+def doubled(a: dace.float64[N], out: dace.float64[N]) -> None:
+    for i in range(N):
+        out[i] = 2.0 * a[i]
+
+
+def test_a_stats_dict_records_the_stage_that_settled_each_loop() -> None:
+    """The record E4 reads (experiments/E4-cost-coverage/canon_stats.py): every loop the parse produced is either
+    settled by a named stage or left remaining, and the solver seconds are reported."""
+    sdfg = doubled.to_sdfg(simplify=False)
+    stats: dict[str, object] = {}
+    cpf_canonical.canonicalize_for(sdfg, Target.CPU, nonnegative=frozenset({"N"}), stats=stats)
+    settled, remaining = stats["settled"], stats["remaining"]
+    assert isinstance(settled, list) and settled, stats
+    assert isinstance(remaining, list)
+    assert stats["loops_in"] == len(settled) + len(remaining)
+    assert all(entry["stage"] for entry in settled)
+    assert {"z3_seconds", "isl_seconds", "seconds"} <= stats.keys()

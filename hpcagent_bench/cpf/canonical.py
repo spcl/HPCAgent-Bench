@@ -323,16 +323,25 @@ def canonicalize_for(
     small: frozenset[str] = frozenset(),
     nonnegative: frozenset[str] = frozenset(),
     positive: frozenset[str] = frozenset(),
+    stats: dict[str, object] | None = None,
 ) -> None:
     """Step 3, in place: declare ``small``, ``positive`` and ``nonnegative`` symbols (others have unknown sign), canonicalize,
     offload on GPU, then finalize. Without the finalize tail the unit renders SEQUENTIAL; finalize rejects a GPU
-    graph never offloaded."""
+    graph never offloaded. A ``stats`` dict is filled with canonicalize's record: the stage that settled each loop
+    and the seconds spent, in total and inside Z3 and isl."""
     from dace.transformation.passes.canonicalize.finalize import finalize_for_target, offload_to_gpu
     from dace.transformation.passes.canonicalize.pipeline import canonicalize
 
     declare_small(sdfg, small)
     declare_positive(sdfg, positive)
-    canonicalize(sdfg, validate=True, validate_all=False, target=target.text, nonnegative_symbols=sorted(nonnegative))
+    canonicalize(
+        sdfg,
+        validate=True,
+        validate_all=False,
+        target=target.text,
+        nonnegative_symbols=sorted(nonnegative),
+        stats=stats,
+    )
     if target is Target.GPU:
         offload_to_gpu(sdfg)
     finalize_for_target(sdfg, target.text, validate=True)
