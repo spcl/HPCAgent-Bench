@@ -76,9 +76,11 @@ def _zero8(ptr, zero):
 
 @triton.jit
 def _zero_n(ptr, n, zero):
-    n_i = n.to(tl.int32)
-    for i in range(n_i):
+    # n is a Python int (Triton specializes integer kernel arguments). It has no .to().
+    i = tl.zeros((), dtype=tl.int32)
+    while i < n:
         tl.store(ptr + i, zero)
+        i += 1
 
 
 @triton.jit
@@ -651,7 +653,7 @@ def _scatter_rz(
     diu = tl.where(i_old > i_new, 0, 1)
     dkl = tl.where(k_old < k_new, 0, 1)
     dku = tl.where(k_old > k_new, 0, 1)
-    n_modes_i = n_modes.to(tl.int32)
+    n_modes_i = n_modes
     ib = i_new - 1
     s = zero
     c = wqi * invdtd_x
@@ -700,7 +702,7 @@ def _scatter_rz(
                         for mode in range(1, n_modes_i):
                             sum_re = a_re * (nre - mre) + b_re * (mre - ore)
                             sum_im = a_re * (nim - mim) + b_re * (mim - oim)
-                            coef = neg2 / mode.to(neg2.dtype)
+                            coef = neg2 / tl.full((), mode, neg2.dtype)
                             _accum(priv, t, 1, li, lj, 0, 2 * mode - 1, coef * (-sum_im), WIN, WIN, 1, ncomp)
                             _accum(priv, t, 1, li, lj, 0, 2 * mode, coef * sum_re, WIN, WIN, 1, ncomp)
                             nre2 = nre * new_re - nim * new_im
@@ -1397,7 +1399,6 @@ def _reduce_windows(
     jx0 = tl.load(jst + 0)
     jx1 = tl.load(jst + 1)
     jx2 = tl.load(jst + 2)
-    nc = ncomp.to(tl.int32)
     jx3 = tl.load(jst + 3)
     jy0 = tl.load(jst + 4)
     jy1 = tl.load(jst + 5)
@@ -1415,7 +1416,7 @@ def _reduce_windows(
                 gk = ozv + lk
                 inside = (gi >= 0) & (gi < n0) & (gj >= 0) & (gj < n1) & (gk >= 0) & (gk < n2)
                 if inside:
-                    for c in range(nc):
+                    for c in range(ncomp):
                         off0 = (((((t * 3 + 0) * WIN_I + li) * WIN_J + lj) * WIN_K + lk) * ncomp + c)
                         off1 = (((((t * 3 + 1) * WIN_I + li) * WIN_J + lj) * WIN_K + lk) * ncomp + c)
                         off2 = (((((t * 3 + 2) * WIN_I + li) * WIN_J + lj) * WIN_K + lk) * ncomp + c)

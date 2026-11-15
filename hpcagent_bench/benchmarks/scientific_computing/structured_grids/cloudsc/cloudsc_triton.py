@@ -607,7 +607,8 @@ def _level_sources(
     corqsice = _ldwa(wa, _A_ZCORQSICE)
     qv = _ldwe(we, _E_QX, _QV, k, nlevp)
     qsice = _ldwb(wb, _W_QSICE, k, nlevp)
-    if za > 1.0 - _RAMIN:
+    # 1 - RAMIN is not an f32 value. A host fold stays fp64 and treats exact za==1 as overcast.
+    if za > tl.full((), 1.0, za.dtype) - tl.full((), _RAMIN, za.dtype):
         zsupsat = tl.maximum((qv - zfac * qsice) / corqsice, 0.0)
     else:
         zqp1env = (qv - za * qsice) / tl.maximum(1.0 - za, _ZEPS)

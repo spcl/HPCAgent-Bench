@@ -26,33 +26,21 @@ def _cell_idx(off, i, j, k, n):
 
 @triton.jit
 def _stencil_sum(u_ptr, c, i, j, k, n):
-    s = 0.0
-    d = 6.0
+    # i, j, k are blocks. `if` on a block is rejected; a missing face adds one
+    # to the diagonal and contributes no neighbor (odd reflection of a zero ghost).
     nn = n * n
-    if i > 0:
-        s = s + tl.load(u_ptr + c - nn)
-    else:
-        d = d + 1.0
-    if i < n - 1:
-        s = s + tl.load(u_ptr + c + nn)
-    else:
-        d = d + 1.0
-    if j > 0:
-        s = s + tl.load(u_ptr + c - n)
-    else:
-        d = d + 1.0
-    if j < n - 1:
-        s = s + tl.load(u_ptr + c + n)
-    else:
-        d = d + 1.0
-    if k > 0:
-        s = s + tl.load(u_ptr + c - 1)
-    else:
-        d = d + 1.0
-    if k < n - 1:
-        s = s + tl.load(u_ptr + c + 1)
-    else:
-        d = d + 1.0
+    s = tl.where(i > 0, tl.load(u_ptr + c - nn, mask=i > 0, other=0.0), 0.0)
+    s += tl.where(i < n - 1, tl.load(u_ptr + c + nn, mask=i < n - 1, other=0.0), 0.0)
+    s += tl.where(j > 0, tl.load(u_ptr + c - n, mask=j > 0, other=0.0), 0.0)
+    s += tl.where(j < n - 1, tl.load(u_ptr + c + n, mask=j < n - 1, other=0.0), 0.0)
+    s += tl.where(k > 0, tl.load(u_ptr + c - 1, mask=k > 0, other=0.0), 0.0)
+    s += tl.where(k < n - 1, tl.load(u_ptr + c + 1, mask=k < n - 1, other=0.0), 0.0)
+    d = tl.where(i > 0, 6.0, 7.0)
+    d += tl.where(i < n - 1, 0.0, 1.0)
+    d += tl.where(j > 0, 0.0, 1.0)
+    d += tl.where(j < n - 1, 0.0, 1.0)
+    d += tl.where(k > 0, 0.0, 1.0)
+    d += tl.where(k < n - 1, 0.0, 1.0)
     return s, d
 
 
@@ -126,15 +114,13 @@ def _restrict(r_ptr, f_ptr, off_f, off_c, nc: tl.int32, BLOCK: tl.constexpr):
 
 @triton.jit
 def _prolong_w(w, ci, bound):
-    out_w = w
-    out_ci = ci
-    if ci < 0:
-        out_ci = 0
-        out_w = -out_w
-    if out_ci > bound:
-        out_ci = bound
-        out_w = -out_w
-    return out_w, out_ci
+    neg = ci < 0
+    ci = tl.where(neg, 0, ci)
+    w = tl.where(neg, -w, w)
+    over = ci > bound
+    ci = tl.where(over, bound, ci)
+    w = tl.where(over, -w, w)
+    return w, ci
 
 
 @triton.autotune(configs=_configs(), key=["nc"], cache_results=True)

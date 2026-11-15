@@ -9,7 +9,7 @@ import torch
 import triton
 import triton.language as tl
 
-from hpcagent_bench.support.helpers.triton_utilities import get_1d_tile_offsets, powers_of_2
+from hpcagent_bench.support.helpers.triton_utilities import powers_of_2
 
 _MAXTER = 20
 
@@ -51,45 +51,63 @@ def _gather_grid2g(psic_ptr, c_ptr, gmap_ptr, ngk, BLOCK_SIZE: tl.constexpr):
 @triton.jit
 def _zero_grid(psic_ptr, nnr, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    offs, mask = get_1d_tile_offsets(pid * BLOCK_SIZE, BLOCK_SIZE, nnr * 2)
-    tl.store(psic_ptr + offs, 0.0, mask=mask)
+    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offs < nnr
+    tl.store(psic_ptr + offs * 2, 0.0, mask=mask)
+    tl.store(psic_ptr + offs * 2 + 1, 0.0, mask=mask)
 
 
 @triton.autotune(configs=_fft_configs(), key=["nnr"], cache_results=True)
 @triton.jit
 def _mul_v_grid(psic_ptr, v_ptr, nnr, BLOCK_SIZE: tl.constexpr):
+    """Interleaved complex grid times a real potential, one cell per lane."""
     pid = tl.program_id(0)
-    offs, mask = get_1d_tile_offsets(pid * BLOCK_SIZE, BLOCK_SIZE, nnr * 2)
-    pr = tl.load(psic_ptr + offs, mask=mask, other=0.0)
-    pi = tl.load(psic_ptr + offs + 1, mask=mask, other=0.0)
-    vr = tl.load(v_ptr + (offs // 2), mask=mask, other=0.0)
-    tl.store(psic_ptr + offs, pr * vr, mask=mask)
-    tl.store(psic_ptr + offs + 1, pi * vr, mask=mask)
+    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offs < nnr
+    pr = tl.load(psic_ptr + offs * 2, mask=mask, other=0.0)
+    pi = tl.load(psic_ptr + offs * 2 + 1, mask=mask, other=0.0)
+    vr = tl.load(v_ptr + offs, mask=mask, other=0.0)
+    tl.store(psic_ptr + offs * 2, pr * vr, mask=mask)
+    tl.store(psic_ptr + offs * 2 + 1, pi * vr, mask=mask)
 
 
 @triton.autotune(configs=_fft_configs(), key=["kdim"], cache_results=True)
 @triton.jit
-def _g_psi_row(psi_ptr, hd_ptr, sd_ptr, ew_val, row, kdim, BLOCK_SIZE: tl.constexpr):
+def _g_psi_row(psi_ptr, hd_ptr, sd_ptr, ew_ptr, row, kdim, row_stride, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offs < kdim
     hd = tl.load(hd_ptr + offs, mask=mask, other=0.0)
     sd = tl.load(sd_ptr + offs, mask=mask, other=1.0)
+    ew_val = tl.load(ew_ptr)
     x = hd - ew_val * sd
     pow_base2 = x - 1.0
     denm = 0.5 * (1.0 + x + tl.sqrt(1.0 + pow_base2 * pow_base2))
-    base = row * kdim * 2
+    base = row * row_stride
     pr = tl.load(psi_ptr + base + offs * 2, mask=mask, other=0.0)
     pi = tl.load(psi_ptr + base + offs * 2 + 1, mask=mask, other=0.0)
     tl.store(psi_ptr + base + offs * 2, pr / denm, mask=mask)
     tl.store(psi_ptr + base + offs * 2 + 1, pi / denm, mask=mask)
 
 
+def _component_dtype(dtype: torch.dtype) -> torch.dtype:
+    if dtype == torch.complex64:
+        return torch.float32
+    if dtype == torch.complex128:
+        return torch.float64
+    return dtype
+
+
 def _view_as_interleaved(z: torch.Tensor) -> torch.Tensor:
-    return torch.view_as_real(z.contiguous())
+    z = z.contiguous()
+    if torch.is_complex(z):
+        return torch.view_as_real(z)
+    return z
 
 
 def _from_interleaved(f: torch.Tensor) -> torch.Tensor:
+    if torch.is_complex(f):
+        return f
     return torch.view_as_complex(f.contiguous())
 
 
@@ -133,10 +151,12 @@ def _vloc_fft(block, gmap, v_spin, nnr, n1, n2, n3):
     m = block.shape[0]
     zgrid = lambda meta: (triton.cdiv(nnr, meta["BLOCK_SIZE"]),)
     r = _fft_g2r(block, gmap, nnr, n1, n2, n3)
+    v_real = v_spin.real if torch.is_complex(v_spin) else v_spin
+    v_real = v_real.to(_component_dtype(block.dtype)).contiguous()
     for jj in range(m):
         psic = r[jj]
         psic_f = _view_as_interleaved(psic)
-        _mul_v_grid[zgrid](psic_f, v_spin, nnr)
+        _mul_v_grid[zgrid](psic_f, v_real, nnr)
         r[jj] = _from_interleaved(psic_f)
     return _fft_r2g(r, gmap, nnr, n1, n2, n3)
 
@@ -417,9 +437,12 @@ def cegterg(
         _diaghg(hc, sc, nbase, nvec, ew, vc)
         e[:nvec] = ew[:nvec]
 
-    psi_f = _view_as_interleaved(psi[:, :kdim])
+    psi_sl = psi[:, :kdim]
+    psi_f = torch.view_as_real(psi_sl) if torch.is_complex(psi_sl) else psi_sl
     hd_f = hd.to(psi_f.dtype)
     sd_f = sd.to(psi_f.dtype)
+    row_stride = int(psi_f.stride(0))
+    ew_buf = torch.empty(1, dtype=hd_f.dtype, device=psi.device)
     ggrid = lambda meta: (triton.cdiv(kdim, meta["BLOCK_SIZE"]),)
     conv = torch.zeros(nvec, dtype=torch.bool, device=evc.device)
 
@@ -447,7 +470,8 @@ def cegterg(
         psi[nb1 : nb1 + notcnv, :kdim] = resid
 
         for j in range(notcnv):
-            _g_psi_row[ggrid](psi_f, hd_f, sd_f, float(ew[nb1 + j].item()), nb1 + j, kdim)
+            ew_buf.copy_(ew[nb1 + j].reshape(1).to(hd_f.dtype))
+            _g_psi_row[ggrid](psi_f, hd_f, sd_f, ew_buf, nb1 + j, kdim, row_stride)
 
         cv = psi[nb1 : nb1 + notcnv, :kdim]
         ew_norm = (cv.real * cv.real + cv.imag * cv.imag).sum(dim=1)
