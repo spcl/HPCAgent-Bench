@@ -17,3 +17,6 @@ args:
   a: {shape: "(LEN_1D,)", out: true}
   b: (LEN_1D,)
   c: (LEN_1D,)
+chain_length:
+  # each a[i] accumulates LEN_1D / 2 products b * c
+  a: LEN_1D // 2
