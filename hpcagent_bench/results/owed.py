@@ -27,6 +27,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Iterable, Sequence
+from http import HTTPStatus
 from typing import NamedTuple
 
 from hpcagent_agent.coded import Coded
@@ -37,10 +38,12 @@ from hpcagent_agent.driver.agent_driver import (
     RC_TOKEN_BUDGET,
     AttemptCause,
 )
+from hpcagent_agent.tools.submit import JUDGE_FAULT
 
 from hpcagent_bench import tags
 from hpcagent_bench.cluster import merge_results
 from hpcagent_bench.harness import episodes, results_db
+from hpcagent_bench.harness.outcomes import RunStatus
 from hpcagent_bench.harness.recording import slot_of
 from hpcagent_bench.kernel_key import kernel_stem
 from hpcagent_bench.problem_file import ProblemLine, raw_lines, read_lines
@@ -244,13 +247,21 @@ def task_changed(dbs: Iterable[pathlib.Path], setup: str) -> dict[Run, int]:
 
 def faulted_at(job_dir: pathlib.Path) -> dict[Run, int]:
     """Every run ``job_dir`` has a grade for that a judge fault or an operator void marked, with the ``ts_ms`` of
-    the newest such grade."""
+    the newest such grade. A ``/submit`` the judge refused with its own fault (HTTP 500 ``judge_fault``, recorded as a
+    ``score_error`` call) counts: the agent that stopped after it was never graded."""
     voided = " or ".join("g.reason like ?" for _ in RERUN_PREFIXES)
     rows = shard_rows(
         job_dir,
         "select g.kernel, r.slot, max(g.ts_ms) from grades g join episodes r on r.id = g.episode_id "
-        f"where r.label != ? and (g.reason = ? or {voided}) group by g.kernel, r.slot",
-        (ADHOC_EPISODE_ID, HARNESS_FAULT_REASON, *(f"{prefix}%" for prefix in RERUN_PREFIXES)),
+        f"where r.label != ? and (g.reason = ? or {voided} or (g.kind = 'submit' and g.status = ? and g.detail like ?)) "
+        "group by g.kernel, r.slot",
+        (
+            ADHOC_EPISODE_ID,
+            HARNESS_FAULT_REASON,
+            *(f"{prefix}%" for prefix in RERUN_PREFIXES),
+            RunStatus.SCORE_ERROR.text,
+            f"HTTP {HTTPStatus.INTERNAL_SERVER_ERROR.value}%{JUDGE_FAULT}%",
+        ),
     )
     return {Run(str(kernel), int(str(slot))): int(str(ts)) for kernel, slot, ts in rows}
 
@@ -363,6 +374,13 @@ def designed_runs(jobs: Sequence[Job], tag_kernels: Sequence[str]) -> list[Run]:
     return [Run(kernel, slot) for kernel in tag_kernels for slot in sorted(slots)]
 
 
+def setup_launches(run_root: pathlib.Path, setup: str) -> list[pathlib.Path]:
+    """The job directories under ``run_root`` that launched ``setup``, oldest first: every job whose launch env names
+    it, whether or not it recorded anything (a job that died before its first grade still spent an attempt)."""
+    launched = sorted(run_root.glob(f"{LAUNCH_DIR}/*/.env"), key=lambda path: path.parent.name.zfill(20))
+    return [run_root / path.parent.name for path in launched if read_env(path).get("SETUP") == setup]
+
+
 def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Path] = ()) -> dict[Run, OwedClass]:
     """Every run of ``runs`` the identity owes, in order, with its class: undelivered and not ended by the agent
     (``infra`` if never started or a judge fault came after its latest episode started), or not delivered after a
@@ -378,7 +396,9 @@ def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Pa
     shards = [shard for job in jobs for shard in merge_results.judge_shards(job.path)]
     changed = task_changed([*shards, *regrades], jobs[0].setup) if jobs else {}
     classes = latest_classes(job.path for job in jobs)
-    spent = infra_attempts(job.path for job in jobs)
+    # The attempts every launch of the setup spent, as ``owed run`` counts them, not only the jobs that recorded.
+    launches = {path for root in {job.path.parent for job in jobs} for path in setup_launches(root, jobs[0].setup)}
+    spent = infra_attempts(sorted(launches | {job.path for job in jobs}, key=lambda path: path.name.zfill(20)))
     cap = crash_attempts(jobs[-1].path) if jobs else AGENT_CRASH_ATTEMPTS
     result: dict[Run, OwedClass] = {}
     for run in runs:
@@ -610,14 +630,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     owed_class = OwedClass.parse(args.owed_class)
     # Each rerun problem states which launch of its run it is, how the one before ended and why it runs: the jobs
     # of this setup under the run root are the launches (their launch env names the setup; no shard is opened).
-    launched = [
-        path
-        for path in sorted(
-            args.job_dir.parent.glob(f"{LAUNCH_DIR}/*/.env"), key=lambda path: path.parent.name.zfill(20)
-        )
-        if read_env(path).get("SETUP") == setup
-    ]
-    job_dirs = [args.job_dir.parent / path.parent.name for path in launched]
+    job_dirs = setup_launches(args.job_dir.parent, setup)
     history = launch_history(job_dirs)
     # A repair continues its episode's attempt count; a changed task starts a new episode.
     spent = infra_attempts(job_dirs)
