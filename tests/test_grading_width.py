@@ -236,7 +236,11 @@ def test_a_runtime_built_for_fewer_threads_than_the_slot_runs_all_it_can(
         subprocess.run(["gcc", "-shared", "-fPIC", str(tmp_path / src), "-o", str(so)], check=True)
     env = {**os.environ, "STUB_TEAM": loaded, native_call.LAUNCH_WIDTH_ENV: "4"}
     done = subprocess.run(
-        [sys.executable, "-c", CHECK_STUBS, str(blas), str(plugin)], env=env, capture_output=True, text=True, check=False
+        [sys.executable, "-c", CHECK_STUBS, str(blas), str(plugin)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert done.returncode == 0, done.stderr
     assert verdict in done.stdout, done.stdout
@@ -254,6 +258,7 @@ def test_the_launch_team_is_the_cores_a_grade_takes_not_limits_cores(monkeypatch
     monkeypatch.setenv("HPCAGENT_BENCH_LIMITS_CORES", "1")
     flags.enter_openmp_launch_env()
     assert os.environ[native_call.LAUNCH_WIDTH_ENV] == str(cores)
+
 
 if __name__ == "__main__":
     import tempfile
