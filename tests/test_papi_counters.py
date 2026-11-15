@@ -1011,6 +1011,12 @@ def openmp_threads(monkeypatch: pytest.MonkeyPatch) -> int:
     threads = min(4, flags.ncores())
     for key, value in {**flags.cpu_env(Mode.MULTI_CORE, threads=threads), **papi.PINNED_ENV}.items():
         monkeypatch.setenv(key, value)
+    # numpy's OpenMP-flavour OpenBLAS has loaded libgomp already, which read OMP_NUM_THREADS then (the image's
+    # core count): the pool this process's forked children inherit takes the API call, not the env.
+    try:
+        ctypes.CDLL("libgomp.so.1").omp_set_num_threads(threads)
+    except OSError:
+        pass
     return threads
 
 
