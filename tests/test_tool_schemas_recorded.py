@@ -11,16 +11,16 @@ from hpcagent_agent.tools import registry
 
 from tests.fresh_module import fresh
 
-#: ``canonical_parallel_form.INPUT_SCHEMA`` as 123060f79 wrote it by hand.
+#: ``canonical_parallel_form.INPUT_SCHEMA`` as 123060f79 wrote it by hand, with the GPU dialect stated correctly.
 RECORDED_CPF: dict[str, Any] = {
     "type": "object",
     "properties": {
         "dialect": {
             "type": "string",
-            "description": "Which dialect to render the form in: 'c' or 'c++' on a CPU task, 'hip' (the "
-            "device form) on a GPU task, which gets the hip form whatever it asks. Optional; defaults to "
-            "the run's language when that is one of these, hip for cuda, and c++ otherwise. The "
-            "parallelism facts are the same either way.",
+            "description": "Which dialect to render the form in: 'c' or 'c++' on a CPU task. A GPU task gets "
+            "the device form in its own language, hip or cuda, whatever it asks. Optional; defaults to the "
+            "run's language when that is c or c++, and c++ for any other CPU language. The parallelism facts "
+            "are the same either way.",
             "enum": ["c", "c++", "hip"],
         },
     },
