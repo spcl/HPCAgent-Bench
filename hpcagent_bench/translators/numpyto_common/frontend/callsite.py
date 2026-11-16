@@ -289,6 +289,17 @@ def caller_side_shape(
     return out
 
 
+#: A float64 (complex128) helper parameter follows the run's precision: the dace emitter declares it ``dc_float``.
+#: Its call temporaries are spelled with the precision aliases, which every emitter resolves; ``np.float64``
+#: in a bf16 or fp32 dace program is a float64 buffer that the helper refuses.
+PRECISION_ALLOC_DTYPE = {"float64": "np_float", "complex128": "np_complex"}
+
+
+def alloc_dtype(dtype: str) -> str:
+    """The ``dtype=`` spelling of a call temporary of ``dtype``."""
+    return PRECISION_ALLOC_DTYPE.get(dtype, f"np.{dtype}")
+
+
 def build_callsite_stmts(
     lhs: ast.expr,
     name: str,
@@ -333,7 +344,7 @@ def build_callsite_stmts(
         if info is not None and not isinstance(arg, ast.Name):
             shp, dt = info
             atmp = f"__harg_{hidx}_{k}"
-            pre.append(f"{atmp} = np.empty(({', '.join(shp)},), dtype=np.{dt})")
+            pre.append(f"{atmp} = np.empty(({', '.join(shp)},), dtype={alloc_dtype(dt)})")
             pre.append(f"{atmp}[:] = {ast.unparse(arg)}")
             call_srcs.append(atmp)
         else:
@@ -352,13 +363,13 @@ def build_callsite_stmts(
             reads = {ident for src in call_srcs for ident in IDENT_RE.findall(src)}
             call_srcs.append(lhs.id)
             if lhs.id not in live_buffers and lhs.id not in reads:
-                pre.append(f"{lhs.id} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})")
+                pre.append(f"{lhs.id} = np.empty(({', '.join(hret_shape)},), dtype={alloc_dtype(hret_dtype)})")
         return ast.parse("\n".join([*pre, f"{name}({', '.join(call_srcs)})"])).body
     tmp = f"__hret_tmp_{hidx}"
     call_srcs.append(tmp)
     lines = [
         *pre,
-        f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})",
+        f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype={alloc_dtype(hret_dtype)})",
         f"{name}({', '.join(call_srcs)})",
         f"{ast.unparse(lhs)} = {tmp}",
     ]

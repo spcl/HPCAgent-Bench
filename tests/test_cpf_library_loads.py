@@ -30,7 +30,7 @@ LIBRARIES = ["blas", "lapack"]
 def view_with_libraries(tmp_path: pathlib.Path, libraries: list[str], dialect: str = "c") -> pathlib.Path:
     """A CPF cache whose :data:`KERNEL` form in ``dialect`` records ``libraries``."""
     cache = tmp_path / "cache"
-    publish_form(cache, KERNEL, dialect, source="// form\n", libraries=tuple(libraries))
+    publish_form(cache, KERNEL, dialect, source="// form\n", libraries=tuple(libraries), verified=True)
     return cache
 
 

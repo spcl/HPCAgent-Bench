@@ -28,7 +28,7 @@ WORKSPACE = "8*klon*nlev + 64"
 def view_with_workspace(tmp_path: pathlib.Path, workspace_bytes: str) -> pathlib.Path:
     """A CPF cache whose :data:`KERNEL` C form records ``workspace_bytes``."""
     cache = tmp_path / "cache"
-    publish_form(cache, KERNEL, "c", source="// form\n", workspace_bytes=workspace_bytes)
+    publish_form(cache, KERNEL, "c", source="// form\n", workspace_bytes=workspace_bytes, verified=True)
     return cache
 
 
