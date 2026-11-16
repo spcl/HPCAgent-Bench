@@ -245,6 +245,8 @@ HPCAGENT_BENCH_OPTIMIZER = 'zai-org/GLM-5.3'
 SGLANG_ATTENTION_BACKEND = ''
 # A tensor-parallel group spanning two nodes (SGLANG_PP_SIZE=2) finishes loading minutes apart; the image reads this
 SGLANG_UNBALANCED_MODEL_LOADING_TIMEOUT_S = 5400
+# 24 request slots and decode graphs: 20 agents per pipeline (docs/serving/glm53.md), checked by setup_nodes
+AGENTS_PER_PIPELINE = 20
 # The server's allocator alone (run_cluster.sh): expandable segments stop variable-length prefills
 # fragmenting it, whose high-water mark otherwise ratchets up over hours of agent load (host memory
 # on MI300A; docs/serving/glm53.md)
@@ -259,6 +261,10 @@ VLLM_MODEL = 'moonshotai/Kimi-K2.7-Code'
 AGENT_READY_TIMEOUT_SECONDS = 7200
 HPCAGENT_BENCH_OPTIMIZER = 'moonshotai/Kimi-K2.7-Code'
 AGENTS_PER_NODE = 20
+# One pp=4 pipeline serves 20 agents (docs/serving/kimi27sglang.md). More agents at once queue at the server, whose
+# LRU radix cache then evicts the waiting conversations, so every turn re-prefills (issue #193). setup_nodes refuses
+# a setup whose AGENT_NODES x AGENTS_PER_NODE exceeds INFERENCE_REPLICAS x this.
+AGENTS_PER_PIPELINE = 20
 # the weights are pack-quantized int4
 AITER_USE_FLYDSL_MOE_SORTING = 1
 # The server's allocator alone (run_cluster.sh): expandable segments stop variable-length prefills
@@ -477,8 +483,13 @@ AGENT_EFFORT = 'xhigh'
 SGLANG_EXTRA_ARGS = '"--chat-template ${HPCAGENT_BENCH_REPO}/containers/inference/chat-template-qwen38.jinja --trust-remote-code --attention-backend aiter --kv-cache-dtype fp8_e4m3 --language-only --watchdog-timeout 1800 --context-length 262144 --mem-fraction-static 0.306 --mamba-full-memory-ratio 0.5 --max-running-requests 128 --enable-metrics --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report"'
 [experiment.llrbase-c.models.oss120b]
 AGENT_EFFORT = 'high'
+# Kimi-K2.7: two pp=4 pipelines, 20 agents each, serve the 40 kernels in one pass on one agent node and one judge
+# node like the other models.
 [experiment.llrbase-c.models.kimi27sglang]
 CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS = 1800000
+INFERENCE_NODES = 8
+INFERENCE_REPLICAS = 2
+AGENTS_PER_NODE = 40
 [experiment.llrbase-c.models.glm53]
 # the kimi27sglang stream timeout and the experiment's glm53 serving (20 agents, 1.5M-token KV pool)
 AGENTS_PER_NODE = 20
@@ -502,12 +513,6 @@ SGLANG_EXTRA_ARGS = '"--trust-remote-code --watchdog-timeout 1800 --kv-cache-dty
 extends = "llrbase-c"
 [experiment.llrblind.env]
 AGENT_SUBMISSION_MODE = 'single'
-# Kimi-K2.7: one pp=4 pipeline serves 20 agents (docs/serving/kimi27sglang.md), so two pipelines serve the 40 kernels
-# in one pass, 20 agents per pipeline as the first runs had, on one agent node and one judge node like the other models.
-[experiment.llrblind.models.kimi27sglang]
-INFERENCE_NODES = 8
-INFERENCE_REPLICAS = 2
-AGENTS_PER_NODE = 40
 [experiment.llrblind-multi]
 extends = "llrblind"
 [experiment.llrblind-multi.env]
@@ -542,6 +547,9 @@ extends = "llrbase-c"
 AGENT_NODES = 2
 # the mode of its November runs (harness20-20261110h20), which submitted multiple times and are reused
 AGENT_SUBMISSION_MODE = 'multi'
+# Kimi-K2.7: llrbase-c's two pipelines serve 40 agents, one agent node's worth
+[experiment.harness.models.kimi27sglang]
+AGENT_NODES = 1
 
 # scicomp40 (single submission, as llrbase-c; a grade is a whole application).
 [experiment.scicomp]
@@ -586,8 +594,12 @@ SUBMIT_REPEAT = 20
 # at the model's AGENTS_PER_NODE (40 on one node; 20 on the kimi27sglang pipeline-parallel one)
 JUDGE_NODES = 2
 AGENT_NODES = 3
+# Kimi-K2.7: the 100 agents on five pp=4 pipelines, 20 each
 [experiment.repeat.models.kimi27sglang]
+INFERENCE_NODES = 20
+INFERENCE_REPLICAS = 5
 AGENT_NODES = 5
+AGENTS_PER_NODE = 20
 
 # temperature3 (tags/temperature3.txt): twenty agents per kernel on three kernels, bare kernel only, run
 # once per sampling temperature (TEMPERATURES="default 0 1.5"): the served temperature is the only
@@ -623,9 +635,6 @@ AGENT_TIMEOUT_SECONDS = 28800
 extends = "scicomp"
 [experiment.scicomp40-single.env]
 AGENT_SUBMISSION_MODE = 'single'
-# 20 agents per node on the pipeline-parallel serving: two agent nodes run 40 kernels in one batch
-[experiment.scicomp40-single.models.kimi27sglang]
-AGENT_NODES = 2
 
 # git-scicomp40 (tags/scicomp40-git.txt: scicomp40 minus the 13 kernels whose NumPy reference calls BLAS or
 # LAPACK): only the git setup (PACKETS=repo); scicomp40-single's `none` setups are its control, so everything but
