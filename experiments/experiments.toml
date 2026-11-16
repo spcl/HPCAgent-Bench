@@ -328,6 +328,19 @@ HPCAGENT_BENCH_OPTIMIZER = 'Qwen/Qwen3.8-27B'
 # quoted: sourced under `set -a`, so word-splitting on spaces would run a stray command
 VLLM_EXTRA_ARGS = '"--dtype bfloat16 --attention-backend TRITON_ATTN --chat-template ${HPCAGENT_BENCH_REPO}/containers/inference/chat-template-qwen38.jinja --trust-remote-code --max-model-len 262144 --gpu-memory-utilization 0.85 --max-num-seqs 128 --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3"'
 
+# oss120b serving on one mi200 node: the mi300 setups' arguments (BF16 activations, 131072 context, the openai tool
+# and openai_gptoss reasoning parsers, no chat-template override) on the AMD vLLM image, tp8 over the node's 8 GCDs,
+# TRITON_ATTN as for qwen38 (aiter has no gfx90a kernels). The checkpoint's MXFP4 experts run on vLLM's TRITON
+# Mxfp4 MoE backend on gfx90a; at 0.85 the KV cache holds 8.0M tokens (61 contexts of 131072). Smoke 746363:
+# tool call and reasoning pass, 40 concurrent 256-token requests at 1078 tok/s aggregate.
+[hardware.mi200.models.oss120b]
+INFERENCE_ENGINE = 'vllm'
+INFERENCE_CE_ENV = 'hpcagent-bench-vllm-mi200-latest'
+VLLM_MODEL = 'openai/gpt-oss-120b'
+HPCAGENT_BENCH_OPTIMIZER = 'openai/gpt-oss-120b'
+# quoted: sourced under `set -a`, so word-splitting on spaces would run a stray command
+VLLM_EXTRA_ARGS = '"--dtype bfloat16 --attention-backend TRITON_ATTN --load-format safetensors --safetensors-load-strategy prefetch --generation-config auto --enable-auto-tool-choice --tool-call-parser openai --reasoning-parser openai_gptoss --max-model-len 131072 --gpu-memory-utilization 0.85 --max-num-seqs 128"'
+
 # Hardware gh200: Daint (daint.alps), 4x GH200 per node, 4 Grace sockets of 72 cores. Pinned over a setup's
 # rendered env by apply_hardware (submit_common.sh) for --hardware gh200, followed, for a model served on our
 # nodes, by [hardware.gh200.models.<model>]. apply_hardware renames every *_CE_ENV from its -mi300- EDF to the

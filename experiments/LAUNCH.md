@@ -125,8 +125,8 @@ run is the same command with a short `--time`. Check the queue and budget first:
 
 **mi200 (overflow, never paper data).** The `mi200` hardware (`--hardware mi200`, or `--system beverin-mi200`,
 whose entry also names partition `mi200` and 8 GCDs per node) swaps every `*_CE_ENV` to its `-mi200-` EDF, pins
-`[hardware.mi200]` (and its `models` tables) and `GPUS_PER_NODE`. The recorded study names `mi200` (default `<TAG>-mi200`; a `RECORD_STUDY` you pass must name it); only qwen38 has an mi200
-serving layer.
+`[hardware.mi200]` (and its `models` tables) and `GPUS_PER_NODE`. The recorded study names `mi200` (default `<TAG>-mi200`; a `RECORD_STUDY` you pass must name it); qwen38 and oss120b have an
+mi200 serving layer.
 
 ```bash
 EXPERIMENT=harness20-mi200 BASE=harness TAG=harness20 HARNESSES=claude SUBMIT=1 ../hpcagent_bench/cluster/submit.sh --system beverin-mi200 --account <project>
