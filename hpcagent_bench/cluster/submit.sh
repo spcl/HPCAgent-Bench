@@ -167,11 +167,14 @@ prompt_check() {
         "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.prompt_build --env
 }
 
-# check_forms <KEY=cache> <language> <device> <hint detail> -- refuses a cpf-src setup whose cache cannot serve a
-# verified form of every tag kernel (forms_missing)
+# check_forms <KEY=cache> <language> <device> <hint detail> [verified_only] -- refuses a cpf-src setup whose cache
+# cannot serve a verified form of every tag kernel (forms_missing). Under cpf.verified_only (any non-empty fifth
+# argument), a kernel without a verified form starts from the reference, so a cpf-src or cpf-tool setup is refused
+# only for a kernel never rendered: a forgotten prepare, which would turn the whole setup into its control.
 check_forms() {
     local cache="${1#*=}" mode=on-demand dialect="$2" absent kernels
     if [[ "${1%%=*}" == CPF_DROPIN_DIR ]]; then mode=verified; elif [[ "$2" != c ]]; then dialect=c++; fi
+    [[ -z "${5:-}" ]] || mode=rendered
     # Resolve the kernels explicitly and refuse on failure: a failed "$(tag_csv)" inside the call
     # below would hand forms_missing an empty list, whose check passes trivially -- a broken tag
     # resolution would silently skip this gate instead of refusing the setup.
@@ -179,7 +182,7 @@ check_forms() {
         || { echo "check_forms: cannot resolve the kernels of ${TAG:-${KERNELS_FILE}}; refusing the unchecked cache ${cache}" >&2; return 2; }
     absent=$(forms_missing "${cache}" "${dialect}" "${mode}" "$3" "${kernels}" "$4")
     [[ -n "${absent}" ]] || return 0
-    echo "the CPF cache ${cache} cannot serve a verified $3 form for:" >&2
+    echo "the CPF cache ${cache} cannot serve a ${mode} $3 form for:" >&2
     sed 's/^/  /' <<<"${absent}" >&2
     echo "  prepare them with: hpcagent-bench job submit hpcagent_bench/cluster/prepare.sbatch --tag <tag> --language $2 --cpf-cache <cache> --steps cpf${4:+ --cpf-hints $4}" >&2
     return 2
@@ -260,14 +263,16 @@ stage_setup() {
     [[ -z "${JUDGE_NODES:-}" ]] || kvs+=("JUDGE_NODES=${JUDGE_NODES}")
     [[ -z "${temperature}" ]] || kvs+=("INFERENCE_TEMPERATURE=${temperature}")
     if [[ -n "${packet}" ]]; then
-        local line hints
+        local line hints verified_only
         # The hint detail a -kinds packet serves its form at; the form check below reads the forms at it.
         hints=$(base_value "${packet_env}" HPCAGENT_BENCH_CPF_HINTS)
+        verified_only=$(base_value "${packet_env}" HPCAGENT_BENCH_CPF_VERIFIED_ONLY)
+        [[ "${verified_only}" == true ]] || verified_only=""
         while IFS= read -r line; do
             case "${line}" in
                 HPCAGENT_BENCH_RECORD_PACKET=*) packet="${line#*=}" ;;
                 HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR=* | CPF_DROPIN_DIR=*)
-                    [[ -n "${ENV_ONLY}" ]] || check_forms "${line}" "${lang}" "${device}" "${hints}" || { rm -f "${staged}"; return 2; }
+                    [[ -n "${ENV_ONLY}" ]] || check_forms "${line}" "${lang}" "${device}" "${hints}" "${verified_only}" || { rm -f "${staged}"; return 2; }
                     kvs+=("${line%%=*}=$(symbolic_path HPCAGENT_BENCH_CPF_CACHE "${line#*=}")") ;;
                 *) kvs+=("${line}") ;;
             esac

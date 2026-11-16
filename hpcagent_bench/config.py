@@ -903,6 +903,7 @@ class Cpf(Section):
     cache: str
     hints: HintDetail
     array_facts: bool
+    verified_only: bool
 
 
 @functools.lru_cache(maxsize=None, typed=True)
