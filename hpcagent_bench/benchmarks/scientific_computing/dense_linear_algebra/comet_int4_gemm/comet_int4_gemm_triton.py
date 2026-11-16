@@ -57,18 +57,26 @@ def _kernel(
     for k0 in range(0, F, BLOCK_K):
         offs_k = k0 + tl.arange(0, BLOCK_K)
         k_ok = offs_k < F
+        # Masked loads still form the address. Point past-F lanes at field 0, then drop them below.
+        offs_k_c = tl.where(k_ok, offs_k, 0)
         lv = tl.load(
-            left + offs_m[:, None] * stride_lm + offs_k[None, :] * stride_lk,
+            left + offs_m[:, None] * stride_lm + offs_k_c[None, :] * stride_lk,
             mask=(offs_m[:, None] < V) & k_ok[None, :],
             other=0,
         )
         rv = tl.load(
-            right + offs_k[:, None] * stride_rk + offs_n[None, :] * stride_rn,
+            right + offs_k_c[:, None] * stride_rk + offs_n[None, :] * stride_rn,
             mask=k_ok[:, None] & (offs_n[None, :] < V),
             other=0,
         )
         l0, l1 = _planes(lv)
         r0, r1 = _planes(rv)
+        # A field past F is loaded as code 0, and _planes(0) is (2, 0), not (0, 0).
+        # Zero both planes on that partial K tile or the padding is counted as two 0-bits.
+        l0 = tl.where(k_ok[None, :], l0, 0)
+        l1 = tl.where(k_ok[None, :], l1, 0)
+        r0 = tl.where(k_ok[:, None], r0, 0)
+        r1 = tl.where(k_ok[:, None], r1, 0)
         # acc is int32: int8 dots accumulate there exactly (counts are 0, 1, or 2).
         acc00 = tl.dot(l0, r0, acc00)
         acc01 = tl.dot(l0, r1, acc01)

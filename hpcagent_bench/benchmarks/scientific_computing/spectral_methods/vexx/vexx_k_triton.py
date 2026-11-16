@@ -184,6 +184,10 @@ def _paw_newdxx(weight, becphi, becpsi, deexx, ke, nat, nh, ofsbeta):
     ikb = ofsbeta[:, None] + torch.arange(nh, device=deexx.device)
     becphi_r = becphi[ikb]
     becpsi_r = becpsi[ikb]
+    # ke is a real PAW kernel; the projections are complex. NumPy promotes the
+    # contraction, torch.einsum does not.
+    if torch.is_complex(becphi_r) and not torch.is_complex(ke):
+        ke = ke.to(dtype=becphi_r.dtype)
     t = torch.einsum("uoji,aj,au,ao->ai", ke, becphi_r, becphi_r.conj(), becpsi_r)
     delta = weight * 0.5 * t
     deexx.view(-1).index_add_(0, ikb.reshape(-1), delta.reshape(-1))

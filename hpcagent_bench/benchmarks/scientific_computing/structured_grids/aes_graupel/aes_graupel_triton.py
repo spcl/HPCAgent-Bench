@@ -3,8 +3,13 @@ import triton
 import triton.language as tl
 from triton.language.extra import libdevice
 
-LQR, LQI, LQS, LQG, LQC, LQV = 0, 1, 2, 3, 4, 5
-NX, NP = 6, 4
+LQR = tl.constexpr(0)
+LQI = tl.constexpr(1)
+LQS = tl.constexpr(2)
+LQG = tl.constexpr(3)
+LQC = tl.constexpr(4)
+LQV = tl.constexpr(5)
+NX = tl.constexpr(6)
 
 _TM = tl.constexpr(273.15)
 _QMIN = tl.constexpr(1.0e-15)
@@ -60,7 +65,7 @@ def _t_ie(en, qv, qliq, qice, rho, dz):
 
 @triton.jit
 def _snow_n(t, rho, qs):
-    n0 = 8.0e5
+    n0 = tl.full((), 8.0e5, t.dtype)
     has = qs > _QMIN
     tc = tl.maximum(tl.minimum(t, _TM), _TM - 40.0) - _TM
     alf = libdevice.pow(10.0, -1.65 + tc * (5.45e-2 + tc * 3.27e-4))
@@ -79,19 +84,22 @@ def _snow_l(rho, qs, ns):
     has = qs > _QMIN
     qu = tl.where(has, qs, 1.0)
     lam = libdevice.pow(_AMS * 2.0 * ns / (qu * rho), 1.0 / (_BMS + 1.0))
-    return tl.where(has, lam, 1.0e10)
+    return tl.where(has, lam, tl.full((), 1.0e10, rho.dtype))
 
 
 @triton.jit
 def _fall(density, factor, exponent, offset):
-    return factor * libdevice.pow(density + offset, exponent)
+    dt = density.dtype
+    base = density + tl.full((), offset, dt)
+    return tl.full((), factor, dt) * libdevice.pow(base, tl.full((), exponent, dt))
 
 
 @triton.jit
 def _process_rates(t, p, rho, qv, qc, qi, qr, qs, qg, nc, dt, sig, sx):
+    z = tl.full((), 0.0, t.dtype)
     for i in tl.static_range(NX):
         for j in tl.static_range(NX):
-            tl.store(sx + i * NX + j, 0.0)
+            tl.store(sx + i * NX + j, z)
     dvsw = qv - _qsat_rho(t, rho)
     qvsi = _qsat_ice(t, rho)
     dvsi = qv - qvsi
@@ -131,8 +139,8 @@ def _process_rates(t, p, rho, qv, qc, qi, qr, qs, qg, nc, dt, sig, sx):
         tl.maximum(tl.minimum(libdevice.exp(0.09 * (t - _TM)), 1.0), 0.075),
         3.5e-3 * (t - (_TM - 85.0)),
     )
-    eta = 0.0
-    idep = 0.0
+    eta = z
+    idep = z
     b = 1.94
     a = 2.8345e6 * 2.8345e6 / (2.40e-2 * _RV)
     cx = 2.22e-5 * libdevice.pow(_TM, -b) * 101325.0
@@ -145,7 +153,7 @@ def _process_rates(t, p, rho, qv, qc, qi, qr, qs, qg, nc, dt, sig, sx):
     eta = tl.where(cold & sig, eta_c, 0.0)
     vi_pos = tl.where(cold & sig, tl.maximum(vi, 0.0), 0.0)
     tl.store(sx + LQV * NX + LQI, vi_pos)
-    tl.store(sx + LQI * NX + LQV, -tl.minimum(vi, 0.0))
+    tl.store(sx + LQI * NX + LQV, tl.where(cold & sig, -tl.minimum(vi, 0.0), z))
     idep = tl.where(cold & sig, tl.minimum(vi_pos, dvsi / dt), 0.0)
     b2 = 2.0 / 3.0
     dep = tl.where((cold & sig) & (qi > _QMIN), tl.maximum(0.0, idep) * (b2 / (libdevice.pow(3.0e-9 / mi, b2) - 1.0)), 0.0)
@@ -194,7 +202,7 @@ def _process_rates(t, p, rho, qv, qc, qi, qr, qs, qg, nc, dt, sig, sx):
     tl.store(sx + LQC * NX + LQS, tl.where(warm, 0.0, tl.load(sx + LQC * NX + LQS)))
     tl.store(sx + LQC * NX + LQG, tl.where(warm, 0.0, tl.load(sx + LQC * NX + LQG)))
     dvsw0 = qv - _qsat_rho(_TM, rho)
-    vs = 0.0
+    vs = z
     a1 = 0.4182 * libdevice.sqrt(_V0S / 1.75e-5)
     vs_c = (4.0 * ns * eta / rho) * (1.0 + a1 * libdevice.pow(ls, -(_V1S + 1.0) / 2.0)) * dvsi / (ls * ls + 1.0e-15)
     vs_c = tl.where(vs_c > 0.0, tl.minimum(vs_c, dvsi / dt - idep), vs_c)
@@ -239,7 +247,13 @@ def _process_rates(t, p, rho, qv, qc, qi, qr, qs, qg, nc, dt, sig, sx):
     tl.store(sx + LQG * NX + LQR, gr)
 
 
-@triton.autotune(configs=_configs(), key=["ke", "nvec"], cache_results=True)
+# Outputs are updated in place; autotune trials must each start from the same fields.
+@triton.autotune(
+    configs=_configs(),
+    key=["ke", "nvec"],
+    cache_results=True,
+    restore_value=["t", "qv", "qc", "qi", "qr", "qs", "qg", "prr", "pri", "prs", "prg", "pflx", "pre"],
+)
 @triton.jit(do_not_specialize=["ke", "nvec", "ivstart", "kstart"])
 def _graupel_column(
     dz,
@@ -265,28 +279,33 @@ def _graupel_column(
     nvec,
     ke,
     stride,
+    sx_ptr,
+    sk_ptr,
+    dq_ptr,
 ):
     iv = tl.program_id(0) + ivstart
     if iv >= nvec:
         return
+    fd = dz.dtype.element_ty
+    zero = tl.full((), 0.0, fd)
+    dt_f = tl.full((), dt, fd)
+    sx = sx_ptr + iv * NX * NX
+    sk = sk_ptr + iv * NX
+    dq = dq_ptr + iv * NX
     nc = tl.load(qnc + ivstart)
     km_r = ke
     km_i = ke
     km_s = ke
     km_g = ke
-    fl_r = 0.0
-    fl_i = 0.0
-    fl_s = 0.0
-    fl_g = 0.0
-    vt_r = 0.0
-    vt_i = 0.0
-    vt_s = 0.0
-    vt_g = 0.0
-    sx = tl.zeros((NX * NX,), dtype=tl.float64)
-    qx = tl.zeros((NX,), dtype=tl.float64)
-    sk = tl.zeros((NX,), dtype=tl.float64)
-    dq = tl.zeros((NX,), dtype=tl.float64)
-    eflx = 0.0
+    fl_r = zero
+    fl_i = zero
+    fl_s = zero
+    fl_g = zero
+    vt_r = zero
+    vt_i = zero
+    vt_s = zero
+    vt_g = zero
+    eflx = zero
     for k in range(kstart, ke):
         off = k * stride + iv
         qrk = tl.load(qr + off)
@@ -312,31 +331,31 @@ def _graupel_column(
         qx4 = qck
         qx5 = qvk
         sig = tl.maximum(tl.maximum(qx2, qx1), qx3) > _QMIN
-        _process_rates(tk, pk, rh, qx5, qx4, qx1, qx0, qx2, qx3, nc, dt, sig, sx)
+        _process_rates(tk, pk, rh, qx5, qx4, qx1, qx0, qx2, qx3, nc, dt_f, sig, sx)
         for iqx in tl.static_range(NX):
-            ssum = 0.0
+            ssum = zero
             lim = sig | (iqx == LQC) | (iqx == LQV) | (iqx == LQR)
             for j in tl.static_range(NX):
                 ssum = ssum + tl.load(sx + iqx * NX + j)
             tl.store(sk + iqx, tl.where(lim, ssum, 0.0))
             qxi = tl.where(iqx == LQR, qx0, tl.where(iqx == LQI, qx1, tl.where(iqx == LQS, qx2, tl.where(iqx == LQG, qx3, tl.where(iqx == LQC, qx4, qx5)))))
-            stot = qxi / dt
+            stot = qxi / dt_f
             skv = tl.load(sk + iqx)
             over = lim & (skv > stot) & (qxi > _QMIN)
             for j in tl.static_range(NX):
                 v = tl.load(sx + iqx * NX + j)
                 tl.store(sx + iqx * NX + j, tl.where(over, v * stot / skv, v))
-            ssum2 = 0.0
+            ssum2 = zero
             for j in tl.static_range(NX):
                 ssum2 = ssum2 + tl.load(sx + iqx * NX + j)
             tl.store(sk + iqx, tl.where(lim, tl.where(over, ssum2, skv), 0.0))
         for iqx in tl.static_range(NX):
-            acc = 0.0
+            acc = zero
             for j in tl.static_range(NX):
                 acc = acc + tl.load(sx + j * NX + iqx)
             tl.store(dq + iqx, acc - tl.load(sk + iqx))
             qxi = tl.where(iqx == LQR, qx0, tl.where(iqx == LQI, qx1, tl.where(iqx == LQS, qx2, tl.where(iqx == LQG, qx3, tl.where(iqx == LQC, qx4, qx5)))))
-            qnew = tl.maximum(0.0, qxi + tl.load(dq + iqx) * dt)
+            qnew = tl.maximum(zero, qxi + tl.load(dq + iqx) * dt_f)
             qx0 = tl.where(iqx == LQR, qnew, qx0)
             qx1 = tl.where(iqx == LQI, qnew, qx1)
             qx2 = tl.where(iqx == LQS, qnew, qx2)
@@ -349,7 +368,7 @@ def _graupel_column(
         cv = _CVD + (_CVV - _CVD) * qtot + (_CLW - _CVV) * qliq + (_CI - _CVV) * qice
         heat = (tl.load(dq + LQC) + tl.load(dq + LQR)) * (_LVC - (_CLW - _CVV) * tk)
         heat = heat + (tl.load(dq + LQI) + tl.load(dq + LQS) + tl.load(dq + LQG)) * (_LSC - (_CI - _CVV) * tk)
-        tk = tl.where(active, tk + dt * heat / cv, tk)
+        tk = tl.where(active, tk + dt_f * heat / cv, tk)
         tl.store(t + off, tk)
         tl.store(qr + off, tl.where(active, qx0, qrk))
         tl.store(qi + off, tl.where(active, qx1, qik))
@@ -374,7 +393,7 @@ def _graupel_column(
         qliq = qck + qrk
         qice = qsk + qik + qgk
         eint = _ie(tk, qvk, qliq, qice, rh, dzv) + eflx
-        zeta = dt / (2.0 * dzv)
+        zeta = dt_f / (tl.full((), 2.0, fd) * dzv)
         xrho = libdevice.sqrt(_R00 / rh)
         # rain
         do_r = reached & (k >= km_r)
@@ -417,7 +436,8 @@ def _graupel_column(
         qgk = tl.where(do_g, qnew, qgk)
         ice_fl = fl_s + fl_i + fl_g
         tk1 = tl.load(t + kp1 * stride + iv)
-        eflx = dt * (fl_r * (_CLW * tk - _CVD * tk1 - _LVC) + ice_fl * (_CI * tk - _CVD * tk1 - _LSC))
+        energy_flux = dt_f * (fl_r * (_CLW * tk - _CVD * tk1 - _LVC) + ice_fl * (_CI * tk - _CVD * tk1 - _LSC))
+        eflx = tl.where(reached, energy_flux, eflx)
         qliq = qck + qrk
         qice = qsk + qik + qgk
         tnew = _t_ie(eint - eflx, qvk, qliq, qice, rh, dzv)
@@ -432,7 +452,7 @@ def _graupel_column(
         tl.store(pri + iv, fl_i)
         tl.store(prs + iv, fl_s)
         tl.store(prg + iv, fl_g)
-        tl.store(pre + iv, eflx / dt)
+        tl.store(pre + iv, eflx / dt_f)
 
 
 def _graupel_step(dz, p, rho, t, qv, qc, qi, qr, qs, qg, qnc, prr_gsp, pri_gsp, prs_gsp, prg_gsp, pflx, pre_gsp, dt, ivstart, kstart, nvec, ke):
@@ -441,7 +461,12 @@ def _graupel_step(dz, p, rho, t, qv, qc, qi, qr, qs, qg, qnc, prr_gsp, pri_gsp, 
     nvec = int(nvec)
     ke = int(ke)
     dt = float(dt)
+    import torch
+
     stride = int(nvec)
+    scratch_sx = torch.empty((nvec, 36), dtype=t.dtype, device=t.device)
+    scratch_sk = torch.empty((nvec, 6), dtype=t.dtype, device=t.device)
+    scratch_dq = torch.empty((nvec, 6), dtype=t.dtype, device=t.device)
     grid = (max(0, nvec - ivstart),)
     _graupel_column[grid](
         dz,
@@ -467,6 +492,9 @@ def _graupel_step(dz, p, rho, t, qv, qc, qi, qr, qs, qg, qnc, prr_gsp, pri_gsp, 
         nvec,
         ke,
         stride,
+        scratch_sx,
+        scratch_sk,
+        scratch_dq,
     )
 
 

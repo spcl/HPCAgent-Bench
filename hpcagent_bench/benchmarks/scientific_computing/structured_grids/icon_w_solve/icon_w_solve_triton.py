@@ -11,7 +11,14 @@ def _configs():
     ]
 
 
-@triton.autotune(configs=_configs(), key=["NLEV", "NPROMA"], cache_results=True)
+# w and z_q are rewritten from the inputs, but autotune still benches every config
+# against the live buffers. Restore them so a trial cannot feed the next one.
+@triton.autotune(
+    configs=_configs(),
+    key=["NLEV", "NPROMA"],
+    cache_results=True,
+    restore_value=["w_ptr", "z_q_ptr"],
+)
 @triton.jit
 def _icon_w_solve_step(
     z_alpha_ptr,
@@ -66,17 +73,26 @@ def _icon_w_solve_step(
         w_m1 = tl.load(w_ptr + row_wm1 + c, mask=col_mask, other=0.0)
         tl.store(w_ptr + row_w + c, (explicit - z_a * w_m1) * z_g, mask=col_mask)
 
-    for step in range(1, NLEV - 1):
-        jk = NLEV - 1 - step
+    # Thomas back-substitution, top down. Carry w[jk+1] in a register: a pipelined
+    # reload of w[jk+1] sees the value from before this sweep.
+    w_above = tl.load(w_ptr + (NLEV - 1) * NPROMA + c, mask=col_mask, other=0.0)
+    for jk in tl.range(NLEV - 2, 0, -1):
         row_w = jk * NPROMA
-        row_wp1 = (jk + 1) * NPROMA
         w_jk = tl.load(w_ptr + row_w + c, mask=col_mask, other=0.0)
-        w_jkp1 = tl.load(w_ptr + row_wp1 + c, mask=col_mask, other=0.0)
         z_q_jk = tl.load(z_q_ptr + row_w + c, mask=col_mask, other=0.0)
-        tl.store(w_ptr + row_w + c, w_jk + w_jkp1 * z_q_jk, mask=col_mask)
+        w_jk = w_jk + w_above * z_q_jk
+        tl.store(w_ptr + row_w + c, w_jk, mask=col_mask)
+        w_above = w_jk
 
 
-@triton.autotune(configs=_configs(), key=["NLEV", "NPROMA"], cache_results=True)
+# Each trial does z_w_expl = 0.5 * (z_w_expl + w). Without a restore, the bench
+# compounds that average and the real call starts from the corrupted field.
+@triton.autotune(
+    configs=_configs(),
+    key=["NLEV", "NPROMA"],
+    cache_results=True,
+    restore_value=["z_w_expl_ptr"],
+)
 @triton.jit
 def _relax_w_expl(
     z_w_expl_ptr,

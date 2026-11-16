@@ -98,39 +98,42 @@ def _pass1_stress_kernel(xl, yl, zl, p, q, sfx, sfy, sfz, ne):
     y4 = tl.load(yl + base + 4); y5 = tl.load(yl + base + 5); y6 = tl.load(yl + base + 6); y7 = tl.load(yl + base + 7)
     z0 = tl.load(zl + base + 0); z1 = tl.load(zl + base + 1); z2 = tl.load(zl + base + 2); z3 = tl.load(zl + base + 3)
     z4 = tl.load(zl + base + 4); z5 = tl.load(zl + base + 5); z6 = tl.load(zl + base + 6); z7 = tl.load(zl + base + 7)
-    bx0=0.0
-    bx1=0.0
-    bx2=0.0
-    bx3=0.0
-    bx4=0.0
-    bx5=0.0
-    bx6=0.0
-    bx7=0.0
-    by0=0.0
-    by1=0.0
-    by2=0.0
-    by3=0.0
-    by4=0.0
-    by5=0.0
-    by6=0.0
-    by7=0.0
-    bz0=0.0
-    bz1=0.0
-    bz2=0.0
-    bz3=0.0
-    bz4=0.0
-    bz5=0.0
-    bz6=0.0
-    bz7=0.0
-    bx0 = 0.5 * (x2 + x3 - x1 - x0)
-    bx1 = 0.5 * (x1 + x0 - x2 - x3)
-    by0 = 0.5 * (y2 + y3 - y1 - y0)
-    by1 = 0.5 * (y1 + y0 - y2 - y3)
-    bz0 = 0.5 * (z2 + z3 - z1 - z0)
-    bz1 = 0.5 * (z1 + z0 - z2 - z3)
-    area_x = 0.25 * (by0 * bz1 - bz0 * by1)
-    area_y = 0.25 * (bz0 * bx1 - bx0 * bz1)
-    area_z = 0.25 * (bx0 * by1 - by0 * bx1)
+    bx0 = 0.0
+    bx1 = 0.0
+    bx2 = 0.0
+    bx3 = 0.0
+    bx4 = 0.0
+    bx5 = 0.0
+    bx6 = 0.0
+    bx7 = 0.0
+    by0 = 0.0
+    by1 = 0.0
+    by2 = 0.0
+    by3 = 0.0
+    by4 = 0.0
+    by5 = 0.0
+    by6 = 0.0
+    by7 = 0.0
+    bz0 = 0.0
+    bz1 = 0.0
+    bz2 = 0.0
+    bz3 = 0.0
+    bz4 = 0.0
+    bz5 = 0.0
+    bz6 = 0.0
+    bz7 = 0.0
+    # Face areas only. Bisect vectors are temporaries; the previous unroll stored them
+    # back into the corner accumulators, so each face wiped the area it had just added.
+    # Face (0, 1, 2, 3)
+    tx0 = 0.5 * (x3 + x2 - x1 - x0)
+    ty0 = 0.5 * (y3 + y2 - y1 - y0)
+    tz0 = 0.5 * (z3 + z2 - z1 - z0)
+    tx1 = 0.5 * (x2 + x1 - x3 - x0)
+    ty1 = 0.5 * (y2 + y1 - y3 - y0)
+    tz1 = 0.5 * (z2 + z1 - z3 - z0)
+    area_x = 0.25 * (ty0 * tz1 - tz0 * ty1)
+    area_y = 0.25 * (tz0 * tx1 - tx0 * tz1)
+    area_z = 0.25 * (tx0 * ty1 - ty0 * tx1)
     bx0 += area_x
     by0 += area_y
     bz0 += area_z
@@ -143,15 +146,16 @@ def _pass1_stress_kernel(xl, yl, zl, p, q, sfx, sfy, sfz, ne):
     bx3 += area_x
     by3 += area_y
     bz3 += area_z
-    bx0 = 0.5 * (x5 + x1 - x4 - x0)
-    bx1 = 0.5 * (x4 + x0 - x5 - x1)
-    by0 = 0.5 * (y5 + y1 - y4 - y0)
-    by1 = 0.5 * (y4 + y0 - y5 - y1)
-    bz0 = 0.5 * (z5 + z1 - z4 - z0)
-    bz1 = 0.5 * (z4 + z0 - z5 - z1)
-    area_x = 0.25 * (by0 * bz1 - bz0 * by1)
-    area_y = 0.25 * (bz0 * bx1 - bx0 * bz1)
-    area_z = 0.25 * (bx0 * by1 - by0 * bx1)
+    # Face (0, 4, 5, 1)
+    tx0 = 0.5 * (x1 + x5 - x4 - x0)
+    ty0 = 0.5 * (y1 + y5 - y4 - y0)
+    tz0 = 0.5 * (z1 + z5 - z4 - z0)
+    tx1 = 0.5 * (x5 + x4 - x1 - x0)
+    ty1 = 0.5 * (y5 + y4 - y1 - y0)
+    tz1 = 0.5 * (z5 + z4 - z1 - z0)
+    area_x = 0.25 * (ty0 * tz1 - tz0 * ty1)
+    area_y = 0.25 * (tz0 * tx1 - tx0 * tz1)
+    area_z = 0.25 * (tx0 * ty1 - ty0 * tx1)
     bx0 += area_x
     by0 += area_y
     bz0 += area_z
@@ -164,15 +168,16 @@ def _pass1_stress_kernel(xl, yl, zl, p, q, sfx, sfy, sfz, ne):
     bx1 += area_x
     by1 += area_y
     bz1 += area_z
-    bx0 = 0.5 * (x6 + x2 - x5 - x1)
-    bx1 = 0.5 * (x5 + x1 - x6 - x2)
-    by0 = 0.5 * (y6 + y2 - y5 - y1)
-    by1 = 0.5 * (y5 + y1 - y6 - y2)
-    bz0 = 0.5 * (z6 + z2 - z5 - z1)
-    bz1 = 0.5 * (z5 + z1 - z6 - z2)
-    area_x = 0.25 * (by0 * bz1 - bz0 * by1)
-    area_y = 0.25 * (bz0 * bx1 - bx0 * bz1)
-    area_z = 0.25 * (bx0 * by1 - by0 * bx1)
+    # Face (1, 5, 6, 2)
+    tx0 = 0.5 * (x2 + x6 - x5 - x1)
+    ty0 = 0.5 * (y2 + y6 - y5 - y1)
+    tz0 = 0.5 * (z2 + z6 - z5 - z1)
+    tx1 = 0.5 * (x6 + x5 - x2 - x1)
+    ty1 = 0.5 * (y6 + y5 - y2 - y1)
+    tz1 = 0.5 * (z6 + z5 - z2 - z1)
+    area_x = 0.25 * (ty0 * tz1 - tz0 * ty1)
+    area_y = 0.25 * (tz0 * tx1 - tx0 * tz1)
+    area_z = 0.25 * (tx0 * ty1 - ty0 * tx1)
     bx1 += area_x
     by1 += area_y
     bz1 += area_z
@@ -185,15 +190,16 @@ def _pass1_stress_kernel(xl, yl, zl, p, q, sfx, sfy, sfz, ne):
     bx2 += area_x
     by2 += area_y
     bz2 += area_z
-    bx0 = 0.5 * (x7 + x3 - x6 - x2)
-    bx1 = 0.5 * (x6 + x2 - x7 - x3)
-    by0 = 0.5 * (y7 + y3 - y6 - y2)
-    by1 = 0.5 * (y6 + y2 - y7 - y3)
-    bz0 = 0.5 * (z7 + z3 - z6 - z2)
-    bz1 = 0.5 * (z6 + z2 - z7 - z3)
-    area_x = 0.25 * (by0 * bz1 - bz0 * by1)
-    area_y = 0.25 * (bz0 * bx1 - bx0 * bz1)
-    area_z = 0.25 * (bx0 * by1 - by0 * bx1)
+    # Face (2, 6, 7, 3)
+    tx0 = 0.5 * (x3 + x7 - x6 - x2)
+    ty0 = 0.5 * (y3 + y7 - y6 - y2)
+    tz0 = 0.5 * (z3 + z7 - z6 - z2)
+    tx1 = 0.5 * (x7 + x6 - x3 - x2)
+    ty1 = 0.5 * (y7 + y6 - y3 - y2)
+    tz1 = 0.5 * (z7 + z6 - z3 - z2)
+    area_x = 0.25 * (ty0 * tz1 - tz0 * ty1)
+    area_y = 0.25 * (tz0 * tx1 - tx0 * tz1)
+    area_z = 0.25 * (tx0 * ty1 - ty0 * tx1)
     bx2 += area_x
     by2 += area_y
     bz2 += area_z
@@ -206,15 +212,16 @@ def _pass1_stress_kernel(xl, yl, zl, p, q, sfx, sfy, sfz, ne):
     bx3 += area_x
     by3 += area_y
     bz3 += area_z
-    bx0 = 0.5 * (x4 + x0 - x7 - x3)
-    bx1 = 0.5 * (x7 + x3 - x4 - x0)
-    by0 = 0.5 * (y4 + y0 - y7 - y3)
-    by1 = 0.5 * (y7 + y3 - y4 - y0)
-    bz0 = 0.5 * (z4 + z0 - z7 - z3)
-    bz1 = 0.5 * (z7 + z3 - z4 - z0)
-    area_x = 0.25 * (by0 * bz1 - bz0 * by1)
-    area_y = 0.25 * (bz0 * bx1 - bx0 * bz1)
-    area_z = 0.25 * (bx0 * by1 - by0 * bx1)
+    # Face (3, 7, 4, 0)
+    tx0 = 0.5 * (x0 + x4 - x7 - x3)
+    ty0 = 0.5 * (y0 + y4 - y7 - y3)
+    tz0 = 0.5 * (z0 + z4 - z7 - z3)
+    tx1 = 0.5 * (x4 + x7 - x0 - x3)
+    ty1 = 0.5 * (y4 + y7 - y0 - y3)
+    tz1 = 0.5 * (z4 + z7 - z0 - z3)
+    area_x = 0.25 * (ty0 * tz1 - tz0 * ty1)
+    area_y = 0.25 * (tz0 * tx1 - tx0 * tz1)
+    area_z = 0.25 * (tx0 * ty1 - ty0 * tx1)
     bx3 += area_x
     by3 += area_y
     bz3 += area_z
@@ -227,15 +234,16 @@ def _pass1_stress_kernel(xl, yl, zl, p, q, sfx, sfy, sfz, ne):
     bx0 += area_x
     by0 += area_y
     bz0 += area_z
-    bx0 = 0.5 * (x6 + x5 - x7 - x4)
-    bx1 = 0.5 * (x7 + x4 - x6 - x5)
-    by0 = 0.5 * (y6 + y5 - y7 - y4)
-    by1 = 0.5 * (y7 + y4 - y6 - y5)
-    bz0 = 0.5 * (z6 + z5 - z7 - z4)
-    bz1 = 0.5 * (z7 + z4 - z6 - z5)
-    area_x = 0.25 * (by0 * bz1 - bz0 * by1)
-    area_y = 0.25 * (bz0 * bx1 - bx0 * bz1)
-    area_z = 0.25 * (bx0 * by1 - by0 * bx1)
+    # Face (4, 7, 6, 5)
+    tx0 = 0.5 * (x5 + x6 - x7 - x4)
+    ty0 = 0.5 * (y5 + y6 - y7 - y4)
+    tz0 = 0.5 * (z5 + z6 - z7 - z4)
+    tx1 = 0.5 * (x6 + x7 - x5 - x4)
+    ty1 = 0.5 * (y6 + y7 - y5 - y4)
+    tz1 = 0.5 * (z6 + z7 - z5 - z4)
+    area_x = 0.25 * (ty0 * tz1 - tz0 * ty1)
+    area_y = 0.25 * (tz0 * tx1 - tx0 * tz1)
+    area_z = 0.25 * (tx0 * ty1 - ty0 * tx1)
     bx4 += area_x
     by4 += area_y
     bz4 += area_z
@@ -812,7 +820,7 @@ def _calc_monotonic_q_region(
     qq,
 ):
     """CalcMonotonicQRegionForElems for the single region (all elements)."""
-    ielem = torch.arange(numElem, dtype=torch.intp)
+    ielem = torch.arange(numElem, device=delv_xi.device, dtype=torch.int64)
     bcmask = elemBC
     limiter = _MONOQ_LIMITER_MULT
     maxslope = _MONOQ_MAX_SLOPE
@@ -832,9 +840,9 @@ def _calc_monotonic_q_region(
     dp3 = _neighbor_delv(delv_zeta, lzetap, ielem, bcmask, ZETA_P, ZETA_P_SYMM, ZETA_P_FREE, numElem)
     phizeta = _phi(dm3, dp3, norm3, limiter, maxslope)
 
-    delvxxi = torch.minimum(delv_xi * delx_xi, 0.0)
-    delvxeta = torch.minimum(delv_eta * delx_eta, 0.0)
-    delvxzeta = torch.minimum(delv_zeta * delx_zeta, 0.0)
+    delvxxi = torch.clamp(delv_xi * delx_xi, max=0.0)
+    delvxeta = torch.clamp(delv_eta * delx_eta, max=0.0)
+    delvxzeta = torch.clamp(delv_zeta * delx_zeta, max=0.0)
     rho = elemMass / (volo * vnew)
     qlin = -_QLC_MONOQ * rho * (delvxxi * (1.0 - phixi) + delvxeta * (1.0 - phieta) + delvxzeta * (1.0 - phizeta))
     qquad = (
@@ -923,7 +931,7 @@ def _calc_energy(e_old, delvc, p_old, q_old, compression, compHalfStep, vnewc, w
     rho0 = _REFDENS
     emin = _EMIN
     e_new1 = e_old - 0.5 * delvc * (p_old + q_old) + 0.5 * work
-    e_new2 = torch.maximum(e_new1, emin)
+    e_new2 = torch.clamp(e_new1, min=emin)
 
     pHalfStep, bvc, pbvc = _calc_pressure(e_new2, compHalfStep, vnewc)
 
@@ -935,7 +943,7 @@ def _calc_energy(e_old, delvc, p_old, q_old, compression, compHalfStep, vnewc, w
 
     e_new4 = e_new3 + 0.5 * work
     e_new5 = torch.where(torch.abs(e_new4) < _E_CUT, 0.0, e_new4)
-    e_new6 = torch.maximum(e_new5, emin)
+    e_new6 = torch.clamp(e_new5, min=emin)
 
     p_new, bvc, pbvc = _calc_pressure(e_new6, compression, vnewc)
 
@@ -944,7 +952,7 @@ def _calc_energy(e_old, delvc, p_old, q_old, compression, compHalfStep, vnewc, w
     q_tilde = torch.where(delvc > 0.0, 0.0, ssc4 * ql + qq)
     e_new7 = e_new6 - (7.0 * (p_old + q_old) - 8.0 * (pHalfStep + q_new) + (p_new + q_tilde)) * delvc * _SIXTH
     e_new8 = torch.where(torch.abs(e_new7) < _E_CUT, 0.0, e_new7)
-    e_new9 = torch.maximum(e_new8, emin)
+    e_new9 = torch.clamp(e_new8, min=emin)
 
     p_new, bvc, pbvc = _calc_pressure(e_new9, compression, vnewc)
 
