@@ -305,6 +305,20 @@ def test_dace_call_temporaries_follow_the_run_precision() -> None:
     assert "np.float64" not in src, src
 
 
+@pytest.mark.parametrize("kernel", ["dist_mlp_tp", "dist_gemm_gn_swish", "mnist_infer"])
+def test_a_machine_learning_helper_and_its_buffers_follow_the_run_precision(kernel: str) -> None:
+    # A bf16 kernel's helper temporaries get the compute dtype, float32, which the C emitters declare. The dace
+    # emitter kept that float32 as an explicit ``dc.float32`` helper parameter and an ``np.float32`` buffer, so a
+    # bf16 dace program refused the call (dist_mlp_tp: ``"x" of logsumexp_rows is declared float32 but "x3" holds
+    # bfloat16``). An opmath kernel's dace program computes in the precision global throughout.
+    from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace
+    from tests.translators.bench_yaml import kir_for
+
+    src = emit_dace(kir_for(kernel, do_lower=True), fn_name=kernel)
+    assert "dc.float32" not in src, src
+    assert "np.float32" not in src, src
+
+
 def test_an_unresolvable_buffer_dtype_refuses() -> None:
     # A refusal beats a silently wrong emit: a dtype expression nothing can resolve has no width
     # any emitter can pick (stored verbatim it would render as double), so it stops here.
