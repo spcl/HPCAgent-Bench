@@ -218,6 +218,10 @@ class CacheMiss(LookupError):
     """A form a consumer asked for is not in the cache, or its render failed; the message says which."""
 
 
+class NeverRendered(CacheMiss):
+    """The cache holds no entry for the form at all: no render of it was attempted."""
+
+
 def cache_key(kind: str, inputs: str, dace_commit: str, options: Mapping[str, object]) -> str:
     """The key of one entry of ``kind`` (``canonical`` or ``form``): what it is made from (a program's or a canonical
     entry's hash), the dace that makes it, and how."""
@@ -355,7 +359,7 @@ def form(cache_root: pathlib.Path, key: str) -> Form:
     """The :class:`Form` under ``key``; :class:`CacheMiss` when it was never rendered or its render failed."""
     entry = read_entry(cache_root, key)
     if entry is None:
-        raise CacheMiss(f"cache {cache_root} has no form {key}: it was never rendered")
+        raise NeverRendered(f"cache {cache_root} has no form {key}: it was never rendered")
     if entry.verdict is not RenderVerdict.OK:
         raise CacheMiss(f"form {key} of {entry.kernel} has no source (verdict {entry.verdict.text!r}): {entry.error}")
     where = entry_path(cache_root, key)
