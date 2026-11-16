@@ -499,14 +499,51 @@ PARALLEL_FUSION_ROUNDS = 2
 def pipeline_canonicalize(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
     """The fork's ``canonicalize`` plus ``finalize_for_target`` (required: library nodes stay unexpanded); on GPU
     ``offload_to_gpu`` runs between them. Imported inside: only spcl/dace@extended has it."""
+    canonicalize_and_finalize(sdfg, ctx)
+
+
+def pipeline_canonicalize_nolift(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
+    """Ablation: :func:`pipeline_canonicalize` without lifting. No unit of the ``lift_semantics`` stage runs (wherever
+    the recipe places one), and neither do the Einsum, copy and fill lifts that close a round of fusion."""
+    from dace.transformation.passes.canonicalize.pipeline import LIFT_SEMANTICS, stage_labels
+
+    labels = [label for label in stage_labels(device_target(ctx)) if label != LIFT_SEMANTICS]
+    canonicalize_and_finalize(sdfg, ctx, stages=labels, lift=False, lift_copy=False)
+
+
+def pipeline_canonicalize_nosmt(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
+    """Ablation: :func:`pipeline_canonicalize` without the SMT solver (``optimizer.canonicalization.smt``): every pass
+    runs as if z3 were not installed, specialization included."""
+    with dace.config.set_temporary("optimizer", "canonicalization", "smt", value=False):
+        canonicalize_and_finalize(sdfg, ctx)
+
+
+#: The pipelines that parse and canonicalize as the CPF cache does; only :func:`pipeline_canonicalize` reads the
+#: cached form, since an ablation must canonicalize for itself.
+CANONICAL_TRANSFORMS = (pipeline_canonicalize, pipeline_canonicalize_nolift, pipeline_canonicalize_nosmt)
+
+
+def device_target(ctx: PipelineContext) -> str:
+    return "gpu" if ctx.device is dace_dtypes.DeviceType.GPU else "cpu"
+
+
+def canonicalize_and_finalize(sdfg: dace.SDFG, ctx: PipelineContext, **options: object) -> None:
+    """``canonicalize`` with ``options``, then GPU offload, then ``finalize_for_target``."""
     from dace.transformation.passes.canonicalize.finalize import finalize_for_target, offload_to_gpu
     from dace.transformation.passes.canonicalize.pipeline import canonicalize
 
-    target = "gpu" if ctx.device is dace_dtypes.DeviceType.GPU else "cpu"
+    target = device_target(ctx)
     cpf_canonical.declare_small(sdfg, ctx.small)
     cpf_canonical.declare_positive(sdfg, ctx.positive)
     # One validate of the result; validate_all would re-validate after every stage (a bisect aid).
-    canonicalize(sdfg, target=target, validate=True, validate_all=False, nonnegative_symbols=sorted(ctx.nonnegative))
+    canonicalize(
+        sdfg,
+        target=target,
+        validate=True,
+        validate_all=False,
+        nonnegative_symbols=sorted(ctx.nonnegative),
+        **options,  # pyright: ignore[reportArgumentType]  # the ablations pass stages and the lift switches
+    )
     if target == "gpu":
         offload_to_gpu(sdfg)
         if ctx.offloaded is not None:
@@ -621,6 +658,10 @@ DACE_PIPELINES: tuple[SdfgPipeline, ...] = (
     SdfgPipeline("parallel_gpu", pipeline_parallel, config=PARALLEL_CODEGEN),
     SdfgPipeline("canon_cpu", pipeline_canonicalize, config=READABLE_CODEGEN),
     SdfgPipeline("canon_gpu", pipeline_canonicalize, config=READABLE_CODEGEN),
+    SdfgPipeline("canon_nolift_cpu", pipeline_canonicalize_nolift, config=READABLE_CODEGEN),
+    SdfgPipeline("canon_nolift_gpu", pipeline_canonicalize_nolift, config=READABLE_CODEGEN),
+    SdfgPipeline("canon_nosmt_cpu", pipeline_canonicalize_nosmt, config=READABLE_CODEGEN),
+    SdfgPipeline("canon_nosmt_gpu", pipeline_canonicalize_nosmt, config=READABLE_CODEGEN),
     SdfgPipeline("autoopt_cpu", pipeline_auto_opt, config=CLASSIC_CODEGEN),
     SdfgPipeline("autoopt_gpu", pipeline_auto_opt, config=CLASSIC_CODEGEN),
 )
@@ -871,8 +912,8 @@ class DaceFramework(Framework):
             pipe = pipeline_named(name)
             try:
                 apply_pipeline_config(pipe)
-                canonical = pipe.transform is pipeline_canonicalize
-                if canonical and canonical_root:
+                canonical = pipe.transform in CANONICAL_TRANSFORMS
+                if pipe.transform is pipeline_canonicalize and canonical_root:
                     sdfg = self.cached_canonical(bench, pathlib.Path(canonical_root))
                     sdfg.name = pipe.name  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
                 else:

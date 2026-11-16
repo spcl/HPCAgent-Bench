@@ -25,6 +25,7 @@ __all__ = [
     "PACKETS",
     "Arch",
     "Column",
+    "CANONICAL_STAGES",
     "DaceStage",
     "ModelEntry",
     "PacketDef",
@@ -48,6 +49,13 @@ class DaceStage(Coded):
     CANON = enum.auto()
     PARALLEL = enum.auto()
     AUTOOPT = enum.auto()
+    #: Ablations of ``CANON``: without lifting, and without the SMT solver.
+    CANON_NOLIFT = enum.auto()
+    CANON_NOSMT = enum.auto()
+
+
+#: The stages that run DaCe's canonicalize, which needs spcl/dace@extended.
+CANONICAL_STAGES: frozenset[DaceStage] = frozenset({DaceStage.CANON, DaceStage.CANON_NOLIFT, DaceStage.CANON_NOSMT})
 
 
 class Transform(Coded):

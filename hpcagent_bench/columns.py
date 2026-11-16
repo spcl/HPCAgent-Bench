@@ -43,6 +43,8 @@ DACE_STAGES: dict[DaceStage, tuple[str, str]] = {
     DaceStage.CANON: ("canonicalized", "canonicalize"),
     DaceStage.PARALLEL: ("parallel", "parallel"),
     DaceStage.AUTOOPT: ("auto-opt", "auto_optimize"),
+    DaceStage.CANON_NOLIFT: ("canonicalized, no lifting", "canonicalize without lifting"),
+    DaceStage.CANON_NOSMT: ("canonicalized, no SMT", "canonicalize without the SMT solver"),
 }
 DACE_PRECISIONS = frozenset({Precision.FP64, Precision.FP32, Precision.FP16})
 
@@ -587,6 +589,11 @@ FRAMEWORKS.add(
         flavor="fastmath",
     ),
 )
+
+# The CPF ablations, last so that no published figure's slot moves.
+for ablation in (DaceStage.CANON_NOLIFT, DaceStage.CANON_NOSMT):
+    for device in (Arch.CPU, Arch.GPU):
+        add_dace(device, ablation)
 
 
 def register_plugin_flavors() -> None:
