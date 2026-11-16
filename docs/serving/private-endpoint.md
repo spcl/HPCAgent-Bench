@@ -2,8 +2,10 @@
 
 `containers/inference/serve-private.sbatch` starts a keyed, OpenAI-compatible
 Qwen3.8 SGLang server on one Beverin node that only you can use. `hpcagent_bench/cluster/serve-only.sbatch`, by
-contrast, serves every interface without a key ([`README.md`](README.md)). Contributors:
-[`extending-private-inference.md`](extending-private-inference.md).
+contrast, serves every interface without a key ([`README.md`](README.md)), unless `ACCESS=alps`, which serves an
+experiment's SGLang model under the same rules (section 1) for your own setups on another partition
+([`cross-partition.md`](cross-partition.md)). Both launchers share `containers/inference/private_endpoint.sh`.
+Contributors: [`extending-private-inference.md`](extending-private-inference.md).
 
 | Client | `ACCESS` | Server binds | Connection |
 |---|---|---|---|

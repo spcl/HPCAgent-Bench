@@ -5,6 +5,7 @@
 #   containers/images/install_edfs.sh                     # this host's platform (build_common.sh ce_platform)
 #   CE_PLATFORM=gh200 containers/images/install_edfs.sh   # or name it: amd, gh200, nvidia-x86, cpu
 #   containers/images/install_edfs.sh <role>...           # only these rows (registry.sh promote)
+#   CE_IMAGE_RELEASE=v10 containers/images/install_edfs.sh   # freeze the live images as release v10 (images.env)
 #
 # Refuses to point an existing EDF at a different image unless ALLOW_REPOINT=1: every job that
 # starts afterwards, queued ones included, would move. `registry.sh promote` sets it.
@@ -51,6 +52,21 @@ render() {
     printf '  %-40s -> %s\n' "${name}" "${image}"
 }
 
+# freeze <live sqsh>: prints the release's <stem>-<release>.sqsh, a hard link of the live image made the first time
+# (no copy, and a later promote or pull leaves it on the old inode), its sidecars copied: a pull rewrites the live
+# .sha256 in place.
+freeze() {
+    local live="${CE_IMAGES}/$1" frozen="${CE_IMAGES}/${1%.sqsh}-${CE_IMAGE_RELEASE}.sqsh" ext
+    if [[ ! -e "${frozen}" ]]; then
+        [[ -f "${live}" ]] || { echo "refusing to freeze ${frozen##*/}: ${live} does not exist" >&2; return 1; }
+        for ext in .digest .sha256; do
+            [[ ! -f "${live}${ext}" ]] || cp -p -- "${live}${ext}" "${frozen}${ext}"
+        done
+        ln -- "${live}" "${frozen}"
+    fi
+    printf '%s\n' "${frozen##*/}"
+}
+
 CE_PLATFORM="$(ce_platform)"
 case "${CE_PLATFORM}" in
     amd|gh200|nvidia-x86|cpu) ;;
@@ -66,6 +82,14 @@ for role in ${*:-$(ce_roles "${CE_PLATFORM}")}; do
     # An optional image (mi200) renders only when it is there.
     if [[ ",${flags}," == *,opt,* && ! -f "${CE_IMAGES}/${sqsh}" ]]; then
         continue
+    fi
+    if [[ -n "${CE_IMAGE_RELEASE}" ]]; then
+        edf+="-${CE_IMAGE_RELEASE}"
+        if [[ -f "${EDF_DIR}/${edf}.toml" ]]; then
+            printf '  %-40s kept: a release EDF is never rewritten\n' "${edf}"
+            continue
+        fi
+        sqsh="$(freeze "${sqsh}")" || { failed=$((failed + 1)); continue; }
     fi
     preload=""
     [[ ",${flags}," =~ ,preload=([^,]+), ]] && preload="${BASH_REMATCH[1]}"

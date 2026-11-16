@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Where a setup's inference comes from (``INFERENCE_SOURCE``): a server this job starts (``node``, default) or a
-hosted endpoint (``service``, the ``INFERENCE_SERVICE_*`` block). Both resolve to a base URL, model and key
-(:func:`launcher_env`); the key travels by variable NAME only. Runs on the batch host under the host python."""
+"""Where a setup's inference comes from (``INFERENCE_SOURCE``): a server this job starts (``node``, default), a hosted
+endpoint (``service``, the ``INFERENCE_SERVICE_*`` block) or the keyed endpoint another job of ours serves
+(``endpoint``, the ``endpoint.json`` that ``serve-only.sbatch ACCESS=alps`` writes, ``INFERENCE_ENDPOINT_FILE``). Each
+resolves to a base URL, model and key (:func:`launcher_env`); the key travels by variable or file NAME only. Runs on
+the batch host under the host python."""
 
 import argparse
 import dataclasses
@@ -12,6 +14,7 @@ import os
 import pathlib
 import shlex
 import sys
+import urllib.parse
 from collections.abc import Mapping
 
 import pydantic
@@ -22,21 +25,25 @@ from hpcagent_agent.coded import Coded
 __all__ = [
     "CLAUDE_KEY_VARIABLE",
     "CLAUDE_MODEL_PINS",
+    "ENDPOINT_FILE_KEY",
     "FREE_ONLY_KEY",
     "RECORD_NAME",
     "REQUIRED",
     "Api",
     "Auth",
+    "EndpointProvenance",
     "NodeProvenance",
     "PricingListing",
     "Provenance",
     "Service",
+    "ServedEndpoint",
     "ServiceProvenance",
     "TunerProvenance",
     "Source",
     "check_free",
     "check_network",
     "claude_key_variable",
+    "endpoint_launcher_env",
     "from_environ",
     "launcher_env",
     "main",
@@ -45,9 +52,11 @@ __all__ = [
     "provenance",
     "record",
     "required_value",
+    "served_endpoint",
     "service_harnesses",
     "shell_block",
     "source",
+    "write_endpoint",
 ]
 
 
@@ -60,6 +69,8 @@ class Source(Coded):
     SERVICE = enum.auto()
     #: No model: a tuner setup (``TUNER`` names the optimizer).
     NONE = enum.auto()
+    #: The keyed endpoint another job of ours serves (:class:`ServedEndpoint`, ``INFERENCE_ENDPOINT_FILE``).
+    ENDPOINT = enum.auto()
 
 
 class Api(Coded):
@@ -200,6 +211,108 @@ def launcher_env(service: Service) -> dict[str, str]:
     }
 
 
+#: The setup key naming the ``endpoint.json`` an ``endpoint`` setup reads.
+ENDPOINT_FILE_KEY = "INFERENCE_ENDPOINT_FILE"
+
+
+class ServedEndpoint(pydantic.BaseModel):
+    """``endpoint.json``: the keyed endpoint a serving job of ours publishes (``serve-only.sbatch ACCESS=alps``) once a
+    request without its key answered 401 and one with it 200, and deletes before the server stops. Names the key file,
+    never the key. ``url``, ``served_model`` and ``key_file`` are what ``alps-endpoint.sh`` reads as well."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    #: The first pipeline's ``/v1`` base, and every serving pipeline's (the driver stripes agents over them).
+    url: str
+    replicas: tuple[str, ...]
+    served_model: str
+    #: What serves: the checkpoint, the engine and its EDF (the provenance an ``endpoint`` row records).
+    model: str
+    engine: str
+    ce_env: str
+    key_file: str
+    nodes: str
+    job_id: str
+
+
+def checked_url(url: str) -> str:
+    """``url`` unless it is not a plain ``http://<host>:<port>/v1`` base on a named, non-wildcard host."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "http" or parts.hostname in (None, "", "0.0.0.0", "::") or parts.port is None:  # noqa: S104
+        raise SystemExit(f"endpoint URL {url!r} is not http://<host>:<port>/v1 on a named host")
+    if parts.path.rstrip("/") != "/v1":
+        raise SystemExit(f"endpoint URL {url!r} is not a /v1 base")
+    return url
+
+
+def owned_private(path: pathlib.Path, what: str) -> None:
+    """Refuse ``path`` unless it is a regular file of this user, mode 600: an endpoint and its key serve one user's
+    jobs, and anyone who could rewrite the file could point them at another server."""
+    try:
+        status = path.stat()
+    except OSError as exc:
+        raise SystemExit(f"cannot read the {what} {path}: {exc}") from exc
+    if not path.is_file() or status.st_uid != os.getuid() or status.st_mode & 0o777 != 0o600:
+        raise SystemExit(f"the {what} {path} must be a file owned by you, mode 600")
+
+
+def write_endpoint(path: pathlib.Path, environ: Mapping[str, str]) -> ServedEndpoint:
+    """Publish the endpoint the serving job's environment describes as ``path``, mode 600 and renamed into place so a
+    reader never sees half of it."""
+    replicas = tuple(checked_url(url) for url in required_value(environ, "VLLM_REPLICA_URLS").split(","))
+    endpoint = ServedEndpoint(
+        url=replicas[0],
+        replicas=replicas,
+        served_model=required_value(environ, "VLLM_SERVED_MODEL"),
+        model=required_value(environ, "VLLM_MODEL"),
+        engine=environ.get("INFERENCE_ENGINE", "").strip() or "vllm",
+        ce_env=required_value(environ, "INFERENCE_CE_ENV"),
+        key_file=required_value(environ, "INFERENCE_KEY_FILE"),
+        nodes=required_value(environ, "SLURM_JOB_NODELIST"),
+        job_id=required_value(environ, "SLURM_JOB_ID"),
+    )
+    staged = path.with_name(f".{path.name}.{os.getpid()}")
+    descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(endpoint.model_dump_json() + "\n")
+    staged.replace(path)
+    return endpoint
+
+
+def served_endpoint(environ: Mapping[str, str]) -> ServedEndpoint:
+    """The endpoint an ``endpoint`` setup runs against, fully checked: the file and its key file are this user's, mode
+    600, every URL a plain http base, the setup starts no server, and the endpoint serves the
+    setup's own checkpoint (``VLLM_MODEL``), so a row never records one model while another answered."""
+    path = pathlib.Path(required_value(environ, ENDPOINT_FILE_KEY))
+    owned_private(path, "endpoint file")
+    try:
+        endpoint = ServedEndpoint.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"{path} is not an endpoint file serve-only.sbatch ACCESS=alps writes: {exc}") from exc
+    for url in (endpoint.url, *endpoint.replicas):
+        checked_url(url)
+    owned_private(pathlib.Path(endpoint.key_file), "key file")
+    nodes = environ.get("INFERENCE_NODES", "0").strip() or "0"
+    if nodes != "0":
+        raise SystemExit(f"an endpoint setup starts no server; set INFERENCE_NODES=0, not {nodes}")
+    wanted = environ.get("VLLM_MODEL", "").strip()
+    if wanted and wanted != endpoint.model:
+        raise SystemExit(f"{path} serves {endpoint.model}, but this setup is {wanted}: refusing to record it as such")
+    return endpoint
+
+
+def endpoint_launcher_env(endpoint: ServedEndpoint) -> dict[str, str]:
+    """The endpoint values run_cluster.sh exports for an ``endpoint`` setup, in the names a server setup composes: the
+    key FILE, which the launcher reads itself, never the key."""
+    return {
+        "VLLM_MASTER_HOST": "",
+        "VLLM_BASE_URL": endpoint.url,
+        "VLLM_REPLICA_URLS": ",".join(endpoint.replicas),
+        "VLLM_SERVED_MODEL": endpoint.served_model,
+        "INFERENCE_KEY_FILE": endpoint.key_file,
+    }
+
+
 class Endpoint(pydantic.BaseModel):
     """One provider serving the model in a :class:`PricingListing`."""
 
@@ -309,6 +422,21 @@ class ServiceProvenance(pydantic.BaseModel):
     key_env: str
 
 
+class EndpointProvenance(pydantic.BaseModel):
+    """``inference.json`` of a setup served by another job's keyed endpoint: what served (from its ``endpoint.json``),
+    the job and the pipelines; never the key."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    source: Source = Source.ENDPOINT
+    engine: str
+    ce_env: str
+    model: str
+    job_id: str
+    nodes: str
+    replicas: tuple[str, ...]
+
+
 class TunerProvenance(pydantic.BaseModel):
     """``inference.json`` of a tuner setup: no model, the optimizer ``TUNER`` names."""
 
@@ -319,7 +447,7 @@ class TunerProvenance(pydantic.BaseModel):
 
 
 #: ``inference.json``, any source (told apart by ``source``).
-Provenance = NodeProvenance | ServiceProvenance | TunerProvenance
+Provenance = NodeProvenance | ServiceProvenance | EndpointProvenance | TunerProvenance
 
 
 def provenance(environ: Mapping[str, str]) -> Provenance:
@@ -333,6 +461,16 @@ def provenance(environ: Mapping[str, str]) -> Provenance:
             engine=environ.get("INFERENCE_ENGINE", "").strip() or "vllm",
             ce_env=environ.get("INFERENCE_CE_ENV", "").strip(),
             model=environ.get("VLLM_MODEL", "").strip(),
+        )
+    if declared is Source.ENDPOINT:
+        endpoint = served_endpoint(environ)
+        return EndpointProvenance(
+            engine=endpoint.engine,
+            ce_env=endpoint.ce_env,
+            model=endpoint.model,
+            job_id=endpoint.job_id,
+            nodes=endpoint.nodes,
+            replicas=endpoint.replicas,
         )
     service = from_environ(environ)
     return ServiceProvenance(
@@ -367,7 +505,13 @@ def main(argv: list[str]) -> int:
         help="fail when a service setup's agent network policy cannot reach its endpoint",
     )
     parser.add_argument("--record", type=pathlib.Path, help="write the run's inference provenance into this directory")
+    parser.add_argument(
+        "--write-endpoint", type=pathlib.Path, help="publish this serving job's keyed endpoint as this endpoint.json"
+    )
     args = parser.parse_args(argv)
+    if args.write_endpoint is not None:
+        write_endpoint(args.write_endpoint, os.environ)
+        return 0
     if args.check_free and os.environ.get(FREE_ONLY_KEY, "").strip() == "1":
         check_free(from_environ(os.environ))
     if args.check_network and source(os.environ) is Source.SERVICE:
@@ -375,7 +519,12 @@ def main(argv: list[str]) -> int:
     if args.record is not None:
         record(args.record, os.environ)
     if args.export:
-        print(shell_block(launcher_env(from_environ(os.environ))))
+        exported = (
+            endpoint_launcher_env(served_endpoint(os.environ))
+            if source(os.environ) is Source.ENDPOINT
+            else launcher_env(from_environ(os.environ))
+        )
+        print(shell_block(exported))
     return 0
 
 

@@ -123,14 +123,26 @@ or split the tag. A smoke
 run is the same command with a short `--time`. Check the queue and budget first:
 `squeue -u "$USER" -o "%.10i %.30j %.9T %.10M %.5D %R"`.
 
-**mi200 (overflow, never paper data).** The `mi200` hardware (`--hardware mi200`, or `--system beverin-mi200`,
+**mi200 (overflow, or a declared mi200 study; never pooled with mi300 data).** The `mi200` hardware (`--hardware mi200`, or `--system beverin-mi200`,
 whose entry also names partition `mi200` and 8 GCDs per node) swaps every `*_CE_ENV` to its `-mi200-` EDF, pins
 `[hardware.mi200]` (and its `models` tables) and `GPUS_PER_NODE`. The recorded study names `mi200` (default `<TAG>-mi200`; a `RECORD_STUDY` you pass must name it); qwen38 and oss120b have an
-mi200 serving layer.
+mi200 serving layer. A study may run on mi200 as its hardware of record when it says so (its own study name, e.g.
+`cpf-ml40-mi200`): its rows stay in that study and are never pooled with an mi300 one. A model mi200 cannot serve
+(kimi27sglang) runs its agents and judge there against the keyed endpoint of a serving job on mi300
+(`INFERENCE_SOURCE=endpoint`, [`docs/serving/cross-partition.md`](../docs/serving/cross-partition.md)); the row records
+mi200, the judge's hardware.
 
 ```bash
 EXPERIMENT=harness20-mi200 BASE=harness TAG=harness20 HARNESSES=claude SUBMIT=1 ../hpcagent_bench/cluster/submit.sh --system beverin-mi200 --account <project>
+# kimi27sglang served on mi300 (serve-only.sbatch ACCESS=alps), agents and judge on mi200
+EXTRA_ENV_KV="INFERENCE_SOURCE=endpoint INFERENCE_NODES=0 INFERENCE_ENDPOINT_FILE=$SCRATCH/inference-server/<serving jobid>/endpoint.json" \
+    BASE=mlgpu40 TAG=ml40 MODELS=kimi27sglang LANGUAGES=hip RECORD_STUDY=cpf-ml40-mi200 SUBMIT=1 \
+    ../hpcagent_bench/cluster/submit.sh --system beverin-mi200 --account <project>
 ```
+
+**A frozen campaign** sets `CE_IMAGE_RELEASE=v<N>` for every submission: every `*_CE_ENV` gains `-v<N>`, the EDFs
+`CE_IMAGE_RELEASE=v<N> containers/images/install_edfs.sh` froze, which no promote or pull moves while the campaign runs
+([`containers/README.md`](../containers/README.md#a-frozen-release)).
 
 ## Sizing agents and walltime
 

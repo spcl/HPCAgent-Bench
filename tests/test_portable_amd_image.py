@@ -207,6 +207,40 @@ def test_install_edfs_renders_each_partition_edf_with_its_own_arch(tmp_path: pat
             assert {var: rendered["env"][var] for var in ARCH_VARS} == dict.fromkeys(ARCH_VARS, arch), name
 
 
+def test_a_release_freezes_every_edf_on_an_image_no_promote_moves(tmp_path: pathlib.Path) -> None:
+    """CE_IMAGE_RELEASE=v10: each <edf>-v10 mounts a hard link of the live image with its sidecars; a promote renames
+    a new image over the live name and renders the live EDFs only, and a second freeze keeps what the first wrote."""
+    ce, edf_dir = tmp_path / "ce", tmp_path / "edf"
+    ce.mkdir()
+    for image in images_env(*AMD_ROLES):
+        (ce / image).write_bytes(b"old")
+        (ce / f"{image}.digest").write_text("sha256:old\n", encoding="utf-8")
+    env = {"HOME": str(tmp_path), "SCRATCH": str(tmp_path), "CE_IMAGES": str(ce), "EDF_DIR": str(edf_dir)}
+    freeze = {**env, "CE_PLATFORM": "amd", "CE_IMAGE_RELEASE": "v10"}
+    done = run(["bash", str(CE / "install_edfs.sh")], freeze)
+    assert done.returncode == 0, done.stderr
+    frozen = ce / LIVE["judge"].replace(".sqsh", "-v10.sqsh")
+    assert edf(edf_dir, "hpcagent-bench-judge-mi200-latest-v10")["image"] == str(frozen)
+    assert frozen.stat().st_ino == (ce / LIVE["judge"]).stat().st_ino
+    assert (ce / f"{frozen.name}.digest").read_text(encoding="utf-8") == "sha256:old\n"
+    release_edf = (edf_dir / "hpcagent-bench-judge-mi200-latest-v10.toml").read_text(encoding="utf-8")
+
+    candidate = ce / CANDIDATES["judge"]
+    candidate.write_bytes(b"new")
+    (ce / f"{candidate.name}.digest").write_text("sha256:new\n", encoding="utf-8")
+    (ce / f"{candidate.name}.verified").write_text("verified role=judge job=1 digest=sha256:new\n", encoding="utf-8")
+    done = run(["bash", str(CE / "registry.sh"), "promote", "judge"], {**env, "CE_IMAGE_RELEASE": "v10"})
+    assert done.returncode == 0, done.stderr
+    assert (ce / LIVE["judge"]).read_bytes() == b"new"
+    assert frozen.read_bytes() == b"old"
+    assert (edf_dir / "hpcagent-bench-judge-mi200-latest-v10.toml").read_text(encoding="utf-8") == release_edf
+
+    done = run(["bash", str(CE / "install_edfs.sh"), "judge-mi200"], freeze)
+    assert done.returncode == 0, done.stderr
+    assert "kept: a release EDF is never rewritten" in done.stdout
+    assert frozen.read_bytes() == b"old"
+
+
 def test_the_mlscale_edf_is_the_judge_edf_plus_the_hwloc_preload(tmp_path: pathlib.Path) -> None:
     done, edf_dir = install_edfs(tmp_path, images_env(*AMD_ROLES))
     assert done.returncode == 0, done.stderr

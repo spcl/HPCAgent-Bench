@@ -76,6 +76,23 @@ With `CE_IMAGE_FLAVOR=native` set at submission, an experiment's agent and judge
 `-native` ones (`hpcagent_bench/cluster/submit_common.sh` `apply_flavor`), as do the default EDFs of the
 standalone scripts (regrade, preflight).
 
+### A frozen release
+
+`CE_IMAGE_RELEASE=v<N>` names one release for every role, so a campaign runs in images nothing can repoint while it
+runs. Freeze the live images once, after the last promote of the release:
+
+```bash
+CE_IMAGE_RELEASE=v10 containers/images/install_edfs.sh   # hpcagent-bench-agent-mi300-latest-v10, ...-judge-mi200-latest-v10, ...
+```
+
+Each EDF `<edf>-v10` mounts `<sqsh stem>-v10.sqsh`, a hard link of the live squashfs (no copy) with copies of its
+`.digest` and `.sha256`. A later promote renames a new image over the live name and a pull removes the live file
+before writing it, so the link keeps the image it froze, and `install_edfs.sh` never rewrites a release EDF that
+exists (`ALLOW_REPOINT` does not apply; `registry.sh promote` renders the live names only). With the same variable
+set at submission, `submit.sh` and `serve-only.sbatch` append `-v10` to every `*_CE_ENV`, serving included
+(`submit_common.sh` `apply_release`), so each setup's env snapshot names the release it ran in and `inference.json`
+its serving EDF; the frozen `.digest` is the image identity a table cites.
+
 A plain `podman build` / `docker build` of a Dockerfile, without the build scripts, is a native
 build too: `SPACK_TARGET` defaults to empty, which is spack's host detection. Every image records
 which it is in the label `org.hpcagent-bench.cpu-target` (the baseline, or `native`).

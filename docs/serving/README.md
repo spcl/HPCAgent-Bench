@@ -12,6 +12,7 @@ carry to MI300X.
 | [`knobs.md`](knobs.md) | cross-model: APU memory model, KV pool threshold, aiter derate, HiCache, fabric, Slurm shape |
 | [`private-endpoint.md`](private-endpoint.md) | a keyed Qwen3.8 server only you can use, from your laptop or your own Daint jobs |
 | [`mi200-endpoint.md`](mi200-endpoint.md) | the same server in BF16 on an mi200 node, and the one-command ping test that checks it from anywhere |
+| [`cross-partition.md`](cross-partition.md) | an experiment's serving on mi300, keyed (`serve-only.sbatch ACCESS=alps`), for a setup whose agents and judge run on mi200 |
 | [`extending-private-inference.md`](extending-private-inference.md) | contributors: the private launcher's security contract, new presets, access paths, engines |
 
 The authoritative launch line per model is the render of `experiment:<model>`
@@ -73,7 +74,11 @@ layer alone ([known issue 5](known-issues.md#5-8-fabric-and-memory)).
 |---|---|---|---|
 | `hpcagent-bench-sglang-mi300-latest` | SGLang 0.5.20 | Qwen3.8, Kimi K2.7, GLM-5.3 | yes |
 | `hpcagent-bench-vllm-mi300-latest` | vLLM 0.28.0 | gpt-oss-120b | yes |
-| `hpcagent-bench-vllm-mi200-latest` | vLLM 0.28.0 (same image) | Qwen3.8 on mi200 | yes |
+| `hpcagent-bench-vllm-mi200-latest` | vLLM 0.28.0 (same image) | Qwen3.8 and gpt-oss-120b on mi200 | yes |
+
+The mi200 setups (`--system beverin-mi200`) name `hpcagent-bench-agent-mi200-latest`,
+`hpcagent-bench-judge-mi200-latest` (`hpcagent-bench-judge-mi200-mlscale-latest` for mlscale) and the serving EDF
+above; `CE_IMAGE_RELEASE=v<N>` names the frozen `<edf>-v<N>` of each ([`containers/README.md`](../../containers/README.md#a-frozen-release)).
 
 ## 3. Slurm shape
 

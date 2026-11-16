@@ -286,13 +286,24 @@ apply_flavor() {
     esac
 }
 
-# finalize_staged_env <staged> <env> -- the hardware, the image flavor, then the rename. A
+# apply_release <env> -- CE_IMAGE_RELEASE=v<N> (containers/images/images.env) appends -v<N> to every *_CE_ENV of <env>,
+# serving included: the frozen EDFs `CE_IMAGE_RELEASE=v<N> install_edfs.sh` renders, which nothing repoints while the
+# campaign runs. Unset or empty: the live names.
+apply_release() {
+    [[ -n "${CE_IMAGE_RELEASE:-}" ]] || return 0
+    [[ "${CE_IMAGE_RELEASE}" =~ ^v[0-9][0-9A-Za-z.]*$ ]] \
+        || { echo "apply_release: CE_IMAGE_RELEASE is v<N> (v10, v1.0) or empty, got '${CE_IMAGE_RELEASE}'" >&2; return 2; }
+    sed -i -E "s/^([A-Z_]*CE_ENV=.+)$/\1-${CE_IMAGE_RELEASE}/" "$1"
+}
+
+# finalize_staged_env <staged> <env> -- the hardware, the image flavor and release, then the rename. A
 # bailed gate leaves neither a staged nor a final file looking complete.
 finalize_staged_env() {
     local staged="$1" env="$2"
     apply_hardware "${staged}" "$(sed -n 's/^HPCAGENT_BENCH_RECORD_MODEL=//p' "${staged}" | tail -1)" \
         || { rm -f "${staged}"; return 2; }
     apply_flavor "${staged}" || { rm -f "${staged}"; return 2; }
+    apply_release "${staged}" || { rm -f "${staged}"; return 2; }
     mv -- "${staged}" "${env}"
 }
 

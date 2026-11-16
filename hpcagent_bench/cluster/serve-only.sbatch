@@ -7,6 +7,13 @@
 #   MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch   another model (any [model.<MODEL>] of experiments/experiments.toml)
 #   SUBMIT=0 hpcagent_bench/cluster/serve-only.sbatch             print what would be submitted, submit nothing
 #   PREWARM=1 MODEL=glm53 hpcagent_bench/cluster/serve-only.sbatch  boot, run every served shape once, exit: fills the kernel caches
+#   ACCESS=alps MODEL=kimi27sglang SERVE_BASE_ENV=mlgpu40:kimi27sglang hpcagent_bench/cluster/serve-only.sbatch
+#                                                                  keyed, for setups of ours on another partition (below)
+# ACCESS: open (default) serves every interface without a key. alps (SGLang only) serves with the key KEY_FILE holds
+# (default ~/.config/hpcagent-bench/<MODEL>-endpoint.key, mode 600) on the address each node's name resolves to, never
+# the wildcard, metrics off, from a mode-700 run dir (docs/serving/private-endpoint.md, section 1). Once a request
+# without the key answered 401 and one with it 200 on every pipeline it publishes <run dir>/endpoint.json, which an
+# INFERENCE_SOURCE=endpoint setup reads (docs/serving/cross-partition.md); the job deletes it before the server stops.
 # It derives --nodes from the rendered env, so never pass --nodes yourself. Account, partition and GPUs per node resolve as
 # for an experiment job (`hpcagent-bench job options`: $SBATCH_ACCOUNT, $SBATCH_PARTITION,
 # $HPCAGENT_BENCH_JOB_GPUS_PER_NODE or the system's systems.yaml entry); the time limit is SERVE_TIME (default 04:00:00).
@@ -62,6 +69,31 @@ set -a
 [[ -z "${SERVE_ENV}" ]] || . "${SERVE_ENV}"
 set +a
 
+# CE_IMAGE_RELEASE (containers/images/images.env): the frozen serving EDF of that release, as submit.sh names it.
+INFERENCE_CE_ENV="${INFERENCE_CE_ENV:-}${INFERENCE_CE_ENV:+${CE_IMAGE_RELEASE:+-${CE_IMAGE_RELEASE}}}"
+ACCESS="${ACCESS:-open}"
+if [[ "${ACCESS}" == alps ]]; then
+    refuse() {
+        printf 'serve-only: refusing: %s\n' "$*" >&2
+        exit 2
+    }
+    # shellcheck source=../../containers/inference/private_endpoint.sh
+    . "${REPO_DIR}/containers/inference/private_endpoint.sh"
+    [[ "${INFERENCE_ENGINE:-vllm}" == sglang ]] \
+        || refuse "ACCESS=alps: ${INFERENCE_ENGINE:-vllm} serves /metrics and other routes without the key"
+    KEY_FILE="${KEY_FILE:-${HOME}/.config/hpcagent-bench/${MODEL}-endpoint.key}"
+    private_key "${KEY_FILE}"
+    # The experiment's own --enable-metrics is dropped (SGLang serves /metrics without the key); any other keyed word
+    # of its server arguments is refused.
+    read -r -a served_words <<<"${SGLANG_EXTRA_ARGS:-}"
+    kept_words=()
+    for word in "${served_words[@]}"; do [[ "${word}" == --enable-metrics ]] || kept_words+=("${word}"); done
+    private_refuse_words SGLANG_EXTRA_ARGS "${kept_words[@]}"
+    [[ "${PREWARM:-0}" != 1 ]] || refuse "ACCESS=alps: PREWARM=1 fills the caches of an open server; prewarm without ACCESS"
+elif [[ "${ACCESS}" != open ]]; then
+    echo "ACCESS must be open or alps, got '${ACCESS}'" >&2
+    exit 2
+fi
 INFERENCE_NODES="${INFERENCE_NODES:-1}"
 INFERENCE_MODE="${INFERENCE_MODE:-replicas}"
 VLLM_PORT="${VLLM_PORT:-8000}"
@@ -84,6 +116,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
         printf 'would serve %s on %s node(s)\n' "${MODEL}" "${INFERENCE_NODES}"
         printf '  env      %s + [serve]%s\n' "${BASE_ENV##*/}" "${SERVE_ENV:+ + ${SERVE_ENV##*/}}"
         printf '  image    %s\n' "${INFERENCE_CE_ENV:-unset}"
+        printf '  access   %s%s\n' "${ACCESS}" "${KEY_FILE:+, key ${KEY_FILE}}"
         printf '  engine   %s (%s), port %s, model name %s\n' \
             "${INFERENCE_ENGINE:-vllm}" "${INFERENCE_MODE}" "${VLLM_PORT}" "${SERVED_MODEL}"
         printf '  weights  %s\n' "${VLLM_MODEL:-unset}"
@@ -105,15 +138,50 @@ fi
 # batch shell resolves them for an experiment job.
 . "${SCRIPT_DIR}/env.sh"
 RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID}"
+SERVER_PID=""
+if [[ "${ACCESS}" == alps ]]; then
+    # Mode 700 before anything lands in it: the server log prints the key. On exit the endpoint goes first, so a job
+    # that finds endpoint.json finds the server behind it, and the secrets once the server stopped.
+    private_dir "${RUN_DIR}"
+    cleanup_alps() {
+        rm -f -- "${RUN_DIR}/endpoint.json"
+        if [[ -n "${SERVER_PID}" ]]; then
+            kill "${SERVER_PID}" 2>/dev/null || true
+            wait "${SERVER_PID}" 2>/dev/null || true
+        fi
+        rm -f -- "${RUN_DIR}/sglang-auth.yaml" "${RUN_DIR}/api.key" "${RUN_DIR}/auth.header"
+    }
+    trap cleanup_alps EXIT
+    # scancel sends TERM: leave through the EXIT trap so the endpoint and the secrets go.
+    trap 'exit 143' TERM INT
+    private_secrets "${RUN_DIR}"
+    printf '{"model": "%s", "messages": [{"role": "user", "content": "Say hi."}], "max_tokens": 16}\n' \
+        "${SERVED_MODEL}" >"${RUN_DIR}/hello.json"
+fi
 mkdir -p "${RUN_DIR}"
-# The one file run_cluster.sh re-reads in the container, and the record of what this job served.
+# The one file run_cluster.sh re-reads in the container, and the record of what this job served. ACCESS=alps adds the
+# key's --config and drops --enable-metrics from the experiment's server arguments.
 { printf '%s\n' "${BASE_FLAT}" "${SERVE_FLAT}"; [[ -z "${SERVE_ENV}" ]] || cat -- "${SERVE_ENV}"
-  printf 'GPUS_PER_NODE=%s\n' "${GPUS_PER_NODE:?}"; } >"${RUN_DIR}/serve.env"
+  printf 'GPUS_PER_NODE=%s\nINFERENCE_CE_ENV=%s\n' "${GPUS_PER_NODE:?}" "${INFERENCE_CE_ENV}"
+  [[ "${ACCESS}" != alps ]] || printf 'INFERENCE_SGLANG_AUTH_CONFIG=%s\n' "${RUN_DIR}/sglang-auth.yaml"
+} >"${RUN_DIR}/serve.env"
+[[ "${ACCESS}" != alps ]] \
+    || sed -i -E '/^SGLANG_EXTRA_ARGS=/ s/(["[:space:]])--enable-metrics([[:space:]"])/\1\2/g' "${RUN_DIR}/serve.env"
 
 export CLUSTER_ENV_FILE="${RUN_DIR}/serve.env"
 export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-${REPO_DIR}}"
 export VLLM_MASTER_HOST="${nodes[0]}"
+# run_vllm_node reads its pipeline's nodes from here when INFERENCE_REPLICAS pipelines serve side by side.
+INFERENCE_NODELIST="$(IFS=,; printf '%s' "${nodes[*]}")"
+export INFERENCE_NODELIST
 BASE_URL="http://${VLLM_MASTER_HOST}:${VLLM_PORT}"
+# Every endpoint that serves, as run_cluster.sh composes them: each node in `replicas` mode, else each pipeline's first.
+stride=$(( INFERENCE_NODES / ${INFERENCE_REPLICAS:-1} ))
+[[ "${INFERENCE_MODE}" != replicas ]] || stride=1
+endpoints=()
+for (( i = 0; i < INFERENCE_NODES; i += stride )); do endpoints+=("http://${nodes[i]}:${VLLM_PORT}/v1"); done
+auth=()
+[[ "${ACCESS}" != alps ]] || auth=(-H "@${RUN_DIR}/auth.header")
 
 cat <<EOF
 job:     ${SLURM_JOB_ID}
@@ -147,7 +215,8 @@ SERVER_PID=$!
 echo "waiting for the API (up to ${READY_TIMEOUT}s); weight load dominates this"
 deadline=$(( $(date +%s) + READY_TIMEOUT ))
 # The deadline is checked between attempts, so each attempt is bounded: a wedged server accepts and never answers.
-until curl -sf --connect-timeout 10 --max-time 60 "${BASE_URL}/v1/models" -o "${RUN_DIR}/models.json"; do
+for endpoint in "${endpoints[@]}"; do
+until curl -sf --connect-timeout 10 --max-time 60 "${auth[@]}" "${endpoint}/models" -o "${RUN_DIR}/models.json"; do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
         echo "FAIL: the serving step exited before the API came up" >&2
         tail -n 40 "${RUN_DIR}"/server-*.log >&2 || true
@@ -159,6 +228,7 @@ until curl -sf --connect-timeout 10 --max-time 60 "${BASE_URL}/v1/models" -o "${
         exit 1
     fi
     sleep 15
+done
 done
 
 if [[ "${PREWARM:-0}" == 1 ]]; then
@@ -184,10 +254,31 @@ if [[ "${PREWARM:-0}" == 1 ]]; then
     exit "${rc}"
 fi
 
-endpoints=("${BASE_URL}/v1")
-if [[ "${INFERENCE_MODE}" == "replicas" ]]; then
-    endpoints=()
-    for node in "${nodes[@]}"; do endpoints+=("http://${node}:${VLLM_PORT}/v1"); done
+if [[ "${ACCESS}" == alps ]]; then
+    for endpoint in "${endpoints[@]}"; do
+        private_auth_check "${endpoint%/v1}" "${RUN_DIR}/hello.json" "${RUN_DIR}/auth.header" \
+            || { echo "FAIL: ${endpoint} did not answer 401 without the key and 200 with it" >&2; exit 1; }
+    done
+    VLLM_REPLICA_URLS="$(IFS=,; printf '%s' "${endpoints[*]}")" VLLM_SERVED_MODEL="${SERVED_MODEL}" \
+        INFERENCE_CE_ENV="${INFERENCE_CE_ENV}" INFERENCE_KEY_FILE="${KEY_FILE}" \
+        "${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/inference_service.py" --write-endpoint "${RUN_DIR}/endpoint.json" \
+        || exit 1
+    cat <<EOF
+
+===== keyed endpoint is live =====
+endpoint:   ${RUN_DIR}/endpoint.json
+replicas:   ${endpoints[*]}
+model name: ${SERVED_MODEL}
+key file:   ${KEY_FILE}
+server log: ${RUN_DIR}/server-0.log (in a mode-700 dir: it prints the key)
+
+A setup of yours on another partition reads it (docs/serving/cross-partition.md):
+  EXTRA_ENV_KV="INFERENCE_SOURCE=endpoint INFERENCE_NODES=0 INFERENCE_ENDPOINT_FILE=${RUN_DIR}/endpoint.json" submit.sh ...
+It stays up until this job ends, which deletes endpoint.json first; scancel ${SLURM_JOB_ID} to stop it.
+Only your own jobs: do not share the key, endpoint.json or these URLs with anyone, project members included.
+EOF
+    wait "${SERVER_PID}"
+    exit
 fi
 
 cat <<EOF

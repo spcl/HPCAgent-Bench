@@ -120,7 +120,7 @@ SPELLINGS: list[tuple[type[Coded], tuple[str, ...]]] = [
     (manifest_schema.ShownAs, ("values", "range")),
     (agent.Thinking, ("adaptive",)),
     (baseline.Phase, ("begin", "run", "finish", "all")),
-    (inference_service.Source, ("node", "service", "none")),
+    (inference_service.Source, ("node", "service", "none", "endpoint")),
     (inference_service.Api, ("openai", "anthropic")),
     (inference_service.Auth, ("bearer", "x-api-key")),
 ]

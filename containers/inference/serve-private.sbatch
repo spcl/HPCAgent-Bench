@@ -96,6 +96,8 @@ ACCESS="${ACCESS:-tunnel}"
 REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
 GATE="${REPO}/containers/inference/verify-tools-reasoning.py"
 [[ -n "${REPO}" && -f "${GATE}" ]] || refuse "no checkout: set REPO or submit from inside one"
+# shellcheck source=private_endpoint.sh
+. "${REPO}/containers/inference/private_endpoint.sh"
 
 KEY_FILE="${KEY_FILE:-${HOME}/.config/hpcagent-bench/${PRESET}-endpoint.key}"
 EDF="${EDF:-${PRESET_EDF}}"
@@ -119,28 +121,6 @@ MONITOR_PID=""
 declare -A IMAGE_PYTHON=([sglang]=/opt/venv/bin/python3 [vllm]=/usr/bin/python3)
 ENGINE_PYTHON="${IMAGE_PYTHON[${PRESET_ENGINE}]}"
 
-# Sets API_KEY, unexported, so srun --export=ALL never carries it.
-read_key_file() {
-    local mode
-    [[ -f "${KEY_FILE}" ]] || refuse "no key file ${KEY_FILE}; create it as the header shows"
-    mode="$(stat -c %a -- "${KEY_FILE}")"
-    [[ "${mode}" == 600 ]] || refuse "key file ${KEY_FILE} is mode ${mode}, not 600"
-    [[ "$(stat -c %u -- "${KEY_FILE}")" == "$(id -u)" ]] || refuse "key file ${KEY_FILE} is not owned by $(id -un)"
-    API_KEY="$(tr -d '\n' < "${KEY_FILE}")"
-    [[ ${#API_KEY} -ge 32 ]] || refuse "key in ${KEY_FILE} is shorter than 32 characters"
-    [[ "${API_KEY}" =~ ^[A-Za-z0-9._~+/=-]+$ ]] || refuse "key in ${KEY_FILE} has characters outside [A-Za-z0-9._~+/=-]"
-}
-
-validate_extra_args() {
-    local word
-    for word in ${EXTRA_ARGS}; do
-        case "${word}" in
-            --host*|--port*|--api*|--admin*|--config*|--tokenizer-worker*|--enable-metrics*)
-                refuse "EXTRA_ARGS may not set ${word%%=*}" ;;
-        esac
-    done
-}
-
 parse_leg() {  # sets LEG_TP and LEG_FRAC
     [[ "$1" =~ ^tp(1|2|4|8):(0\.[0-9]+)$ ]] || refuse "leg '$1' is not tp<1|2|4|8>:<0.fraction>"
     LEG_TP="${BASH_REMATCH[1]}"
@@ -162,25 +142,6 @@ use_access() {  # sets BIND_HOST and METRICS_FLAGS
     [[ -n "${iface}" ]] || refuse "ACCESS=alps: set HPCAGENT_BENCH_BIND_IFACE (site layer) to the interface to bind"
     BIND_HOST="$(ip -4 -o addr show dev "${iface}" 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')"
     [[ "${BIND_HOST}" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || refuse "ACCESS=alps: ${NODE} has no ${iface} IPv4 address"
-}
-
-make_private_dir() {
-    local acl
-    (umask 077 && mkdir -p -- "$1")
-    chmod 700 -- "$1"
-    # Scratch default ACLs (group:csstaff r-x) are inherited and beat umask.
-    if command -v setfacl >/dev/null 2>&1; then setfacl -b -- "$1" 2>/dev/null || true; fi
-    [[ "$(stat -c %a -- "$1")" == 700 ]] || refuse "$1 is not mode 700"
-    if command -v getfacl >/dev/null 2>&1; then
-        acl="$(getfacl -cp -- "$1" 2>/dev/null || true)"
-        if grep -qvE '^(user|group|other)::|^$' <<< "${acl}"; then refuse "$1 still carries extended ACL entries"; fi
-    fi
-}
-
-write_secret() {  # write_secret <file> <line>: printf is a builtin, so the content never reaches argv
-    (umask 077 && printf '%s\n' "$2" > "$1")
-    chmod 600 -- "$1"
-    [[ "$(stat -c %a -- "$1")" == 600 ]] || refuse "$1 is not mode 600"
 }
 
 sglang_argv() {  # sglang_argv <tp> <fraction> <port>: sets SERVER_ARGV
@@ -245,20 +206,8 @@ record_memory() {  # record_memory <dir>
     cat "$1/memory.txt"
 }
 
-http_status() {  # http_status <port> <body> [header-file]
-    local auth=()
-    [[ $# -lt 3 ]] || auth=(-H "@$3")
-    curl -s -o /dev/null -w '%{http_code}' --max-time 600 -H 'Content-Type: application/json' "${auth[@]}" \
-        --data-binary "@$2" "http://${BIND_HOST}:$1/v1/chat/completions" || true
-}
-
 auth_checks() {  # auth_checks <port> <dir>
-    local closed open
-    closed="$(http_status "$1" "${RUN_DIR}/hello.json")"
-    open="$(http_status "$1" "${RUN_DIR}/hello.json" "${RUN_DIR}/auth.header")"
-    printf 'unauthenticated POST: %s (want 401)\nauthenticated POST:   %s (want 200)\n' "${closed}" "${open}" \
-        | tee "$2/auth.txt"
-    [[ "${closed}" == 401 && "${open}" == 200 ]]
+    private_auth_check "http://${BIND_HOST}:$1" "${RUN_DIR}/hello.json" "${RUN_DIR}/auth.header" | tee "$2/auth.txt"
 }
 
 tools_gate() {  # tools_gate <port> <dir>
@@ -402,8 +351,9 @@ cleanup() {
     rm -f -- "${RUN_DIR}/sglang-auth.yaml" "${RUN_DIR}/api.key" "${RUN_DIR}/auth.header"
 }
 
-read_key_file
-validate_extra_args
+private_key "${KEY_FILE}"
+# shellcheck disable=SC2086 # EXTRA_ARGS is an operator word list
+private_refuse_words EXTRA_ARGS ${EXTRA_ARGS}
 use_access
 read -r -a LEG_SPECS <<< "${LEGS}"
 ((${#LEG_SPECS[@]} > 0)) || refuse "LEGS is empty"
@@ -413,13 +363,11 @@ for spec in "${LEG_SPECS[@]}"; do parse_leg "${spec}"; done
 # Partition table, image stamp and rocminfo agree before any secret is written or weights load.
 [[ "${DRY_RUN}" == 1 ]] || bash "${REPO}/containers/images/gpu_arch_check.sh" "${EDF}"
 
-make_private_dir "${RUN_DIR}"
+private_dir "${RUN_DIR}"
 trap cleanup EXIT
 # scancel sends TERM: leave through the EXIT trap so the secret files go.
 trap 'exit 143' TERM INT
-[[ "${PRESET_ENGINE}" != sglang ]] || write_secret "${RUN_DIR}/sglang-auth.yaml" "api-key: \"${API_KEY}\""
-write_secret "${RUN_DIR}/api.key" "${API_KEY}"
-write_secret "${RUN_DIR}/auth.header" "Authorization: Bearer ${API_KEY}"
+private_secrets "${RUN_DIR}"
 printf '{"model": "%s", "messages": [{"role": "user", "content": "Say hi."}], "max_tokens": 16}\n' \
     "${SERVED_MODEL}" > "${RUN_DIR}/hello.json"
 filler="$(printf 'The kernel iterates over the array and accumulates into the result buffer. %.0s' {1..200})"

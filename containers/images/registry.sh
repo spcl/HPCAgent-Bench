@@ -236,7 +236,8 @@ case "${action}" in
             [[ " ${PROMOTED[*]} " != *" ${sqsh} "* ]] || edf_roles+=("${role}")
         done
         if [[ ${#edf_roles[@]} -gt 0 ]]; then
-            ALLOW_REPOINT=1 "${HERE}/install_edfs.sh" "${edf_roles[@]}" || failed=$((failed + 1))
+            # The live names only: a release's EDFs keep the image they froze.
+            CE_IMAGE_RELEASE="" ALLOW_REPOINT=1 "${HERE}/install_edfs.sh" "${edf_roles[@]}" || failed=$((failed + 1))
         fi
         ;;
     push)
