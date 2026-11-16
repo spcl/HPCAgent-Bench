@@ -1,11 +1,11 @@
-"""Sorting and order statistics: sort, median, searchsorted."""
+"""Sorting and order statistics: sort, argsort, median, searchsorted."""
 
 import ast
 import copy
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
-from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos, read_axis_keepdims
+from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
@@ -16,7 +16,23 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
-__all__ = ["expand_median", "expand_searchsorted", "expand_sort", "make_sort_routine"]
+__all__ = [
+    "SORT_LIBRARY_MARKER",
+    "expand_argsort",
+    "expand_median",
+    "expand_searchsorted",
+    "expand_sort",
+    "make_sort_routine",
+]
+
+#: Pseudo-call a ``sort_library`` target renders as a library sort of every row of a C-order
+#: operand along its LAST axis: C ``qsort``, C++ ``std::sort`` / ``std::stable_sort``, Fortran
+#: ``qsort`` through ``iso_c_binding``. Args are ``(out, src, argsort_flag, *extents)`` with
+#: ``extents`` the operand's full shape (rows = the product of all but the last, row length = the
+#: last). Ascending with NaN last, as numpy. ``argsort_flag`` 1 writes each row's int64 index order
+#: instead of the values, ties in index order: a STABLE argsort, which numpy's default
+#: (``kind='quicksort'``) matches whenever the keys are distinct.
+SORT_LIBRARY_MARKER = "__sort_library"
 
 
 def make_sort_routine(buf: str, n: ast.expr, prefix: str) -> list[ast.stmt]:
@@ -142,13 +158,16 @@ def expand_sort(
     args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
+    sort_library: bool = False,
 ) -> list[ast.stmt]:
-    """``np.sort(a)`` (1-D, ascending) -> copy ``a`` into the target buffer, then
-    an in-place insertion sort of that buffer. Only the 1-D form is lowered. The
-    target may be an output parameter (``out[:] = np.sort(a)``) or a fresh local
-    (``t = np.sort(a)``, allocated via :data:`ELEMENT_WRITE_EXPANDERS`);
-    registering ``shape_table[target]`` here makes the sorted buffer's shape
-    available to that auto-alloc and any later use of ``t``."""
+    """``np.sort(a, axis=-1)``: a :data:`SORT_LIBRARY_MARKER` call when the target sorts with a
+    library (``sort_library``), else (DaCe) the 1-D form only, as a copy of ``a`` into the target
+    buffer and an in-place insertion sort of that buffer. The target may be an output parameter
+    (``out[:] = np.sort(a)``) or a fresh local (``t = np.sort(a)``, allocated via
+    :data:`ELEMENT_WRITE_EXPANDERS`); registering ``shape_table[target]`` here makes the sorted
+    buffer's shape available to that auto-alloc and any later use of ``t``."""
+    if sort_library:
+        return sort_library_call(target, args, shape_table, kwargs, argsort=False)
     a = first_name(args)
     if a is None:
         raise NotImplementedError("np.sort needs a bare-Name array")
@@ -171,6 +190,54 @@ def expand_sort(
     copy_loops = wrap_for_loops([it], [shape[0]], copy_body)
     sort = make_sort_routine(out, const_or_name(shape[0]), "__srt")
     return [*copy_loops, *sort]
+
+
+def expand_argsort(
+    target: ast.Name,
+    args: Sequence[ast.expr],
+    shape_table: dict[str, tuple[str, ...]],
+    kwargs: list[ast.keyword] | None = None,
+    local_dtypes: dict[str, str] | None = None,
+    sort_library: bool = False,
+) -> list[ast.stmt]:
+    """``np.argsort(a, axis=-1)`` -> a :data:`SORT_LIBRARY_MARKER` call writing int64 indices; a
+    target without a library sort declines."""
+    if not sort_library:
+        raise NotImplementedError("np.argsort lowers only to a library sort")
+    if local_dtypes is not None and isinstance(target, ast.Name):
+        local_dtypes.setdefault(target.id, "int64")
+    return sort_library_call(target, args, shape_table, kwargs, argsort=True)
+
+
+def sort_library_call(
+    target: ast.Name,
+    args: Sequence[ast.expr],
+    shape_table: dict[str, tuple[str, ...]],
+    kwargs: list[ast.keyword] | None,
+    argsort: bool,
+) -> list[ast.stmt]:
+    """The :data:`SORT_LIBRARY_MARKER` statement for ``np.sort`` / ``np.argsort`` of a bare-Name
+    operand along its last axis. ``kind`` does not change sorted values, and the marker's stable
+    order is every kind's on distinct keys; a flattening ``axis=None``, another axis or a structured
+    ``order`` declines."""
+    op = "np.argsort" if argsort else "np.sort"
+    a = first_name(args)
+    if a is None or not isinstance(target, ast.Name):
+        raise NotImplementedError(f"{op} needs a bare-Name operand and target")
+    shape = shape_table.get(a.id)
+    if not shape:
+        raise NotImplementedError(f"{op}: operand shape unknown")
+    axis = kwarg_or_pos(args, kwargs or [], 1, "axis")
+    last_axis = axis is None or const_axis(axis, len(shape)) == len(shape) - 1
+    if not last_axis or kwarg_or_pos(args, kwargs or [], 3, "order") is not None:
+        raise NotImplementedError(f"{op}: only a sort along the last axis is lowered")
+    shape_table.setdefault(target.id, tuple(shape))
+    call = ast.Call(
+        func=name_(SORT_LIBRARY_MARKER),
+        args=[name_(target.id), name_(a.id), const_(1 if argsort else 0), *[const_or_name(e) for e in shape]],
+        keywords=[],
+    )
+    return [ast.Expr(value=call)]
 
 
 def expand_searchsorted(

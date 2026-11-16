@@ -176,6 +176,7 @@ class LoweringContext:
         "scalar_temps",
         "shapes",
         "sibling_scalar_helpers",
+        "sort_library",
         "tree",
         "wa_rewriter",
         "zeros",
@@ -197,6 +198,8 @@ class LoweringContext:
         self.fft_library: bool = False
         #: Target renders a batched / N-D np.fft.* as FFTN_LIBRARY_MARKER; see :func:`lower`.
         self.fft_library_nd: bool = False
+        #: Target renders np.sort / np.argsort as SORT_LIBRARY_MARKER; see :func:`lower`.
+        self.sort_library: bool = False
         #: By-value scalar helpers this IR can call but does not itself list -- a HELPER body's
         #: own IR carries no helper list, so its siblings are handed down by :func:`lower`.
         self.sibling_scalar_helpers: set[str] = set()
@@ -661,6 +664,7 @@ def lp_libnode_expand(ctx: LoweringContext) -> None:
         opmath=ctx.kir.opmath,
         fft_library=ctx.fft_library,
         fft_library_nd=ctx.fft_library_nd,
+        sort_library=ctx.sort_library,
         extent_values={
             name: value
             for name, value in {**ctx.kir.pinned_consts, **ctx.kir.shape_only_consts}.items()
@@ -1352,6 +1356,7 @@ def lower(
     scalar_helpers: set[str] | None = None,
     fft_library_nd: bool = False,
     blas_complex: bool = False,
+    sort_library: bool = False,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
 
@@ -1386,6 +1391,9 @@ def lower(
     with no BLAS_GEMM_MARKER renderer (Fortran, numba) can still opt into this one.
     ``fft_library_nd`` (numpyto_c only) also renders a batched / N-D transform as
     :data:`lib_nodes.FFTN_LIBRARY_MARKER` -- one ``fftw_plan_many_dft`` -- instead of the naive loop.
+    ``sort_library`` renders ``np.sort`` / ``np.argsort`` along the last axis as
+    :data:`lib_nodes.SORT_LIBRARY_MARKER` (qsort / std::sort / Fortran qsort); without it only a 1-D
+    ``np.sort`` lowers (DaCe).
 
     Set :data:`INVARIANT_ENV` in the environment to run
     :func:`assert_lowering_invariants` after every phase.
@@ -1400,6 +1408,7 @@ def lower(
     ctx.blas_complex = blas_complex
     ctx.fft_library = fft_library
     ctx.fft_library_nd = fft_library_nd
+    ctx.sort_library = sort_library
     ctx.sibling_scalar_helpers = set(scalar_helpers or ())
     for name_, phase in LOWER_PHASES:
         phase(ctx)

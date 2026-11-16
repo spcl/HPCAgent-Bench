@@ -4,7 +4,7 @@
 so a DaCe loop-nest extractor can round-trip its ``dace -> numpy``
 emit through ``numpy -> C/C++/Fortran``:
 
-* ``np.sort`` (1-D, ascending) -- ``expand_sort`` (copy + insertion sort);
+* ``np.sort`` / ``np.argsort`` along the last axis -- ``SORT_LIBRARY_MARKER`` (qsort / std::sort);
 * ``np.maximum.accumulate`` / ``np.minimum.accumulate`` -- running max / min
   prefix scans (``expand_cummax`` / ``expand_cummin``, sharing the cumsum /
   cumprod ``expand_cumulative`` engine);
@@ -51,7 +51,7 @@ def ok_(res: dict[str, str]) -> tuple[bool, dict[str, str]]:
     return (all(v == "ok" or v.startswith("skip") for v in res.values()) and any(v == "ok" for v in res.values())), res
 
 
-# np.sort (1-D)
+# np.sort / np.argsort
 
 
 def test_sort_1d() -> None:
@@ -60,6 +60,23 @@ def test_sort_1d() -> None:
     a = rng.standard_normal(9)
     src = "import numpy as np\ndef f(a, out):\n    out[:] = np.sort(a)\n"
     res = run_op(src, "f", {"a": a}, {"out": (9,)}, {"N": 9}, shapes={"a": "(N,)", "out": "(N,)"}, backends=NATIVE)
+    ok, r = ok_(res)
+    assert ok, r
+
+
+def test_sort_argsort_last_axis() -> None:
+    """``np.sort`` / stable ``np.argsort`` of each row of a 2-D array, through expression operands: a NaN sorts last
+    and repeated keys keep their index order."""
+    rng = np.random.default_rng(3)
+    a = rng.standard_normal((4, 7))
+    a[1, 3] = np.nan
+    a[2, [1, 4, 5]] = 0.5
+    src = (
+        "import numpy as np\ndef f(a, out, idx):\n    out[:] = -np.sort(-a, axis=1)\n"
+        "    idx[:] = np.argsort(a * 2.0, axis=-1, kind='stable') * 1.0\n"
+    )
+    shapes = {"a": "(M, N)", "out": "(M, N)", "idx": "(M, N)"}
+    res = run_op(src, "f", {"a": a}, {"out": (4, 7), "idx": (4, 7)}, {"M": 4, "N": 7}, shapes=shapes, backends=NATIVE)
     ok, r = ok_(res)
     assert ok, r
 
