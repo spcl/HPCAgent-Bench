@@ -1513,10 +1513,10 @@ class CBodyEmitter(BaseEmitter):
         """``(routine, alpha, beta, declarations)`` of the CBLAS gemm over ``operands`` (a, b, out), read from their
         declared element types: ``s``/``d`` gemm for real operands at the kernel's float, ``c``/``z`` for complex
         ones. A complex gemm takes ``alpha`` and ``beta`` by pointer, so ``declarations`` binds them to ``{re, im}``
-        arrays (valid C and C++, which has no compound literals) in a block around the call. Operands of mixed
-        real and complex type have no gemm and keep the loop nest (the refusal reaches the inlined lowering)."""
+        arrays (valid C and C++, which has no compound literals) in a block around the call. Mixed real and complex
+        operands raise here: :meth:`emit_blas_gemm` widens the real ones first, the strided marker never has them."""
         f32 = self.is_float32_kernel()
-        complex_ = [str(self.name_dtype(name) or "").startswith("complex") for name in operands]
+        complex_ = [self.is_complex_name(name) for name in operands]
         if not any(complex_):
             return ("cblas_sgemm", "1.0f", "0.0f", "") if f32 else ("cblas_dgemm", "1.0", "0.0", "")
         if not all(complex_):
@@ -1536,6 +1536,8 @@ class CBodyEmitter(BaseEmitter):
             raise NotImplementedError("the gemm marker takes three array names")
         a, b, out = operands
         m, n, k = (self.emit_expr(arg) for arg in node.args[3:])
+        if self.is_complex_name(out) and not (self.is_complex_name(a) and self.is_complex_name(b)):
+            return self.emit_widened_gemm(a, b, out, (m, n, k))
         gemm, one, zero, declarations = self.blas_gemm_routine(operands)
         # Explicit (blasint) casts: blasint is 32-bit unless OpenBLAS was built INTERFACE64, while
         # every extent here is int64_t, so the implicit narrowing is a -Wconversion diagnostic. Only
@@ -1546,6 +1548,39 @@ class CBodyEmitter(BaseEmitter):
             f"{one}, {a}, (blasint)({k}), {b}, (blasint)({n}), {zero}, {out}, (blasint)({n}))"
         )
         return f"{{ {declarations}{call}; }}" if declarations else call
+
+    def is_complex_name(self, name: str) -> bool:
+        return str(self.name_dtype(name) or "").startswith("complex")
+
+    def emit_widened_gemm(self, a: str, b: str, out: str, extents: tuple[str, str, str]) -> str:
+        """A dense gemm with a real and a complex operand (``A @ B`` with one side real, numpy's promotion): each real
+        operand is copied into a complex scratch of the output's element type, then the complex gemm runs. CBLAS
+        has no mixed gemm; the copy is O(size) beside the O(m n k) product."""
+        m, n, k = extents
+        wide = c_type_(str(self.name_dtype(out)))
+        lines, scratch = [], []
+        args = []
+        for name, size in ((a, f"({m}) * ({k})"), (b, f"({k}) * ({n})")):
+            if self.is_complex_name(name):
+                args.append(name)
+                continue
+            tmp = f"__gemm_wide_{name}"
+            nbytes = byte_count(size, wide)
+            lines += [
+                f"{wide} *{tmp} = ({wide} *)malloc({nbytes});",
+                alloc_check(tmp, nbytes, ""),
+                f"for (int64_t __gemm_i = 0; __gemm_i < {size}; ++__gemm_i) {tmp}[__gemm_i] = ({wide})({name}[__gemm_i]);",
+            ]
+            args.append(tmp)
+            scratch.append(tmp)
+        gemm, one, zero, declarations = self.blas_gemm_routine([out, out, out])
+        dims = ", ".join(f"(blasint)({e})" for e in (m, n, k))
+        lines.append(
+            f"{declarations}{gemm}(CblasRowMajor, CblasNoTrans, CblasNoTrans, {dims}, "
+            f"{one}, {args[0]}, (blasint)({k}), {args[1]}, (blasint)({n}), {zero}, {out}, (blasint)({n}));"
+        )
+        lines += [f"free({tmp});" for tmp in scratch]
+        return "{ " + " ".join(lines) + " }"
 
     def emit_blas_gemm_strided(self, node: ast.Call) -> str:
         """Render the strided gemm marker (see BLAS_GEMM_STRIDED_MARKER) as one CBLAS call, each operand the

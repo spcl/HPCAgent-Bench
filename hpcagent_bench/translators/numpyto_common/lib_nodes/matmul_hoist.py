@@ -669,25 +669,21 @@ class MatmulHoister(ast.NodeTransformer):
 
         Integer, boolean and complex matmuls have no real-BLAS equivalent and keep the loop nest; complex
         ones reach the gemm of a ``blas_complex`` target. A complex literal anywhere in the subtree counts,
-        matching how the caller tags the temp. A real operand next to a complex one keeps the loop nest too, as in
-        :func:`~hpcagent_bench.translators.numpyto_common.lib_nodes.contractions` (CBLAS has no mixed gemm).
+        matching how the caller tags the temp. A real operand next to a complex one reaches the gemm too: Fortran's
+        MATMUL takes it as is, the C emitter widens the real operand to complex first (``emit_widened_gemm``).
         """
-        kinds: set[bool] = set()  # True for a complex operand, False for a real float one
         for sub_node in walk_nodes(node):
             if isinstance(sub_node, ast.Constant) and isinstance(sub_node.value, complex) and not self.blas_complex:
                 return False
             if isinstance(sub_node, ast.Name):
                 dt = self.local_dtypes.get(sub_node.id, "")
                 if self.blas_complex and dt.startswith("complex"):
-                    kinds.add(True)
                     continue
                 if dt.startswith(BLAS_INELIGIBLE_DTYPES):
                     return False
                 if dt.startswith("float") and dt != self.blas_float:
                     return False  # not the width of the gemm the emitter will pick: see BLAS_LOWERING_FLOAT
-                if dt.startswith("float"):
-                    kinds.add(False)
-        return len(kinds) < 2
+        return True
 
     def materialise_call_operands(self, node: ast.BinOp) -> ast.BinOp:
         """Spill a CALL-valued matmul operand to a temp array, so the hoister sees a bare Name.
