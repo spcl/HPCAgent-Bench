@@ -262,6 +262,22 @@ stage_setup() {
     [[ -z "${AGENT_NODES:-}" ]] || kvs+=("AGENT_NODES=${AGENT_NODES}")
     [[ -z "${JUDGE_NODES:-}" ]] || kvs+=("JUDGE_NODES=${JUDGE_NODES}")
     [[ -z "${temperature}" ]] || kvs+=("INFERENCE_TEMPERATURE=${temperature}")
+    # A pp model serves AGENTS_PER_PIPELINE agents per pipeline: a setup with fewer problems than its pipelines serve
+    # (an owed rerun of a few kernels) gets one pipeline per AGENTS_PER_PIPELINE problems and the agent nodes they need.
+    local per_pipeline replicas
+    per_pipeline=$(base_value "${flat}" AGENTS_PER_PIPELINE)
+    replicas=$(base_value "${flat}" INFERENCE_REPLICAS)
+    if [[ -n "${per_pipeline}" && -s "${problems}" ]] && (( ${replicas:-1} > 1 )); then
+        local need served per_node agent_nodes
+        need=$(( ($(grep -c . "${problems}") + per_pipeline - 1) / per_pipeline ))
+        if (( need < replicas )); then
+            served=$(( need * per_pipeline ))
+            per_node=${AGENTS_PER_NODE:-$(base_value "${flat}" AGENTS_PER_NODE)}
+            agent_nodes=$(( (served + ${per_node:-40} - 1) / ${per_node:-40} ))
+            kvs+=("INFERENCE_REPLICAS=${need}" "INFERENCE_NODES=$(( $(base_value "${flat}" INFERENCE_NODES) / replicas * need ))"
+                "AGENT_NODES=${agent_nodes}" "AGENTS_PER_NODE=$(( served / agent_nodes ))")
+        fi
+    fi
     if [[ -n "${packet}" ]]; then
         local line hints verified_only
         # The hint detail a -kinds packet serves its form at; the form check below reads the forms at it.

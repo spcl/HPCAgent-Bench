@@ -231,6 +231,24 @@ def test_staging_refuses_pipeline_replicas_that_do_not_divide_the_inference_node
 
 
 @pytest.mark.parametrize(
+    ("env", "nodes"),
+    [
+        ("INFERENCE_NODES=8\nINFERENCE_REPLICAS=2\nAGENT_NODES=1\nAGENTS_PER_NODE=40\nAGENTS_PER_PIPELINE=20\n", "10"),
+        ("INFERENCE_NODES=4\nAGENT_NODES=1\nAGENTS_PER_NODE=20\nAGENTS_PER_PIPELINE=20\n", "6"),
+        ("INFERENCE_NODES=4\nAGENT_NODES=2\nAGENTS_PER_NODE=20\nAGENTS_PER_PIPELINE=20\n", ""),
+        ("INFERENCE_NODES=4\nAGENT_NODES=2\nAGENTS_PER_NODE=20\n", "7"),
+    ],
+)
+def test_staging_refuses_more_agents_than_the_pipelines_serve(tmp_path: pathlib.Path, env: str, nodes: str) -> None:
+    """A pp model's AGENTS_PER_PIPELINE caps a setup's agents at INFERENCE_REPLICAS pipelines' worth (issue #193)."""
+    staged = tmp_path / ".env.some-setup"
+    staged.write_text(env)
+    done = bash(f"set -euo pipefail\n. {CLUSTER / 'setup_nodes.sh'}\nsetup_nodes {staged}")
+    assert (done.returncode, done.stdout.strip()) == ((0, nodes) if nodes else (2, ""))
+    assert ("pipelines of 20" in done.stderr) is not bool(nodes)
+
+
+@pytest.mark.parametrize(
     ("recorded", "snapshot", "refused"),
     [("0123456789", "0123456789abcdef", False), ("", "0123456789abcdef", False), ("0123456789", "fedcba987654", True)],
 )

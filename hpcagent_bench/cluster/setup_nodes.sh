@@ -4,7 +4,7 @@
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 setup_nodes() {
-    local env_file="$1" inference agent judge replicas mode
+    local env_file="$1" inference agent judge replicas mode per_pipeline per_node
     [[ -s "${env_file}" ]] || { echo "setup_nodes: missing env file ${env_file}" >&2; return 2; }
     inference="$(grep -oP '^INFERENCE_NODES=\K[0-9]+' "${env_file}" || true)"
     agent="$(grep -oP '^AGENT_NODES=\K[0-9]+' "${env_file}" || true)"
@@ -15,6 +15,16 @@ setup_nodes() {
     if [[ "${mode}" == replicas ]] && (( ${replicas:-1} != 1 )) \
         || (( ${replicas:-1} < 1 || ${inference:-2} % ${replicas:-1} != 0 )); then
         echo "setup_nodes: ${env_file##*/}: INFERENCE_REPLICAS=${replicas} must be a pp setup's divisor of INFERENCE_NODES=${inference:-2}" >&2
+        return 2
+    fi
+    # A pp model serves AGENTS_PER_PIPELINE agents per pipeline; more queue at the server, which evicts their cached
+    # prefixes, so every turn re-prefills and episodes run into the time limit (issue #193)
+    per_pipeline="$(grep -oP '^AGENTS_PER_PIPELINE=\K[0-9]+' "${env_file}" || true)"
+    per_node="$(grep -oP '^AGENTS_PER_NODE=\K[0-9]+' "${env_file}" || true)"
+    if [[ -n "${per_pipeline}" ]] && (( ${agent:-1} * ${per_node:-40} > ${replicas:-1} * per_pipeline )); then
+        echo "setup_nodes: ${env_file##*/}: AGENT_NODES=${agent:-1} x AGENTS_PER_NODE=${per_node:-40} agents need" \
+            "$(( (${agent:-1} * ${per_node:-40} + per_pipeline - 1) / per_pipeline )) pipelines of ${per_pipeline}:" \
+            "raise INFERENCE_REPLICAS=${replicas:-1} (and INFERENCE_NODES with it) or lower the agents" >&2
         return 2
     fi
     echo $(( ${inference:-2} + ${agent:-1} + ${judge:-1} ))
