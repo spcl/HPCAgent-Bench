@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend import dtype_from_constructor
+from hpcagent_bench.translators.numpyto_common.frontend.initialize import dtype_from_dtype_arg
 from hpcagent_bench.translators.numpyto_common.ir import COMPLEX_FOR_FLOAT
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ARRAY_METHOD_SHAPE_OPS
 
@@ -210,9 +211,10 @@ class RealConjDropper(ast.NodeTransformer):
 
 def ctor_complex_tag(call: ast.Call, local_dtypes: dict[str, str]) -> str | None:
     """``np.zeros/ones/empty/eye(shape, <dtype>)`` -> a ``complexNN`` tag when the
-    constructor's dtype arg is a complex array's ``Y.dtype`` or a bare
-    ``np.complexNN`` (else None). The eigh reduction allocates its complex work
-    matrices this way; without this they default to real."""
+    constructor's dtype arg is a complex array's ``Y.dtype``, ``np.complexNN`` or the
+    ``np_complex`` precision alias a helper call temporary is allocated with (else None).
+    The eigh reduction allocates its complex work matrices this way; without this they
+    default to real."""
     if not (isinstance(call.func, ast.Attribute) and call.func.attr in ("zeros", "ones", "empty", "eye")):
         return None
     kw = {k.arg: k.value for k in call.keywords}
@@ -222,9 +224,8 @@ def ctor_complex_tag(call: ast.Call, local_dtypes: dict[str, str]) -> str | None
     if isinstance(da, ast.Attribute) and da.attr == "dtype" and isinstance(da.value, ast.Name):
         dt = local_dtypes.get(da.value.id)
         return dt if dt and dt.startswith("complex") else None
-    if isinstance(da, ast.Attribute) and da.attr in ("complex128", "complex64"):
-        return da.attr
-    return None
+    spelled = None if da is None else dtype_from_dtype_arg(da)
+    return spelled if spelled is not None and spelled.startswith("complex") else None
 
 
 def scalar_expr_complex(expr: ast.expr, local_dtypes: dict[str, str]) -> bool:

@@ -917,16 +917,21 @@ def index_aliases(kir: KernelIR, seeds: set[str]) -> set[str]:
     ``+ 1`` the seam had already applied. The ``np.empty`` that precedes such a fill is skipped
     because it supplies no values; ``np.zeros`` is NOT skipped, since a zero that survives the
     fill is a real 0-based value the suppression would turn into an out-of-bounds subscript.
+
+    A kernel array never qualifies: the seam hands it over and takes it back in the base its
+    manifest declares, so an output filled only from index reads (streamcluster's ``assign_out``)
+    and not declared ``index_array`` leaves 0-based.
     """
     if not seeds:
         return set()  # nothing declared -- do not walk the tree at all
     assigns = value_assignments(kir.tree)
+    params = {a.name for a in kir.arrays}
     tainted = set(seeds)
     changed = True
     while changed:
         changed = False
         for name, values in assigns.items():
-            if name in tainted:
+            if name in tainted or name in params:
                 continue
             if all(pure_index_root(v, tainted) is not None for v in values):
                 tainted.add(name)
@@ -1476,9 +1481,13 @@ class FortranBodyEmitter(BaseEmitter):
         if fns is not None:  # fp8 target: demote the real(c_float) RHS to the byte
             rhs = f"{fns.demote}({rhs})"
         # Rebase a value entering an index array. Skipped when the RHS is an index read plus integers
-        # (``path[t] = perm[k] + 1`` is already one-based); that shape would double.
-        if self.writes_index_array(target) and not self.reads_index_array(node.value):
-            rhs = f"({rhs}) + 1"
+        # (``path[t] = perm[k] + 1`` is already one-based); that shape would double. The mirror: an
+        # index read leaving for a location that is NOT an index goes back to numpy's 0-based value.
+        if self.writes_index_array(target):
+            if not self.reads_index_array(node.value):
+                rhs = f"({rhs}) + 1"
+        elif self.carries_index_value(node.value):
+            rhs = f"({rhs}) - 1"
         return f"{indent}{lhs} = {unprotected(rhs)}"
 
     def emit_helper_arg(self, node: ast.expr) -> str:
@@ -1502,7 +1511,7 @@ class FortranBodyEmitter(BaseEmitter):
         call_args = [self.emit_helper_arg(a) for a in call.args]
         call_args.insert(slot, self.emit_expr(target))
         # ABI-aligned with call_args now that the result sits in its slot; the result dummy is
-        # intent(out) and must stay a bare name, so it is never wrapped.
+        # intent(inout) and must stay a bare name, so it is never wrapped.
         types = self._helper_param_types.get(name)
         if types is not None:
             call_args = [
@@ -1695,6 +1704,20 @@ class FortranBodyEmitter(BaseEmitter):
             f"read. A buffer whose values are also COMPARED against 0-based quantities has no "
             f"single base and must not carry index_array in its manifest at all."
         )
+
+    def carries_index_value(self, node: ast.expr) -> bool:
+        """``node`` is one index-array value, plus or minus integers, so it holds the delivered base.
+
+        Stored into a buffer or local that is not an index (``assign_out[i] = feasible[c]``, a token
+        id written to an output, a local that also takes 0-based values), the value must leave that
+        base, or it lands one high and the seam, which rebases only index buffers, returns it one
+        high. Unlike :meth:`reads_index_array` this never refuses: any other mix is emitted as written.
+        """
+        if not self.index_arrays:
+            return False  # the common case: no declared index arrays, no walk
+        node = peel_int_casts(node)
+        hits = self.index_reads(node)
+        return len(hits) == 1 and self.additive_index_chain(node, hits[0])
 
     def writes_index_array(self, target: ast.expr) -> bool:
         """``target`` STORES into a buffer whose elements are subscripts (Sec. 7 ``index_array``).
@@ -4043,7 +4066,10 @@ def emit_fortran_helper(
         # A real result follows the KERNEL's float precision, exactly as collect_implicit_locals
         # types the caller's hoisted temp.
         ret_dtype = "int64" if helper_returns_int(hkir) else dtypes.accumulator_dtype(kernel_float_dtype(hkir))
-        ret_decl = f"{fortran_type(ret_dtype)}, intent(out) :: {ret_name}"
+        # inout, not out: ``acc = log_plus(acc, x)`` passes ``acc`` as the result AND as a value
+        # argument, and gfortran clobbers an intent(out) actual before it evaluates the value copy
+        # (ctc_loss read garbage at -O1/-O2, right at -O0).
+        ret_decl = f"{fortran_type(ret_dtype)}, intent(inout) :: {ret_name}"
     decls = helper_dummy_decls(hkir)
     if ret_decl:
         decls.append(ret_decl)
