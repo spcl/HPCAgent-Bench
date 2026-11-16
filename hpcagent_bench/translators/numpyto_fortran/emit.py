@@ -87,8 +87,8 @@ __all__ = [
     "PURE_VIEW_FNS",
     "QSORT_INTERFACE",
     "REAL_ARG_INTRINSICS",
-    "SORT_MARKER_NAMES",
     "SHAPE_TOKEN_INTRINSICS",
+    "SORT_MARKER_NAMES",
     "SYMBOL_INT_TAG",
     "TWO_OPERAND_CALLS",
     "UNARY_MATH_ATTRS",
@@ -527,11 +527,14 @@ def sort_helpers(used: set[tuple[bool, str]]) -> str:
     out = []
     for ftype in sorted({ftype for unused, ftype in used}):
         less, cmp = (f"npb_sort_{role}_{type_suffix(ftype)}" for role in ("less", "cmp"))
+        # NaN last for real keys; an integer key has no NaN, and ieee_is_nan takes reals only.
+        real = not ftype.startswith("integer")
+        nan_use = "\n        use, intrinsic :: ieee_arithmetic, only: ieee_is_nan" if real else ""
+        order = ".not. ieee_is_nan(a) .and. (ieee_is_nan(b) .or. a < b)" if real else "a < b"
         out.append(f"""
-    pure integer(c_int) function {less}(a, b)
-        use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
+    pure integer(c_int) function {less}(a, b){nan_use}
         {ftype}, intent(in) :: a, b
-        {less} = merge(1_c_int, 0_c_int, .not. ieee_is_nan(a) .and. (ieee_is_nan(b) .or. a < b))
+        {less} = merge(1_c_int, 0_c_int, {order})
     end function {less}
 
     integer(c_int) function {cmp}(a, b) bind(C)
@@ -583,7 +586,9 @@ def sort_helpers(used: set[tuple[bool, str]]) -> str:
     integer(c_int) function {pair_cmp}(a, b) bind(C){pair}
         type(npb_sort_pair), intent(in) :: a, b
         {pair_cmp} = {cmp}(a%v, b%v)
-        if ({pair_cmp} == 0) {pair_cmp} = merge(1_c_int, 0_c_int, a%i > b%i) - merge(1_c_int, 0_c_int, a%i < b%i)
+        if ({pair_cmp} == 0) then
+            {pair_cmp} = merge(1_c_int, 0_c_int, a%i > b%i) - merge(1_c_int, 0_c_int, a%i < b%i)
+        end if
     end function {pair_cmp}
 """)
     return "".join(out)
@@ -1118,9 +1123,9 @@ class FortranBodyEmitter(BaseEmitter):
         "_rk",
         "_size1_arrays",
         "_used_fftw",
-        "_used_gemm",
         "_used_floordiv_int",
         "_used_floordiv_real",
+        "_used_gemm",
         "_used_ieee",
         "_used_libm",
         "_used_nan_minmax",

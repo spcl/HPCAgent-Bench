@@ -13,7 +13,6 @@ from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.translators.numpyto_c.pluto_predicate import if_convert
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
 from hpcagent_bench.translators.numpyto_common.ast_build import (
-    const_int,
     line_of,
     name_,
     refuse_negative_int_power,
@@ -3036,11 +3035,10 @@ def sort_helpers(text: str, cpp: bool) -> str:
     out = []
     for t in sorted({ctype for unused, ctype in used}):
         isnan = "std::isnan" if cpp else "isnan"
-        out.append(
-            f"static inline int npb_sort_less_{t}(const {t} a, const {t} b) {{\n"
-            f"    return !{isnan}(a) && ({isnan}(b) || a < b);\n"
-            "}\n"
-        )
+        # NaN last for float keys; an integer key has no NaN, and C's isnan refuses one.
+        integer = t.startswith(("int", "uint")) or t in ("bool", "char")
+        less = "a < b" if integer else f"!{isnan}(a) && ({isnan}(b) || a < b)"
+        out.append(f"static inline int npb_sort_less_{t}(const {t} a, const {t} b) {{\n    return {less};\n}}\n")
         if cpp:
             if (False, t) in used:
                 out.append(
