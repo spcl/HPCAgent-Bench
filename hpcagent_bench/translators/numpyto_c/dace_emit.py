@@ -625,6 +625,30 @@ def array_annotation(arr: ArrayDesc, helper: bool = False) -> str:
 #: Map framework precision globals (np_float/np_complex) to the dace globals the module imports.
 FRAMEWORK_DTYPE_TO_DACE = {"np_float": "dc_float", "np_complex": "dc_complex_float"}
 
+#: A single-precision allocation dtype, as the precision global an opmath dace program declares it in.
+COMPUTE_TO_PRECISION = {"float32": "np_float", "complex64": "np_complex"}
+
+
+class PrecisionAllocations(ast.NodeTransformer):
+    """In an opmath kernel, allocate single-precision buffers in the run precision.
+
+    The frontend gives a bf16 / fp8 kernel's helper temporaries the compute dtype (``float32``), which is what the C
+    emitters declare them as. The dace program computes in the precision global throughout, and its helpers are
+    declared in it too, so a ``float32`` buffer cannot bind them (dist_mlp_tp's ``logsumexp_rows``,
+    dist_gemm_gn_swish's ``group_norm_rows``)."""
+
+    __slots__ = ()
+
+    def visit_Call(self, node: ast.Call) -> ast.Call:
+        self.generic_visit(node)
+        if isinstance(node.func, ast.Attribute) and node.func.attr in ("empty", "zeros", "ones", "full"):
+            for keyword in node.keywords:
+                dtype = keyword.value
+                if keyword.arg == "dtype" and isinstance(dtype, ast.Attribute) and dtype.attr in COMPUTE_TO_PRECISION:
+                    precision = ast.Name(id=COMPUTE_TO_PRECISION[dtype.attr], ctx=ast.Load())
+                    keyword.value = ast.copy_location(precision, dtype)
+        return node
+
 
 class RewriteFrameworkDtype(ast.NodeTransformer):
     """Rewrite leaked np_float/np_complex tokens to the dace precision global; tracks complex usage for the import."""
@@ -4666,7 +4690,9 @@ def render_program(
     params: list[str] = []
     for arg in kir.input_args:
         if arg in arrays:
-            params.append(f"{arg}: {array_annotation(arrays[arg], helper=nested)}")
+            # An opmath (machine-learning) kernel's helper follows the run precision like the kernel itself: its
+            # single-precision parameters are the compute dtype of a bf16 / fp8 argument, not a deliberate float32.
+            params.append(f"{arg}: {array_annotation(arrays[arg], helper=nested and not kir.opmath)}")
         elif arg in scalars and arg not in shape_scalars:
             params.append(f"{arg}: {dace_dtype(scalars[arg].dtype)}")
         # symbols (and scalars promoted to symbols): skip (declared at module scope below)
@@ -4677,6 +4703,8 @@ def render_program(
 
     # Desugar the body with the same pass numba uses for feature parity; falls back to verbatim on parse failure.
     fn_ast = desugared_function(kir)
+    if kir.opmath:
+        fn_ast = PrecisionAllocations().visit(fn_ast)
     # Rewrite leaked np_float/np_complex tokens to the dace precision global the module binds.
     framework_dtype = RewriteFrameworkDtype()
     fn_ast = framework_dtype.visit(fn_ast)
