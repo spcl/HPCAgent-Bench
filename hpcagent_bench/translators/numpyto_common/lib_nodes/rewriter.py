@@ -52,6 +52,7 @@ def call_expander(
     blas_complex: bool = False,
     element_dtypes: dict[str, str] | None = None,
     opmath: bool = False,
+    sort_library: bool = False,
 ) -> list[ast.stmt]:
     """Adapter: pass ``keywords``/``local_dtypes``/``fresh_local_allocs``/``library`` to
     expanders that accept them, else call with the legacy signature. The two
@@ -62,7 +63,8 @@ def call_expander(
     FFT_LIBRARY_MARKER). ``blas_float`` is the float of the gemm a BLAS target renders (None: no BLAS),
     ``extent_values`` the compile-time integer behind a shape token (a pinned knob), ``blas_complex`` whether
     that gemm also takes complex operands, ``element_dtypes`` every array's element dtype (a scan picks its carry
-    from its target's), ``opmath`` the kernel's arithmetic on narrow floats (:attr:`KernelIR.opmath`).
+    from its target's), ``opmath`` the kernel's arithmetic on narrow floats (:attr:`KernelIR.opmath`),
+    ``sort_library`` whether the target renders SORT_LIBRARY_MARKER.
     """
     sig = inspect.signature(expander)
     params = sig.parameters
@@ -89,6 +91,8 @@ def call_expander(
         extras["element_dtypes"] = element_dtypes
     if "opmath" in params:
         extras["opmath"] = opmath
+    if "sort_library" in params:
+        extras["sort_library"] = sort_library
     return expander(target, args, shape_table, **extras)
 
 
@@ -133,6 +137,7 @@ ELEMENT_WRITE_EXPANDERS = {
     ("np", "abs"),
     ("np", "absolute"),
     ("np", "sort"),
+    ("np", "argsort"),
     ("np", "histogram"),
     ("np", "linalg.inv"),
     ("np", "linalg.solve"),
@@ -367,6 +372,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         "scalar_call_temps",
         "scalar_helpers",
         "shape_table",
+        "sort_library",
         "sparse",
     )
 
@@ -387,6 +393,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         extent_values: dict[str, int] | None = None,
         blas_complex: bool = False,
         opmath: bool = False,
+        sort_library: bool = False,
     ) -> None:
         self.shape_table = shape_table
         #: The kernel's arithmetic on narrow floats (:attr:`KernelIR.opmath`), for the expanders that read it.
@@ -412,6 +419,8 @@ class LibNodeRewriter(ast.NodeTransformer):
         self.fft_library = fft_library
         #: Target also renders a batched / N-D np.fft.* as FFTN_LIBRARY_MARKER (numpyto_c only).
         self.fft_library_nd = fft_library_nd
+        #: Target renders np.sort / np.argsort as SORT_LIBRARY_MARKER (C, C++, Fortran).
+        self.sort_library = sort_library
         #: Target's "I render this numpy call myself" predicate. A call it claims is left
         #: UNEXPANDED so the emitter can use its own intrinsic -- Fortran's SUM/MAXVAL/NORM2 --
         #: instead of the loop nest every target would otherwise get. Default: claims nothing.
@@ -635,23 +644,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         if self.target_renders(key, call):
             return node
         try:
-            expanded = call_expander(
-                expander,
-                target,
-                call.args,
-                call.keywords,
-                self.shape_table,
-                local_dtypes=self.local_dtypes,
-                fresh_local_allocs=self.fresh_local_allocs,
-                dim_aliases=self.dim_aliases,
-                library=self.fft_library,
-                library_nd=self.fft_library_nd,
-                blas_float=self.gemm_float,
-                extent_values=self.extent_values,
-                blas_complex=self.blas_complex,
-                element_dtypes=self.native_dtypes,
-                opmath=self.opmath,
-            )
+            expanded = self.expand(expander, target, call)
         except NotImplementedError:
             return None
         if key in ELEMENT_WRITE_EXPANDERS and target.id in self.shape_table and target.id not in self.known_arrays:
@@ -690,24 +683,30 @@ class LibNodeRewriter(ast.NodeTransformer):
         if key not in SLICE_TARGET_EXPANDERS:
             return None
         try:
-            return call_expander(
-                NP_CALL_EXPANDERS[key],
-                node.targets[0],
-                node.value.args,
-                node.value.keywords,
-                self.shape_table,
-                local_dtypes=self.local_dtypes,
-                fresh_local_allocs=self.fresh_local_allocs,
-                library=self.fft_library,
-                library_nd=self.fft_library_nd,
-                blas_float=self.gemm_float,
-                extent_values=self.extent_values,
-                blas_complex=self.blas_complex,
-                element_dtypes=self.native_dtypes,
-                opmath=self.opmath,
-            )
+            return self.expand(NP_CALL_EXPANDERS[key], node.targets[0], node.value)
         except NotImplementedError:
             return None
+
+    def expand(self, expander: Callable, target: ast.expr, call: ast.Call) -> list[ast.stmt]:
+        """``target = call`` through ``expander``, handed this target's tables and library choices."""
+        return call_expander(
+            expander,
+            target,
+            call.args,
+            call.keywords,
+            self.shape_table,
+            local_dtypes=self.local_dtypes,
+            fresh_local_allocs=self.fresh_local_allocs,
+            dim_aliases=self.dim_aliases,
+            library=self.fft_library,
+            library_nd=self.fft_library_nd,
+            blas_float=self.gemm_float,
+            extent_values=self.extent_values,
+            blas_complex=self.blas_complex,
+            element_dtypes=self.native_dtypes,
+            opmath=self.opmath,
+            sort_library=self.sort_library,
+        )
 
     def target_renders(self, key: tuple[str, str] | None, call: ast.Call) -> bool:
         """The target claims this call as its own intrinsic, so leave it unexpanded.
@@ -741,23 +740,7 @@ class LibNodeRewriter(ast.NodeTransformer):
                     continue
                 if expander is not None:
                     try:
-                        expanded = call_expander(
-                            expander,
-                            stmt.targets[0],
-                            stmt.value.args,
-                            stmt.value.keywords,
-                            self.shape_table,
-                            local_dtypes=self.local_dtypes,
-                            fresh_local_allocs=self.fresh_local_allocs,
-                            dim_aliases=self.dim_aliases,
-                            library=self.fft_library,
-                            library_nd=self.fft_library_nd,
-                            blas_float=self.gemm_float,
-                            extent_values=self.extent_values,
-                            blas_complex=self.blas_complex,
-                            element_dtypes=self.native_dtypes,
-                            opmath=self.opmath,
-                        )
+                        expanded = self.expand(expander, stmt.targets[0], stmt.value)
                         # Same note as the direct path: the hoister split ``out = f(np.sum(a))`` into
                         # a temp assign, and it is THIS statement that becomes the loop nest.
                         tag_numpy_origin(expanded, ast.unparse(stmt.value))

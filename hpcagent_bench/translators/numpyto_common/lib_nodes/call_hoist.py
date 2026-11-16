@@ -158,8 +158,8 @@ def leading_count_shape(
 
 def named_operand_shape(position: int) -> Callable[..., RuleResult]:
     """A rule for an op whose result has the declared shape of its Name operand at ``position``:
-    ``np.linalg.inv``, ``cholesky``, the ``np.fft`` transforms, ``roll``, ``tril``, ``triu`` (first
-    operand) and ``np.linalg.solve`` (x has b's shape)."""
+    ``np.linalg.inv``, ``cholesky``, the ``np.fft`` transforms, ``roll``, ``tril``, ``triu``, ``sort``,
+    ``argsort`` (first operand) and ``np.linalg.solve`` (x has b's shape)."""
 
     def rule(
         hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
@@ -352,7 +352,7 @@ OUTPUT_SHAPE_RULES: tuple[tuple[frozenset[str] | set[str], Callable[..., RuleRes
     (frozenset({"fft.fftn", "fft.ifftn", "fft.fft", "fft.ifft"}), named_operand_shape(0)),
     (frozenset({"fft.fftfreq"}), leading_count_shape),
     (frozenset({"diag"}), routed_extent),
-    (frozenset({"roll", "linalg.cholesky", "tril", "triu"}), named_operand_shape(0)),
+    (frozenset({"roll", "linalg.cholesky", "tril", "triu", "sort", "argsort"}), named_operand_shape(0)),
     (frozenset({"swapaxes", "expand_dims", "squeeze", "moveaxis"}), routed_extent),
     (frozenset({"reshape"}), reshape_name_shape),
     (frozenset({"concatenate"}), concatenate_shape),
@@ -408,6 +408,8 @@ SPILL_FIRST_OPERAND: frozenset[tuple[str, str]] = frozenset(
             "expand_dims",
             "squeeze",
             "moveaxis",
+            "sort",
+            "argsort",
         )
     }
     | {("np", "fft.fftn"), ("np", "fft.ifftn"), ("np", "fft.fft"), ("np", "fft.ifft")}
@@ -464,7 +466,7 @@ FFT_TRANSFORMS = frozenset({"fft.fftn", "fft.ifftn", "fft.fft", "fft.ifft"})
 #: Shape-preserving ops whose result inherits the source array's dtype: ``Xiv = np.reshape(Xi,
 #: (xn * yn,))`` with ``Xi`` int64 keeps Xiv int64, not the default double.
 SHAPE_PRESERVING_OPS = frozenset(
-    {"reshape", "repeat", "copy", "array", "asarray", "ascontiguousarray", "transpose", "flip"}
+    {"reshape", "repeat", "copy", "array", "asarray", "ascontiguousarray", "transpose", "flip", "sort"}
 )
 
 
@@ -663,11 +665,11 @@ class CallHoister(ast.NodeTransformer):
 
     def type_array_temp(self, temp: str, op: str, node: ast.Call) -> None:
         """The element dtype of an array temp, where it is not the double default: ``argmax`` /
-        ``argmin`` produce int64 indices; complex operands (and every ``np.fft`` transform, even of
+        ``argmin`` / ``argsort`` produce int64 indices; complex operands (and every ``np.fft`` transform, even of
         a real input) give complex128; a shape-preserving op inherits its source's dtype; an
         all-integer elementwise ufunc, or an ``np.where`` over integer VALUES (the condition's dtype
         is ignored), stays int64 rather than round-tripping through a double."""
-        if op in {"argmax", "argmin"}:
+        if op in {"argmax", "argmin", "argsort"}:
             self.local_dtypes[temp] = "int64"
         if self.infer_complex(node) or op in FFT_TRANSFORMS:
             self.local_dtypes[temp] = "complex128"

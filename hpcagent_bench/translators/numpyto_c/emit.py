@@ -26,6 +26,7 @@ from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
     is_numpy_module,
 )
 from hpcagent_bench.translators.numpyto_common.emit_helpers.pinned import pinned_knobs
+from hpcagent_bench.translators.numpyto_common.emit_helpers.sort import sort_call
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import (
     IDENT_RE,
     loop_target_names,
@@ -46,6 +47,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     BLAS_GEMM_STRIDED_MARKER,
     FFT_LIBRARY_MARKER,
     FFTN_LIBRARY_MARKER,
+    SORT_LIBRARY_MARKER,
 )
 from hpcagent_bench.translators.numpyto_common.limits import FIXPOINT_ROUNDS
 from hpcagent_bench.translators.numpyto_common.lowering import (
@@ -97,6 +99,7 @@ __all__ = [
     "PLUTO_UNSCOPABLE_RE",
     "RESERVED_C_NAMES",
     "RESPELLING_SUFFIX",
+    "SORT_HELPER_CALL_RE",
     "STACK_BUDGET_BYTES",
     "STDLIB_STRING_NAMES",
     "CBodyEmitter",
@@ -164,8 +167,11 @@ __all__ = [
     "respelled_parameters",
     "respelled_shape",
     "respelled_unit",
+    "sort_helpers",
+    "sort_includes",
     "spelled_names",
     "unit_stride_offset",
+    "used_sorts",
     "value_dependent_test",
     "write_arith_header",
     "zero_fill_stmt",
@@ -228,7 +234,7 @@ def pluto_call_free(name: str, args: str, hoisted: dict[str, str] | None = None)
 
 
 #: Constructs pet cannot model; the whole scop one lands in is rejected (POLYCC-007, POLYCC-013).
-PLUTO_UNSCOPABLE_RE = re.compile(r"\b(?:malloc|calloc|realloc|free|memset|memcpy|memmove|while)\s*\(")
+PLUTO_UNSCOPABLE_RE = re.compile(r"\b(?:malloc|calloc|realloc|free|memset|memcpy|memmove|while|npb_(?:arg)?sort_\w+)\s*\(")
 
 #: pet DROPS a statement whose only write is a scop-external scalar (POLYCC-009), so a loop-less
 #: region would lose it and buy no schedule.
@@ -602,16 +608,18 @@ class CBodyEmitter(BaseEmitter):
         return any(self.scalar_ctypes.get(n, "").startswith(("double", "float")) for n in IDENT_RE.findall(cond))
 
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:
-        """Base dispatch, plus one override: FFT_LIBRARY_MARKER needs several C statements (plan,
+        """Base dispatch, plus the library markers: FFT_LIBRARY_MARKER needs several C statements (plan,
         execute, destroy, an optional normalize loop -- see :meth:`emit_fft_library`), which the
-        base ``ast.Expr`` case (one expression, one ``;``) cannot hold. Every other statement kind
-        is unchanged."""
+        base ``ast.Expr`` case (one expression, one ``;``) cannot hold, and SORT_LIBRARY_MARKER calls a
+        prelude helper (:meth:`emit_sort_library`). Every other statement kind is unchanged."""
         if (
             isinstance(node, ast.Expr)
             and isinstance(node.value, ast.Call)
             and isinstance(node.value.func, ast.Name)
-            and node.value.func.id in (FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER)
+            and node.value.func.id in (FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER, SORT_LIBRARY_MARKER)
         ):
+            if node.value.func.id == SORT_LIBRARY_MARKER:
+                return self.emit_sort_library(node.value, indent)
             if node.value.func.id == FFTN_LIBRARY_MARKER:
                 return self.emit_fftn_library(node.value, indent)
             return self.emit_fft_library(node.value, indent)
@@ -1666,6 +1674,21 @@ class CBodyEmitter(BaseEmitter):
             ]
         lines += [f"{indent}  }}", f"{indent}}}"]
         return "\n".join(lines)
+
+    def emit_sort_library(self, node: ast.Call, indent: str) -> str:
+        """Render the sort marker as one call to the ``npb_[arg]sort_<ctype>`` helper :func:`sort_helpers` defines
+        (qsort in C, std::sort / std::stable_sort in C++). The casts flatten a Pluto VLA to the helper's pointer."""
+        sort = sort_call(node)
+        ctype, out_ctype = (
+            c_type_(self.dtype_for_name(name) or default_float_dtype(self.kir)) for name in (sort.src, sort.out)
+        )
+        if out_ctype != (c_type_("int64") if sort.argsort else ctype) or not ctype.isidentifier():
+            raise NotImplementedError(f"{sort.helper}: {sort.out} ({out_ctype}) cannot hold {sort.src} ({ctype})")
+        rows = " * ".join(f"(int64_t)({self.emit_expr(e)})" for e in sort.rows) or "(int64_t)1"
+        return (
+            f"{indent}{sort.helper}_{ctype}(({out_ctype} *)({sort.out}), (const {ctype} *)({sort.src}), {rows}, "
+            f"(int64_t)({self.emit_expr(sort.n)}));"
+        )
 
     def emit_true_divide(self, node: ast.BinOp) -> str:
         """numpy ``/`` mixing a float and a Python int yields the FLOAT's own precision -- NEP 50
@@ -2953,6 +2976,93 @@ def fftw_include(body: str) -> str:
     return "#include <fftw3.h>\n" if "_plan_dft_1d(" in body or "_plan_many_dft(" in body else ""
 
 
+#: A call :meth:`CBodyEmitter.emit_sort_library` emitted: group 1 ``arg`` for an argsort, group 2 the element ctype.
+SORT_HELPER_CALL_RE = re.compile(r"\bnpb_(arg)?sort_(\w+)\(")
+
+
+def used_sorts(text: str) -> set[tuple[bool, str]]:
+    """``(argsort, ctype)`` of every sort helper ``text`` calls."""
+    return {(bool(m.group(1)), m.group(2)) for m in SORT_HELPER_CALL_RE.finditer(text)}
+
+
+def sort_includes(text: str, cpp: bool) -> str:
+    """The C++ headers the sort helpers use, outside the ``extern "C"`` block (C's are in its header)."""
+    return "#include <algorithm>\n#include <numeric>\n" if cpp and used_sorts(text) else ""
+
+
+def sort_helpers(text: str, cpp: bool) -> str:
+    """The ``npb_[arg]sort_<ctype>(out, src, rows, n)`` helpers ``text`` calls: each ``n``-long row of ``src`` sorted
+    ascending, NaN last as numpy, into ``out`` -- the values, or for argsort the int64 indices with ties in index
+    order (stable). C sorts with ``qsort``, argsort through (value, index) pairs; C++ with ``std::sort`` and an
+    index ``std::stable_sort``."""
+    used = used_sorts(text)
+    out = []
+    for t in sorted({ctype for unused, ctype in used}):
+        isnan = "std::isnan" if cpp else "isnan"
+        out.append(
+            f"static inline int npb_sort_less_{t}(const {t} a, const {t} b) {{\n"
+            f"    return !{isnan}(a) && ({isnan}(b) || a < b);\n"
+            "}\n"
+        )
+        if cpp:
+            if (False, t) in used:
+                out.append(
+                    f"static void npb_sort_{t}({t} *out, const {t} *src, int64_t rows, int64_t n) {{\n"
+                    "    if (out != src) std::copy(src, src + rows * n, out);\n"
+                    f"    for (int64_t r = 0; r < rows; ++r) std::sort(out + r * n, out + (r + 1) * n, npb_sort_less_{t});\n"
+                    "}\n"
+                )
+            if (True, t) in used:
+                out.append(
+                    f"static void npb_argsort_{t}(int64_t *out, const {t} *src, int64_t rows, int64_t n) {{\n"
+                    "    for (int64_t r = 0; r < rows; ++r) {\n"
+                    f"        const {t} *keys = src + r * n;\n"
+                    "        std::iota(out + r * n, out + (r + 1) * n, int64_t{0});\n"
+                    "        std::stable_sort(out + r * n, out + (r + 1) * n,\n"
+                    f"                         [keys](int64_t a, int64_t b) {{ return npb_sort_less_{t}(keys[a], keys[b]); }});\n"
+                    "    }\n"
+                    "}\n"
+                )
+            continue
+        out.append(
+            f"static int npb_sort_cmp_{t}(const void *pa, const void *pb) {{\n"
+            f"    const {t} a = *(const {t} *)pa, b = *(const {t} *)pb;\n"
+            f"    return npb_sort_less_{t}(b, a) - npb_sort_less_{t}(a, b);\n"
+            "}\n"
+        )
+        if (False, t) in used:
+            out.append(
+                f"static void npb_sort_{t}({t} *out, const {t} *src, int64_t rows, int64_t n) {{\n"
+                f"    if (out != src) memcpy(out, src, (size_t)(rows * n) * sizeof({t}));\n"
+                f"    for (int64_t r = 0; r < rows; ++r) qsort(out + r * n, (size_t)n, sizeof({t}), npb_sort_cmp_{t});\n"
+                "}\n"
+            )
+        if (True, t) in used:
+            pair = f"npb_sort_pair_{t}"
+            out.append(
+                f"typedef struct {{\n    {t} v;\n    int64_t i;\n}} {pair};\n"
+                f"static int npb_argsort_cmp_{t}(const void *pa, const void *pb) {{\n"
+                f"    const {pair} *a = (const {pair} *)pa, *b = (const {pair} *)pb;\n"
+                f"    const int c = npb_sort_cmp_{t}(&a->v, &b->v);\n"
+                "    return c != 0 ? c : (a->i > b->i) - (a->i < b->i);\n"
+                "}\n"
+                f"static void npb_argsort_{t}(int64_t *out, const {t} *src, int64_t rows, int64_t n) {{\n"
+                f"    {pair} *pairs = ({pair} *)malloc((size_t)n * sizeof({pair}));\n"
+                f'    __npb_alloc_check(pairs, (size_t)n * sizeof({pair}), "argsort pairs");\n'
+                "    for (int64_t r = 0; r < rows; ++r) {\n"
+                "        for (int64_t j = 0; j < n; ++j) {\n"
+                "            pairs[j].v = src[r * n + j];\n"
+                "            pairs[j].i = j;\n"
+                "        }\n"
+                f"        qsort(pairs, (size_t)n, sizeof({pair}), npb_argsort_cmp_{t});\n"
+                "        for (int64_t j = 0; j < n; ++j) out[r * n + j] = pairs[j].i;\n"
+                "    }\n"
+                "    free(pairs);\n"
+                "}\n"
+            )
+    return "".join(out)
+
+
 CPP_HEADER = CPP_ARITH + '\nextern "C" {\n'
 CPP_FOOTER = '} // extern "C"\n'
 
@@ -3678,9 +3788,10 @@ def c_family_source(
     body = emit_body(kir, indent="        ", parallel=parallel)
     consts = pinned_const_block(kir)
     prelude, epilogue, footer = (CPP_PRELUDE, CPP_EPILOGUE, CPP_FOOTER) if cpp else (C_PRELUDE, C_EPILOGUE, "")
+    calls = helpers + body
     return (
-        f"{header}{blas_include(body)}{fftw_include(body)}{fp8_prelude(kir)}\n{consts}{helpers}{signature} {{\n"
-        f"{prelude}{body}\n{epilogue}}}\n{footer}"
+        f"{sort_includes(calls, cpp)}{header}{blas_include(body)}{fftw_include(body)}{fp8_prelude(kir)}"
+        f"{sort_helpers(calls, cpp)}\n{consts}{helpers}{signature} {{\n{prelude}{body}\n{epilogue}}}\n{footer}"
     )
 
 
@@ -3743,7 +3854,8 @@ def emit_pluto(kir: KernelIR, fn_name: str | None = None) -> str:
     free_block = (frees + "\n") if frees else ""
     # A helper the frontend could not inline (it returns an array, ...) is a plain C function; its calls stay
     # outside every scop (CBodyEmitter.pluto_unscopable).
+    helpers = emit_c_helpers(kir)
     return (
-        f"{C_HEADER}{fp8_prelude(kir)}\n{pinned_const_block(kir)}{emit_c_helpers(kir)}{signature} {{\n{C_PRELUDE}"
-        f"{decl_block}{body}\n{free_block}{C_EPILOGUE}}}\n"
+        f"{C_HEADER}{fp8_prelude(kir)}{sort_helpers(helpers + body, cpp=False)}\n{pinned_const_block(kir)}{helpers}"
+        f"{signature} {{\n{C_PRELUDE}{decl_block}{body}\n{free_block}{C_EPILOGUE}}}\n"
     )

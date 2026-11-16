@@ -28,6 +28,7 @@ from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
     is_numpy_module,
 )
 from hpcagent_bench.translators.numpyto_common.emit_helpers.pinned import pinned_knobs
+from hpcagent_bench.translators.numpyto_common.emit_helpers.sort import sort_call
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import (
     IDENT_RE,
     loop_target_names,
@@ -47,6 +48,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     BLAS_GEMM_MARKER,
     BLAS_GEMM_STRIDED_MARKER,
     FFT_LIBRARY_MARKER,
+    SORT_LIBRARY_MARKER,
 )
 from hpcagent_bench.translators.numpyto_common.lowering import (
     MATH_INTRINSIC_NAMES,
@@ -83,7 +85,9 @@ __all__ = [
     "ONE_OPERAND_CALLS",
     "PURE_INT_CASTS",
     "PURE_VIEW_FNS",
+    "QSORT_INTERFACE",
     "REAL_ARG_INTRINSICS",
+    "SORT_MARKER_NAMES",
     "SHAPE_TOKEN_INTRINSICS",
     "SYMBOL_INT_TAG",
     "TWO_OPERAND_CALLS",
@@ -155,9 +159,12 @@ __all__ = [
     "shape_token_uses_unknown",
     "sign_helper",
     "signature_decls",
+    "sort_helper_name",
+    "sort_helpers",
     "supplies_no_values",
     "symbol_decl",
     "to_fortran_shape_token",
+    "type_suffix",
     "unprotected",
     "value_assignments",
     "wrap_fortran_line",
@@ -485,9 +492,101 @@ def floordiv_real_helper(dk: str) -> str:
 """
 
 
+def type_suffix(ftype: str) -> str:
+    """A Fortran type spec as an identifier suffix (``real(c_double)`` -> ``real_c_double``)."""
+    return "_".join(re.findall(r"[a-z0-9]+", ftype.lower()))
+
+
 def gemm_helper_name(ftype: str) -> str:
     """``npb_gemm_<type>`` for a Fortran type spec (``real(c_double)`` -> ``npb_gemm_real_c_double``)."""
-    return "npb_gemm_" + "_".join(re.findall(r"[a-z0-9]+", ftype.lower()))
+    return "npb_gemm_" + type_suffix(ftype)
+
+
+def sort_helper_name(argsort: bool, ftype: str) -> str:
+    """``npb_sort_<type>`` / ``npb_argsort_<type>`` for the element type spec of the sorted keys."""
+    return ("npb_argsort_" if argsort else "npb_sort_") + type_suffix(ftype)
+
+
+QSORT_INTERFACE = """
+        interface
+            subroutine qsort(base, nmemb, size, compar) bind(C, name="qsort")
+                import :: c_ptr, c_size_t, c_funptr
+                type(c_ptr), value :: base
+                integer(c_size_t), value :: nmemb, size
+                type(c_funptr), value :: compar
+            end subroutine qsort
+        end interface"""
+
+
+def sort_helpers(used: set[tuple[bool, str]]) -> str:
+    """Contained ``npb_[arg]sort_<type>(out, src, rows, n)`` for each ``(argsort, key type)`` the body sorts: every
+    ``n``-long row of ``src`` (rows are contiguous, arrays being declared with reversed dims) sorted ascending, NaN last
+    as numpy, by C ``qsort`` through ``iso_c_binding``. An argsort sorts (value, 0-based index) pairs whose ties fall
+    in index order, so its int64 indices are a stable argsort."""
+    ik = fortran_type("int64")
+    out = []
+    for ftype in sorted({ftype for unused, ftype in used}):
+        less, cmp = (f"npb_sort_{role}_{type_suffix(ftype)}" for role in ("less", "cmp"))
+        out.append(f"""
+    pure integer(c_int) function {less}(a, b)
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
+        {ftype}, intent(in) :: a, b
+        {less} = merge(1_c_int, 0_c_int, .not. ieee_is_nan(a) .and. (ieee_is_nan(b) .or. a < b))
+    end function {less}
+
+    integer(c_int) function {cmp}(a, b) bind(C)
+        {ftype}, intent(in) :: a, b
+        {cmp} = {less}(b, a) - {less}(a, b)
+    end function {cmp}
+""")
+        if (False, ftype) in used:
+            name = sort_helper_name(False, ftype)
+            out.append(f"""
+    subroutine {name}(out, src, rows, n)
+        {ik}, intent(in) :: rows, n
+        {ftype}, intent(in) :: src(*)
+        {ftype}, intent(inout), target :: out(*)
+        {ik} :: r{QSORT_INTERFACE}
+        out(1:rows * n) = src(1:rows * n)
+        if (n == 0) return
+        do r = 0, rows - 1
+            call qsort(c_loc(out(r * n + 1)), int(n, c_size_t), c_sizeof(out(1)), c_funloc({cmp}))
+        end do
+    end subroutine {name}
+""")
+        if (True, ftype) in used:
+            name = sort_helper_name(True, ftype)
+            pair_cmp = f"npb_argsort_cmp_{type_suffix(ftype)}"
+            pair = f"""
+        type, bind(C) :: npb_sort_pair
+            {ftype} :: v
+            {ik} :: i
+        end type npb_sort_pair"""
+            out.append(f"""
+    subroutine {name}(out, src, rows, n)
+        {ik}, intent(in) :: rows, n
+        {ftype}, intent(in) :: src(*)
+        {ik}, intent(inout) :: out(*){pair}
+        type(npb_sort_pair), allocatable, target :: pairs(:)
+        {ik} :: r, j{QSORT_INTERFACE}
+        if (n == 0) return
+        allocate(pairs(n))
+        do r = 0, rows - 1
+            do j = 1, n
+                pairs(j) = npb_sort_pair(src(r * n + j), j - 1)
+            end do
+            call qsort(c_loc(pairs), int(n, c_size_t), c_sizeof(pairs(1)), c_funloc({pair_cmp}))
+            out(r * n + 1:r * n + n) = pairs(:)%i
+        end do
+    end subroutine {name}
+
+    integer(c_int) function {pair_cmp}(a, b) bind(C){pair}
+        type(npb_sort_pair), intent(in) :: a, b
+        {pair_cmp} = {cmp}(a%v, b%v)
+        if ({pair_cmp} == 0) {pair_cmp} = merge(1_c_int, 0_c_int, a%i > b%i) - merge(1_c_int, 0_c_int, a%i < b%i)
+    end function {pair_cmp}
+""")
+    return "".join(out)
 
 
 def gemm_helper(ftype: str) -> str:
@@ -581,6 +680,8 @@ FFT_MARKER_NAMES = frozenset({FFT_LIBRARY_MARKER, "x_" + FFT_LIBRARY_MARKER.lstr
 #: BLAS_GEMM_MARKER / BLAS_GEMM_STRIDED_MARKER, each with its renamed alias (as FFT_MARKER_NAMES).
 GEMM_MARKER_NAMES = frozenset({BLAS_GEMM_MARKER, "x_" + BLAS_GEMM_MARKER.lstrip("_")})
 GEMM_STRIDED_MARKER_NAMES = frozenset({BLAS_GEMM_STRIDED_MARKER, "x_" + BLAS_GEMM_STRIDED_MARKER.lstrip("_")})
+#: SORT_LIBRARY_MARKER with its renamed alias (as FFT_MARKER_NAMES).
+SORT_MARKER_NAMES = frozenset({SORT_LIBRARY_MARKER, "x_" + SORT_LIBRARY_MARKER.lstrip("_")})
 
 #: numpy min/max family that needs int-literal-vs-real promotion before renaming to MAX/MIN.
 #: Fortran caps an identifier at 63 characters (F2003 onward, and what -std=f2018 enforces).
@@ -1025,6 +1126,7 @@ class FortranBodyEmitter(BaseEmitter):
         "_used_nan_minmax",
         "_used_round_even",
         "_used_sign",
+        "_used_sort",
         "array_shapes",
         "index_arrays",
         "inline_alloc_locals",
@@ -1056,6 +1158,8 @@ class FortranBodyEmitter(BaseEmitter):
         ):
             return self.emit_fftw(node.value, indent)
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+            if node.value.func.id in SORT_MARKER_NAMES:
+                return self.emit_sort(node.value, indent)
             if node.value.func.id in GEMM_MARKER_NAMES:
                 return self.emit_gemm(node.value, indent)
             if node.value.func.id in GEMM_STRIDED_MARKER_NAMES:
@@ -1102,6 +1206,23 @@ class FortranBodyEmitter(BaseEmitter):
         m, n, k, ta, tb, lda, ldb, ldc, oa, ob, oc = (f"int({self.emit_expr(e)}, {ik})" for e in node.args[3:])
         args = [ta, tb, m, n, k, a, lda, oa, b, ldb, ob, out, ldc, oc]
         return f"{indent}call {gemm_helper_name(ftype)}({', '.join(args)})"
+
+    def emit_sort(self, node: ast.Call, indent: str) -> str:
+        """The sort marker (see SORT_LIBRARY_MARKER) as a call to the contained ``npb_[arg]sort_<type>``
+        (:func:`sort_helpers`), which sorts each row with C ``qsort``."""
+        sort = sort_call(node)
+        out, src = fortran_safe(sort.out), fortran_safe(sort.src)
+        ftype, out_ftype = (
+            fortran_type(dt) if (dt := self._local_elem_dtypes.get(name) or self.name_dtype(name)) else f"real({self._rk})"
+            for name in (src, out)
+        )
+        if out_ftype != (fortran_type("int64") if sort.argsort else ftype):
+            raise NotImplementedError(f"np.sort: {out} ({out_ftype}) cannot hold {src} ({ftype}) sorted")
+        self._used_sort.add((sort.argsort, ftype))
+        ik = fortran_type("int64").partition("(")[2].rstrip(")")
+        rows = " * ".join(f"int({self.emit_expr(e)}, {ik})" for e in sort.rows) or f"1_{ik}"
+        n = f"int({self.emit_expr(sort.n)}, {ik})"
+        return f"{indent}call {sort_helper_name(sort.argsort, ftype)}({out}, {src}, {rows}, {n})"
 
     def emit_return(self, node: ast.Return, indent: str) -> str:
         # In a HELPER subroutine the returned value is written to the out-param
@@ -1209,6 +1330,8 @@ class FortranBodyEmitter(BaseEmitter):
         self._used_fftw: set[str] = set()
         # Element types (Fortran type specs) of the strided gemms the body calls (see :meth:`emit_gemm_strided`).
         self._used_gemm: set[str] = set()
+        # (argsort, key type spec) of the sorts the body calls (see :meth:`emit_sort`).
+        self._used_sort: set[tuple[bool, str]] = set()
         # Whether the body calls np.round/np.rint -- lowered to a contained npb_round_even helper
         # (not inline, which repeats the argument six times).
         self._used_round_even = False
@@ -3586,7 +3709,7 @@ def fftw_interface(used_fftw: set[str]) -> str:
 
 def contained_procedures(kir: KernelIR, body_emitter: "FortranBodyEmitter", helpers_src: str) -> str:
     """The CONTAINS section: fp8 helpers, the kept kernel helpers, each numpy-semantics helper the
-    body used (round half-to-even, NaN-propagating min / max, sign, floor division) and its strided gemms."""
+    body used (round half-to-even, NaN-propagating min / max, sign, floor division), its strided gemms and sorts."""
     contained = fp8_contained(kir) + helpers_src
     if body_emitter._used_round_even:
         contained += round_even_helper(body_emitter._rk)
@@ -3600,7 +3723,7 @@ def contained_procedures(kir: KernelIR, body_emitter: "FortranBodyEmitter", help
         contained += floordiv_real_helper(double_kind())
     for ftype in sorted(body_emitter._used_gemm):
         contained += gemm_helper(ftype)
-    return contained
+    return contained + sort_helpers(body_emitter._used_sort)
 
 
 def collect_implicit_locals(kir: KernelIR) -> list[tuple[str, str]]:
@@ -4190,6 +4313,7 @@ def merge_used_procedures(parent: "FortranBodyEmitter", be: "FortranBodyEmitter"
     parent._used_sign |= be._used_sign
     parent._used_floordiv_real |= be._used_floordiv_real
     parent._used_gemm |= be._used_gemm
+    parent._used_sort |= be._used_sort
 
 
 #: Physical-line budget for emitted Fortran. gfortran free-form rejects any
