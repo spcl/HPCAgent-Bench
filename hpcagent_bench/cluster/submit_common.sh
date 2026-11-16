@@ -345,6 +345,9 @@ submit_setup_job() {
         SUBMITTED_JOB_ID="${setup}"
         return 0
     fi
+    # A checkout whose job would stop at its first container (systems.checkout_problems) is refused before sbatch.
+    "${HPCAGENT_BENCH_HOST_PYTHON}" -c 'import sys; from hpcagent_bench.cluster import systems
+sys.exit(systems.refuse_unready(sys.argv[1]))' "${HPCAGENT_BENCH_REPO}" || return 2
     resolved=$(job_options) || return 2
     mapfile -t options <<<"${resolved}"
     [[ " ${options[*]} " != *" --account=root "* ]] \
