@@ -292,6 +292,19 @@ def test_fp64_helper_buffers_are_unchanged() -> None:
     assert "real(c_double), intent(inout) :: x_hret_0(n)" in f90
 
 
+def test_dace_call_temporaries_follow_the_run_precision() -> None:
+    # The dace emitter declares a float64 helper parameter ``dc_float``, the run's precision. A call temporary
+    # allocated ``np.float64`` was a float64 buffer in a bf16 or fp32 program, and dace refused the call
+    # (``Argument "__hret_0" ... is declared bfloat16 but "__hret_tmp_0" holds float64``).
+    import re
+
+    from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace
+
+    src = emit_dace(helper_kir(DTYPE_OF_SRC, ""), fn_name="f")
+    assert re.search(r"__hret_tmp_0 = np\.(empty|zeros)\(.*dtype=dc_float\)", src), src
+    assert "np.float64" not in src, src
+
+
 def test_an_unresolvable_buffer_dtype_refuses() -> None:
     # A refusal beats a silently wrong emit: a dtype expression nothing can resolve has no width
     # any emitter can pick (stored verbatim it would render as double), so it stops here.
