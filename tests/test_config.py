@@ -136,6 +136,17 @@ def test_overriding_with_a_value_of_the_wrong_type_raises() -> None:
         config.set_override("mpi.ranks", "eight")
 
 
+def test_overriding_a_constrained_key_with_a_value_out_of_its_range_raises() -> None:
+    with pytest.raises(pydantic.ValidationError):
+        config.set_override("measurement.repeat", 0)
+
+
+def test_a_key_without_an_annotation_has_no_validator(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(config.FIELDS, "measurement.unannotated", pydantic.fields.FieldInfo())
+    with pytest.raises(TypeError, match=r"measurement\.unannotated"):
+        config.adapter("measurement.unannotated")
+
+
 def test_get_of_an_unknown_key_raises() -> None:
     with pytest.raises(KeyError):
         config.get("measurement.repeats")
