@@ -522,6 +522,11 @@ class LibNodeRewriter(ast.NodeTransformer):
                 src = self.shape_table.get(rhs_call.args[0].id)
                 if src is not None:
                     self.shape_table[target_id] = tuple(src)
+            # Its dtype too, for the same reason: an untyped local reads as real to the matmul hoist, so a complex
+            # product built from it reached a real gemm (eigh_generalized's ``bu`` and ``scaled``).
+            dtype_of = constructor_dtype_source(rhs_call, np_attr)
+            if dtype_of is not None and dtype_of in self.local_dtypes:
+                self.local_dtypes.setdefault(target_id, self.local_dtypes[dtype_of])
             return
         if rhs_call is not None and np_attr in {"reshape", "repeat", "transpose"}:
             # Shape-CHANGING ops: ``iter_extent_of`` would report the source operand's extent. A
@@ -872,3 +877,19 @@ def canonicalize_call_assign(node: ast.Assign) -> None:
         inner = node.value.value
         if numpy_call_key(inner) in {("np", "linalg.lstsq"), ("np", "histogram")}:
             node.value = inner
+
+
+def constructor_dtype_source(call: ast.Call, np_attr: str) -> str | None:
+    """The array whose dtype a ``np.zeros``-family constructor takes: the ``x`` of an explicit ``x.dtype`` argument
+    (second positional or ``dtype=``), else a ``_like`` form's source array; None for any other spelling (a literal
+    dtype is the ZerosRewriter's)."""
+    explicit = next((kw.value for kw in call.keywords if kw.arg == "dtype"), None)
+    if explicit is None and len(call.args) >= 2:
+        explicit = call.args[1]
+    if explicit is not None:
+        if isinstance(explicit, ast.Attribute) and explicit.attr == "dtype" and isinstance(explicit.value, ast.Name):
+            return explicit.value.id
+        return None
+    if np_attr.endswith("_like") and call.args and isinstance(call.args[0], ast.Name):
+        return call.args[0].id
+    return None
