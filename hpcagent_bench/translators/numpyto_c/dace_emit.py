@@ -527,11 +527,11 @@ def dace_dtype(tag: str) -> str:
     mapped = DTYPE_TO_DACE.get(tag) or DTYPE_TO_DACE.get(dtypes.storage_dtype(tag))
     if mapped is not None:
         return mapped
-    # float16/float128 and the fp8 pair have no dace spelling of their own here: like float64 and
+    # float16/float128, bfloat16 and the fp8 pair have no dace spelling of their own here: like float64 and
     # float32 they compute through the precision-driven float global.
     if tag.startswith("complex"):
         return "dc_complex_float"
-    if tag.startswith("float"):
+    if tag.startswith(("float", "bfloat")):
         return "dc_float"
     raise ValueError(
         f"dace emit: cannot map dtype {tag!r} (not in _DTYPE_TO_DACE and not a float "
