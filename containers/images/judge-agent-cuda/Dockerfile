@@ -950,6 +950,11 @@ RUN set -eux; \
 # The gate proper. The framework check imports the MODULE each adapter dispatches to; the CUDA
 # libraries are asked the way a graded kernel asks (nvcc compiles and links one), and the CPU
 # libraries by a trial LINK, not a file test.
+# SLEEF, shared and static (lib/install-sleef.sh): the vector math library Alloy's matrix offers beside libmvec; a
+# scope that picks it links a private copy from the static archive.
+COPY containers/images/lib/install-sleef.sh /tmp/install-sleef.sh
+RUN set -eux; /tmp/install-sleef.sh /usr/local; rm -f /tmp/install-sleef.sh
+
 COPY containers/images/lib/stdpar-gate.sh /stdpar-gate.sh
 COPY containers/images/lib/parallelizer-gate.sh /parallelizer-gate.sh
 RUN set -eux; \
@@ -958,6 +963,7 @@ RUN set -eux; \
     ln -sf "${mimalloc_so}" /usr/local/lib/libmimalloc.so; \
     ldconfig; \
     ls "/usr/lib/$(uname -m)-linux-gnu/libmvec.so.1"; \
+    ls /usr/local/lib/libsleef.a /usr/local/lib/libsleefgnuabi.a /usr/local/lib/libsleefgnuabi.so; \
     for tool in polycc ppcg perf nvcc ncu nsys nvc nvc++ nvfortran cuobjdump \
                 mpicc mpicc.mpich mpicxx.mpich mpifort.mpich pkg-config cmake ninja nm objdump \
                 gcc clang flang; do \
@@ -985,7 +991,7 @@ RUN set -eux; \
     done; \
     for lib in -lopenblas -llapack -lscalapack -lfftw3 -lhdf5 -ltbb -lhptt -ltblis -lmetis \
                -lparmetis "-lscotch -lscotcherr" -lsuperlu -lsuperlu_dist -ldmumps -lHYPRE -lmagma -lpetsc \
-               -lslepc -lumfpack -larpack -lsundials_core -lmvec; do \
+               -lslepc -lumfpack -larpack -lsundials_core -lmvec -lsleef -lsleefgnuabi; do \
       gcc /tmp/l.c -o /tmp/l.out ${lib} -Wl,-rpath-link,"${drv}" || { echo "trial link failed for ${lib}" >&2; exit 1; }; \
     done; \
     rm -rf "${drv}"; \
