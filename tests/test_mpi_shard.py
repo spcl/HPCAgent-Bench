@@ -146,6 +146,17 @@ def test_the_plan_is_json(tmp_path: Path) -> None:
     assert json.loads(json.dumps(plan))["ranks"][2]["workspace_bytes"] == 16
 
 
+def test_a_rank_verdict_with_an_infinite_error_survives_the_result_file() -> None:
+    """mlscale: a rank whose output was non-finite wrote ``null`` and the grade read "mpi run failed"."""
+    wrong = (False, float("inf"), "run 1: out: non-finite")
+    written = mpi_shard_driver.ShardResult(
+        draws=[mpi_shard_driver.DrawResult(samples=[0.5], verdicts=[wrong, (False, float("nan"), "nan")])]
+    ).model_dump_json()
+    read = mpi_shard_driver.ShardResult.model_validate_json(written).draws[0].verdicts
+    assert read[0] == wrong
+    assert read[1][1] != read[1][1]  # nan
+
+
 def test_run_sharded_returns_rank_verdicts_and_ns_samples(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     exe = tmp_path / "atax_bench"
     kernel_library_path(exe).write_bytes(b"")
