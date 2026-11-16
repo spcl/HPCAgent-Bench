@@ -1499,6 +1499,20 @@ class CBodyEmitter(BaseEmitter):
             return f"{self.math_name('hypot')}({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
         return None
 
+    def blas_gemm_routine(self, operands: Sequence[str]) -> tuple[str, str, str]:
+        """``(routine, alpha, beta)`` of the real CBLAS gemm over ``operands`` (a, b, out) at the kernel's float.
+
+        The matmul hoist marks a product whose operands' dtypes it may not see yet (a tuple-unpacked ``eigh`` result
+        and every temp derived from it), so the element type is checked here, where every declaration is known: a
+        complex operand has no real gemm, and the refusal sends the kernel down the inlined lowering, which keeps
+        the loop nest (``emit_with_inline_fallback``). Without the check the emit passed a complex buffer to
+        ``cblas_dgemm`` and the C reference did not compile."""
+        complex_ = [name for name in operands if str(self.name_dtype(name) or "").startswith("complex")]
+        if complex_:
+            raise NotImplementedError(f"gemm over complex operands {complex_}: no real CBLAS routine")
+        f32 = self.is_float32_kernel()
+        return ("cblas_sgemm", "1.0f", "0.0f") if f32 else ("cblas_dgemm", "1.0", "0.0")
+
     def emit_blas_gemm(self, node: ast.Call) -> str:
         """Render the dense 2-D GEMM marker as a CBLAS call.
 
@@ -1510,9 +1524,7 @@ class CBodyEmitter(BaseEmitter):
             raise NotImplementedError("the gemm marker takes three array names")
         a, b, out = operands
         m, n, k = (self.emit_expr(arg) for arg in node.args[3:])
-        f32 = self.is_float32_kernel()
-        gemm = "cblas_sgemm" if f32 else "cblas_dgemm"
-        one, zero = ("1.0f", "0.0f") if f32 else ("1.0", "0.0")
+        gemm, one, zero = self.blas_gemm_routine(operands)
         # Explicit (blasint) casts: blasint is 32-bit unless OpenBLAS was built INTERFACE64, while
         # every extent here is int64_t, so the implicit narrowing is a -Wconversion diagnostic. Only
         # single extents are passed (never their product), and no corpus dimension approaches 2**31.
@@ -1530,9 +1542,7 @@ class CBodyEmitter(BaseEmitter):
         if len(buffers) != 3 or len(trans) != 2 or len(node.args) != 14:
             raise NotImplementedError("the strided gemm marker takes three array names and two 0/1 literals")
         m, n, k, lda, ldb, ldc, *offsets = (self.emit_expr(arg) for arg in (*node.args[3:6], *node.args[8:]))
-        f32 = self.is_float32_kernel()
-        gemm = "cblas_sgemm" if f32 else "cblas_dgemm"
-        one, zero = ("1.0f", "0.0f") if f32 else ("1.0", "0.0")
+        gemm, one, zero = self.blas_gemm_routine(buffers)
         ta, tb = ("CblasTrans" if t else "CblasNoTrans" for t in trans)
         a, b, out = (f"({buf} + ({off}))" for buf, off in zip(buffers, offsets, strict=True))
         # (blasint) casts as in emit_blas_gemm: every extent and leading dimension is one int64_t.
