@@ -17,10 +17,8 @@ def get_configs():
 @triton.autotune(configs=get_configs(), key=["N"])
 @triton.jit
 def _force_lj_kernel(pos_ptr,
-                     cutoffsq,
+                     scalars_ptr,
                      force_ptr,
-                     prefactor,
-                     offset,
                      N,
                      BLOCK_I: tl.constexpr,
                      BLOCK_J: tl.constexpr,
@@ -40,6 +38,10 @@ def _force_lj_kernel(pos_ptr,
     f_x = tl.zeros((BLOCK_I,), dtype=dtype)
     f_y = tl.zeros((BLOCK_I,), dtype=dtype)
     f_z = tl.zeros((BLOCK_I,), dtype=dtype)
+
+    cutoffsq  = tl.load(scalars_ptr + 0)
+    prefactor = tl.load(scalars_ptr + 1)
+    offset    = tl.load(scalars_ptr + 2)
 
     #blockwise loop through all atoms j
     for j in range(0, N, BLOCK_J):
@@ -86,10 +88,6 @@ def force_lj(pos: torch.Tensor,
              ):
     N = pos.shape[0]
 
-    cutoff = float(cutoff)
-    epsilon = float(epsilon)
-    sigma = float(sigma)
-
     #scalar constants
     cutoffsq = cutoff * cutoff
     sigma2 = sigma * sigma
@@ -99,6 +97,10 @@ def force_lj(pos: torch.Tensor,
 
     if N == 0:
         return force
+
+    scalars = torch.tensor([cutoffsq, prefactor, offset],
+                           dtype=pos.dtype, device=pos.device)
+
     grid = lambda meta: (triton.cdiv(N, meta['BLOCK_I']),)
-    _force_lj_kernel[grid](pos, cutoffsq, force, prefactor, offset, N)
+    _force_lj_kernel[grid](pos, scalars, force, N)
     return force
