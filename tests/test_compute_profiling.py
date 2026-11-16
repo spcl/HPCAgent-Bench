@@ -245,6 +245,22 @@ def test_ncu_metrics_are_found_wherever_the_row_puts_the_id_and_the_first_number
     assert all(row["unit"] == "pct" and row["section"] == "raw" for row in metrics), metrics
 
 
+def test_ncu_raw_page_columns_are_read_from_the_value_row_under_each_metric_id() -> None:
+    """``ncu --page raw --csv`` has a metric per column: ids in a header row, a units row, then a value row per launch."""
+    raw = (
+        '"ID","Kernel Name","gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",'
+        '"sm__warps_active.avg.pct_of_peak_sustained_active","unrelated__metric.sum"\n'
+        '"","","%","%","inst"\n'
+        '"0","gemm_kernel","96.49","65.1","7"\n'
+        '"1","gemm_kernel","11.0","12.0","8"\n'
+    )
+    metrics = compute_profiling.ncu_metrics(raw)
+    assert [(row["metric"], row["value"]) for row in metrics] == [
+        ("gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed", 96.49),
+        ("sm__warps_active.avg.pct_of_peak_sustained_active", 65.1),
+    ]
+
+
 @pytest.mark.parametrize(
     "raw",
     ["", "not,a,metric\n", "sm__warps_active.avg.pct_of_peak_sustained_active,N/A\n"],
@@ -750,3 +766,7 @@ def test_an_amd_counted_run_is_sealed_outside_rocprof_compute(
     inner = profile[profile.index("--") + 1 :]
     assert inner[:2] == ["rpc", "profile"], inner
     assert inner[inner.index("--") + 1 :] == gpu_profiling.measured_argv(tmp_path / "request.json", sealed_outside=True)
+
+
+if __name__ == "__main__":
+    test_ncu_raw_page_columns_are_read_from_the_value_row_under_each_metric_id()
