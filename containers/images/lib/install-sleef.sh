@@ -10,8 +10,7 @@
 #   install-sleef.sh [PREFIX]          JOBS=<n> parallel compiles (default nproc)
 set -euo pipefail
 
-# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
-# SUBMITTER's core limit, so the floor has to be set here.
+# No core files from a crashing compiler or probe in the build tree.
 ulimit -c 0
 VERSION=3.8
 SHA256=a12ccd50f57083c530e1c76f10d52865defbd19fc9e2c85b483493065709874a
@@ -24,8 +23,9 @@ curl -fsSL -o "${work}/sleef.tar.gz" "https://github.com/shibatch/sleef/archive/
 echo "${SHA256}  ${work}/sleef.tar.gz" | sha256sum -c -
 tar -xzf "${work}/sleef.tar.gz" -C "${work}"
 
-# One configure per form: SLEEF builds either shared or static libraries.
-for shared in ON OFF; do
+# One configure per form: SLEEF builds either shared or static libraries. Shared installs last, so the CMake package
+# and pkg-config files both forms write name the shared libraries.
+for shared in OFF ON; do
     cmake -S "${work}/sleef-${VERSION}" -B "${work}/build-${shared}" -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="${PREFIX}" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DBUILD_SHARED_LIBS="${shared}" -DSLEEF_BUILD_GNUABI_LIBS=ON -DSLEEF_BUILD_TESTS=OFF \
