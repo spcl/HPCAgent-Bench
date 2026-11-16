@@ -6,6 +6,7 @@ import dataclasses
 import functools
 import itertools
 import logging
+import math
 import re
 from collections.abc import Callable, Iterable, Sequence
 from typing import NamedTuple
@@ -15,12 +16,14 @@ from hpcagent_bench.translators.numpyto_common import frontend as common_fronten
 from hpcagent_bench.translators.numpyto_common.ast_build import (
     RenameNames,
     SubstituteLoads,
+    const_float,
     const_int,
     expr_of,
     literal_loads,
     name_,
     nested_blocks,
     numpy_attribute,
+    numpy_call,
     set_field,
     store_,
     walk_nodes,
@@ -625,28 +628,74 @@ def array_annotation(arr: ArrayDesc, helper: bool = False) -> str:
 #: Map framework precision globals (np_float/np_complex) to the dace globals the module imports.
 FRAMEWORK_DTYPE_TO_DACE = {"np_float": "dc_float", "np_complex": "dc_complex_float"}
 
-#: A single-precision allocation dtype, as the precision global an opmath dace program declares it in.
-COMPUTE_TO_PRECISION = {"float32": "np_float", "complex64": "np_complex"}
+#: A float allocation dtype, as the precision global an opmath dace program declares it in.
+COMPUTE_TO_PRECISION = {
+    "float32": "np_float",
+    "float64": "np_float",
+    "complex64": "np_complex",
+    "complex128": "np_complex",
+}
 
 
 class PrecisionAllocations(ast.NodeTransformer):
-    """In an opmath kernel, allocate single-precision buffers in the run precision.
+    """In an opmath kernel, allocate float buffers in the run precision.
 
     The frontend gives a bf16 / fp8 kernel's helper temporaries the compute dtype (``float32``), which is what the C
-    emitters declare them as. The dace program computes in the precision global throughout, and its helpers are
-    declared in it too, so a ``float32`` buffer cannot bind them (dist_mlp_tp's ``logsumexp_rows``,
-    dist_gemm_gn_swish's ``group_norm_rows``)."""
+    emitters declare them as, and numpy's natural ``float64`` to a value whose dtype it does not track (a mean over a
+    reduction temporary). The dace program computes in the precision global throughout, and its helpers are declared
+    in it too, so neither buffer binds them (dist_mlp_tp's ``logsumexp_rows``, gemm_max_subtract_gelu's ``_gelu``).
+    No machine_learning reference asks for a float width on purpose."""
 
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.Call:
         self.generic_visit(node)
         if isinstance(node.func, ast.Attribute) and node.func.attr in ("empty", "zeros", "ones", "full"):
+            # ``np.full`` takes the dtype third, the others second; the reduction lowering passes it positionally.
+            position = 2 if node.func.attr == "full" else 1
+            if len(node.args) > position:
+                node.args[position] = self.precision(node.args[position])
             for keyword in node.keywords:
-                dtype = keyword.value
-                if keyword.arg == "dtype" and isinstance(dtype, ast.Attribute) and dtype.attr in COMPUTE_TO_PRECISION:
-                    precision = ast.Name(id=COMPUTE_TO_PRECISION[dtype.attr], ctx=ast.Load())
-                    keyword.value = ast.copy_location(precision, dtype)
+                if keyword.arg == "dtype":
+                    keyword.value = self.precision(keyword.value)
+        return node
+
+    @staticmethod
+    def precision(dtype: ast.expr) -> ast.expr:
+        """``np.float32`` / ``np.float64`` (complex alike) -> the precision global; any other dtype as it is."""
+        if isinstance(dtype, ast.Attribute) and dtype.attr in COMPUTE_TO_PRECISION:
+            return ast.copy_location(ast.Name(id=COMPUTE_TO_PRECISION[dtype.attr], ctx=ast.Load()), dtype)
+        return dtype
+
+
+#: numpy math on a literal -> the ``math`` function giving the same double.
+LITERAL_MATH = {"sqrt": math.sqrt, "exp": math.exp, "log": math.log}
+
+
+class FoldLiteralMath(ast.NodeTransformer):
+    """In an opmath kernel, fold ``np.sqrt(2.0)`` (``exp``, ``log``) on a number literal into the Python float it is.
+
+    numpy returns a strong ``float64`` scalar there, so ``x / np.sqrt(2.0)`` is float64 even for a float32 ``x``
+    (NEP 50) and the dace program computes the rest of the expression wide; a helper declared in the precision
+    global then refuses the result (conv2d_gelu_gap's ``_adaptive_avg_pool2d``). PyTorch, which the
+    machine_learning track is graded against, takes the constant as a Python float: a weak operand."""
+
+    __slots__ = ()
+
+    def visit_Call(self, node: ast.Call) -> ast.expr:
+        self.generic_visit(node)
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in LITERAL_MATH
+            and is_numpy_module(func.value)
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            literal = const_float(node.args[0])
+            literal = const_int(node.args[0]) if literal is None else literal
+            if literal is not None and (func.attr == "exp" or literal > 0):
+                return ast.copy_location(ast.Constant(value=LITERAL_MATH[func.attr](literal)), node)
         return node
 
 
@@ -955,14 +1004,9 @@ class DesugarChainedCompare(ast.NodeTransformer):
         return ast.copy_location(ast.BoolOp(op=ast.And(), values=links), node)
 
 
-def is_negative_one(node: ast.expr) -> bool:
-    """``-1`` reaches the AST as a USub over a Constant, never as a negative literal."""
-    return (
-        isinstance(node, ast.UnaryOp)
-        and isinstance(node.op, ast.USub)
-        and isinstance(node.operand, ast.Constant)
-        and node.operand.value == 1
-    )
+def is_negative_one(node: ast.expr | None) -> bool:
+    """``-1``, which reaches the AST as a USub over a Constant (:func:`const_int` reads either spelling)."""
+    return const_int(node) == -1
 
 
 def reshape_target(node: ast.Call) -> tuple[str | None, list[ast.expr]]:
@@ -1056,16 +1100,33 @@ FRESH_ARRAY_CALLS = frozenset(
 )
 
 
-def ordered_reshape_source(value: ast.expr) -> str | None:
-    """The source name of ``src.reshape(...)`` or ``np.reshape(src, ...)`` with a non-C ``order=``, else None."""
+def reshape_source(value: ast.expr) -> ast.expr | None:
+    """The array ``src.reshape(...)`` or ``np.reshape(src, ...)`` reshapes, else None."""
     if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and value.func.attr == "reshape"):
         return None
-    order = next((keyword.value for keyword in value.keywords if keyword.arg == "order"), None)
-    if not (isinstance(order, ast.Constant) and order.value != "C"):
+    if is_numpy_module(value.func.value):
+        return value.args[0] if value.args else None
+    return value.func.value
+
+
+def reshape_order_is_c(value: ast.expr) -> bool:
+    """Whether a reshape call keeps numpy's default C order, the one dace answers with a View."""
+    keywords = value.keywords if isinstance(value, ast.Call) else []
+    order = next((keyword.value for keyword in keywords if keyword.arg == "order"), None)
+    return not (isinstance(order, ast.Constant) and order.value != "C")
+
+
+def ordered_reshape_source(value: ast.expr) -> str | None:
+    """The source name of ``src.reshape(...)`` or ``np.reshape(src, ...)`` with a non-C ``order=``, else None."""
+    source = reshape_source(value)
+    if not isinstance(source, ast.Name) or reshape_order_is_c(value):
         return None
-    numpy_form = is_numpy_module(value.func.value)
-    source = (value.args[0] if value.args else None) if numpy_form else value.func.value
-    return source.id if isinstance(source, ast.Name) else None
+    return source.id
+
+
+def copy_of(value: ast.expr) -> ast.Call:
+    """``np.copy(value)`` at ``value``'s location: a plain array where dace would hold a View."""
+    return ast.copy_location(numpy_call("copy", [value]), value)
 
 
 def stored_through(root: ast.AST, name: str) -> bool:
@@ -1142,7 +1203,7 @@ class MaterializeWrittenReshape(ast.NodeTransformer):
         rebound = any(isinstance(use.ctx, ast.Store) for use in name_uses(block[start + 1 : at + 1], source))
         if rebound or len(name_uses(block[start : at + 1], source)) != len(name_uses([fn], source)):
             return
-        stmt.value = ast.copy_location(ast.Call(func=expr_of("np.copy"), args=[stmt.value], keywords=[]), stmt.value)
+        stmt.value = copy_of(stmt.value)
 
 
 class DesugarUnreplacedCalls(ast.NodeTransformer):
@@ -1234,35 +1295,81 @@ class DesugarContractionFreeEinsum(ast.NodeTransformer):
 
 
 class DesugarReverseSlice(ast.NodeTransformer):
-    """Rewrite x[::-1] to np.flip(x) -- dace rejects negative-stride subscripts."""
+    """Rewrite a reversed read to the positive-step slice it reverses, flipped -- dace rejects negative-stride subscripts.
+
+    ``x[::-1]`` -> ``np.flip(x, axis=0)``; ``x[a:b, ::-1]`` -> ``np.flip(x[a:b, :], axis=1)``; ``x[u:l:-1]`` reads
+    ``x[l + 1:u + 1]`` backwards. Only step ``-1`` over literal non-negative bounds is rewritten: a negative bound
+    counts from the end, which the ascending spelling would not. An integer index before a reversed axis drops
+    its axis, so the flip's axis counts it out; any other non-slice element there (an index array, ``None``,
+    ``...``) could change the numbering, and the subscript stays as written. A STORE through a reversed slice
+    stays too, and dace refuses it loudly.
+    """
 
     __slots__ = ()
 
     @staticmethod
-    def is_neg_one(node: ast.expr | None) -> bool:
-        # ``-1`` parses to ``UnaryOp(USub, Constant(1))``, not ``Constant(-1)``.
-        if isinstance(node, ast.Constant):
-            return node.value == -1
-        return (
-            isinstance(node, ast.UnaryOp)
-            and isinstance(node.op, ast.USub)
-            and isinstance(node.operand, ast.Constant)
-            and node.operand.value == 1
+    def ascending(reverse: ast.Slice) -> ast.Slice | None:
+        """The positive-step slice holding the elements ``reverse`` (step -1) reads, or None when a bound is not a
+        literal non-negative int."""
+        upper, lower = (None if bound is None else const_int(bound) for bound in (reverse.lower, reverse.upper))
+        if (reverse.lower is not None and (upper is None or upper < 0)) or (
+            reverse.upper is not None and (lower is None or lower < 0)
+        ):
+            return None
+        # x[u:l:-1] reads u, u - 1, ..., l + 1
+        return ast.Slice(
+            lower=None if lower is None else ast.Constant(value=lower + 1),
+            upper=None if upper is None else ast.Constant(value=upper + 1),
         )
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.expr:
         self.generic_visit(node)
-        sl = node.slice
-        if isinstance(sl, ast.Slice) and sl.lower is None and sl.upper is None and self.is_neg_one(sl.step):
-            # ``axis=0`` is not decoration: ``x[::-1]`` reverses the FIRST axis only, while a bare
-            # ``np.flip`` reverses every one of them. The two agree at rank 1 and diverge above it.
-            flip = ast.Call(
-                func=numpy_attribute("flip"),
-                args=[node.value],
-                keywords=[ast.keyword(arg="axis", value=ast.Constant(value=0))],
-            )
-            return ast.copy_location(flip, node)
-        return node
+        if not isinstance(node.ctx, ast.Load):
+            return node
+        elements = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+        positive: list[ast.expr] = []
+        axes: list[int] = []
+        axis = 0
+        numbering_known = True
+        for element in elements:
+            if isinstance(element, ast.Slice) and is_negative_one(element.step):
+                ascending = self.ascending(element)
+                if ascending is None or not numbering_known:
+                    return node
+                positive.append(ascending)
+                axes.append(axis)
+                axis += 1
+            elif isinstance(element, ast.Slice):
+                positive.append(element)
+                axis += 1
+            else:
+                # An int literal drops its axis; anything else may be an index array or a new axis.
+                positive.append(element)
+                numbering_known = numbering_known and const_int(element) is not None
+        if not axes:
+            return node
+        # Trailing whole-axis slices select nothing: ``x[1:3, :, :]`` is ``x[1:3]``, and ``x[:, :]`` is ``x``.
+        while (
+            positive
+            and isinstance(positive[-1], ast.Slice)
+            and not (positive[-1].lower or positive[-1].upper or positive[-1].step)
+        ):
+            positive.pop()
+        source = node.value
+        if positive:
+            index = ast.Tuple(elts=positive, ctx=ast.Load()) if len(positive) > 1 else positive[0]
+            source = ast.Subscript(value=node.value, slice=index, ctx=ast.Load())
+        # ``axis`` is not decoration: ``x[::-1]`` reverses the FIRST axis only, while a bare ``np.flip`` reverses
+        # every one of them. The two agree at rank 1 and diverge above it.
+        flip_axis = (
+            ast.Constant(value=axes[0])
+            if len(axes) == 1
+            else ast.Tuple(elts=[ast.Constant(value=a) for a in axes], ctx=ast.Load())
+        )
+        flip = ast.Call(
+            func=numpy_attribute("flip"), args=[source], keywords=[ast.keyword(arg="axis", value=flip_axis)]
+        )
+        return ast.fix_missing_locations(ast.copy_location(flip, node))
 
 
 class DivisibleStridedSpan(ast.NodeTransformer):
@@ -1923,9 +2030,22 @@ def bare_alias_binding(node: ast.stmt, symbols: frozenset[str] = frozenset()) ->
     return None if value.id in symbols else target.id
 
 
+def reshape_view_binding(node: ast.stmt) -> str | None:
+    """The bound name of ``name = np.reshape(other, ..)`` in C order, which dace answers with a View of
+    ``other``. convolutional_vision_transformer binds ``tokens`` so before its layer loop and rebinds it
+    to each layer's output (``Cannot reassign View``). ``out = out.reshape(..)`` rebinds the name it
+    reads and is not counted: dace accepts that one."""
+    if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+        return None
+    source = reshape_source(node.value)
+    if not isinstance(source, ast.Name) or source.id == node.targets[0].id:
+        return None
+    return node.targets[0].id if reshape_order_is_c(node.value) else None
+
+
 def view_binding(node: ast.stmt, symbols: frozenset[str] = frozenset()) -> str | None:
-    """Either spelling that leaves dace holding a View: a kept-dimension slice or a bare alias."""
-    return view_slice_binding(node) or bare_alias_binding(node, symbols)
+    """Any spelling that leaves dace holding a View: a kept-dimension slice, a bare alias or a reshape."""
+    return view_slice_binding(node) or bare_alias_binding(node, symbols) or reshape_view_binding(node)
 
 
 def statement_lists(root: ast.AST) -> list[list[ast.stmt]]:
@@ -2024,12 +2144,7 @@ def copy_view_bindings(fn: ast.FunctionDef, names: set[str], symbols: frozenset[
     for block in statement_lists(fn):
         for stmt in block:
             if isinstance(stmt, ast.Assign) and view_binding(stmt, symbols) in names:
-                copied = ast.Call(
-                    func=numpy_attribute("copy"),
-                    args=[stmt.value],
-                    keywords=[],
-                )
-                stmt.value = ast.copy_location(copied, stmt.value)
+                stmt.value = copy_of(stmt.value)
 
 
 def views_of_written_bases(fn: ast.FunctionDef) -> set[str]:
@@ -2994,9 +3109,17 @@ class BroadcastScalarWhere(ResolveShapeReads):
 
     Inference is the base class's, which poisons on an unknown operand: ``x @ w + bias`` taking
     ``bias``'s rank-1 shape is a miscompile for a fill and for a ``.shape`` read alike.
+
+    A float literal fills in ``float_dtype`` when given: an opmath kernel computes in the precision
+    global, and numpy's dtype-less ``np.full(shape, -1.0)`` is float64, which no helper declared in
+    that precision binds (conv2d_gelu_gap's ``_adaptive_avg_pool2d``).
     """
 
-    __slots__ = ()
+    __slots__ = ("float_dtype",)
+
+    def __init__(self, shapes: dict[str, list[str]], float_dtype: str | None = None) -> None:
+        super().__init__(shapes)
+        self.float_dtype = float_dtype
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
         self.generic_visit(node)  # innermost first: a nested where is filled before it is measured
@@ -3030,7 +3153,9 @@ class BroadcastScalarWhere(ResolveShapeReads):
                 return node
         extents = ", ".join(shape) + ("," if len(shape) == 1 else "")
         fill = scalars[0]
-        node.args[fill] = ast.parse(f"np.full(({extents}), {ast.unparse(node.args[fill])})", mode="eval").body
+        value = node.args[fill]
+        dtype = f", dtype={self.float_dtype}" if self.float_dtype and const_float(value) is not None else ""
+        node.args[fill] = ast.parse(f"np.full(({extents}), {ast.unparse(value)}{dtype})", mode="eval").body
         return ast.fix_missing_locations(node)
 
 
@@ -4704,7 +4829,7 @@ def render_program(
     # Desugar the body with the same pass numba uses for feature parity; falls back to verbatim on parse failure.
     fn_ast = desugared_function(kir)
     if kir.opmath:
-        fn_ast = PrecisionAllocations().visit(fn_ast)
+        fn_ast = FoldLiteralMath().visit(PrecisionAllocations().visit(fn_ast))
     # Rewrite leaked np_float/np_complex tokens to the dace precision global the module binds.
     framework_dtype = RewriteFrameworkDtype()
     fn_ast = framework_dtype.visit(fn_ast)
@@ -4792,7 +4917,7 @@ def render_program(
     fn_ast = ResolveShapeReads(value_shapes).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # dace sizes np.where from its branches: give a two-scalar where the condition's shape, or it refuses.
-    fn_ast = BroadcastScalarWhere(value_shapes).visit(fn_ast)
+    fn_ast = BroadcastScalarWhere(value_shapes, "dc_float" if kir.opmath else None).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # Inline a shape scalar that's a pure symbolic alias of an existing dc.symbol, rather than promoting a fresh one.
     # Induction variables count as symbols here and NOWHERE else: they are atoms the inliner may fold

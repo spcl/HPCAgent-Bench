@@ -35,10 +35,12 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import (
     BroadcastScalarWhere,
     DesugarChainedCompare,
     DesugarContractionFreeEinsum,
+    DesugarReverseSlice,
     DesugarTernary,
     DesugarUnreplacedCalls,
     DivisibleStridedSpan,
     DropIdentityAsarray,
+    FoldLiteralMath,
     LowerCallsDaceCannotReplace,
     MaterializeWrittenReshape,
     NormalizeReshape,
@@ -760,6 +762,38 @@ def test_a_bare_alias_rebound_inside_a_loop_is_copied_rather_than_left_a_view() 
     bindings = [line.strip() for line in rewritten.splitlines() if line.strip().startswith("x = ")]
     assert len(bindings) == 2, rewritten
     assert all(b.startswith("x = np.copy(") for b in bindings), rewritten
+
+
+def test_a_reshape_rebound_inside_a_loop_is_copied_rather_than_left_a_view() -> None:
+    """convolutional_vision_transformer binds ``tokens = np.reshape(stacked, ..)`` before its layer loop and
+    rebinds ``tokens`` to each layer's output. dace answers a C-order reshape with a View of ``stacked`` and
+    refuses the loop's binding (``Cannot reassign View "tokens"``). The reshape binding copies, like any other
+    view spelling, and ``res = res.reshape(..)``, which dace accepts, is left alone."""
+    src = (
+        "def k(a, out):\n"
+        "    stacked = np.zeros((2, 3, 4))\n"
+        "    stacked[:, 0, :] = a\n"
+        "    tokens = np.reshape(stacked, (6, 4))\n"
+        "    for it in range(3):\n"
+        "        tokens = tokens * 2.0 + 1.0\n"
+        "    res = tokens.reshape((2, 12))\n"
+        "    res = res.reshape((24,))\n"
+        "    out[:] = res\n"
+    )
+    fn = ast.parse(src).body[0]
+    assert isinstance(fn, ast.FunctionDef)
+    copy_view_bindings(fn, mixed_view_names(fn))
+    rewritten = ast.unparse(fn)
+    assert "tokens = np.copy(np.reshape(stacked, (6, 4)))" in rewritten, rewritten
+    assert "res = res.reshape((24,))" in rewritten, rewritten
+    outputs = []
+    for text in (src, rewritten):
+        scope = {"np": np}
+        run_source(text, scope)
+        out = np.zeros(24)
+        scope["k"](np.arange(8, dtype=np.float64).reshape(2, 4), out)
+        outputs.append(out)
+    assert np.array_equal(*outputs), rewritten
 
 
 def test_swapaxes_becomes_the_transpose_dace_does_have() -> None:
@@ -2114,3 +2148,42 @@ def test_ls3df_eighs_on_real_blocks_lower_to_the_real_jacobi() -> None:
     unused, text = emit_("ls3df_scf")
     assert "__eigh" in text
     assert eigh_accessor_lines(text) == []
+
+
+@pytest.mark.parametrize(
+    ("src", "flipped"),
+    [
+        ("x[::-1]", "np.flip(x, axis=0)"),
+        ("x[:, ::-1]", "np.flip(x, axis=1)"),
+        ("x[1:3, :, ::-1]", "np.flip(x[1:3], axis=2)"),
+        ("x[2, ::-1]", "np.flip(x[2], axis=0)"),
+        ("x[:, 3:0:-1]", "np.flip(x[:, 1:4], axis=1)"),
+        ("x[:, 2::-1, ::-1]", "np.flip(x[:, :3], axis=(1, 2))"),
+        ("x[:, :1:-1]", "np.flip(x[:, 2:], axis=1)"),
+    ],
+)
+def test_a_reversed_read_is_a_flip_of_the_positive_step_slice(src: str, flipped: str) -> None:
+    """dace refuses a negative step. Every reversed axis reads its elements as the ascending slice
+    flipped along that axis -- the tuple form included (cumsum_reverse's ``x[::-1, :]``,
+    convt2d_gap_bias_lse_sum_mul's ``w[:, :, ::-1, ::-1]``), with no-op trailing ``:`` dropped."""
+    out = ast.unparse(DesugarReverseSlice().visit(ast.parse(src, mode="eval")))
+    assert out == flipped
+    x = np.arange(60.0).reshape(3, 4, 5)
+    assert np.array_equal(eval(src, {"x": x}), eval(out, {"x": x, "np": np}))  # noqa: S307 - literal test strings
+
+
+@pytest.mark.parametrize("src", ["x[i, ::-1]", "x[:, -1::-1]", "x[::-2]", "x[None, ::-1]"])
+def test_a_reversed_read_the_ascending_slice_cannot_spell_is_kept(src: str) -> None:
+    """A variable index may be an index array (axis numbering unknown), a negative bound counts from
+    the end, and only step ``-1`` reverses exactly: those stay, and dace refuses them loudly."""
+    assert ast.unparse(DesugarReverseSlice().visit(ast.parse(src, mode="eval"))) == src
+
+
+@pytest.mark.parametrize(
+    ("src", "folded"),
+    [("np.sqrt(2.0)", "1.4142135623730951"), ("np.exp(-1.0)", "0.36787944117144233"), ("np.log(0.0)", "np.log(0.0)")],
+)
+def test_numpy_math_on_a_literal_folds_to_a_weak_python_float(src: str, folded: str) -> None:
+    """``x / np.sqrt(2.0)`` is float64 in numpy (a strong numpy scalar) and in dace; an opmath kernel
+    computes it in the run precision, as PyTorch does with a Python float. A domain error stays."""
+    assert ast.unparse(FoldLiteralMath().visit(ast.parse(src, mode="eval"))) == folded

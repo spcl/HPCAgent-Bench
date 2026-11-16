@@ -17,6 +17,7 @@ __all__ = [
     "RenameNames",
     "SubstituteLoads",
     "callee_attribute",
+    "const_float",
     "const_int",
     "expr_of",
     "literal_loads",
@@ -103,6 +104,17 @@ def const_int(node: ast.expr | None) -> int | None:
         return node.value
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
         inner = const_int(node.operand)
+        if inner is not None:
+            return -inner if isinstance(node.op, ast.USub) else inner
+    return None
+
+
+def const_float(node: ast.expr | None) -> float | None:
+    """``node`` as a Python float, or ``None``. Accepts a signed literal, as :func:`const_int` does."""
+    if isinstance(node, ast.Constant) and type(node.value) is float:
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        inner = const_float(node.operand)
         if inner is not None:
             return -inner if isinstance(node.op, ast.USub) else inner
     return None
