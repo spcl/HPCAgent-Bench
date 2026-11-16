@@ -303,8 +303,11 @@ SBATCH_TRANSIENT='cli_filter plugin terminated with error|Unable to contact slur
 
 # sbatch_retry <sbatch args...> -- sbatch, tried again after 10, 30 and 90 s on a SBATCH_TRANSIENT failure. Anything
 # else (an invalid account or partition) fails at once. Its stdout is the job id of the attempt that succeeded.
+# A checkout $HPCAGENT_BENCH_REPO whose job would stop at its first container (systems.checkout_problems) is refused.
 sbatch_retry() {
     local delay errors status
+    "${HPCAGENT_BENCH_HOST_PYTHON}" -c 'import sys; from hpcagent_bench.cluster import systems
+sys.exit(systems.refuse_unready(sys.argv[1]))' "${HPCAGENT_BENCH_REPO:?the checkout to submit from}" || return 2
     for delay in 10 30 90 ""; do
         status=0
         { errors=$(sbatch "$@" 2>&1 >&3 3>&-) || status=$?; } 3>&1
