@@ -6033,6 +6033,36 @@ def symbol_declarations(kir: KernelIR, helpers: list[KernelIR], symbol_names: li
     return decls
 
 
+def size_assertions(constraints: Sequence[str], rendered: RenderedProgram) -> list[str]:
+    """``assert <constraint>`` for each manifest constraint over the program's symbols alone, in its emitted
+    spelling: dace proves extents with it (unet_softmax pools ``height`` by 16 and upsamples back to ``height // 8``,
+    one extent only because 16 divides ``height``). A pinned config knob reads as its value; a constraint naming
+    anything else (a free knob, a scalar) is left out."""
+    symbols = set(rendered.symbol_names)
+    asserted = []
+    for constraint in constraints:
+        test = PinnedValues(rendered.pinned).visit(ast.parse(constraint, mode="eval").body)
+        functions = {id(call.func) for call in ast.walk(test) if isinstance(call, ast.Call)}
+        names = [n for n in ast.walk(test) if isinstance(n, ast.Name) and id(n) not in functions]
+        for name in names:
+            name.id = rendered.renames.get(name.id, name.id)
+        if names and all(name.id in symbols for name in names):
+            asserted.append(f"assert {ast.unparse(test)}")
+    return asserted
+
+
+class PinnedValues(ast.NodeTransformer):
+    """Each name of a pinned config knob replaced by the knob's value."""
+
+    def __init__(self, pinned: dict[str, PinnedValue]) -> None:
+        self.pinned = pinned
+
+    def visit_Name(self, node: ast.Name) -> ast.expr:
+        if node.id not in self.pinned:
+            return node
+        return ast.copy_location(ast.Constant(self.pinned[node.id]), node)
+
+
 def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     """Return the source of a ``<short>_dace.py`` module for ``kir``.
 
@@ -6104,6 +6134,8 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
         out.append("")
         out.append("@dc.program")
         out.append(f"def {rendered.name}({', '.join(rendered.params)}):")
+        if rendered is main:
+            out += ["    " + line for line in size_assertions(kir.constraints, main)]
         if not rendered.body:
             out.append("    pass")
         else:

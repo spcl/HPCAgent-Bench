@@ -31,8 +31,12 @@ from hpcagent_bench.frameworks import generate_framework
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.translators.numpyto_c.dace_emit import (
     AnnotateEmptyDtype,
+    array_annotation,
     BindMethodReceiver,
     BroadcastScalarWhere,
+    copy_view_bindings,
+    dace_chained_assign_split,
+    dace_dtype,
     DesugarChainedCompare,
     DesugarContractionFreeEinsum,
     DesugarReverseSlice,
@@ -40,30 +44,28 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import (
     DesugarUnreplacedCalls,
     DivisibleStridedSpan,
     DropIdentityAsarray,
-    FoldLiteralMath,
-    LowerCallsDaceCannotReplace,
-    MaterializeWrittenReshape,
-    NormalizeReshape,
-    PointwiseScatterToLoop,
-    ResolveInferredReshape,
-    ResolveShapeReads,
-    RewriteBuiltinDtype,
-    RewriteFrameworkDtype,
-    SplitReassignedSize,
-    SplitTupleAssign,
-    array_annotation,
-    copy_view_bindings,
-    dace_chained_assign_split,
-    dace_dtype,
     emit_dace,
     float_names,
+    FoldLiteralMath,
     freeze_pinned_extent_scalars,
     freeze_shape_only_parameters,
     inline_slice_only_extents,
     loop_target_ranks,
+    LowerCallsDaceCannotReplace,
+    MaterializeWrittenReshape,
     mixed_view_names,
+    NormalizeReshape,
     plan_size_promotion,
+    PointwiseScatterToLoop,
+    RenderedProgram,
+    ResolveInferredReshape,
+    ResolveShapeReads,
+    RewriteBuiltinDtype,
+    RewriteFrameworkDtype,
+    size_assertions,
     sliced_extents,
+    SplitReassignedSize,
+    SplitTupleAssign,
     uniquify_nested_loop_targets,
     value_binding,
     version_reallocations,
@@ -2187,3 +2189,21 @@ def test_numpy_math_on_a_literal_folds_to_a_weak_python_float(src: str, folded: 
     """``x / np.sqrt(2.0)`` is float64 in numpy (a strong numpy scalar) and in dace; an opmath kernel
     computes it in the run precision, as PyTorch does with a Python float. A domain error stays."""
     assert ast.unparse(FoldLiteralMath().visit(ast.parse(src, mode="eval"))) == folded
+
+
+def test_manifest_constraints_over_sizes_are_asserted_with_pinned_knobs_folded() -> None:
+    """dace reads an ``assert`` over its symbols as a relation its extent proofs use (unet_softmax's
+    ``height % 16 == 0``, a grouped convolution's ``out_channels % groups == 0`` with ``groups`` pinned to 4); a
+    constraint naming a free knob or a scalar is not a fact of the sizes and is left out."""
+    rendered = RenderedProgram(
+        name="kernel",
+        params=[],
+        body=[],
+        symbol_names=["height", "out_ch"],
+        symbol_defs=[],
+        renames={"out_channels": "out_ch"},
+        pinned={"groups": 4},
+        needs_complex=False,
+    )
+    constraints = ["height % 16 == 0", "out_channels % groups == 0", "alpha > 0", "groups > 1"]
+    assert size_assertions(constraints, rendered) == ["assert height % 16 == 0", "assert out_ch % 4 == 0"]
