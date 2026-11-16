@@ -10,6 +10,7 @@ import resource
 import subprocess
 import sys
 
+import dace
 import pytest
 from dace.sdfg.sdfg import build_folder_root
 
@@ -216,6 +217,31 @@ def test_a_node_task_runs_one_worker_per_slot_each_its_own_rank_and_device(
     action = jobs.Action("record", "", lambda parser: None, record)
     assert jobs.run_slots(action, object(), jobs.Rank(1, 2), 3) == 0  # type: ignore[arg-type]
     assert {path.name: path.read_text() for path in out.iterdir()} == {"3": "6 0", "4": "6 1", "5": "6 2"}
+
+
+def test_each_slot_worker_builds_dace_in_its_own_rank_folder(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A one-task step's launcher rank (PMI_RANK=0 under cray_shasta) is inherited by every forked slot worker; each
+    worker must still read as its own rank to DaCe, or all of them share rank 0's build folder (smoke 2026-11-16)."""
+    for name in ("HPCAGENT_BENCH_JUDGE_GPUS_PER_NODE", "HPCAGENT_BENCH_JUDGE_CPU_SLOTS_PER_NODE"):
+        monkeypatch.setenv(name, "")  # run_slots exports the slot shape; restored after the test
+    for name, value in (("SLURM_PROCID", "0"), ("SLURM_NTASKS", "1"), ("PMI_RANK", "0"), ("PALS_RANKID", "0")):
+        monkeypatch.setenv(name, value)
+    out = tmp_path / "folders"
+    out.mkdir()
+
+    def record(args: object, rank: jobs.Rank) -> int:
+        (out / f"{rank.index}").write_text(f"{dace_framework.mpi_rank()} {build_folder_root()}", encoding="utf-8")
+        return 0
+
+    action = jobs.Action("record", "", lambda parser: None, record)
+    with dace.config.set_temporary("cache_distaware", value=True):
+        assert jobs.run_slots(action, object(), jobs.Rank(0, 1), 4) == 0  # type: ignore[arg-type]
+    seen = {path.name: path.read_text().split() for path in out.iterdir()}
+    assert {index: words[0] for index, words in seen.items()} == {"0": "0", "1": "1", "2": "2", "3": "3"}
+    assert all(words[1].endswith(f"_rank{index}") for index, words in seen.items())
+    assert os.environ["PMI_RANK"] == "0"  # the parent task keeps its own launcher rank
 
 
 @pytest.mark.parametrize(("failing", "status"), [({4}, 0), ({3, 4, 5}, 7)])
