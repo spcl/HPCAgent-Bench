@@ -12,6 +12,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     name_ids,
     nested_blocks,
     numpy_attribute,
+    numpy_call,
     store_,
     walk_nodes,
 )
@@ -508,8 +509,39 @@ def rename_rebound_parameters(fn: ast.FunctionDef, inputs: frozenset[str]) -> No
     is untouched -- that IS an in-place write -- and an output parameter is excluded, since writing
     it is the point.
     """
-    # Only a TOP-LEVEL rebinding is handled: one inside a loop would need the rename to apply to
-    # reads from the previous iteration too, so those are left exactly as they are.
+    # A rebinding anywhere else -- inside a loop, a branch, or a tuple unpack (``X, Y = Y, Ynew`` in a
+    # Chebyshev recurrence) -- has no single point after which every read sees the new value: the next
+    # iteration reads it through the same name. The function then works on its own copy of the
+    # parameter from entry on, so the caller's buffer is only ever read.
+    top_level = {
+        id(s.targets[0])
+        for s in fn.body
+        if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+    }
+    in_place = {id(node.target) for node in walk_nodes(fn) if isinstance(node, ast.AugAssign)}
+    carried = sorted(
+        {
+            node.id
+            for node in walk_nodes(fn)
+            if isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node.id in inputs
+            and id(node) not in top_level
+            and id(node) not in in_place
+        }
+    )
+    if carried:
+        own = {name: f"__rb_{name}" for name in carried}
+        for node in walk_nodes(fn):
+            if isinstance(node, ast.Name) and node.id in own:
+                node.id = own[node.id]
+        first = fn.body[0] if fn.body else None
+        docstring = int(isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant))
+        fn.body[docstring:docstring] = [
+            ast.Assign(targets=[store_(own[name])], value=numpy_call("copy", [name_(name)])) for name in carried
+        ]
+        inputs = inputs - frozenset(carried)
+    # A TOP-LEVEL rebinding is renamed from its assignment on: reads before it see the parameter.
     rebound = [
         s.targets[0].id
         for s in fn.body
@@ -519,6 +551,7 @@ def rename_rebound_parameters(fn: ast.FunctionDef, inputs: frozenset[str]) -> No
         and s.targets[0].id in inputs
     ]
     if not rebound:
+        ast.fix_missing_locations(fn)
         return
     renamed = {name: f"__rb_{name}" for name in rebound}
     bound: set[str] = set()
