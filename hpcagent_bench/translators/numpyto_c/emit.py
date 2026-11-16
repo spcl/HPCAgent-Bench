@@ -234,7 +234,9 @@ def pluto_call_free(name: str, args: str, hoisted: dict[str, str] | None = None)
 
 
 #: Constructs pet cannot model; the whole scop one lands in is rejected (POLYCC-007, POLYCC-013).
-PLUTO_UNSCOPABLE_RE = re.compile(r"\b(?:malloc|calloc|realloc|free|memset|memcpy|memmove|while|npb_(?:arg)?sort_\w+)\s*\(")
+PLUTO_UNSCOPABLE_RE = re.compile(
+    r"\b(?:malloc|calloc|realloc|free|memset|memcpy|memmove|while|npb_(?:arg)?sort_\w+)\s*\("
+)
 
 #: pet DROPS a statement whose only write is a scop-external scalar (POLYCC-009), so a loop-less
 #: region would lose it and buy no schedule.

@@ -1213,7 +1213,9 @@ class FortranBodyEmitter(BaseEmitter):
         sort = sort_call(node)
         out, src = fortran_safe(sort.out), fortran_safe(sort.src)
         ftype, out_ftype = (
-            fortran_type(dt) if (dt := self._local_elem_dtypes.get(name) or self.name_dtype(name)) else f"real({self._rk})"
+            fortran_type(dt)
+            if (dt := self._local_elem_dtypes.get(name) or self.name_dtype(name))
+            else f"real({self._rk})"
             for name in (src, out)
         )
         if out_ftype != (fortran_type("int64") if sort.argsort else ftype):
