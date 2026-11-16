@@ -334,6 +334,28 @@ def sbatch_command(
     ]
 
 
+def checkout_problems(root: pathlib.Path) -> list[str]:
+    """What stops a job from checkout ``root`` at its first container: a submodule left empty. A new worktree has none,
+    and launch_venv.sh stops the judge on an empty third_party/KernelBench, 30 s into the job."""
+    problems = []
+    gitmodules = root / ".gitmodules"
+    lines = gitmodules.read_text(encoding="utf-8").splitlines() if gitmodules.is_file() else []
+    for line in lines:
+        key, _, value = line.partition("=")
+        module = value.strip()
+        if key.strip() == "path" and module and not any((root / module).glob("*")):
+            problems.append(f"{module} is empty: git -C {root} submodule update --init {module}")
+    return problems
+
+
+def refuse_unready(root: str | pathlib.Path) -> int:
+    """2 with each of :func:`checkout_problems` on stderr, else 0: the check both submit paths run before sbatch."""
+    problems = checkout_problems(pathlib.Path(root))
+    for problem in problems:
+        print(f"checkout not ready: {problem}", file=sys.stderr)
+    return 2 if problems else 0
+
+
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="hpcagent-bench job submit", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -369,7 +391,9 @@ def main(argv: Sequence[str]) -> int:
     command = sbatch_command(str(args.script), options, args.script_args, logs, args.hold or environ.get("HOLD") == "1")
     shown = ["env", *(f"{name}={value}" for name, value in exports.items()), *command] if exports else command
     print(f"# system {resolved.system or 'none'}: {shlex.join(shown)}", file=sys.stderr)
-    return 0 if args.dry_run else subprocess.run(command, check=False, env=os.environ | exports).returncode
+    if args.dry_run:
+        return 0
+    return refuse_unready(paths.ROOT) or subprocess.run(command, check=False, env=os.environ | exports).returncode
 
 
 def options_main(argv: Sequence[str]) -> int:
