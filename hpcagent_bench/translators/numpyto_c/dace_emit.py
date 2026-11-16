@@ -28,18 +28,10 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
-from hpcagent_bench.translators.numpyto_common.ir import (
-    COMPLEX_FOR_FLOAT,
-    ArrayDesc,
-    KernelIR,
-    ScalarDesc,
-    descs,
-    shape_dimension_symbols,
-)
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, descs, shape_dimension_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import np_call_attr
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from hpcagent_bench.translators.numpyto_common.lowering.pipeline import signature_float_dtype
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     AUG_OP_SRC,
     axis_list,
@@ -616,25 +608,15 @@ def declared_extent(dim: str) -> str:
 EXPLICIT_HELPER_DTYPES = {"float32": "dc.float32", "complex64": "dc.complex64"}
 
 
-def own_floats(kir: KernelIR) -> frozenset[str]:
-    """The float and complex dtypes ``kir`` computes in (:func:`signature_float_dtype`): they follow the precision
-    global wherever they appear. A bf16, fp16 or fp32 kernel computes in float32, so its float32 helper parameters
-    and call temporaries are the run's precision, not an explicit single-precision choice."""
-    real = signature_float_dtype(kir)
-    return frozenset((real, COMPLEX_FOR_FLOAT.get(real, real)))
-
-
-def array_annotation(arr: ArrayDesc, helper: bool = False, own: frozenset[str] = frozenset()) -> str:
+def array_annotation(arr: ArrayDesc, helper: bool = False) -> str:
     """``a`` of shape ``(LEN_1D,)`` float64 -> ``dc_float[LEN_1D]``; a 0-d array -> a dace scalar.
 
     A shapeless manifest entry is a SCALAR the harness happens to file under ``arrays``. Declaring
     it ``[1]`` gave the program a rank the initializer does not build and the other backends do not
     pass -- the same declared-rank-vs-initialize disagreement that runs and still lies. A ``helper``
-    parameter keeps an explicit single-precision type (:data:`EXPLICIT_HELPER_DTYPES`) unless it is one of the
-    kernel's ``own`` floats (:func:`own_floats`).
+    parameter keeps an explicit single-precision type (:data:`EXPLICIT_HELPER_DTYPES`).
     """
-    explicit = helper and arr.dtype not in own
-    dtype = (EXPLICIT_HELPER_DTYPES.get(arr.dtype) if explicit else None) or dace_dtype(arr.dtype)
+    dtype = (EXPLICIT_HELPER_DTYPES.get(arr.dtype) if helper else None) or dace_dtype(arr.dtype)
     if not arr.shape:
         return dtype
     return f"{dtype}[{', '.join(declared_extent(s) for s in arr.shape)}]"
@@ -645,24 +627,12 @@ FRAMEWORK_DTYPE_TO_DACE = {"np_float": "dc_float", "np_complex": "dc_complex_flo
 
 
 class RewriteFrameworkDtype(ast.NodeTransformer):
-    """Rewrite leaked np_float/np_complex tokens to the dace precision global; tracks complex usage for the import.
+    """Rewrite leaked np_float/np_complex tokens to the dace precision global; tracks complex usage for the import."""
 
-    ``np.<dtype>`` of one of the kernel's ``own`` single-precision floats (:func:`own_floats`) becomes the precision
-    global too: it is the run's precision, spelled at the width the kernel computes in."""
+    __slots__ = ("used_complex",)
 
-    __slots__ = ("own", "used_complex")
-
-    def __init__(self, own: frozenset[str] = frozenset()) -> None:
+    def __init__(self) -> None:
         self.used_complex = False
-        self.own = {tag: dace_dtype(tag) for tag in own if tag in EXPLICIT_HELPER_DTYPES}
-
-    def visit_Attribute(self, node: ast.Attribute) -> ast.expr:
-        mapped = self.own.get(node.attr) if isinstance(node.value, ast.Name) and node.value.id == "np" else None
-        if mapped is None:
-            return self.generic_visit(node)
-        if mapped == "dc_complex_float":
-            self.used_complex = True
-        return ast.copy_location(ast.Name(id=mapped, ctx=node.ctx), node)
 
     def visit_Name(self, node: ast.Name) -> ast.expr:
         mapped = FRAMEWORK_DTYPE_TO_DACE.get(node.id)
@@ -4667,7 +4637,6 @@ def render_program(
     fn_name: str | None = None,
     helpers: Sequence[KernelIR] = (),
     nested: bool = False,
-    own: frozenset[str] | None = None,
 ) -> RenderedProgram:
     """Lower ``kir``'s body into the form dace's frontend parses, and return it with its signature.
 
@@ -4682,15 +4651,12 @@ def render_program(
     ``nested`` marks a kept helper, whose symbols dace SOLVES from the shapes its call site passes.
     The kernel program's own symbols are bound by recipe instead, so the two differ in what a
     declared extent may spell -- see :func:`with_named_floor_extents`.
-
-    ``own`` is the kernel's own floats (:func:`own_floats`), a kept helper's taken from the kernel that calls it.
     """
     if names_logical_sparse(kir):
         kir = lower(kir)
     kir = freeze_pinned_extent_scalars(kir)
     kir = freeze_shape_only_parameters(kir)
     name = fn_name or kir.kernel_name
-    own = own_floats(kir) if own is None else own
     arrays = {a.name: a for a in kir.arrays}
     scalars = {s.name: s for s in kir.scalars}
     arr_shapes = {a.name: [str(s) for s in a.shape] for a in kir.arrays}
@@ -4700,7 +4666,7 @@ def render_program(
     params: list[str] = []
     for arg in kir.input_args:
         if arg in arrays:
-            params.append(f"{arg}: {array_annotation(arrays[arg], helper=nested, own=own)}")
+            params.append(f"{arg}: {array_annotation(arrays[arg], helper=nested)}")
         elif arg in scalars and arg not in shape_scalars:
             params.append(f"{arg}: {dace_dtype(scalars[arg].dtype)}")
         # symbols (and scalars promoted to symbols): skip (declared at module scope below)
@@ -4712,7 +4678,7 @@ def render_program(
     # Desugar the body with the same pass numba uses for feature parity; falls back to verbatim on parse failure.
     fn_ast = desugared_function(kir)
     # Rewrite leaked np_float/np_complex tokens to the dace precision global the module binds.
-    framework_dtype = RewriteFrameworkDtype(own)
+    framework_dtype = RewriteFrameworkDtype()
     fn_ast = framework_dtype.visit(fn_ast)
     # ``np.asarray`` has no dace replacement; on an array it is numpy's own identity, so it goes.
     fn_ast = DropIdentityAsarray(rank_table(fn_ast, {a.name: len(a.shape) for a in kir.arrays})).visit(fn_ast)
@@ -5815,7 +5781,7 @@ def render_helper_closure(kir: KernelIR, main: RenderedProgram) -> list[tuple[Ke
         # Returns go before render_program, not after: the duplication this can make of the
         # statements past a branch rebinds a view, and the passes that version such a rebinding run
         # in there.
-        rendered = render_program(without_returns(settled, name), name, kir.helpers, nested=True, own=own_floats(kir))
+        rendered = render_program(without_returns(settled, name), name, kir.helpers, nested=True)
         refuse_unsound_callee(rendered, name, owner, hkir, {sy.name for sy in kir.symbols})
         for callee in called_helpers(rendered.body, kir.helpers):
             visit(hkir.tree, callee)
