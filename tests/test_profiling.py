@@ -155,12 +155,20 @@ def test_tail_keeps_the_end_and_admits_the_cut() -> None:
 
 
 def test_thread_sweep_clamps_to_available_cores(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(profiling, "grading_cpus", lambda _slot: set())  # unreadable topology: the node's cores
     monkeypatch.setattr(profiling.flags, "ncores", lambda: 2)
     assert profiling.thread_sweep() == [1, 2]
     assert profiling.thread_sweep([1, 2, 4, 8]) == [1, 2]
     assert profiling.thread_sweep([16]) == [2], "an unrunnable request must still profile something"
     monkeypatch.setattr(profiling.flags, "ncores", lambda: 8)
     assert profiling.thread_sweep([4, 4, 1]) == [1, 4]
+
+
+def test_thread_sweep_clamps_to_the_slot_not_the_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A judge slot holds 24 of the node's cores; a 32-thread run there fails the grading-width check (HTTP 500)."""
+    monkeypatch.setattr(profiling, "grading_cpus", lambda _slot: set(range(24)))
+    monkeypatch.setattr(profiling.flags, "ncores", lambda: 96)
+    assert profiling.thread_sweep([1, 8, 16, 32, 64, 128]) == [1, 8, 16, 24]
 
 
 #: One `perf script -F comm,ip,sym,dso` block per sample: a header line naming the comm, then one

@@ -314,6 +314,28 @@ def test_a_failed_default_phase_answers_its_error_and_keeps_the_phase(
     assert "phase 'build': its default build_tool failed (no build); the kernel stays in 'shape'" in str(sut.answer)
 
 
+def test_a_grade_records_its_phase_while_a_default_phase_waits(
+    tmp_path: pathlib.Path, packets: Kind[PacketDef], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A default phase may wait for a device slot while next_phase holds the episode; a grade of the same episode
+    holding that slot records its phase (``current``) meanwhile, so reading the phase must not wait for next_phase."""
+    plugin = phased_run(tmp_path, packets, monkeypatch)
+    recorded: list[str] = []
+
+    def default_waiting_for_a_slot(judge: FakeJudge, request: RouteRequest) -> None:
+        grade = threading.Thread(target=lambda: recorded.append(next_phase.current("episode", "gemm")), daemon=True)
+        grade.start()
+        grade.join(timeout=5.0)
+        plugin(judge, request)
+
+    monkeypatch.setitem(ROUTES, "phased", Route(default_waiting_for_a_slot, frozenset({HTTPMethod.POST})))
+
+    sut = step()
+
+    assert sut.code == HTTPStatus.OK
+    assert recorded == ["shape"], "the grade's record waited on next_phase, which waited on the grade's slot"
+
+
 def test_a_tool_of_a_later_agent_phase_is_refused_until_next_phase_reaches_it(
     tmp_path: pathlib.Path, packets: Kind[PacketDef], monkeypatch: pytest.MonkeyPatch
 ) -> None:

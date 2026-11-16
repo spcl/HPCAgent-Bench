@@ -13,6 +13,7 @@ from hpcagent_bench import framework_cache as fc
 from hpcagent_bench.categories import Language
 from hpcagent_bench.harness import agent
 from hpcagent_bench.spec import BenchSpec
+from hpcagent_bench.translators.numpyto_common import emit_io
 
 KERNEL = "loop_level_reasoning/tsvc_2_s235/tsvc_2_s235"
 
@@ -71,6 +72,18 @@ def test_a_translator_source_change_forces_a_reemit(translator_tree: pathlib.Pat
     fresh = _fresh_source()
     assert len(emits) == 2, "a translator edit was served the previous translator's cached lowering"
     assert fresh != stale
+
+
+def test_a_sibling_generated_during_a_job_keeps_the_tree_fingerprint(translator_tree: pathlib.Path) -> None:
+    """Outside a git checkout the fingerprint reads the package's files; a job writes generated siblings between two
+    readers of one key (render, then verify), and git ignores them in a checkout."""
+    before = fc.bench_tree_fingerprint()
+    emit_io.write_generated(translator_tree.with_name("gemm_dace.py"), "x = 1\n", source="gemm_numpy.py")
+    fc.bench_tree_fingerprint.cache_clear()  # the next step of the job is a new process
+    assert fc.bench_tree_fingerprint() == before
+    translator_tree.with_name("hand_written.py").write_text("x = 1\n")
+    fc.bench_tree_fingerprint.cache_clear()
+    assert fc.bench_tree_fingerprint() != before, "a new source file must still move the fingerprint"
 
 
 def test_the_key_names_the_target_backend(tmp_path: pathlib.Path) -> None:

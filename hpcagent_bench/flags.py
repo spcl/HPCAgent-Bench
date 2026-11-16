@@ -5,6 +5,8 @@
 string-literal ``-O3`` or ``-march=native`` (tests/test_no_literal_flags.py). Axes: :class:`Mode`, the per-compiler
 CPU baselines, and the multi-core autopar deltas."""
 
+import ctypes
+import dataclasses
 import enum
 import os
 import pathlib
@@ -15,8 +17,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable, Mapping
 from functools import lru_cache
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 from hpcagent_agent import env_aliases
 from hpcagent_agent.coded import Coded
@@ -59,6 +62,7 @@ __all__ = [
     "OMP_TARGET_LLVM_AMD",
     "OMP_TARGET_LLVM_NVIDIA",
     "OPENACC_NVHPC_NVIDIA",
+    "OPENBLAS_MAX_THREADS",
     "OPT_LEVEL",
     "PAPI_RANGES_H",
     "PLUTO_PAR",
@@ -73,6 +77,7 @@ __all__ = [
     "STDPAR_LINK_TBB",
     "STDPAR_PROBE_SOURCE",
     "STDPAR_RUNTIME_CALL_PATTERN",
+    "TEAM_CALL_SUFFIXES",
     "THREADED_RUNTIMES",
     "VECLIB_FLANG",
     "VECMATH_H",
@@ -80,6 +85,7 @@ __all__ = [
     "AutoparProbe",
     "AutoparVerdict",
     "Mode",
+    "ThreadedRuntime",
     "compose_autopar",
     "compose_cuda",
     "compose_hip",
@@ -99,6 +105,7 @@ __all__ = [
     "pluto_capability",
     "polly_capability",
     "probe_autopar",
+    "runtime_call",
     "smt_enabled",
     "thread_reserve_bytes",
     "thread_stack_bytes",
@@ -601,25 +608,80 @@ def openmp_launch_env() -> dict[str, str]:
 def enter_openmp_launch_env() -> None:
     """Make this process the outermost launch :func:`openmp_launch_env` asks for (call before importing numpy), its
     team every physical core it owns unless the launch named one: it grades on all of them, one slot, and a graded
-    child refuses a runtime that loaded at any other team (``native_call.check_loaded_team``)."""
+    child refuses a runtime that loaded at any other team (``native_call.check_loaded_team``). The count is the
+    one ``native_call.grading_cpus`` takes, the affinity's physical cores, never :func:`ncores`'s ``limits.cores``
+    or Slurm fallback."""
     os.environ.update(openmp_launch_env())
-    os.environ.setdefault("OMP_NUM_THREADS", str(ncores()))
+    try:
+        owned = os.sched_getaffinity(0)
+    except AttributeError:  # macOS / Windows expose no affinity API
+        owned = set(range(os.cpu_count() or 1))
+    os.environ.setdefault("OMP_NUM_THREADS", str(physical_cores(owned)))
     hard = resource.getrlimit(resource.RLIMIT_STACK)[1]
     resource.setrlimit(resource.RLIMIT_STACK, (hard, hard))
 
 
-#: Library name prefixes of the threaded runtimes a process can inherit from its parent.
-THREADED_RUNTIMES = ("libopenblas", "libgomp", "libomp")
+#: The threaded runtimes a process can inherit from its parent, by library name prefix: each one's team getter, team
+#: setter, and the call naming its build (``""``: none); a runtime's team is fixed when it loads.
+THREADED_RUNTIMES: Mapping[str, tuple[str, str, str]] = {
+    "libopenblas": ("openblas_get_num_threads", "openblas_set_num_threads", "openblas_get_config"),
+    "libgomp": ("omp_get_max_threads", "omp_set_num_threads", ""),
+    "libomp": ("omp_get_max_threads", "omp_set_num_threads", ""),
+}
+#: The suffixes a runtime's symbols carry: none, or an ILP64 OpenBLAS's ``64_`` (its ``SYMBOLSUFFIX``).
+TEAM_CALL_SUFFIXES = ("", "64_")
+#: The most threads an OpenBLAS build runs (its ``NUM_THREADS``), as ``openblas_get_config`` names it.
+OPENBLAS_MAX_THREADS = re.compile(rb"MAX_THREADS=(\d+)")
 
 
-def loaded_threaded_runtimes() -> list[pathlib.Path]:
-    """The threaded runtimes mapped into this process, by path; empty when ``/proc/self/maps`` is unreadable."""
+@dataclasses.dataclass(frozen=True, slots=True)
+class ThreadedRuntime:
+    """A threaded runtime mapped into this process: ``team()`` the threads its next parallel call runs,
+    ``set_team(n)`` narrows them, ``cap`` the most it can ever run (``None``: no cap of its own)."""
+
+    path: pathlib.Path
+    team: Callable[[], int]
+    set_team: Callable[[int], object]
+    cap: int | None
+
+
+def runtime_call(library: ctypes.CDLL, name: str, restype: type = ctypes.c_int) -> "Callable[..., object] | None":
+    """``library``'s call ``name`` under any of :data:`TEAM_CALL_SUFFIXES`, returning ``restype``; ``None`` when it
+    has none."""
+    for suffix in TEAM_CALL_SUFFIXES:
+        try:
+            call = library[name + suffix]  # a CDLL resolves a symbol on lookup
+        except AttributeError:
+            continue
+        call.restype = restype
+        return call
+    return None
+
+
+def loaded_threaded_runtimes() -> list[ThreadedRuntime]:
+    """The threaded runtimes mapped into this process (:data:`THREADED_RUNTIMES`), in path order; empty when
+    ``/proc/self/maps`` is unreadable. A library the prefixes name that has no team calls (an OpenMP plugin such
+    as ``libomptarget`` or ``libgomp-plugin-*``) runs no team and is left out."""
     try:
         with pathlib.Path("/proc/self/maps").open(encoding="utf-8", errors="replace") as maps:
             mapped = {line.split()[-1] for line in maps if "/" in line}
     except OSError:
         return []
-    return [pathlib.Path(path) for path in sorted(mapped) if pathlib.PurePath(path).name.startswith(THREADED_RUNTIMES)]
+    found: list[ThreadedRuntime] = []
+    for path in sorted(mapped):
+        name = pathlib.PurePath(path).name
+        calls = next((calls for prefix, calls in THREADED_RUNTIMES.items() if name.startswith(prefix)), None)
+        if calls is None:
+            continue
+        library = ctypes.CDLL(path)
+        get, put = runtime_call(library, calls[0]), runtime_call(library, calls[1])
+        if get is None or put is None:
+            continue
+        build = runtime_call(library, calls[2], ctypes.c_char_p) if calls[2] else None
+        named = OPENBLAS_MAX_THREADS.search(cast("bytes | None", build()) or b"") if build is not None else None
+        cap = int(named.group(1)) if named else None
+        found.append(ThreadedRuntime(pathlib.Path(path), cast("Callable[[], int]", get), put, cap))
+    return found
 
 
 def cpu_env(mode: Mode, threads: int | None = None) -> dict[str, str]:
