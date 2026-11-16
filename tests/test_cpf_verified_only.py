@@ -48,17 +48,45 @@ def test_stage_withholds_an_unverified_form_with_its_own_status(tmp_path: pathli
     assert (tmp_path / "verified/argmax_value.c").read_text() == "// argmax_value form\n"
 
 
+def test_stage_starts_a_failed_render_from_the_reference(tmp_path: pathlib.Path) -> None:
+    """A render that failed is no verified form either: the kernel starts from the reference, the launch goes on."""
+    from hpcagent_bench.cpf.cache import RenderVerdict
+    from tests.cpf_forms import publish_failure
+
+    cache = tmp_path / "cache"
+    publish_failure(cache, "argmax_value", "c", RenderVerdict.REFUSED, "CPF cannot render this construct")
+    config.set_override("cpf.verified_only", True)
+    assert stage(cache, tmp_path / "dest") == cpf_prerender.NOT_VERIFIED_EXIT
+    config.set_override("cpf.verified_only", False)
+    assert stage(cache, tmp_path / "dest") == 1, "without the knob a failed render still stops the launch"
+
+
 def test_without_the_knob_stage_serves_any_form(tmp_path: pathlib.Path) -> None:
     """The default keeps today's contract: the prepare gate, not stage, decides what is verified enough."""
     assert stage(cache_with(tmp_path, "argmax_value"), tmp_path / "dest") == 0
 
 
-def materialize(repo: pathlib.Path, shared: pathlib.Path, problems: pathlib.Path, **setup: str) -> str:
+def run_materialize(
+    repo: pathlib.Path, shared: pathlib.Path, problems: pathlib.Path, **setup: str
+) -> subprocess.CompletedProcess[str]:
     env = {key: value for key, value in os.environ.items() if key not in ("CPF_DROPIN_DIR", "AGENT_LANGUAGE", KNOB)}
     env.update(setup, HPCAGENT_BENCH_IMAGE_PYTHON=sys.executable)
     return subprocess.run(
-        [str(MATERIALIZE), str(repo), str(shared), str(problems)], capture_output=True, text=True, env=env, check=True
-    ).stdout
+        [str(MATERIALIZE), str(repo), str(shared), str(problems)], capture_output=True, text=True, env=env, check=False
+    )
+
+
+def materialize(repo: pathlib.Path, shared: pathlib.Path, problems: pathlib.Path, **setup: str) -> str:
+    result = run_materialize(repo, shared, problems, **setup)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def announcing(path: pathlib.Path) -> pathlib.Path:
+    """A problems file whose task text announces the argmax_value drop-in (make_problems.py's form_staged)."""
+    record = {"id": 0, "kernel": KERNEL, "task": "opt", "request_actions": {}, "form_staged": True}
+    path.write_text(json.dumps(record, sort_keys=True) + "\n")
+    return path
 
 
 def task_files(shared: pathlib.Path) -> dict[str, bytes]:
@@ -74,39 +102,54 @@ def test_a_kernel_without_a_verified_form_is_staged_exactly_as_the_control(
     problems = problems_file(tmp_path / "problems.jsonl", [KERNEL])
     materialize(repo, tmp_path / "control", problems)
     out = materialize(repo, tmp_path / "treated", problems, CPF_DROPIN_DIR=str(cache), **{KNOB: "true"})
-    assert "argmax_value has no verified form; it starts from the reference" in out
+    assert "argmax_value's task text announces no form; it starts from the reference" in out
     assert task_files(tmp_path / "treated") == task_files(tmp_path / "control")
+
+
+def test_an_announced_form_that_no_longer_verifies_stops_the_launch(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
+    """The task text was written at submit; a form re-graded since would leave the agent told of a form it lacks."""
+    cache = cache_with(tmp_path, "argmax_value")
+    problems = announcing(tmp_path / "problems.jsonl")
+    result = run_materialize(repo, tmp_path / "treated", problems, CPF_DROPIN_DIR=str(cache), **{KNOB: "true"})
+    assert result.returncode == 3, result.stdout
+    assert "announces a form that no longer verifies" in result.stderr
+    assert not (tmp_path / "treated/tasks/argmax_value").exists()
 
 
 def test_a_verified_form_is_still_the_drop_in(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
     cache = cache_with(tmp_path, "argmax_value")
     verify(cache)
-    problems = problems_file(tmp_path / "problems.jsonl", [KERNEL])
+    problems = announcing(tmp_path / "problems.jsonl")
     materialize(repo, tmp_path / "treated", problems, CPF_DROPIN_DIR=str(cache), **{KNOB: "true"})
     assert task_files(tmp_path / "treated")["argmax_value_reference.c"] == b"// argmax_value form\n"
 
 
-def task_text(cache: pathlib.Path) -> str:
-    """The cpf-src task text for argmax_value, with the packet's cache at ``cache`` (the packet sets the knob)."""
+def problem(cache: pathlib.Path, packet: str = "cpf-src") -> dict[str, object]:
+    """The ``packet`` problem line for argmax_value, with the packet's cache at ``cache`` (the packet sets the knob)."""
     env = dict(os.environ, HPCAGENT_BENCH_CPF_CACHE=str(cache))
     env.pop(KNOB, None)
     result = subprocess.run(
         [sys.executable, str(paths.ROOT / "hpcagent_bench/cluster/make_problems.py"), "--track", "loop_level_reasoning"]
-        + ["--kernel", KERNEL, "--language", "c", "--packet", "cpf-src"],
+        + ["--kernel", KERNEL, "--language", "c", "--packet", packet],
         capture_output=True,
         text=True,
         env=env,
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout.strip())["task"]
+    return json.loads(result.stdout.strip())
 
 
 def test_the_task_text_announces_the_form_only_where_it_is_staged(tmp_path: pathlib.Path) -> None:
+    """The problem line carries the decision (form_staged) that materialize_shared.sh stages by."""
     cache = cache_with(tmp_path, "argmax_value")
-    assert "ALREADY PARALLELIZED" not in task_text(cache), "an unverified kernel starts from the reference"
+    line = problem(cache)
+    assert "ALREADY PARALLELIZED" not in str(line["task"]), "an unverified kernel starts from the reference"
+    assert "form_staged" not in line
     verify(cache)
-    assert "ALREADY PARALLELIZED" in task_text(cache)
+    line = problem(cache)
+    assert "ALREADY PARALLELIZED" in str(line["task"])
+    assert line["form_staged"] is True
 
 
 def test_every_cpf_packet_serves_verified_forms_only() -> None:
@@ -175,3 +218,16 @@ def test_submit_refuses_only_a_kernel_never_rendered(tmp_path: pathlib.Path) -> 
     attempted = submit_gate(tmp_path, cache, "rendered")
     assert (attempted.returncode, attempted.stdout) == (0, ""), attempted.stdout
     assert submit_gate(tmp_path, cache, "verified").stdout, "without the knob a failed render still refuses"
+
+
+def test_an_unverified_form_loads_nothing_by_default(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """default_load and default_workspace_bytes come from the served form: none under the knob until it verifies."""
+    from hpcagent_bench.cluster import make_problems
+
+    cache = cache_with(tmp_path, "argmax_value")
+    monkeypatch.setenv(cpf_cache.CACHE_ENV, str(cache))
+    hints = cpf_cache.DEFAULT_HINTS
+    assert make_problems.setup_form("argmax_value", "c", hints) is not None
+    assert make_problems.setup_form("argmax_value", "c", hints, verified_only=True) is None
+    verify(cache)
+    assert make_problems.setup_form("argmax_value", "c", hints, verified_only=True) is not None

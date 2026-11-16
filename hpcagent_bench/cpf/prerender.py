@@ -298,10 +298,17 @@ def stage(
     """Copy the form for ``kernel`` to ``dest/<name>.<ext>`` (on gpu its device unit beside it, ``<name>.cu`` or ``<name>.hip``);
     ``name`` defaults to the kernel's short name. Returns the staged source.
 
-    :raises NotVerified: ``cpf.verified_only`` holds and the form was never graded correct; nothing is staged.
+    :raises NotVerified: ``cpf.verified_only`` holds and no form was graded correct (a failed or missing render
+        included); nothing is staged.
     """
-    form = lookup(cache, kernel, language, precision, hints, target)
-    if config.current().cpf.verified_only and (reason := cpf_cache.unverified(cache, form.key)):
+    verified_only = config.current().cpf.verified_only
+    try:
+        form = lookup(cache, kernel, language, precision, hints, target)
+    except cpf_cache.CacheMiss as exc:
+        if verified_only:
+            raise NotVerified(str(exc)) from exc
+        raise
+    if verified_only and (reason := cpf_cache.unverified(cache, form.key)):
         raise NotVerified(reason)
     stem = name or kernel_stem(kernel)
     dest.mkdir(parents=True, exist_ok=True)
