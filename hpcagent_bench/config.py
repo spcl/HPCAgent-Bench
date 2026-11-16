@@ -16,7 +16,7 @@ import pathlib
 import threading
 import types
 from collections.abc import Generator, Iterator, Mapping
-from typing import Annotated, Any, ClassVar, Union, get_args, get_origin
+from typing import Annotated, Any, ClassVar, Union, cast, get_args, get_origin
 
 import yaml
 from annotated_types import Ge, Gt, Le, Lt
@@ -1091,7 +1091,12 @@ def nest(tree: dict[str, Any], dotted: str, value: object) -> None:
 def adapter(dotted: str) -> TypeAdapter[Any]:
     """The validator of leaf ``dotted``: its annotation with its constraints."""
     field = FIELDS[dotted]
-    return TypeAdapter(Annotated[(field.annotation, *field.metadata)] if field.metadata else field.annotation)
+    if field.annotation is None:
+        raise TypeError(f"config leaf {dotted} has no annotation")
+    if not field.metadata:
+        return TypeAdapter(field.annotation)
+    # Annotated built from runtime arguments is a value, not a type expression a checker can read
+    return TypeAdapter(cast(Any, Annotated[(field.annotation, *field.metadata)]))
 
 
 def strip_optional(annotation: object) -> tuple[object, bool]:
