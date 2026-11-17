@@ -505,14 +505,6 @@ class Requests(relayout.ops.Requests):
         layouts = {name: layout for name, layout in laid.items() if not layout.is_identity()}
         return SingleNode(tuple(regroups), layouts)
 
-    def run(self, arrays: Sequence[ArraySpec], ranks: int | None = None) -> State:
-        """:meth:`relayout.ops.Requests.run`, with an expression that cannot be evaluated (``P // 0``,
-        ``root`` of an int past float range) a request fault (ValueError) like every other."""
-        try:
-            return relayout.ops.Requests.run(self, arrays, ranks)
-        except (ZeroDivisionError, OverflowError) as exc:
-            raise ValueError(f"an integer expression of the request cannot be evaluated: {exc}") from None
-
     def lowered(self, ndims: Mapping[str, int], ranks: int) -> State:
         """The operations run over the arrays of ``ndims`` on the grid at ``ranks`` ranks."""
         return self.run([ArraySpec(name, ndim) for name, ndim in ndims.items()], ranks)

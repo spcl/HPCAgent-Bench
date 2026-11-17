@@ -659,8 +659,14 @@ def test_every_accepted_request_owns_each_element_on_its_documented_ranks(ranks:
     grid dimension no distribute names, and gather undoes scatter."""
     grids = sorted({(ranks,), (1, ranks), *((a, ranks // a) for a in range(1, ranks + 1) if ranks % a == 0)})
     grids += [(a, b, ranks // (a * b)) for a in (1, 2) for b in (1, 2, 3) if ranks % (a * b) == 0][:3]
-    # block_cyclic of width 1 is left out: the pinned relayout refuses it (fixed in relayout, see its tests)
-    forms = [("block", 1), ("cyclic", 1), ("block_cyclic", 2), ("block_cyclic", 3), ("block_cyclic", 5)]
+    forms = [
+        ("block", 1),
+        ("cyclic", 1),
+        ("block_cyclic", 1),
+        ("block_cyclic", 2),
+        ("block_cyclic", 3),
+        ("block_cyclic", 5),
+    ]
     for dims in grids:
         grid = Grid(tuple(dims))
         for (s0, w0), (s1, w1) in [(a, b) for a in forms for b in forms][::3]:

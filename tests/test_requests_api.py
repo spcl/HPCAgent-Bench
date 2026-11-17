@@ -237,7 +237,7 @@ def test_a_cut_merged_back_before_the_plan_is_whole_again() -> None:
 def test_an_expression_that_divides_by_zero_is_a_request_fault(grid: list[str]) -> None:
     """The judge refuses a request on ValueError; a division by zero in the grid is one, not an
     exception that escapes the refusal as a judge fault."""
-    with pytest.raises(ValueError, match=r"cannot be evaluated|divides by zero"):
+    with pytest.raises(ValueError, match="divides by zero"):
         distributed(BANDS, grid=grid).plan({"A": 2}, 4)
 
 
