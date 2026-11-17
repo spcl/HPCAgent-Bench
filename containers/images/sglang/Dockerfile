@@ -89,7 +89,7 @@ RUN set -eux; \
       fly="$(grep -m1 -oE '^flydsl==[0-9][^; ]*' requirements.txt)"; \
       /opt/venv/bin/python3 -m pip install --no-cache-dir "${fly}"; \
       PREBUILD_KERNELS=0 GPU_ARCHS="${ROCM_ARCH}" /opt/venv/bin/python3 -m pip install --no-cache-dir --no-deps \
-        --no-build-isolation -e .; \
+        --no-build-isolation --config-settings editable_mode=compat -e .; \
     fi; \
     git -C /sgl-workspace/aiter log --oneline -1
 
