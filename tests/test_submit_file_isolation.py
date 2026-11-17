@@ -300,8 +300,25 @@ def test_the_job_is_submitted_at_nice_else_the_site_default(
     assert f"--nice={nice}" in argv.splitlines()
 
 
-def test_an_agent_job_chains_no_job_after_it(tmp_path: pathlib.Path) -> None:
-    """Every /submit is its own final grade (mw4x5), so no job is chained on the agent job to grade what its
-    judges left pending."""
-    _, _, others = run_submit_setup_job_probe(tmp_path, {"NICE": "1000"})
+def test_an_agent_job_chains_only_the_pack_of_its_episodes_after_it(tmp_path: pathlib.Path) -> None:
+    """Every /submit is its own final grade (mw4x5), so no grading job is chained on the agent job; the one job after
+    it packs its run directory (RUN_ROOT/<job id>) into episode folders once it ends however it ends, at the job's
+    nice and account, and removes the loose files only after each archive reads back equal."""
+    _, line, others = run_submit_setup_job_probe(
+        tmp_path, {"NICE": "1000", "SCRATCH": str(tmp_path)}, "RUN_ROOT=${SCRATCH:?}/hpcagent-bench-runs/exp-20261118\n"
+    )
+    job = line.split("-> ", 1)[1].split()[0]
+    assert len(others) == 1, others
+    argv = others[0].splitlines()
+    assert argv[-3:] == [
+        str(CLUSTER_DIR / "pack.sbatch"),
+        "--remove-loose",
+        f"{tmp_path}/hpcagent-bench-runs/exp-20261118/{job}",
+    ]
+    assert {f"--dependency=afterany:{job}", "--nice=1000", "--account=project"} <= set(argv)
+    assert not [option for option in argv if option.startswith("--gpus")], "a pack job is a CPU job"
+
+
+def test_pack_after_0_chains_nothing_after_the_agent_job(tmp_path: pathlib.Path) -> None:
+    _, _, others = run_submit_setup_job_probe(tmp_path, {"PACK_AFTER": "0"})
     assert others == []

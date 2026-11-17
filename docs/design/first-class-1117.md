@@ -240,7 +240,8 @@ record (`data_guard`) is unsealed/resealed through `data_guard.unsealed`. No too
 
 ## Implemented (phase 2): where the code differs from the design above
 
-One commit per item on this branch. The decisions of the review: `claude.log` is kept (compressed), pack/cleanup is an optional
+One commit per item on this branch. The decisions of the review: `claude.log` is kept (compressed), pack/cleanup is an optional (11-18 user: now automatic, an afterany `pack.sbatch --remove-loose` chained on
+every experiment job, `PACK_AFTER=0` to skip)
 post-experiment step, `infra` resumes by default, reservations defer experiments and trim prepare/goldens, the KV guard fails by
 default at 80000 tokens per Kimi agent, the mini-SWE/OpenHands resume state is kept verbatim, split parts keep the setup identity.
 
