@@ -34,6 +34,7 @@ __all__ = [
     "GPU_SHIM",
     "WIRE_MOVE_FNS",
     "c_int_array",
+    "called_binding",
     "element_type",
     "gen_kernel_mpi_stub",
     "gen_mpi_driver",
@@ -274,6 +275,15 @@ def cast_driver_blocks(ptrs: Sequence[Arg], cast_index: Mapping[int, str]) -> Ca
     return CastBlocks(functions, alloc, timed_casts(cast_in, "cast_in"), timed_casts(cast_out, "cast_out"))
 
 
+def called_binding(binding: Binding, casts: Mapping[str, str] | None = None) -> Binding:
+    """``binding`` as the driver declares and calls ``kernel_mpi``: each ``cast`` array at its requested type."""
+    casts = dict(casts or {})
+    return dataclasses.replace(
+        binding,
+        args=tuple(dataclasses.replace(a, dtype=casts[a.name]) if a.name in casts else a for a in binding.args),
+    )
+
+
 def gen_mpi_driver(
     binding: Binding,
     grid_dims: Sequence[int],
@@ -293,10 +303,7 @@ def gen_mpi_driver(
     casts = dict(casts or {})
     cast_index = {i: casts[a.name] for i, a in enumerate(binding.pointers) if a.name in casts}
     # The kernel is declared and called with the requested element types.
-    called = dataclasses.replace(
-        binding,
-        args=tuple(dataclasses.replace(a, dtype=casts[a.name]) if a.name in casts else a for a in binding.args),
-    )
+    called = called_binding(binding, casts)
     ptrs = binding.pointers
     scalars = binding.scalars
     n_ptr = len(ptrs)
