@@ -333,10 +333,17 @@ class ArrayDist(pydantic.BaseModel):
         """A replicated array names no axes, and no two axes share a grid dimension: two would deal the
         same coordinate to both, so the owned tiles would leave elements on no rank at all."""
         if self.replicated and self.axes:
-            raise ValueError("a replicated array names no axes")
+            raise ValueError(
+                'a replicated array names no axes: it is whole on every rank. Write {"replicated": true} alone, '
+                "or drop replicated and list one axis per dimension"
+            )
         dims = [axis.grid_dim for axis in self.axes if axis.grid_dim is not None]
         if len(set(dims)) != len(dims):
-            raise ValueError(f"two axes are dealt to one grid dimension: {dims}; each grid dimension drives one axis")
+            raise ValueError(
+                f"two dimensions of one array are dealt to the same grid dimension ({dims}): the ranks along it "
+                f"would own both dimensions' blocks at once, leaving most elements on no rank. Deal each dimension "
+                f"to its own grid dimension (add one to startup.grid), or keep one of them whole"
+            )
         return self
 
 
@@ -523,8 +530,9 @@ class Requests(relayout.ops.Requests):
         grid = state.grid or ()
         if cyclic and len(set(grid)) > 1:
             raise ValueError(
-                f"a cyclic / block-cyclic layout needs an equal-edge grid so the cyclic wrap is symmetric; "
-                f"startup.grid {list(self.startup.grid or ())} is {list(grid)} at {ranks} rank(s)"
+                f"a cyclic / block_cyclic scheme needs an equal-edge grid (the same extent on every grid "
+                f"dimension), but startup.grid {list(self.startup.grid or ())} is {list(grid)} at {ranks} rank(s). "
+                f'Use a 1-D grid ["P"] with the cyclic dimension on grid dimension 0, or a block scheme on this grid'
             )
         locations = {name: array.location for name, array in state.arrays.items() if array.location is not None}
         arrays = {name: planned_array(splits.get(name), locations.get(name)) for name in splits | locations}
@@ -694,9 +702,9 @@ def compact_local_dims(name: str, axes: Sequence[AxisSplit | None], state: State
         if axis is None and [digit.shape() for digit in own] != [(dim, 1, None, False)]:
             raise ValueError(
                 f"array {name!r}: dimension {dim} is cut into the digits {[digit.name for digit in own]} but not "
-                "distributed; a distributed run hands each rank a compact row-major tile, so a local cut (and the "
-                "dead cells a block that does not divide its extent adds) is not realized. Drop the cut, or "
-                "distribute the dimension"
+                "distributed: a distributed run hands each rank its tile row-major, padded only on the dimensions "
+                "it splits, so a cut of a dimension the rank keeps whole (and the dead cells a block that does not "
+                "divide its extent adds) has no realization. Drop the cut, or distribute the digit it makes"
             )
 
 
