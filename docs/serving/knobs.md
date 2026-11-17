@@ -113,6 +113,11 @@ Do not set `--enable-hierarchical-cache` or `--hicache-ratio`. On an APU the "ho
 the KV cache already lives in, so it allocates a second KV copy in the same memory and the server
 dies to the OOM killer with no traceback. No `experiments/` env sets it.
 
+`--hicache-size 32` (an explicit host tier instead of a ratio) starts, and is slower: Kimi K2.7 at 20 agents
+gave 0.62 output tok/s per agent and a 464 s median time to first token, against 1.9 tok/s and 152 s
+without it on the same pool (jobs 747589 and 747586, 2026-11-17). Moving KV between the two tiers of one
+memory costs more than the extra hits save. Do not measure it again.
+
 ## Both parsers, always
 
 Name `--reasoning-parser` **and** `--tool-call-parser`. With one missing the server starts normally,
