@@ -170,7 +170,12 @@ def run(args: argparse.Namespace) -> int:
         "kv_pool_tokens": guard.pool,
         "kv_floor_tokens": guard.floor,
         "kv_guard": guard.message,
-        "load": {key: getattr(args, key) for key in ("prefix_tokens", "turn_tokens", "output_tokens", "seconds")},
+        "load": {
+            "prefix_tokens": args.prefix_tokens,
+            "turn_tokens": args.turn_tokens,
+            "output_tokens": args.output_tokens,
+            "seconds": args.seconds,
+        },
         "phases": [],
     }
     target = args.run_dir / report_name(args.name)
