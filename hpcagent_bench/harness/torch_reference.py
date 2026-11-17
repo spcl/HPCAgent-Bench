@@ -411,7 +411,8 @@ def shard_verdict(
         if strict_small is not None and strict_small.sign_margin is not None
         else None
     )
-    for lo, hi in () if reason else row_chunks(rows, row_elements):
+    # An empty shard (a rank that owns none of a ragged axis) has no chunk, but still joins every reduction.
+    for lo, hi in () if reason or not total else row_chunks(rows, row_elements):
         e, a = chunk_pair(e_all, a_all, lo, hi)
         if exact:
             off = e != a

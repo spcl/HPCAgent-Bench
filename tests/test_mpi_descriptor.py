@@ -82,7 +82,7 @@ def test_is_partition_false_for_overlapping_dist() -> None:
     # both axes bound to the same grid dim -> ranks own only the diagonal, off-diagonal uncovered
     g = Grid((2,))
     axes = (AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist(grid_dim=0, scheme=Scheme.BLOCK))
-    with pytest.raises(ValueError, match="two axes are dealt to one grid dimension"):
+    with pytest.raises(ValueError, match="dealt to the same grid dimension"):
         ArrayDist(axes=axes)
     # the model refuses it; the predicate must still catch one built around the validation
     assert is_partition((4, 4), ArrayDist.model_construct(axes=axes, replicated=False), g) is False
@@ -324,7 +324,7 @@ def test_local_size_scalars_rejects_a_symbol_split_two_different_ways() -> None:
         }
     )
     d = Descriptor.from_submission(sub, b, ranks=4)
-    with pytest.raises(ValueError, match="CONFLICTING decompositions"):
+    with pytest.raises(ValueError, match="reaches the kernel as ONE per-rank extent"):
         d.local_size_scalars({"N": 8}, 0)
 
 
@@ -637,7 +637,7 @@ def test_from_plan_refuses_an_axis_beyond_the_grid() -> None:
     """A plan axis on grid dimension 1 of a 1-D grid used to pass resolution and fail as an IndexError
     at the first scatter; the descriptor names it at resolution."""
     plan = plan_of({"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 1}, {"grid_dim": None}]}}})
-    with pytest.raises(ValueError, match=r"grid dimension 1, but startup.grid \[2\] has 1 dimension"):
+    with pytest.raises(ValueError, match=r"grid dimension 1, but startup.grid \[2\] has only 1 dimension"):
         Descriptor.from_plan(plan, binding_2d(), 2)
 
 

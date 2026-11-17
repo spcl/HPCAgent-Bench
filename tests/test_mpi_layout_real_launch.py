@@ -8,8 +8,8 @@ only a real transport exposes (an object pickled wrong, a rank computing the wro
 coordinate for ITSELF, a scatter ordering mismatch). This file runs the same schemes over an
 actual ``mpirun``/``mpiexec`` job (``tests/mpi_layout_worker.py``, oversubscribed so it fits a
 2-4 core CI runner): every scheme mpi_descriptor supports (block, cyclic, block_cyclic,
-replicated), 1-D/2-D/3-D grids, and uneven/remainder extents. It also states the two refusals
-the descriptor makes for a bad layout declaration (pure logic, no launch needed).
+replicated), 1-D/2-D/3-D grids, and uneven/remainder extents. It also states the replication
+refusal the descriptor makes for a bad layout declaration (pure logic, no launch needed).
 
 SKIPS cleanly (reason printed) when no mpi4py-compatible launcher bootstraps here (e.g. this
 repo's own login/dev venv). The CI job that installs a real MPI runs it under
@@ -20,14 +20,11 @@ import sys
 from pathlib import Path
 
 import pytest
-from relayout.ops import Scheme
 
 from hpcagent_bench.harness.mpi_descriptor import (
     ArrayDist,
-    AxisDist,
     Descriptor,
     Grid,
-    block_partition_mismatch,
     replication_refusal,
 )
 from tests.mpi_launch_helpers import mpi4py_launcher, mpi4py_launcher_diagnosis, run_cmd
@@ -54,7 +51,7 @@ CASES = [
     (2, (64 * 2 * 100,), "block", 1),  # 12_800
     (4, (64 * 4 * 500,), "block_cyclic", 64),  # 128_000
     (4, (64 * 4 * 500,), "cyclic", 1),
-    # extent = 64*P + a remainder that is NOT a multiple of 64: exercises the remainder/64-rule
+    # extent = 64*P + a remainder that is NOT a multiple of 64: exercises the remainder
     # boundary the sizing quantum otherwise hides (block_bounds hands the extra elements to the
     # first `remainder` ranks; a cyclic/block_cyclic scheme deals them round-robin instead).
     (4, (64 * 4 * 500 + 37,), "block", 1),  # 128_037
@@ -85,24 +82,7 @@ def test_replicated_layout_roundtrip_real_mpi(ranks: int, shape: tuple[int, ...]
     assert r.returncode == 0, r.stderr
 
 
-# The two refusals the descriptor makes for a layout it will not run with a real grid (pure
-# logic; every P above must have exercised only the layouts these accept).
-def test_cyclic_layout_that_does_not_tile_the_contiguous_block_is_named() -> None:
-    grid = Grid((3,))  # 10 % 3 != 0: cyclic width 1 deals a DIFFERENT index set than block does
-    desc = Descriptor(
-        grid=grid, arrays={"x": ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.CYCLIC, block_size=1),))}
-    )
-    msg = block_partition_mismatch(desc, {"x": (10,)})
-    assert msg is not None
-    assert "cyclic" in msg
-
-
-def test_block_scheme_is_never_refused_for_a_mismatch() -> None:
-    grid = Grid((3,))
-    desc = Descriptor(grid=grid, arrays={"x": ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK),))})
-    assert block_partition_mismatch(desc, {"x": (10,)}) is None
-
-
+# The refusal the descriptor makes for a layout it will not run (pure logic, no launch needed).
 def test_replicating_an_array_off_the_allowlist_is_named() -> None:
     grid = Grid((2,))
     desc = Descriptor(grid=grid, arrays={"x": ArrayDist(replicated=True)})
@@ -110,3 +90,11 @@ def test_replicating_an_array_off_the_allowlist_is_named() -> None:
     assert msg is not None
     assert "replicatable" in msg
     assert replication_refusal(desc, {"x": (5,)}, allowed=["x"]) is None
+
+
+if __name__ == "__main__":
+    for count, extent, name, width in CASES:
+        test_layout_roundtrip_real_mpi(count, extent, name, width)
+    for count, extent in [(2, (6,)), (3, (9,)), (4, (5, 5))]:
+        test_replicated_layout_roundtrip_real_mpi(count, extent)
+    test_replicating_an_array_off_the_allowlist_is_named()
