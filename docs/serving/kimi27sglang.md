@@ -20,7 +20,7 @@ EDF `hpcagent-bench-sglang-mi300-latest`. Port 8000 on rank 0 only, served name
 ```
 --trust-remote-code --attention-backend aiter --language-only --watchdog-timeout 1800
 --kv-cache-dtype fp8_e4m3 --page-size 64 --context-length 262144
---mem-fraction-static 0.48 --max-running-requests 24 --cuda-graph-max-bs-decode 24
+--mem-fraction-static 0.52 --max-running-requests 24 --cuda-graph-max-bs-decode 24
 --enable-metrics --pre-warm-nccl
 --reasoning-parser kimi_k2 --tool-call-parser kimi_k2 --enable-cache-report
 ```
@@ -33,7 +33,8 @@ Environment: `SGLANG_USE_AITER=1`, `SGLANG_ROCM_FUSED_DECODE_MLA=0`, `SGLANG_SET
 |---|---|
 | Free per rank before weight load | about 412 GB |
 | Weights per stage | about 171 GB (unequal: read `avail mem=` on every rank) |
-| `--mem-fraction-static` 0.48 | 0.408 effective (aiter x0.85); throughput-neutral across 0.408-0.4675 |
+| `--mem-fraction-static` 0.52 | 0.442 effective (aiter x0.85): about 16 GB per rank above the heaviest stage, KV pool about 2.2M tokens |
+| 0.48 (0.408 effective) | 2-4 GB left above PP3's weights: KV pool 0.15-1.0M tokens, different every run; 20 agents queue and re-prefill |
 | 0.55 (0.4675 effective) | host memory grew from 415 to 501 GiB over the last 40 min of a 4 h run, then OOM (job 746293) |
 | 0.588 (0.4998 effective) | heaviest stage at 513.2 of 513.5 GB: too close to OOM |
 | `pp=2` | refuses at startup: `minimum viable = 0.7525` |

@@ -270,10 +270,11 @@ AITER_USE_FLYDSL_MOE_SORTING = 1
 # The server's allocator alone (run_cluster.sh): expandable segments stop variable-length prefills
 # fragmenting it, whose high-water mark otherwise ratchets up over hours of agent load (host memory on MI300A)
 SGLANG_PYTORCH_HIP_ALLOC_CONF = 'expandable_segments:True'
-# mem-fraction-static 0.48 = effective 0.408 (aiter x0.85), the low end of the throughput-neutral range;
-# 0.588 put PP3 within 0.3 GB of the 513.5 GB host memory, and at 0.55 host memory still grew to the
-# limit after 4 h of agent load (job 746293, OOM)
-SGLANG_EXTRA_ARGS = '"--trust-remote-code --attention-backend aiter --language-only --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 --context-length 262144 --mem-fraction-static 0.48 --max-running-requests 24 --cuda-graph-max-bs-decode 24 --enable-metrics --pre-warm-nccl --reasoning-parser kimi_k2 --tool-call-parser kimi_k2 --enable-cache-report"'
+# mem-fraction-static 0.52 = effective 0.442 (aiter x0.85) of ~409 GB: the heaviest stage (PP3, with lm_head)
+# holds ~165 GB of weights, so about 16 GB per rank is left for the KV pool (~2.2M tokens). 0.48 left 2-4 GB
+# (0.15-1.0M tokens, varying run to run; jobs 747584/86/89) and 20 agents evicted each other; 0.55 (3.7M tokens)
+# ran host memory to the limit after 4 h once (job 746293, before expandable segments)
+SGLANG_EXTRA_ARGS = '"--trust-remote-code --attention-backend aiter --language-only --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 --context-length 262144 --mem-fraction-static 0.52 --max-running-requests 24 --cuda-graph-max-bs-decode 24 --enable-metrics --pre-warm-nccl --reasoning-parser kimi_k2 --tool-call-parser kimi_k2 --enable-cache-report"'
 
 # Meta's Muse Spark, contributor tier: discounted in exchange for Meta training on the prompts and
 # completions a setup sends. muse-spark-1.3 on the standard tier is the same model.
