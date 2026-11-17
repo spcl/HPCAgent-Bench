@@ -540,7 +540,8 @@ class Requests(relayout.ops.Requests):
         if cyclic and len(set(grid)) > 1:
             raise ValueError(
                 f"a cyclic / block_cyclic scheme needs an equal-edge grid (the same extent on every grid "
-                f"dimension), but startup.grid {list(self.startup.grid or ())} is {list(grid)} at {ranks} rank(s). "
+                f"dimension, so the cyclic wrap is symmetric), but startup.grid {list(self.startup.grid or ())} "
+                f"is {list(grid)} at {ranks} rank(s). "
                 f'Use a 1-D grid ["P"] with the cyclic dimension on grid dimension 0, or a block scheme on this grid'
             )
         locations = {name: array.location for name, array in state.arrays.items() if array.location is not None}

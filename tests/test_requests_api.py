@@ -178,6 +178,19 @@ def test_the_grid_is_evaluated_at_each_rank_count() -> None:
         distributed(cyclic, grid=["P // 2", 2]).plan({"A": 2}, 8)
 
 
+def test_the_cyclic_grid_refusal_says_what_why_and_the_way_out() -> None:
+    """A refusal is the agent's feedback: the cyclic scheme on an unequal grid names the grid it got, why an
+    equal-edge one is needed, and the layouts that are accepted instead."""
+    cyclic = {"action": "distribute", "array": "A", "grid_dim": 0, "dim": 0, "scheme": "cyclic"}
+    with pytest.raises(ValueError, match="needs an equal-edge grid") as refused:
+        distributed(cyclic, grid=["P // 2", 2]).plan({"A": 2}, 8)
+    why = str(refused.value)
+    assert "is [4, 2] at 8 rank(s)" in why
+    assert "so the cyclic wrap is symmetric" in why
+    assert 'Use a 1-D grid ["P"]' in why
+    assert "or a block scheme on this grid" in why
+
+
 def test_a_plan_is_requested_so_that_its_grid_follows_p() -> None:
     """A kernel's default plan at one rank count becomes the request a scaling run
     evaluates at every P: 1-D follows P, an equal-edge grid keeps its edges equal, and every other
