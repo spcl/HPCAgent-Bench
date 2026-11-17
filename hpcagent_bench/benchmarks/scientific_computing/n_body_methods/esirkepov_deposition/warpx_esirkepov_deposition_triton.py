@@ -3,9 +3,10 @@
 
 """Deterministic Esirkepov deposition using sorted bins and disjoint cell colours.
 
-Only integer list construction uses atomics. One persistent cooperative launch builds the bins and walks the
-colours in order, a grid barrier after each;
-within a bin, ascending particle IDs define the floating-point accumulation order.
+One launch writes every particle's bin, a stable sort of the bins (torch.sort) lists each bin's particles in
+ascending ID, and one persistent cooperative launch walks the colours in order, a grid barrier after each; within a
+bin, ascending particle IDs define the floating-point accumulation order. (The bins were sorted linked lists built by
+CAS insertion, O(bin size^2): in the 1D geometries a few hundred bins hold all particles, and a rep passed 300 s.)
 
 Source: derived from PR #166 (student baseline, validated here unchanged in substance).
 """
@@ -158,15 +159,8 @@ def canonical_axes(xn, yn, zn, xo, yo, zo, GEOM: tl.constexpr):
 
 
 @triton.jit
-def initialize_heads(b, heads, N: tl.constexpr, COUNT: tl.constexpr, BLOCK: tl.constexpr):
-    index = b * BLOCK + tl.arange(0, BLOCK)
-    tl.store(heads + index, COUNT, index < N)
-
-
-@triton.jit
-def build_sorted_bins(
-    b,
-    links,
+def bucket_kernel(
+    bucket,
     uxp,
     uyp,
     uzp,
@@ -186,7 +180,8 @@ def build_sorted_bins(
     GEOM: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
-    particle = b * BLOCK + tl.arange(0, BLOCK)
+    """bucket[p] = the flat cell of particle p's new position, the bin it deposits from."""
+    particle = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     valid = particle < COUNT
     xn, yn, zn, xo, yo, zo, vx, vy, vz, nr, ni, mr, mi, ore, oi = particle_motion(
         uxp, uyp, uzp, xp, yp, zp, dinv, xyzmin, particle, valid, DT, RELATIVE, GEOM
@@ -202,28 +197,7 @@ def build_sorted_bins(
     if DIM == 3:
         ic, wc = deposition_shape(cn, 0, ORDER, False)
         bc = ic + tl.load(lo + 2)
-    bucket = (ba * NY + bb) * NZ + bc
-    # AMD workaround: the Triton AMD backend aborts in CanonicalizePointers.cpp:1375 on a select between pointers
-    # (gfx90a), so links = [next_particle | heads] and the walk selects an index on that one base. Plain form:
-    # link = tl.where(complete, heads, heads + bucket), then tl.where(following, next_particle + current, link).
-    complete = ~valid
-    while tl.sum((~complete).to(tl.int32), 0) > 0:
-        # A padded lane's dummy coordinates can imply an out-of-range bucket
-        # for a shifted origin. Its unmasked CAS must still use a valid address.
-        link = tl.where(complete, COUNT, COUNT + bucket)
-        current = tl.atomic_add(links + link, 0, mask=~complete, sem="acquire")
-        following = (~complete) & (current < particle)
-        while tl.sum(following.to(tl.int32), 0) > 0:
-            link = tl.where(following, current, link)
-            loaded = tl.atomic_add(links + current, 0, mask=following, sem="acquire")
-            current = tl.where(following, loaded, current)
-            following = (~complete) & (current < particle)
-        tl.store(links + particle, current, ~complete)
-        # CAS has no mask argument. Completed lanes compare against an impossible
-        # list value so they cannot insert twice or publish an out-of-range ID.
-        expected = tl.where(complete, -1, current)
-        previous = tl.atomic_cas(links + link, expected, particle, sem="acq_rel")
-        complete = complete | (previous == current)
+    tl.store(bucket + particle, (ba * NY + bb) * NZ + bc, valid)
 
 
 @triton.jit
@@ -465,19 +439,12 @@ def esirkepov_kernel(
     NCC: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
-    """The bin heads, the sorted bins and every colour in one persistent cooperative launch; a grid barrier separates
-    the phases and the colours, which keeps the stream order of the separate launches."""
+    """Every colour in one persistent cooperative launch over the sorted bins (links = [next_particle | heads]); a grid
+    barrier separates the colours, which keeps the stream order of the separate launches."""
     next_particle = links
     heads = links + COUNT
     pid = tl.program_id(0)
     programs = tl.num_programs(0)
-    for b in range(pid, tl.cdiv(NX * NY * NZ, 256), programs):
-        initialize_heads(b, heads, NX * NY * NZ, COUNT, 256)
-    grid_sync(barrier)
-    for b in range(pid, tl.cdiv(COUNT, 128), programs):
-        build_sorted_bins(b, links, uxp, uyp, uzp, xp, yp, zp, dinv, xyzmin, lo, COUNT, NY, NZ, DIM, ORDER,
-                          DT, RELATIVE, GEOM, 128)  # fmt: skip
-    grid_sync(barrier)
     width: tl.constexpr = ORDER + 3
     ta: tl.constexpr = (NX + width - 1) // width
     tb: tl.constexpr = (NY + width - 1) // width
@@ -529,14 +496,25 @@ def warpx_esirkepov_deposition(
         return
     dim = 3 if geometry == 3 else (2 if geometry in (1, 2) else 1)
     nx, ny, nz = Jx.shape[0], Jx.shape[1] if dim >= 2 else 1, Jx.shape[2] if dim == 3 else 1
-    # The per-particle next links, then the bin heads.
-    links = torch.empty((count + nx * ny * nz,), dtype=torch.int32, device=Jx.device)
+    # The bins: each particle's cell, stably sorted, so every bin lists its particles in ascending ID. links holds the
+    # per-particle next links, then the bin heads; COUNT ends a list and marks an empty bin.
+    bucket = torch.empty((count,), dtype=torch.int64, device=Jx.device)
+    bucket_kernel[(triton.cdiv(count, 128),)](bucket, uxp, uyp, uzp, xp, yp, zp, dinv, xyzmin, lo, count, ny, nz, dim,
+                                              order, float(dt), float(relative_time), geometry, BLOCK=128,
+                                              num_warps=8 if dim == 3 else 4, enable_fp_fusion=False)  # fmt: skip
+    cells, members = torch.sort(bucket, stable=True)
+    links = torch.full((count + nx * ny * nz,), count, dtype=torch.int32, device=Jx.device)
+    same = cells[1:] == cells[:-1]
+    links[members[:-1]] = torch.where(same, members[1:], count).to(torch.int32)
+    first = torch.ones((count,), dtype=torch.bool, device=Jx.device)
+    first[1:] = ~same
+    links[count + cells[first]] = members[first].to(torch.int32)
     width = order + 3
     colours = (width, width if dim >= 2 else 1, width if dim == 3 else 1)
     block = triton.next_power_of_2(width**dim * (2 * modes - 1))
     tiles = triton.cdiv(nx, width) * triton.cdiv(ny, width) * triton.cdiv(nz, width)
     num_sms = torch.cuda.get_device_properties(Jx.device).multi_processor_count
-    programs = max(1, min(num_sms, max(tiles, triton.cdiv(count, 128), triton.cdiv(nx * ny * nz, 256))))
+    programs = max(1, min(num_sms, tiles))
     esirkepov_kernel[(programs,)](
         Jx,
         Jy,
