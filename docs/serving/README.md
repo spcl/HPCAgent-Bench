@@ -202,3 +202,31 @@ registered EDF as-is. A model that serves here and fails in an experiment run: s
 - `containers/inference/`: `accuracy-gate.py`, `verify-tools-reasoning.py` (gates against a live server).
 
 Node-to-node spread is about 30%. Re-measure a flag change **on one node, back to back**.
+
+## 8. Benchmarking a configuration, and the guards
+
+A serving configuration is measured, not guessed. `[bench.<name>]` of `experiments/experiments.toml` is one candidate: the
+`model` whose `SGLANG_EXTRA_ARGS` it edits, flags to `set` (a bare flag is `""`) or `drop`, and other env keys in `env`.
+
+```bash
+hpcagent-bench serve-bench submit kimi27sglang --config kimi-base --config kimi-ep4-triton   # 1 to 3 serve-only jobs
+hpcagent-bench serve-bench report $SCRATCH/inference-server/<job>...                          # the rows of a tuning record
+```
+
+Each job is `serve-only.sbatch` under `SERVE_BENCH=<name>` (`BENCH_CONCURRENCY`, `BENCH_SECONDS`; defaults `20 40`, 900 s
+each): it applies the overlay, boots, runs an agent-shaped load (`hpcagent_bench/cluster/serve_bench.py`: per agent a
+30k-token prefix, then turns of 1.5k new and 400 output tokens, the shape that makes the radix cache matter) and writes
+`bench-<name>.json` into its run directory (server arguments as run, API-up seconds, KV pool, TTFT p50/p90, tokens per
+second per agent and in total, cache hit rate, every request), then ends. It runs under the same rules as a launch.
+
+**Rules** (`hpcagent_bench/cluster/serve_args.py`, `RULES`): refused at submit (`env_spec.py check-staged`, so before a
+setup queues) and by `serve-only.sbatch` and the bench (`BENCH_FORCE_RULES=1` skips them, for a crash hunt). A model states
+what a rule keys on in its table, never a model name: `MOE_CHECKPOINT = 'int4-wna16'` (Kimi) means `--ep-size` above 1 needs
+`--moe-runner-backend triton`.
+
+**KV guard** (`hpcagent_bench/cluster/serve_guard.py`): a model that sets `KV_TOKENS_PER_AGENT` is held to a KV pool of
+`AGENTS_PER_PIPELINE` x that many tokens. The smallest `max_total_num_tokens` / `KV Cache is allocated` any pipeline
+logs is compared with it as soon as it is stated: below the floor the job fails (an experiment job is cancelled from its batch
+shell, `serve-only.sbatch` ends after the API is up), `KV_GUARD=warn` only reports. The verdict is `kv-guard.json` in the
+run directory. A bench always warns: a starved pool is one of its results.
+

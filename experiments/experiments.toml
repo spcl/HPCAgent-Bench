@@ -267,7 +267,12 @@ AGENTS_PER_NODE = 20
 # LRU radix cache then evicts the waiting conversations, so every turn re-prefills (issue #193). setup_nodes refuses
 # a setup whose AGENT_NODES x AGENTS_PER_NODE exceeds INFERENCE_REPLICAS x this.
 AGENTS_PER_PIPELINE = 20
-# the weights are pack-quantized int4
+# the weights are pack-quantized int4; --ep-size above 1 then needs --moe-runner-backend triton (serve_args.RULES)
+MOE_CHECKPOINT = 'int4-wna16'
+# The KV pool one agent's conversation needs, in tokens: the server must allocate AGENTS_PER_PIPELINE x this
+# (serve_guard.py fails the job below it; KV_GUARD=warn reports). 0.52 measured 1.85M for 20 agents (90% cache hit),
+# 0.98M held 88% at 4.3 tok/s and 0.21M none (docs/serving/kimi27sglang.md, Tuning record).
+KV_TOKENS_PER_AGENT = 80000
 AITER_USE_FLYDSL_MOE_SORTING = 1
 # The server's allocator alone (run_cluster.sh): expandable segments stop variable-length prefills
 # fragmenting it, whose high-water mark otherwise ratchets up over hours of agent load (host memory on MI300A)
@@ -277,6 +282,28 @@ SGLANG_PYTORCH_HIP_ALLOC_CONF = 'expandable_segments:True'
 # (0.15-1.0M tokens, varying run to run; jobs 747584/86/89) and 20 agents evicted each other; 0.55 (3.7M tokens)
 # ran host memory to the limit after 4 h once (job 746293, before expandable segments)
 SGLANG_EXTRA_ARGS = '"--trust-remote-code --attention-backend aiter --language-only --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 --context-length 262144 --mem-fraction-static 0.52 --max-running-requests 24 --cuda-graph-max-bs-decode 24 --enable-metrics --pre-warm-nccl --reasoning-parser kimi_k2 --tool-call-parser kimi_k2 --enable-cache-report"'
+
+# Serving benchmark configurations (hpcagent-bench serve-bench submit; hpcagent_bench/cluster/serve_args.py): a model, flags to
+# set or drop in its SGLANG_EXTRA_ARGS (a bare flag is ""), other env keys to override. Each is a row of the tuning
+# record of docs/serving/kimi27sglang.md.
+[bench.kimi-base]
+model = "kimi27sglang"
+
+[bench.kimi-fraction-048]
+model = "kimi27sglang"
+set = { "--mem-fraction-static" = "0.48" }
+
+[bench.kimi-fraction-055]
+model = "kimi27sglang"
+set = { "--mem-fraction-static" = "0.55" }
+
+[bench.kimi-ep4-triton]
+model = "kimi27sglang"
+set = { "--ep-size" = "4", "--moe-runner-backend" = "triton" }
+
+[bench.kimi-triton-attention]
+model = "kimi27sglang"
+set = { "--attention-backend" = "triton" }
 
 # Meta's Muse Spark, contributor tier: discounted in exchange for Meta training on the prompts and
 # completions a setup sends. muse-spark-1.3 on the standard tier is the same model.
