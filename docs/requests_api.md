@@ -188,9 +188,10 @@ a sparse array and a distributed kernel take no single-node layout.
 On one node `place` (allowed by `place_single_node` only) chooses where an array STARTS and ENDS for the kernel
 call, as it does for a distributed array's tiles. Without it every array starts at the setup's residency. On a
 device-resident grade `"on": "host"` hands the kernel that array on the host (a host pointer; a numpy array to a
-python delivery) and reads an output back from there: the judge stages it on the host, outside the score
-(`grades.convert_in_ns` / `convert_out_ns` stay 0, since no conversion is left to time), and the python
-device-residency guard skips it (`sandbox.Sandbox.build`, `languages.python_device_refusal`). `"on": "device"`
+python delivery) and reads an output back from there: before every call the judge copies it from the device
+(where a device grade builds its inputs) to a fresh host buffer, outside the score, on the conversion timer
+(`grades.convert_in_ns`, `native_call.timed_host_inputs`; the output is graded from the host buffer, so nothing
+is added to `convert_out_ns`), and the python device-residency guard skips it (`sandbox.Sandbox.build`, `languages.python_device_refusal`). `"on": "device"`
 there, and `"on": "host"` on a host-resident grade, change nothing; `"on": "device"` on a host-resident grade, a
 sparse array, and a host array the request also casts, lays out or regroups are refused
 (`service.single_node_place_refusal`).
@@ -286,7 +287,7 @@ changes.
 | --- | --- |
 | `grades.requests TEXT NOT NULL DEFAULT ''` | the request, validated, as relayout's models write it (sorted keys); `''` = none; a `final` / `regrade` row's request is its `of_grade_id` grade's |
 | `grade_requests` (one row per entry) | the same request, one typed row per library, the grid and each operation |
-| `grades.convert_in_ns INTEGER NOT NULL DEFAULT 0` | the sparse format conversion (once per grade) plus the credited rep's conversions in: casts, single-node layouts, zips and unzips |
+| `grades.convert_in_ns INTEGER NOT NULL DEFAULT 0` | the sparse format conversion (once per grade) plus the credited rep's conversions in: casts, single-node layouts, zips and unzips, single-node host placements |
 | `grades.convert_out_ns INTEGER NOT NULL DEFAULT 0` | the credited rep's conversions of the outputs back: casts, layouts and regroups |
 
 The recorded JSON carries a version, `"v"` (`requests_api.RECORDED_VERSION`, 1 = relayout's request JSON at the
