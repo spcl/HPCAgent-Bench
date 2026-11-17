@@ -612,8 +612,9 @@ class Descriptor:
     def symbol_conflict(self) -> str | None:
         """Why a size symbol has no single per-rank value under this layout, or ``None``.
 
-        A size symbol reaches the kernel as ONE value per rank, so every split dimension it sizes must hand a rank
-        the same count: the same grid dimension and the same block width (``block`` and ``cyclic`` count alike,
+        A size symbol reaches the kernel as ONE value per rank and ONE allocated extent (:meth:`padded_size_scalars`),
+        LOCAL or GLOBAL, so every split dimension it sizes must hand a rank the same count and allocation: the same
+        grid dimension and the same block width (``block`` and ``cyclic`` count alike,
         ``block_cyclic`` by its ``block_size``)."""
         for sym in sorted(self.symbol_axes):
             dealt: dict[tuple[int, int], list[str]] = {}
@@ -626,9 +627,10 @@ class Descriptor:
                     for (grid_dim, width), names in sorted(dealt.items())
                 )
                 return (
-                    f"size symbol {sym!r} reaches the kernel as ONE per-rank extent, but the layout deals the "
-                    f"dimensions it sizes differently ({groups}), so one rank would hold different extents of "
-                    f"them and no single value is right. Deal every dimension {sym!r} sizes over the same grid "
+                    f"size symbol {sym!r} reaches the kernel as ONE per-rank extent and ONE allocated extent "
+                    f"{padded_name(sym)!r}, but the layout deals the dimensions it splits differently ({groups}), so "
+                    f"one rank would hold different extents of them and no single value is right. Deal every "
+                    f"dimension {sym!r} sizes over the same grid "
                     f"dimension with the same block width (block and cyclic count alike; block_cyclic counts in "
                     f"its block_size), e.g. the same distribute operation for each of those arrays"
                 )
@@ -654,16 +656,14 @@ class Descriptor:
         return out
 
     def padded_size_scalars(self, symbols: Mapping[str, int]) -> dict[str, int]:
-        """``<symbol>_padded`` for each size symbol: the ALLOCATED extent of the split dimensions a local symbol
-        sizes (:func:`padded_extent`, the same on every rank), the global value of any other symbol (a global
-        symbol's split dimension, if any, is padded by the same formula, which the kernel evaluates itself)."""
-        local = self.local_symbols()
+        """``<symbol>_padded`` for each size symbol: the ALLOCATED extent of the dimensions the layout splits by it
+        (:func:`padded_extent`, the same on every rank; one value, since :meth:`symbol_conflict` refuses a symbol
+        whose split dimensions are dealt differently), LOCAL or GLOBAL alike; its value when it splits none. A
+        kernel indexes a split dimension with ``<symbol>_padded`` and a whole one with the symbol."""
         out = {}
         for sym, value in symbols.items():
-            if sym in local:
-                out[padded_name(sym)] = padded_extent(int(value), self.symbol_split_axes(sym)[0][0][2], self.grid)
-            else:
-                out[padded_name(sym)] = int(value)
+            split = self.symbol_split_axes(sym)[0]
+            out[padded_name(sym)] = padded_extent(int(value), split[0][2], self.grid) if split else int(value)
         return out
 
     def holds_whole(self, name: str, global_shape: Sequence[int]) -> bool:

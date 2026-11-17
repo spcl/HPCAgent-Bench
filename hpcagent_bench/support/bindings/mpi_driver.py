@@ -316,7 +316,8 @@ def gen_mpi_driver(
     each cast timed MAX-over-ranks in its own bracket and written beside the kernel samples.
 
     ``padded`` (the sharded ML track) declares and calls ``kernel_mpi`` with its :func:`padded_args`, as the stub
-    does. This driver's tiles are compact, so each ``<symbol>_padded`` it passes is the symbol's own value."""
+    does. The ML track never runs this executable (its ranks load the kernel library, ``mpi_shard_driver``), so it
+    only proves the link; its tiles are compact and each ``<symbol>_padded`` it passes is the symbol's own value."""
     sym = mpi_symbol(binding)
     casts = dict(casts or {})
     cast_index = {i: casts[a.name] for i, a in enumerate(binding.pointers) if a.name in casts}
