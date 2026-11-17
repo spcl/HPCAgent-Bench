@@ -11,6 +11,8 @@ import json
 import pathlib
 import tempfile
 
+import pytest
+
 from hpcagent_bench.cluster import env_spec, pipelines
 from hpcagent_bench.problem_file import ProblemLine, read_lines
 
@@ -105,6 +107,16 @@ def test_the_cli_prints_the_env_files_in_order(tmp_path: pathlib.Path) -> None:
     assert out.getvalue().split() == [str(tmp_path / f".env.exp-kimi-c.p{k}") for k in (1, 2, 3)]
 
 
+def test_an_empty_problems_file_is_refused(tmp_path: pathlib.Path) -> None:
+    env = tmp_path / ".env.exp-kimi-c"
+    env.write_text(ENV)
+    problems = tmp_path / "problems.jsonl"
+    problems.write_text("")
+    with pytest.raises(SystemExit, match="holds no problem"):
+        pipelines.split(env, problems)
+    assert env.read_text() == ENV
+
+
 if __name__ == "__main__":
 
     def scratch() -> pathlib.Path:
@@ -115,3 +127,4 @@ if __name__ == "__main__":
     test_a_small_rerun_keeps_its_env_and_runs_one_pipeline(scratch())
     test_a_model_with_no_pipeline_size_is_not_split(scratch())
     test_the_cli_prints_the_env_files_in_order(scratch())
+    test_an_empty_problems_file_is_refused(scratch())
