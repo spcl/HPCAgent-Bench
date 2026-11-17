@@ -9,7 +9,7 @@ import math
 import pathlib
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -216,13 +216,26 @@ def is_dim(tok: str) -> bool:
 
 def plan_dims(info: dict[str, Any]) -> dict[str, int]:
     """Assign a concrete, consistent size to every dimension symbol that
-    appears in any logical_shape (shared symbols get one value)."""
+    appears in any logical_shape (shared symbols get one value), satisfying the
+    manifest's ``constraints`` (a bsr-offering kernel's ``N % 8 == 0``), which the
+    emitted DaCe program asserts and its compiled SDFG checks at the call."""
     dims: list[str] = []
     for layout in info["sparse_layouts"].values():
         for tok in layout["logical_shape"]:
             if is_dim(tok) and tok not in dims:
                 dims.append(tok)
-    return {d: DIM_POOL[i % len(DIM_POOL)] for i, d in enumerate(dims)}
+    env: dict[str, int] = {}
+    for i, d in enumerate(dims):
+        pool = DIM_POOL[i % len(DIM_POOL) :] + DIM_POOL[: i % len(DIM_POOL)] + [8 * k for k in range(1, 9)]
+        env[d] = next(v for v in pool if satisfies(info.get("constraints", ()), {**env, d: v}))
+    return env
+
+
+def satisfies(constraints: Iterable[str], env: dict[str, int]) -> bool:
+    """Whether every constraint naming only symbols of ``env`` holds there."""
+    return all(
+        evaluate(c, {"__builtins__": {}, **env}) for c in constraints if set(re.findall(r"[A-Za-z_]\w*", c)) <= set(env)
+    )
 
 
 def shape_val(tok: str, env: dict[str, int]) -> int:
