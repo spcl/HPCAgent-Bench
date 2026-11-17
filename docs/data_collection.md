@@ -35,28 +35,41 @@ directory again (`run_cluster.sh` unseals it first), a re-merge (`merge_results.
 
 ### Episode archives
 
-`hpcagent-bench runs` (`hpcagent_bench/harness/artifacts.py`) keeps a finished job's episodes as one archive each,
-`<job>/episodes/<setup>/<label>.tar.zst`, so restoring an episode, or continuing it
-([matched_limits.md](matched_limits.md#extending-a-timed-out-episode)), is one command. An archive holds the episode's
-worker directory (`agents/node-N/problem-P-worker-W/`: transcript, session JSONL, prompt, `tokens.json`,
-`attempts.jsonl`) and every `shared/agent-K/` folder it worked in (`agent-folders.jsonl`), from the loose files and
-from `workspaces.tar` alike, at their paths in the job directory. Secrets never enter it (`mcp.json`, `litellm.yaml`,
-`.claude.json` and the other names `collect` never copies). `episodes/index.jsonl` lists each archive with its
-`label`, `setup`, `path`, `sha256`, `bytes` and `members`; the results DB holds no log. The archive is a tar
-stream through the `zstd` binary the transcript extracts already need (`-T0 -10`).
+`hpcagent-bench runs` (`hpcagent_bench/harness/artifacts.py`) keeps a finished job's episodes as one folder each,
+`<job>/episodes/<setup>/<label>/` (`label` is the episode id, `<experiment>-<model>-<lang>.n<node>.p<problem>.w<worker>`),
+so reading an episode's transcript, restoring it, or continuing it ([matched_limits.md](matched_limits.md#extending-a-timed-out-episode))
+is one command that opens only what it needs. Packing is an optional step after the experiments; the results DB holds no log.
+
+| member | holds | derived from |
+|---|---|---|
+| `episode.json` (plain) | schema 2, worker and shared folders, harness, the episode record (`tokens.json`: token accounting, limits, identity), the attempt ledger, each member's sha256 and size | `tokens.json`, `attempts.jsonl` |
+| `transcript.extract.jsonl.zst` | the transcript extract ([below](#the-transcript-extract)): reasoning, every tool call whole, tool results as id, length and hash, token usage per call; absent for a harness with no extractor | the logs |
+| `logs.tar.zst` | the files the extract is read from, whole: Claude Code's `claude.log`, `claude.attempt*.log` and `home/.claude/projects/**/*.jsonl` sessions (needed to resume, and the token caps count from the log), mini-SWE-agent's `miniswe.traj.json`, OpenHands' events and state | the agent |
+| `worker.tar.zst` | the rest of the worker directory: `prompt.txt`, `tokens.json`, `attempts.jsonl`, markers, `.submission-spent`, the agent's home | the agent |
+| `workspace.tar.zst` | every `shared/agent-K/` folder the episode worked in (`agent-folders.jsonl`), from the loose files and from `workspaces.tar` | the agent |
+
+The tars hold their files at their paths in the job directory, owner-writable. Secrets never enter an archive (`mcp.json`,
+`litellm.yaml`, `.claude.json` and the other names `collect` never copies). `episodes/index.jsonl` lists one line per
+episode: `label`, `setup`, `schema`, `path`, `result`, `bytes` and `members` (each member's sha256). Each tar is a tar
+stream through the `zstd` binary the transcript extracts already need (`-10`).
 
 ```bash
-hpcagent-bench runs pack "$RUNS/<study>/<job>"                  # every ended episode; a job still in squeue is refused
-hpcagent-bench runs pack --remove-loose "$RUNS/<study>/<job>"   # ... then each packed worker directory's files go
-hpcagent-bench runs verify "$RUNS/<study>/<job>"                # each archive's sha256 and member count, as indexed
+hpcagent-bench runs pack "$RUNS/<study>/<job>" ...            # a Slurm job (pack.sbatch): every ended episode; a job in squeue is refused
+hpcagent-bench runs pack --local "$RUNS/<study>/<job>"        # here instead: nice 19, ionice idle, one core, one process
+hpcagent-bench runs pack --remove-loose "$RUNS/<study>/<job>" # then the loose files go, see below
+hpcagent-bench runs verify "$RUNS/<study>/<job>"              # each member's sha256, as indexed
 hpcagent-bench runs unpack [--label <label>] "$RUNS/<study>/<job>"  # restore in place, never over an existing file
 ```
 
-`pack` is idempotent and skips an episode whose `attempts.jsonl` holds no line yet. Each archive is written under a
-temporary name, listed back against what was packed (every member's name and size), then renamed into place and
-indexed; only then does `--remove-loose` remove the worker directory's files but `tokens.json`, `attempts.jsonl` and
-the `cancelled` marker, which `owed` and a re-merge read in place. `collect copy` reads transcripts from the worker
-directories, so `runs unpack` a job before collecting it. The archives are part of the sealed graded record.
+`pack` is idempotent and skips an episode whose `attempts.jsonl` holds no line yet. The folder is written under a
+temporary name, every file and link of the episode on disk and in `workspaces.tar` is read back from the tars and
+compared by size and sha256, and only then is it renamed into place and indexed. Without `--remove-loose` nothing is
+removed. With it, and only after that comparison (and, for a Claude Code episode, the token totals of the restored
+extract equal to those of its logs), the worker directory's files go but `tokens.json`, `attempts.jsonl` and the
+`cancelled` marker, which `owed` and a re-merge read in place; so do the job's `vllm/nccl.*.log` debug dumps and, once
+every episode of the job is packed and every file in it lies in an episode (or is a secret), its `workspaces.tar`. Any
+mismatch stops before the removal. `collect copy` reads transcripts from the worker directories, so `runs unpack` a job
+before collecting it. The archives are part of the sealed graded record.
 
 ## End to end
 
@@ -194,7 +207,7 @@ hpcagent-bench plot kernel-speedups out/llr-cpu/llr40_observations.csv --experim
 | tool | does |
 |---|---|
 | `hpcagent-bench collect copy/verify/archive` (`hpcagent_bench/results/collect.py`) | copy-only collection, checksum verification, archive |
-| `hpcagent-bench runs pack/unpack/verify` (`hpcagent_bench/harness/artifacts.py`) | one archive per episode, restored in place |
+| `hpcagent-bench runs pack/unpack/verify` (`hpcagent_bench/harness/artifacts.py`) | one folder per episode, restored in place |
 | `hpcagent-bench extract` (`hpcagent_bench/results/extract.py`) | the observations table, regrades pooled |
 | `hpcagent-bench grade-under worklist/run/apply` (`hpcagent_bench/harness/grade_under.py`) | list what is owed a final grade, grade a shard of it, merge the shards back |
 | `agent/hpcagent_agent/driver/token_cost.py` | per-episode token cost, per-run token totals |

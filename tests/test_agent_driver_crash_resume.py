@@ -229,7 +229,7 @@ def test_a_leg_the_watchdog_killed_does_not_file_the_clean_resumed_leg_as_an_api
 #: The leg the wall clock stopped in an earlier job: two turns, a third cut off, no closing result.
 TIMED_OUT_LEG = [init_line(), *turn("msg_a1", 1000, 100), *turn("msg_a2", 1200, 50), *turn("msg_a3", 1300, None)]
 #: An extension's problem stamps (``owed run --class extend``).
-EXTEND = {"launch_kind": "extend", "resume_from": "/runs/100/episodes/golden-setup/x.tar.zst"}
+EXTEND = {"launch_kind": "extend", "resume_from": "/runs/100/episodes/golden-setup/x"}
 
 
 def restore_timed_out_episode(root: pathlib.Path) -> None:

@@ -95,7 +95,7 @@ def test_stage_writes_the_earlier_legs_best_and_keeps_an_earlier_extensions_bett
     """The archive's job is the leg's job; the better of its best and the one the restored episode already carries
     stays (a tie to the later)."""
     old, _ = legs(tmp_path, 4.0, None)
-    archive = old / "episodes" / "setup" / f"{FIRST}.tar.zst"
+    archive = old / "episodes" / "setup" / FIRST
     worker = tmp_path / "restored" / "agents" / "node-0" / "problem-1-worker-1"
     worker.mkdir(parents=True)
     (worker / "tokens.json").write_text(json.dumps({"episode_id": FIRST, "final_attempt_start_ms": 5}))
