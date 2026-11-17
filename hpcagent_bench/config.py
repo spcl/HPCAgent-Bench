@@ -868,6 +868,8 @@ class RequestCapability(Coded):
     PLACE = enum.auto()
     #: A distributed grade's layout operations; implied by ``mpi.grade_distributed``.
     DISTRIBUTE = enum.auto()
+    #: ``place`` on a single-node grade: where an array starts and ends for the kernel call (host on a device grade).
+    PLACE_SINGLE_NODE = enum.auto()
 
 
 class GridChooser(Coded):

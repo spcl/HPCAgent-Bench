@@ -82,7 +82,7 @@ SPELLINGS: list[tuple[type[Coded], tuple[str, ...]]] = [
     (config.ContainerRuntime, ("oci", "sif", "ce", "native", "docker", "podman", "apptainer")),
     (config.MpContext, ("auto", "fork", "spawn", "forkserver")),
     (config.Execution, ("native", "container", "harbor")),
-    (config.RequestCapability, ("load", "cast", "layout", "sparse_format", "place", "distribute")),
+    (config.RequestCapability, ("load", "cast", "layout", "sparse_format", "place", "distribute", "place_single_node")),
     (config.GridChooser, ("agent", "task")),
     (protocols.Role, ("grade", "preview", "calibration", "live")),
     (

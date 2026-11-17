@@ -172,7 +172,7 @@ class RequestActions(pydantic.BaseModel):
     distributed: bool = False
     #: ``startup.grid`` on a distributed task (``requests.grid`` ``agent``).
     grid: bool = False
-    #: ``place`` on a distributed task.
+    #: ``place`` on a distributed task, or on a single-node device task (``place_single_node``).
     place: bool = False
     #: The precisions a ``cast`` may target; empty offers no ``cast``.
     casts: tuple[Precision, ...] = ()
@@ -230,16 +230,20 @@ class RequestAllowances(pydantic.BaseModel):
         """Whether ``capability`` is allowed."""
         return capability in self.allow
 
-    def actions(self, *, distributed: bool, castable: bool, layable: bool, sparse: bool) -> RequestActions:
+    def actions(
+        self, *, distributed: bool, device: bool, castable: bool, layable: bool, sparse: bool
+    ) -> RequestActions:
         """What one task's tools offer: a ``distributed`` task's layout and placement, a cast where the task has
         ``castable`` arrays, the single-node layouts where it has ``layable`` ones, a format on a ``sparse``
-        kernel. ``place`` takes effect on a distributed grade only (a single-node one refuses it), so it is
-        offered there only."""
+        kernel. ``place`` takes effect on a distributed grade and, under ``place_single_node``, on a single-node
+        ``device`` grade (an array handed over on the host), so it is offered there only."""
         return RequestActions(
             load=self.allows(RequestCapability.LOAD),
             distributed=distributed and self.allows(RequestCapability.DISTRIBUTE),
             grid=self.grid is GridChooser.AGENT,
-            place=distributed and self.allows(RequestCapability.PLACE),
+            place=self.allows(RequestCapability.PLACE)
+            if distributed
+            else device and self.allows(RequestCapability.PLACE_SINGLE_NODE),
             casts=self.precisions if castable and self.allows(RequestCapability.CAST) else (),
             layouts=layable and self.allows(RequestCapability.LAYOUT),
             formats=sparse and self.allows(RequestCapability.SPARSE_FORMAT),
@@ -258,10 +262,11 @@ class RequestAllowances(pydantic.BaseModel):
                 ["startup.grid"] * requests.distributed + [f"the {name} operation(s)" for name in spread]
             )
             return f"this setup grades no distributed layout: drop {dropped}"
-        if any(isinstance(op, Place) for op in requests.operations) and not self.allows(RequestCapability.PLACE):
+        placement = RequestCapability.PLACE if requests.distributed else RequestCapability.PLACE_SINGLE_NODE
+        if any(isinstance(op, Place) for op in requests.operations) and not self.allows(placement):
             return (
-                "this setup does not allow placement requests: drop every place operation; every array lives "
-                "in the run's residency"
+                f"this setup does not allow {'' if requests.distributed else 'single-node '}placement requests: "
+                "drop every place operation; every array lives in the run's residency"
             )
         casts = [op for op in requests.operations if isinstance(op, Cast)]
         if casts and not self.allows(RequestCapability.CAST):
@@ -441,6 +446,10 @@ class Requests(relayout.ops.Requests):
             return raw
         parsed = raw if isinstance(raw, relayout.ops.Requests) else parse_requests(raw)
         return cls(parsed.startup, parsed.operations)
+
+    def host_arrays(self) -> frozenset[str]:
+        """The arrays the last ``place`` of each leaves on the host."""
+        return frozenset(name for name, on in self.locations().items() if on is Location.HOST)
 
     def asks_nothing(self) -> bool:
         """True for the empty request (no startup, no operation), which a submission leaves out."""

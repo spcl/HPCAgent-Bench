@@ -1533,6 +1533,7 @@ def call_native_impl(
     targets = dict(casts.targets) if casts is not None else {}
     layouts = dict(casts.layouts) if casts is not None else {}
     regroups = casts.regroups if casts is not None else ()
+    host_arrays = casts.host_arrays if casts is not None else frozenset()
     call_binding = kernel_binding(binding, regroups)
     kernel_side = {
         name: np.empty(0, dtype)
@@ -1584,6 +1585,7 @@ def call_native_impl(
         outputs_named = {a.name for a in binding.args if a.role == "output"}
         owner = {name: g for g in regroups for name in g.kernel}
         with budget():
+            placed, placed_ns = timed_host_inputs(src, host_arrays, xp)
             for a in call_binding.args:
                 if a.name in owner and a.name not in kernel_buffers:
                     regroup_of = owner[a.name]
@@ -1596,7 +1598,7 @@ def call_native_impl(
                 if a.name in owner:
                     c_args.append(ffi.cast(ptr_cdecl[a.name], scratch_ptr(kernel_buffers[a.name])))
                 elif a.kind == "ptr":
-                    copied = staged_input(xp, src[a.name])
+                    copied = placed[a.name] if a.name in placed else staged_input(xp, src[a.name])
                     if rebase[a.name]:
                         copied += rebase[a.name]
                     buf: ArrayBuffer = copied
@@ -1627,7 +1629,7 @@ def call_native_impl(
             call_ws[...] = 0
 
         # Every requested array is cast in: outputs are intent(inout), so one may be read.
-        convert_in_ns = timed_conversions(list(staged.values()), convert, inward=True)
+        convert_in_ns = placed_ns + timed_conversions(list(staged.values()), convert, inward=True)
         convert_in_ns += timed_groups(groups, regroup, to_kernel=True)
         # The only timed region: fn(*c_args) and the settle waits.
         rep = timed_call(fn, c_args, settle)
@@ -1874,12 +1876,32 @@ def torch_views(staged: Sequence[object]) -> list[object]:
     return [torch.as_tensor(value) if is_array(value) else value for value in staged]
 
 
-def stage_python_inputs(src: KernelData, input_args: Sequence[str], xp: types.ModuleType) -> list[object]:
-    """The python ABI's positional arguments, fresh per rep on ``xp``'s side; scalars stay host values."""
+def timed_host_inputs(
+    src: KernelData, names: frozenset[str], xp: types.ModuleType
+) -> tuple[dict[str, np.ndarray], int]:
+    """Fresh host copies of the arrays ``names`` (a device grade's ``place ... on host``) and the nanoseconds the
+    copies took: a device-built input comes down (D2H), a host one is copied. Recorded, never scored."""
+    start = time.perf_counter_ns()
+    placed = {
+        name: staged_input(np, value) if isinstance(value, np.ndarray) else xp.asnumpy(value)
+        for name in sorted(names)
+        if is_array(value := src[name])
+    }
+    return placed, time.perf_counter_ns() - start if placed else 0
+
+
+def stage_python_inputs(
+    src: KernelData, input_args: Sequence[str], xp: types.ModuleType, placed: Mapping[str, np.ndarray] | None = None
+) -> list[object]:
+    """The python ABI's positional arguments, fresh per rep on ``xp``'s side (the ``placed`` host copies as they
+    are); scalars stay host values."""
+    placed = placed or {}
     staged: list[object] = []
     for name in input_args:
         value = src[name]
-        if is_array(value):
+        if name in placed:
+            staged.append(placed[name])
+        elif is_array(value):
             staged.append(staged_input(xp, value))
         else:
             staged.append(copy.deepcopy(value))
@@ -2091,6 +2113,7 @@ def call_python(
     device_id: int | None = None,
     host_only: bool = False,
     torch_inputs: bool = False,
+    host_arrays: frozenset[str] = frozenset(),
 ) -> tuple[list[SpilledMap], list[int], list[FollowupResult], list[RepTiming]]:
     """Load an agent's Python submission from ``py_path`` and time ``reps`` calls of its kernel.
 
@@ -2098,6 +2121,8 @@ def call_python(
     and a host bracket; True: arrays staged on the GPU and a GPU event pair. ``host_only`` skips the framework sync
     (a pre-fork cupy must not start a device runtime in the child). ``torch_inputs`` (device only, the Triton
     reference) hands the staged arrays over as torch tensors, wrapped before the bracket, on a cuda default device.
+    ``host_arrays`` (a device grade's ``place ... on host``) are handed over as host copies, timed apart
+    (:func:`timed_host_inputs`, ``convert_in_ns``).
     Returns ``(outputs, [ns samples], [followup outputs], [RepTiming])``."""
     func_name, input_args, output_args = py_meta
     python_envs.enter(pathlib.Path(py_path))
@@ -2158,10 +2183,12 @@ def call_python(
         budget: Callable[[], contextlib.AbstractContextManager[None]]
         budget = grading_memory_budget if is_followup else contextlib.nullcontext
         with budget():
-            args = stage_python_inputs(src, input_args, xp)
+            placed, placed_ns = timed_host_inputs(src, host_arrays & set(input_args), xp)
+            args = stage_python_inputs(src, input_args, xp, placed)
             if torch_inputs and device:
                 args = torch_views(args)
         result, rep = timed_call(args)
+        rep = dataclasses.replace(rep, convert_in_ns=placed_ns)
         refuse_deferred_outputs(result, xp)
         if not warming and not is_followup:
             reps_seen.append(rep)
@@ -2393,6 +2420,7 @@ def native_call_worker(
             device_id=device_id,
             host_only=host_only,
             torch_inputs=torch_inputs,
+            host_arrays=casts.host_arrays if casts is not None else frozenset(),
         )
     elif device:
         timed_outputs, samples, extras, rep_timings = call_native_device(
