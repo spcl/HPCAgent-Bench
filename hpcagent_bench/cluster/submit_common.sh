@@ -406,6 +406,29 @@ submit_setup_job() {
     # --parsable prints <id> or <id>;<cluster>; a dependency names the id alone.
     SUBMITTED_JOB_ID="${jid%%;*}"
     echo "submitted ${setup} -> ${jid} (${nodes} nodes${detail}) env ${snapshot}"
+    submit_pack_job "${snapshot}" "${SUBMITTED_JOB_ID}" "${options[@]}" || return 2
+}
+
+# submit_pack_job <env> <job id> <sbatch options...> -- PACK_AFTER=1 (the default) submits pack.sbatch after <job>
+# ends, however it ends (afterany): its episodes go into their episode folders (runs pack, docs/data_collection.md#
+# episode-archives) and the loose files they were packed from go once each archive reads back equal (--remove-loose),
+# so a run root holds one folder per episode, not the 10^4 files of its workers. PACK_AFTER=0 leaves the job loose.
+# The run directory is the job's RUN_ROOT (<env>; unset, the checkout's results/cluster) / <job id>, as
+# run_cluster.sh names it; only <options>' account and partition carry over (a CPU job: pack.sbatch asks for no GPU).
+submit_pack_job() {
+    local env="$1" job="$2" root option pack_jid
+    shift 2
+    [[ "${PACK_AFTER:-1}" == 1 ]] || return 0
+    root=$(sed -n 's/^RUN_ROOT=//p' "${env}" | tail -1)
+    root=$(eval "printf '%s' \"${root:-\${SUBMIT_REPO_DIR}/results/cluster}\"") || return 2
+    local -a args=(--parsable --dependency="afterany:${job}" --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}"
+        --job-name="runs-pack-${job}" --output="${HPCAGENT_BENCH_SCRATCH}/logs/runs-pack-%j.out"
+        --export="ALL,HPCAGENT_BENCH_REPO=${SUBMIT_REPO_DIR},HPCAGENT_BENCH_PYTHON=${HPCAGENT_BENCH_HOST_PYTHON}")
+    for option in "$@"; do
+        [[ "${option}" != --account=* && "${option}" != --partition=* ]] || args+=("${option}")
+    done
+    pack_jid=$(sbatch_retry "${args[@]}" "${CLUSTER_DIR}/pack.sbatch" --remove-loose "${root}/${job}") || return 2
+    echo "packs ${job} after it ends -> ${pack_jid%%;*}"
 }
 
 # plan_waves <max-nodes> <nodes>... -- sets WAVE_NUMBERS to one 1-based wave number per node count, in order: a

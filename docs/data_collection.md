@@ -61,6 +61,10 @@ hpcagent-bench runs verify "$RUNS/<study>/<job>"              # each member's sh
 hpcagent-bench runs unpack [--label <label>] "$RUNS/<study>/<job>"  # restore in place, never over an existing file
 ```
 
+Every experiment job is packed this way without asking: the submit chains `pack.sbatch --remove-loose <run dir>`
+on it (`--dependency=afterany`, a CPU job at the job's nice and account), so a run root holds one folder per episode
+once its jobs end. `PACK_AFTER=0` on the submit leaves a job loose.
+
 `pack` is idempotent and skips an episode whose `attempts.jsonl` holds no line yet. The folder is written under a
 temporary name, every file and link of the episode on disk and in `workspaces.tar` is read back from the tars and
 compared by size and sha256, and only then is it renamed into place and indexed. Without `--remove-loose` nothing is
