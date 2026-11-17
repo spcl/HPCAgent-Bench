@@ -1,5 +1,5 @@
-# What the sglang image adds to the vendor venv /opt/venv: flydsl at the version the setups run (the base
-# carries an older one) and cupy built for HIP. Synced with `uv sync --frozen --inexact` so that nothing
+# What the sglang image adds to the vendor venv /opt/venv: cupy built for HIP (the base ships none; flydsl is
+# the base's own, at the version its aiter pins). Synced with `uv sync --frozen --inexact` so that nothing
 # else in the vendor environment is removed; the Dockerfile skips numpy, which the vendor environment owns
 # and served results are compared against. Not a package: nothing here is built or installed.
 [project]
@@ -7,7 +7,6 @@ name = "sglang-image-extras"
 version = "0"
 requires-python = "==3.12.*"
 dependencies = [
-    "flydsl==0.3.2",  # FlyDSL ships its own LLVM/MLIR and the MLIR python bindings, so it is the wheel
     "cupy==14.2.0",  # no ROCm wheel exists: the PyPI sdist, built for HIP
 ]
 
