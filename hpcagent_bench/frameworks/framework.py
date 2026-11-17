@@ -375,7 +375,8 @@ class TorchCudaEventTiming:
         import torch
 
         timer = Timer(program)
-        timer.state = (torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True))
+        # torch types Event.record's stream as _CudaStreamBase with a None default, which no protocol matches
+        timer.state = (torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True))  # pyright: ignore[reportAttributeAccessIssue]
         return timer
 
     def start_timer(self, timer: Timer) -> None:
