@@ -1530,6 +1530,7 @@ def call_native_impl(
     targets = dict(casts.targets) if casts is not None else {}
     layouts = dict(casts.layouts) if casts is not None else {}
     regroups = casts.regroups if casts is not None else ()
+    host_arrays = casts.host_arrays if casts is not None else frozenset()
     call_binding = kernel_binding(binding, regroups)
     kernel_side = {
         name: np.empty(0, dtype)
@@ -1593,7 +1594,7 @@ def call_native_impl(
                 if a.name in owner:
                     c_args.append(ffi.cast(ptr_cdecl[a.name], scratch_ptr(kernel_buffers[a.name])))
                 elif a.kind == "ptr":
-                    copied = staged_input(xp, src[a.name])
+                    copied = staged_input(np if a.name in host_arrays else xp, src[a.name])
                     if rebase[a.name]:
                         copied += rebase[a.name]
                     buf: ArrayBuffer = copied
@@ -1871,13 +1872,16 @@ def torch_views(staged: Sequence[object]) -> list[object]:
     return [torch.as_tensor(value) if is_array(value) else value for value in staged]
 
 
-def stage_python_inputs(src: KernelData, input_args: Sequence[str], xp: types.ModuleType) -> list[object]:
-    """The python ABI's positional arguments, fresh per rep on ``xp``'s side; scalars stay host values."""
+def stage_python_inputs(
+    src: KernelData, input_args: Sequence[str], xp: types.ModuleType, host_arrays: frozenset[str] = frozenset()
+) -> list[object]:
+    """The python ABI's positional arguments, fresh per rep on ``xp``'s side (``host_arrays`` on the host);
+    scalars stay host values."""
     staged: list[object] = []
     for name in input_args:
         value = src[name]
         if is_array(value):
-            staged.append(staged_input(xp, value))
+            staged.append(staged_input(np if name in host_arrays else xp, value))
         else:
             staged.append(copy.deepcopy(value))
     return staged
@@ -2088,6 +2092,7 @@ def call_python(
     device_id: int | None = None,
     host_only: bool = False,
     torch_inputs: bool = False,
+    host_arrays: frozenset[str] = frozenset(),
 ) -> tuple[list[SpilledMap], list[int], list[FollowupResult], list[RepTiming]]:
     """Load an agent's Python submission from ``py_path`` and time ``reps`` calls of its kernel.
 
@@ -2095,6 +2100,7 @@ def call_python(
     and a host bracket; True: arrays staged on the GPU and a GPU event pair. ``host_only`` skips the framework sync
     (a pre-fork cupy must not start a device runtime in the child). ``torch_inputs`` (device only, the Triton
     reference) hands the staged arrays over as torch tensors, wrapped before the bracket, on a cuda default device.
+    ``host_arrays`` (a device grade's ``place ... on host``) are staged as host arrays instead.
     Returns ``(outputs, [ns samples], [followup outputs], [RepTiming])``."""
     func_name, input_args, output_args = py_meta
     python_envs.enter(pathlib.Path(py_path))
@@ -2155,7 +2161,7 @@ def call_python(
         budget: Callable[[], contextlib.AbstractContextManager[None]]
         budget = grading_memory_budget if is_followup else contextlib.nullcontext
         with budget():
-            args = stage_python_inputs(src, input_args, xp)
+            args = stage_python_inputs(src, input_args, xp, host_arrays)
             if torch_inputs and device:
                 args = torch_views(args)
         result, rep = timed_call(args)
@@ -2390,6 +2396,7 @@ def native_call_worker(
             device_id=device_id,
             host_only=host_only,
             torch_inputs=torch_inputs,
+            host_arrays=casts.host_arrays if casts is not None else frozenset(),
         )
     elif device:
         timed_outputs, samples, extras, rep_timings = call_native_device(

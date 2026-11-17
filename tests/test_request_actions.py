@@ -58,8 +58,9 @@ ACCEPTED_ALONE: dict[RequestCapability, set[str]] = {
     RequestCapability.CAST: {"cast"},
     RequestCapability.LAYOUT: LAYOUT_OPS | REGROUP_OPS,
     RequestCapability.SPARSE_FORMAT: {"format"},
-    RequestCapability.PLACE: {"place"},
+    RequestCapability.PLACE: set(),  # a place without a grid is single-node: place_single_node
     RequestCapability.DISTRIBUTE: {"grid", "distribute", "replicate"},
+    RequestCapability.PLACE_SINGLE_NODE: {"place"},
 }
 
 #: The presets an experiment names ([requests.<preset>]) and the set each resolves to.

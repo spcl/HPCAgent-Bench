@@ -565,7 +565,8 @@ sparse:
 requests:
   allow: [load]           # list of: load (startup.load), cast (cast to `precisions`), layout (digit operations
                           # without a grid, zip / unzip), sparse_format (format), place (an array's memory on
-                          # a distributed grade), distribute (startup.grid, distribute, replicate and the
+                          # a distributed grade), place_single_node (place on one node: an array handed to
+                          # the kernel on the host of a device grade), distribute (startup.grid, distribute, replicate and the
                           # digit operations over the grid). [] allows nothing and hides `requests`.
                           # mpi.grade_distributed implies distribute (the resolved list carries it). A list,
                           # or comma-separated in the environment.

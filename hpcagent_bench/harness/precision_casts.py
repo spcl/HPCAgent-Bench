@@ -70,12 +70,13 @@ class DeviceArray(Protocol):
 @dataclass(frozen=True, slots=True)
 class CastPlan:
     """The conversions one grade's calls run: per-array target dtypes, per-array layouts over the logical extents,
-    and the host library (empty on a device grade)."""
+    the host library (empty on a device grade), and the arrays a device grade hands over on the host (``place``)."""
 
     targets: tuple[tuple[str, str], ...]
     host_library: str = ""
     layouts: tuple[tuple[str, IndexMap], ...] = ()
     regroups: tuple["Regroup", ...] = ()
+    host_arrays: frozenset[str] = frozenset()
 
     def target(self, name: str) -> str | None:
         """The dtype ``name`` is cast to, or None when it is not requested."""
