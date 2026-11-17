@@ -82,8 +82,8 @@ COPY containers/images/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.s
 #
 # flydsl is the base's own: the vendor installs the version its aiter pins (aiter 581579ab: flydsl==0.4.2),
 # and kimi's int4 MoE reaches it through aiter (AITER_USE_FLYDSL_MOE_SORTING=1). A pin of our own would
-# move it off the version aiter's FlyDSL kernels are written against. The gates below still require that it
-# imports from inside the image.
+# move it off the version aiter's FlyDSL kernels are written against (PyPI's newest, 0.5.0 on 2026-11-17, is
+# past it). The gates below require that it imports from inside the image and satisfies every pin on it.
 #
 # cupy: the base ships none. From SOURCE: there is no ROCm wheel, the cupy-rocm-* names are dead and PyPI
 # carries only the sdist. The HIP switches are the project's [tool.uv.extra-build-variables]; the target
@@ -111,6 +111,17 @@ RUN /opt/venv/bin/python3 -c "import cupy, flydsl; \
     assert cupy.__file__.startswith('/opt/'), cupy.__file__; \
     assert flydsl.__file__.startswith('/opt/'), flydsl.__file__; \
     print('self-contained: cupy', cupy.__version__, '| flydsl', flydsl.__version__)"
+
+# Gate: the flydsl the base installs satisfies every pin on it in the vendor venv (aiter's above all), so a base
+# bump that moves aiter's pin without moving flydsl fails here, not in kimi's MoE at serve time.
+RUN /opt/venv/bin/python3 -c "import importlib.metadata as m; \
+    from packaging.requirements import Requirement; \
+    have = m.version('flydsl'); \
+    pins = [(d.metadata['Name'], r) for d in m.distributions() for r in map(Requirement, d.requires or []) \
+            if r.name.lower() == 'flydsl' and (r.marker is None or r.marker.evaluate({'extra': ''}))]; \
+    bad = [f'{n} needs {r}' for n, r in pins if not r.specifier.contains(have, prereleases=True)]; \
+    assert not bad, f'flydsl {have}: ' + '; '.join(bad); \
+    print('flydsl', have, 'satisfies', [f'{n}: {r}' for n, r in pins] or 'no declared pin')"
 
 # sgl_kernel common_ops, REBUILT for every ROCM_ARCH. The base's copy is gfx942-only, and it is on the
 # serve path of every model: SiluAndMul calls sgl_kernel.silu_and_mul, which segfaults on gfx90a in
