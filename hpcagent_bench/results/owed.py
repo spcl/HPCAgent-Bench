@@ -710,7 +710,7 @@ def extensions(
     )
     if other:
         raise SystemExit(f"{other} extended to another time limit: every setup of a comparison is extended alike")
-    spent = {found[run][1].limits.timeout_seconds for run in runs if found[run][1].limits}
+    spent = {limits.timeout_seconds for run in runs if (limits := found[run][1].limits)}
     if len(spent) != 1:
         raise SystemExit(f"the selected episodes ran under different time limits {sorted(spent)}: extend each apart")
     chosen: dict[Run, Extension] = {}

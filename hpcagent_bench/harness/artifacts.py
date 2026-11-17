@@ -9,7 +9,8 @@ prompt, episode record, attempt ledger) and every shared folder it worked in (``
 :data:`~hpcagent_bench.run_layout.WORKSPACES_ARCHIVE`, at its path relative to the run directory, owner-writable.
 Secrets (:func:`hpcagent_bench.results.collect.secret`: ``mcp.json``, ``litellm.yaml``, ``.claude.json``, ...)
 never enter it. ``episodes/index.jsonl`` lists every archive (label, setup, path, sha256, bytes, members); the
-results DB holds no log. Compression is the standard library's (``tarfile`` ``w:zst``, Python 3.14).
+results DB holds no log. Compression is the ``zstd`` binary every transcript extract is written with
+(:func:`hpcagent_bench.results.transcripts.zstd`), streamed through ``tarfile``.
 
     python -m hpcagent_bench runs pack <run_dir> [--remove-loose]
     python -m hpcagent_bench runs unpack <run_dir> [--label L]
@@ -28,7 +29,8 @@ import stat
 import subprocess
 import sys
 import tarfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from typing import Literal
 
 from hpcagent_agent.driver.agent_driver import CANCELLED_MARKER
 from hpcagent_agent.driver.promote_unsubmitted import AGENT_FOLDERS_LOG
@@ -38,10 +40,11 @@ from hpcagent_bench import run_layout
 from hpcagent_bench.harness.recording import setup_of
 from hpcagent_bench.problem_file import read_lines
 from hpcagent_bench.results import collect, data_guard
-from hpcagent_bench.results.transcripts import file_sha
+from hpcagent_bench.results.transcripts import file_sha, zstd
 
 __all__ = [
     "LOOSE_KEEP",
+    "ZSTD_ARGS",
     "Episode",
     "build_parser",
     "episodes_of",
@@ -54,8 +57,11 @@ __all__ = [
     "unpack_episode",
     "unpack_run",
     "verify_run",
+    "zst_tar",
 ]
 
+#: How an archive is compressed: every core, a level written once and read rarely can afford.
+ZSTD_ARGS = ("-q", "-T0", "-10")
 #: What ``--remove-loose`` leaves in a packed episode's worker directory: what ``owed`` and a re-merge read in place.
 LOOSE_KEEP = frozenset({run_layout.TOKENS_NAME, ATTEMPTS_NAME, CANCELLED_MARKER})
 
@@ -161,9 +167,29 @@ def writable(info: tarfile.TarInfo) -> tarfile.TarInfo:
     return info
 
 
+@contextlib.contextmanager
+def zst_tar(path: pathlib.Path, mode: Literal["r", "w"]) -> Iterator[tarfile.TarFile]:
+    """A tar stream of the zstd file ``path``, read (``r``) or written (``w``) through the ``zstd`` binary; raises
+    when zstd fails."""
+    with path.open("wb") if mode == "w" else contextlib.nullcontext() as out:
+        command = [zstd(), *ZSTD_ARGS, "-c", *(["-d", str(path)] if mode == "r" else [])]
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE if mode == "w" else None, stdout=out or subprocess.PIPE
+        )
+        stream = process.stdin if mode == "w" else process.stdout
+        assert stream is not None
+        try:
+            with tarfile.open(fileobj=stream, mode="w|" if mode == "w" else "r|") as tar:
+                yield tar
+        finally:
+            stream.close()
+            if process.wait() != 0:
+                raise SystemExit(f"artifacts: zstd exited {process.returncode} on {path}")
+
+
 def listing(archive: pathlib.Path) -> list[tuple[str, int]]:
     """Every member of ``archive`` with its size, read through to the end (a truncated stream raises)."""
-    with tarfile.open(archive, "r:zst") as tar:
+    with zst_tar(archive, "r") as tar:
         return [(member.name, member.size) for member in tar]
 
 
@@ -186,7 +212,7 @@ def packed(
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(f".{target.name}.partial")
     planned: list[tuple[str, int]] = []
-    with tarfile.open(partial, "w:zst") as tar:
+    with zst_tar(partial, "w") as tar:
         for entry in loose:
             info = writable(tar.gettarinfo(entry, arcname=str(entry.relative_to(run_dir))))
             with entry.open("rb") if info.isreg() else contextlib.nullcontext() as data:
@@ -266,13 +292,16 @@ def unpack_episode(archive: pathlib.Path, dest: pathlib.Path) -> pathlib.Path:
     """Restore ``archive`` under ``dest`` (a run directory, or a fresh one) at the paths the driver wrote, never over
     an existing entry (idempotent); returns the episode's worker directory."""
     dest.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive, "r:zst") as tar:
-        members = tar.getmembers()
-        missing = [member for member in members if not os.path.lexists(dest / member.name)]
+    names: list[str] = []
+
+    def missing(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
+        names.append(member.name)
         # "tar", not "data": an agent's symlink to an absolute path (its /shared folder) is part of its workspace.
-        tar.extractall(dest, members=missing, filter="tar")
-    worker = next(m.name for m in members if pathlib.PurePosixPath(m.name).full_match(run_layout.WORKER_GLOB))
-    return dest / worker
+        return None if os.path.lexists(dest / member.name) else tarfile.tar_filter(member, path)
+
+    with zst_tar(archive, "r") as tar:
+        tar.extractall(dest, filter=missing)  # noqa: S202 -- missing() applies tarfile.tar_filter
+    return dest / next(worker for name in names if (worker := collect.worker_of(pathlib.PurePosixPath(name))))
 
 
 def unpack_run(run_dir: pathlib.Path, label: str | None = None) -> list[pathlib.Path]:

@@ -86,7 +86,7 @@ def test_pack_archives_each_ended_episode_without_its_secrets_and_indexes_it(tmp
     run = run_dir(tmp_path)
     (archive,) = artifacts.pack_run(run)
     assert archive == run / "episodes" / "exp-kimi-c" / f"{LABEL}.tar.zst"
-    with tarfile.open(archive, "r:zst") as tar:
+    with artifacts.zst_tar(archive, "r") as tar:
         names = {member.name for member in tar if member.isfile()}
     assert names == set(LOOSE) | set(ARCHIVED)
     (line,) = artifacts.index(run).values()
@@ -172,11 +172,9 @@ def test_stage_restores_each_continued_episode_under_its_problem_id(tmp_path: pa
 
 def test_the_cli_verb_packs_verifies_and_restores(tmp_path: pathlib.Path) -> None:
     run = run_dir(tmp_path)
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
     for verb in (["pack", str(run), "--remove-loose"], ["verify", str(run)], ["unpack", str(run), "--label", LABEL]):
         done = subprocess.run(
             [sys.executable, "-m", "hpcagent_bench", "runs", *verb],
-            env=env,
             capture_output=True,
             text=True,
             check=False,
