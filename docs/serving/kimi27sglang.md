@@ -67,6 +67,15 @@ running a new sweep; every row below has been measured once.
 | `--ep-size 4 --moe-runner-backend triton` | serves; API up in 1098 s against about 1490 s for plain `pp=4` | 747607 |
 | `--enable-dp-attention --dp-size 4` (with `pp=4`, EP4) | needs fraction above 0.4874 x 0.85; at 0.55 it serves, then the first gathered prefill faults (`HSA_STATUS_ERROR_EXCEPTION`, `unspecified launch failure`) | 747588, 747608 |
 | `tp16 ep16 dp-attention`, `pp=1` | needs fraction above 0.4874 at 0.85 (each rank keeps the attention weights); weights load in about 10 min | 747591 |
+| **fraction 0.52 (the setting)** | pool 1.85M; 20 agents: 5.1 tok/s per agent, cache hit 90%, TTFT p50/p90 10/16 s. 40 agents: 105 tok/s total (2.6 per agent), hit 83% | 747672 |
+| `--weight-loader-prefetch-checkpoints` (+ drop cache) | API up after 2435 s against 1789 s without: slower on this storage | 747673 |
+| `--attention-backend triton` under load | the server's own warmup request timed out at 1800 s; no request answered | 747585 |
+| `--ep-size 4 --moe-runner-backend triton`, pool 0.35M | decode 5.0 tok/s median against 7.4 for the aiter MoE at the same starved pool | 747607 |
+| DP attention, any layout (`pp=4` or `pp=1`, mask of pad rows on or off) | `HSA_STATUS_ERROR_EXCEPTION` on the first real prefill in SGLang 0.5.20 | 747608, 747609, 747722 |
+| `tp16 ep16`, `pp=1`, no DP attention, fraction 0.55 | serves; 20 agents: 3.4 tok/s per agent, hit 85%, TTFT p90 128 s. Slower than `pp=4` at 0.52; at 40 agents (fraction 0.48) 0.8 tok/s | 747833, 747610 |
+
+Conclusion: `pp=4`, fraction 0.52, 20 agents per pipeline. More agents per server lose prefix hits whatever the
+layout; split larger setups into separate jobs of 20.
 
 ## Rules
 
