@@ -12,6 +12,7 @@ carry to MI300X.
 | [`knobs.md`](knobs.md) | cross-model: APU memory model, KV pool threshold, aiter derate, HiCache, fabric, Slurm shape |
 | [`private-endpoint.md`](private-endpoint.md) | a keyed Qwen3.8 server only you can use, from your laptop or your own Daint jobs |
 | [`mi200-endpoint.md`](mi200-endpoint.md) | the same server in BF16 on an mi200 node, and the one-command ping test that checks it from anywhere |
+| [`mi200-experiments.md`](mi200-experiments.md) | a whole setup on mi200 (inference, agents, judge) for qwen38 and oss120b: `submit.sh --system beverin-mi200` |
 | [`cross-partition.md`](cross-partition.md) | an experiment's serving on mi300, keyed (`serve-only.sbatch ACCESS=alps`), for a setup whose agents and judge run on mi200 |
 | [`extending-private-inference.md`](extending-private-inference.md) | contributors: the private launcher's security contract, new presets, access paths, engines |
 

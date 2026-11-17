@@ -71,6 +71,7 @@ extending/inference
 serving/README
 serving/private-endpoint
 serving/mi200-endpoint
+serving/mi200-experiments
 serving/cross-partition
 serving/extending-private-inference
 serving/knobs
