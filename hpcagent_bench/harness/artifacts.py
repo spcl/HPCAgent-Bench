@@ -621,6 +621,21 @@ def build_parser() -> argparse.ArgumentParser:
     unpack.add_argument("--label", help="only this episode")
     verify = sub.add_parser("verify", help="check every indexed archive member's sha256")
     verify.add_argument("run_dir", type=pathlib.Path)
+    for name, text in (
+        ("inventory", "the setups of run roots: run-inventory.csv, EXPERIMENTS.generated.md"),
+        ("nodehours", "node-hours per job (sacct) and the median per model"),
+    ):
+        report_ = sub.add_parser(name, help=text)
+        report_.add_argument("--runs", type=pathlib.Path, action="append", required=True, help="a run root; repeatable")
+        report_.add_argument("--out", type=pathlib.Path, required=True)
+        if name == "nodehours":
+            report_.add_argument(
+                "--sacct-file",
+                type=pathlib.Path,
+                help="sacct -X -P -n -o JobID,JobName,State,ElapsedRaw,NNodes output to read instead of asking sacct",
+            )
+        else:
+            report_.set_defaults(sacct_file=None)
     staged = sub.add_parser("stage", help="restore the episodes a problems file continues (run_cluster.sh)")
     staged.add_argument("problems", type=pathlib.Path)
     staged.add_argument("run_dir", type=pathlib.Path)
@@ -648,6 +663,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return report(unpack_run(args.run_dir, args.label), "restored")
         case "stage":
             return report(stage(args.problems, args.run_dir), "staged")
+        case "inventory" | "nodehours":
+            from hpcagent_bench.results import inventory  # lazy: only these two verbs read the DBs
+
+            return inventory.main(args.command, args.runs, args.out, args.sacct_file)
         case _:
             run_dir = data_guard.real(args.run_dir)
             problems = verify_run(run_dir)
