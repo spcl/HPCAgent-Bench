@@ -205,6 +205,7 @@ __all__ = [
     "counter_notes",
     "crashed_attempt_records",
     "dead_stream_threshold_seconds",
+    "earlier_leg",
     "directive_page",
     "ended_reason",
     "engine_totals",
@@ -288,6 +289,7 @@ __all__ = [
     "setup_knowledge",
     "shared_dir",
     "spent_seconds",
+    "stamp_record",
     "skill_reminder",
     "spent_its_submission",
     "stagger_start",
@@ -1284,6 +1286,20 @@ def restored_episode(problem: Problem) -> Restored | None:
             "no restored episode (hpcagent_bench runs stage)"
         )
     return Restored(restored, workers[0], folders[-1])
+
+
+def earlier_leg(workdir: pathlib.Path) -> promote_unsubmitted.EarlierLeg | None:
+    """An extended episode's best score before the extension, as ``hpcagent_bench runs stage`` restored it
+    (:data:`promote_unsubmitted.EARLIER_LEG_NAME`); None when that leg scored nothing correct."""
+    path = workdir / promote_unsubmitted.EARLIER_LEG_NAME
+    return promote_unsubmitted.EarlierLeg(**json.loads(path.read_text(encoding="utf-8"))) if path.is_file() else None
+
+
+def stamp_record(path: pathlib.Path, **fields: ProblemValue) -> None:
+    """Add ``fields`` to the cost record at ``path``; never raises."""
+    with contextlib.suppress(OSError, ValueError):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps(record | fields, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def spent_seconds() -> float:
@@ -2590,12 +2606,19 @@ def watch_output_budget(
             return
 
 
-def promote_at_agent_exit(episode_id: str, judge_url: str, kernel: str = "", since_ms: int = 0) -> str:
+def promote_at_agent_exit(
+    episode_id: str,
+    judge_url: str,
+    kernel: str = "",
+    since_ms: int = 0,
+    earlier: promote_unsubmitted.EarlierLeg | None = None,
+) -> str:
     """Hand this worker's best correct score to the judge as its submission (:data:`AGENT_AUTO_SUBMIT`); "" when
     nothing was promoted.
 
     Never raises. ``kernel`` feeds the workspace fallback of blind mode; ``since_ms`` excludes grades of crashed
-    attempts, whose sources the relaunch deleted."""
+    attempts, whose sources the relaunch deleted; ``earlier`` is an extended episode's best score before the
+    extension, which competes with this leg's."""
     run_dir = os.environ.get("RUN_DIR", "").strip()
     if not run_dir or not judge_url:
         return ""
@@ -2607,6 +2630,7 @@ def promote_at_agent_exit(episode_id: str, judge_url: str, kernel: str = "", sin
             kernel=kernel,
             since_ms=since_ms,
             scored=AGENT_AUTO_SUBMIT is AutoSubmit.BEST_SCORED,
+            earlier=earlier,
         )
     except Exception as exc:  # noqa: BLE001 -- never fail an agent's teardown
         return f"error:{type(exc).__name__}"
@@ -3514,8 +3538,12 @@ def run_agent(
             judge_url,
             kernel=str(problem.get("kernel", "")),
             since_ms=attempt_start_ms,
+            earlier=earlier_leg(workdir) if restored else None,
         )
         reason += f" promoted={promoted}" if promoted else ""
+        if restored and promoted:
+            leg = "earlier" if promoted.startswith(promote_unsubmitted.EARLIER_LEG) else "extension"
+            stamp_record(workdir / "tokens.json", promoted_leg=leg)
     if is_claude and hit_turn_cap(turns):
         reason += " censored=turns"
     print(

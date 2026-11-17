@@ -37,11 +37,13 @@ if TYPE_CHECKING:
     import pandas as pd
 
 __all__ = [
+    "EXTENDED_SOURCE",
     "LIMIT_COLUMNS",
     "PAIR_COLUMNS",
     "PROTOCOL_COLUMNS",
     "REPAIR_COLUMNS",
     "SETUP_COLUMNS",
+    "TIMEOUT_RESULT",
     "Cut",
     "Limits",
     "LimitsMatch",
@@ -50,11 +52,13 @@ __all__ = [
     "MismatchedTasksError",
     "SetupLimits",
     "announce",
+    "as_extended",
     "check",
     "check_grading",
     "check_table",
     "check_task_table",
     "check_tasks",
+    "common_token_limits",
     "compare",
     "mode",
     "pair_columns",
@@ -207,6 +211,47 @@ def protocol_texts(frame: "pd.DataFrame", column: str) -> "pd.Series":
     return values.map(lambda value: value[: -len(".0")] if value.endswith(".0") else value)
 
 
+#: ``episode_limits_source`` of an episode an extension continued to a longer wall clock (``owed run --class extend``).
+EXTENDED_SOURCE = "extended"
+#: ``episode_result`` of an episode the wall clock stopped.
+TIMEOUT_RESULT = "timeout"
+
+
+def common_token_limits() -> tuple[int, int]:
+    """``[common]``'s consumed- and generated-token limits (experiments/experiments.toml)."""
+    from hpcagent_bench.cluster import env_spec  # lazy: it reads experiments.toml
+
+    common = env_spec.TABLES["common"]
+    return int(common["AGENT_MAX_TOKENS"]), int(common["AGENT_MAX_OUTPUT_TOKENS"])
+
+
+def as_extended(ran: list[tuple[Limits, str]]) -> list[Limits]:
+    """One setup's episode limits (with each episode's result), read under the setup's extension
+    (docs/matched_limits.md#extending-a-timed-out-episode): when every extended episode ran to one time limit ``T``
+    under ``[common]``'s token limits, each reads as a ``[common]`` episode at ``T``, and so does every ``[common]``
+    episode under the same token limits, reply cap and auto-submission that ended before ``T`` by anything but the wall
+    clock (it would have ended the same at ``T``). Anything else keeps its own limits and differs as before: a timeout
+    left unextended, another token limit, another protocol, extensions to different time limits."""
+    extended = {key for key, _ in ran if key.source == EXTENDED_SOURCE}
+    if not extended or len({key.seconds for key in extended}) > 1:
+        return [key for key, _ in ran]
+    common = common_token_limits()
+    if any((key.tokens, key.output_tokens) != common for key in extended):
+        return [key for key, _ in ran]
+    seconds = next(iter(extended)).seconds
+    rules = {(key.reply_cap, key.auto_submit) for key in extended}
+
+    def read(key: Limits, result: str) -> Limits:
+        if key.source == EXTENDED_SOURCE:
+            return key._replace(source="common")
+        same = key.source == "common" and (key.tokens, key.output_tokens) == common
+        if same and (key.reply_cap, key.auto_submit) in rules and key.seconds < seconds and result != TIMEOUT_RESULT:
+            return key._replace(seconds=seconds)
+        return key
+
+    return [read(key, result) for key, result in ran]
+
+
 def setup_limits(observations: "pd.DataFrame") -> dict[str, SetupLimits]:
     """Per setup of ``observations``: the limits its episodes recorded, over the run of each (kernel, slot) the
     aggregates read (``population.latest_episodes``), so the check is over the episodes the comparison is made of. A
@@ -217,18 +262,21 @@ def setup_limits(observations: "pd.DataFrame") -> dict[str, SetupLimits]:
     episodes = episodes.drop_duplicates(["setup", *population.EPISODE_KEY])
     limits = [integers(episodes, column) for column in LIMIT_COLUMNS]
     protocol = [protocol_texts(episodes, column) for column in PROTOCOL_COLUMNS]
+    results = texts(episodes, "episode_result")
     repair = [integers(episodes, column).fillna(0) for column in REPAIR_COLUMNS]
     recorded = limits[0].notna() & limits[1].notna() & limits[2].notna()
     owner = episodes["setup"].astype(str)
     out: dict[str, SetupLimits] = {}
     for setup in setups:
         mine = owner == setup
-        counts: dict[Limits, int] = {}
         rows = mine & recorded
-        for values in zip(*(column[rows] for column in limits), *(column[rows] for column in protocol), strict=True):
-            tokens, output_tokens, seconds, *rules = values
-            key = Limits(int(tokens), int(output_tokens), int(seconds), *(str(rule) for rule in rules))
-            counts[key] = counts.get(key, 0) + 1
+        ran = [
+            (Limits(int(tokens), int(output_tokens), int(seconds), *(str(rule) for rule in rules)), str(result))
+            for tokens, output_tokens, seconds, *rules, result in zip(
+                *(column[rows] for column in limits), *(column[rows] for column in protocol), results[rows], strict=True
+            )
+        ]
+        counts = dict(collections.Counter(as_extended(ran)))
         out[setup] = SetupLimits(
             counts=counts,
             unrecorded=int((mine & ~recorded).sum()),
