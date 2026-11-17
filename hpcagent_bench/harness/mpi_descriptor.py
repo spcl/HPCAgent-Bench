@@ -485,6 +485,14 @@ class Descriptor:
 
         resolved: dict[str, ArrayDist] = {}
         for name, entry in plan.arrays.items():
+            beyond = [
+                axis.grid_dim for axis in entry.axes if axis.grid_dim is not None and axis.grid_dim >= len(grid.dims)
+            ]
+            if beyond:
+                raise ValueError(
+                    f"the layout of {name!r} deals an axis to grid dimension {beyond[0]}, but startup.grid "
+                    f"{list(grid.dims)} has {len(grid.dims)} dimension(s)"
+                )
             if name in scalar_names:
                 raise ValueError(
                     f"the operations name scalar {name!r}; scalars are broadcast by value "

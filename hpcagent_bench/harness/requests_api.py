@@ -303,9 +303,9 @@ class AxisDist(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 
     #: The grid dimension this dimension is dealt to; None keeps it whole on every rank. Always written.
-    grid_dim: int | None
+    grid_dim: Annotated[int, pydantic.Field(ge=0)] | None
     scheme: Scheme = Scheme.BLOCK
-    block_size: int = 1
+    block_size: Annotated[int, pydantic.Field(ge=1)] = 1
 
     @classmethod
     def of(cls, split: AxisSplit | None) -> "AxisDist":
@@ -327,6 +327,17 @@ class ArrayDist(pydantic.BaseModel):
 
     axes: tuple[AxisDist, ...] = ()
     replicated: bool = False
+
+    @pydantic.model_validator(mode="after")
+    def one_axis_per_grid_dim(self) -> "ArrayDist":
+        """A replicated array names no axes, and no two axes share a grid dimension: two would deal the
+        same coordinate to both, so the owned tiles would leave elements on no rank at all."""
+        if self.replicated and self.axes:
+            raise ValueError("a replicated array names no axes")
+        dims = [axis.grid_dim for axis in self.axes if axis.grid_dim is not None]
+        if len(set(dims)) != len(dims):
+            raise ValueError(f"two axes are dealt to one grid dimension: {dims}; each grid dimension drives one axis")
+        return self
 
 
 class PlannedArray(ArrayDist):
@@ -494,6 +505,14 @@ class Requests(relayout.ops.Requests):
         layouts = {name: layout for name, layout in laid.items() if not layout.is_identity()}
         return SingleNode(tuple(regroups), layouts)
 
+    def run(self, arrays: Sequence[ArraySpec], ranks: int | None = None) -> State:
+        """:meth:`relayout.ops.Requests.run`, with an expression that cannot be evaluated (``P // 0``,
+        ``root`` of an int past float range) a request fault (ValueError) like every other."""
+        try:
+            return relayout.ops.Requests.run(self, arrays, ranks)
+        except (ZeroDivisionError, OverflowError) as exc:
+            raise ValueError(f"an integer expression of the request cannot be evaluated: {exc}") from None
+
     def lowered(self, ndims: Mapping[str, int], ranks: int) -> State:
         """The operations run over the arrays of ``ndims`` on the grid at ``ranks`` ranks."""
         return self.run([ArraySpec(name, ndim) for name, ndim in ndims.items()], ranks)
@@ -503,6 +522,9 @@ class Requests(relayout.ops.Requests):
         lays out or places is left out (replicated)."""
         state = self.lowered(ndims, ranks)
         splits = lower(state)
+        for name, axes in splits.items():
+            if axes is not None:
+                compact_local_dims(name, axes, state)
         cyclic = any(
             axis is not None and axis.scheme is not Scheme.BLOCK for axes in splits.values() for axis in axes or ()
         )
@@ -666,6 +688,24 @@ def unzip_group(op: Unzip, state: State, specs: Mapping[str, ArraySpec], cast_to
     else:
         raise ValueError(f"unzip of {op.array!r}: a real array splits along a dim; name it")
     return Regroup(group, False, whole, tuple(member.logical for member in group.parts))
+
+
+def compact_local_dims(name: str, axes: Sequence[AxisSplit | None], state: State) -> None:
+    """Refuse a cut of a dimension of ``name`` that no ``distribute`` takes (ValueError). The scatter hands
+    each rank its tile compact and row-major; relayout lays a cut dimension out over its digits, and a
+    ``block`` whose factor does not divide the extent pads it with dead cells (``[N][ceil(M/3)][3]``),
+    which the tile does not have. The extents are not known here, so every such cut is refused; a
+    distributed dimension's own cuts are the scheme's, checked by :func:`relayout.ops.lower`."""
+    digits = state.arrays[name].digits.digits
+    for dim, axis in enumerate(axes):
+        own = [digit for digit in digits if digit.dim == dim]
+        if axis is None and [digit.shape() for digit in own] != [(dim, 1, None, False)]:
+            raise ValueError(
+                f"array {name!r}: dimension {dim} is cut into the digits {[digit.name for digit in own]} but not "
+                "distributed; a distributed run hands each rank a compact row-major tile, so a local cut (and the "
+                "dead cells a block that does not divide its extent adds) is not realized. Drop the cut, or "
+                "distribute the dimension"
+            )
 
 
 def planned_array(axes: Sequence[AxisSplit | None] | None, location: Location | None) -> PlannedArray:

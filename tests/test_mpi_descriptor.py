@@ -81,8 +81,11 @@ def test_is_partition_false_for_overlapping_dist() -> None:
     """is_partition must reject a bad layout, not just accept good ones."""
     # both axes bound to the same grid dim -> ranks own only the diagonal, off-diagonal uncovered
     g = Grid((2,))
-    dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist(grid_dim=0, scheme=Scheme.BLOCK)))
-    assert is_partition((4, 4), dist, g) is False
+    axes = (AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist(grid_dim=0, scheme=Scheme.BLOCK))
+    with pytest.raises(ValueError, match="two axes are dealt to one grid dimension"):
+        ArrayDist(axes=axes)
+    # the model refuses it; the predicate must still catch one built around the validation
+    assert is_partition((4, 4), ArrayDist.model_construct(axes=axes, replicated=False), g) is False
 
 
 def test_axis_count_mismatch_is_a_clear_error() -> None:
@@ -630,6 +633,74 @@ def test_envelope_rejects_bad_location() -> None:
         Submission.from_obj({"language": "c", "source": "x", "requests": {"operations": [place]}})
 
 
+def test_from_plan_refuses_an_axis_beyond_the_grid() -> None:
+    """A plan axis on grid dimension 1 of a 1-D grid used to pass resolution and fail as an IndexError
+    at the first scatter; the descriptor names it at resolution."""
+    plan = plan_of({"grid": [2], "arrays": {"A": {"axes": [{"grid_dim": 1}, {"grid_dim": None}]}}})
+    with pytest.raises(ValueError, match=r"grid dimension 1, but startup.grid \[2\] has 1 dimension"):
+        Descriptor.from_plan(plan, binding_2d(), 2)
+
+
+#: The rank-owner arithmetic of relayout's docs/layout.md, written out per short-form scheme: a band of
+#: load-balanced contiguous ranges (the first n % P one longer), ``i % P``, and ``(i // b) % P`` (INDXG2P).
+def documented_owner(i: int, n: int, parts: int, scheme: str, width: int) -> int:
+    if scheme == "block":
+        base, rem = divmod(n, parts)
+        return i // (base + 1) if i < rem * (base + 1) else rem + (i - rem * (base + 1)) // base
+    return (i // (width if scheme == "block_cyclic" else 1)) % parts
+
+
+@pytest.mark.parametrize("ranks", [1, 2, 3, 4, 6, 9, 12, 16])
+def test_every_accepted_request_owns_each_element_on_its_documented_ranks(ranks: int) -> None:
+    """Differential against the documented semantics, not the descriptor's own arithmetic: for every grid
+    the rank count factors into (1-3 dimensions), every pair of short-form schemes on two different grid
+    dimensions, and extents around the grid (0, 1, below, at and past it, ragged), each element of the
+    scattered array sits on exactly the ranks whose coordinates match its owners, replicated across every
+    grid dimension no distribute names, and gather undoes scatter."""
+    grids = sorted({(ranks,), (1, ranks), *((a, ranks // a) for a in range(1, ranks + 1) if ranks % a == 0)})
+    grids += [(a, b, ranks // (a * b)) for a in (1, 2) for b in (1, 2, 3) if ranks % (a * b) == 0][:3]
+    # block_cyclic of width 1 is left out: the pinned relayout refuses it (fixed in relayout, see its tests)
+    forms = [("block", 1), ("cyclic", 1), ("block_cyclic", 2), ("block_cyclic", 3), ("block_cyclic", 5)]
+    for dims in grids:
+        grid = Grid(tuple(dims))
+        for (s0, w0), (s1, w1) in [(a, b) for a in forms for b in forms][::3]:
+            for g0, g1 in [(0, len(dims) - 1), (len(dims) - 1, 0)] if len(dims) > 1 else [(0, None)]:
+                ops = [{"action": "distribute", "array": "A", "grid_dim": g0, "dim": 0, "scheme": s0}]
+                ops[0] |= {"block_size": w0} if s0 == "block_cyclic" else {}
+                if g1 is not None:
+                    ops.append({"action": "distribute", "array": "A", "grid_dim": g1, "dim": 1, "scheme": s1})
+                    ops[1] |= {"block_size": w1} if s1 == "block_cyclic" else {}
+                requests = Requests.validate({"startup": {"grid": [str(d) for d in dims]}, "operations": ops})
+                cyclic = s0 != "block" or (g1 is not None and s1 != "block")
+                if cyclic and len(set(dims)) > 1:
+                    with pytest.raises(ValueError, match="equal-edge grid"):  # the bench's deliberate restriction
+                        requests.plan({"A": 2}, ranks)
+                    continue
+                plan = requests.plan({"A": 2}, ranks)
+                dist = plan.arrays["A"].dist()
+                for shape in [(0, 3), (1, 1), (ranks + 1, 2), (2 * ranks + 3, ranks - 1 or 1), (7, 11)]:
+                    owners: dict[tuple[int, int], set[int]] = {}
+                    for rank in range(ranks):
+                        rows, cols = (
+                            owned_indices(n, ax, grid, grid.coords_of(rank))
+                            for n, ax in zip(shape, dist.axes, strict=True)
+                        )
+                        for cell in ((int(i), int(j)) for i in rows for j in cols):
+                            owners.setdefault(cell, set()).add(rank)
+                    for i in range(shape[0]):
+                        for j in range(shape[1]):
+                            want = {g0: documented_owner(i, shape[0], dims[g0], s0, w0)}
+                            if g1 is not None:
+                                want[g1] = documented_owner(j, shape[1], dims[g1], s1, w1)
+                            expected = {
+                                r for r in range(ranks) if all(grid.coords_of(r)[g] == v for g, v in want.items())
+                            }
+                            assert owners.pop((i, j)) == expected, (dims, ops, shape, (i, j))
+                    assert not owners, (dims, ops, shape, sorted(owners)[:3])
+                    a = arange(shape, np.float64)
+                    assert np.array_equal(gather(scatter(a, dist, grid), dist, grid, shape, a.dtype), a)
+
+
 if __name__ == "__main__":
     for n, parts in [(10, 3), (12, 4), (7, 4), (1, 4), (5, 5), (100, 7), (3, 8)]:
         test_block_bounds_partition_and_balance(n, parts)
@@ -682,3 +753,6 @@ if __name__ == "__main__":
     test_from_submission_captures_per_array_location()
     test_from_submission_default_location_applies()
     test_envelope_rejects_bad_location()
+    test_from_plan_refuses_an_axis_beyond_the_grid()
+    for ranks in [1, 2, 3, 4, 6, 9, 12, 16]:
+        test_every_accepted_request_owns_each_element_on_its_documented_ranks(ranks)
