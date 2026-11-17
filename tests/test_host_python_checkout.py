@@ -37,7 +37,10 @@ def test_another_checkouts_package_is_refused_and_a_scripts_only_tree_is_not(tmp
     (tmp_path / "hpcagent_bench" / "__init__.py").write_text("")
     done = source(tmp_path)
     assert done.returncode == 1
-    assert f"imports hpcagent_bench from {paths.ROOT.resolve()}, not this checkout ({tmp_path})" in done.stderr
+    named = done.stderr.split("imports hpcagent_bench from ", 1)[1].split(", not this checkout", 1)[0]
+    # A judge container mounts the repository twice, so the package may be named by either path of it
+    assert pathlib.Path(named).samefile(paths.ROOT), done.stderr
+    assert f"not this checkout ({tmp_path})" in done.stderr
 
 
 if __name__ == "__main__":
