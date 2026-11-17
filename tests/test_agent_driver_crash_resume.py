@@ -118,10 +118,11 @@ def run_agent(
     start_watchers: Callable[..., list[threading.Thread]] | None = None,
     crash_relaunch: str = "resume",
     infra_attempts: int = 0,
+    stamps: dict[str, str] | None = None,
 ) -> ModuleType:
     """One run_agent with ``spawn`` in place of the agent process (and ``start_watchers`` in place of the watchers,
-    when given), ``crash_relaunch`` as ``AGENT_CRASH_RELAUNCH`` and ``infra_attempts`` as the attempts earlier launches
-    lost (an ``owed run`` stamp, when nonzero); returns the driver it ran."""
+    when given), ``crash_relaunch`` as ``AGENT_CRASH_RELAUNCH``, ``infra_attempts`` as the attempts earlier launches
+    lost (an ``owed run`` stamp, when nonzero) and ``stamps`` on the problem; returns the driver it ran."""
     shutil.copytree(FIXTURES / "templates", root / "shared")
     with capture.isolated(root, env):
         driver = capture.load_driver(DRIVER)
@@ -141,16 +142,22 @@ def run_agent(
         problem = {"id": 7, "kernel": capture.KERNEL, "language": "c", "task": capture.TASK}
         if infra_attempts:
             problem["infra_attempts"] = infra_attempts
+        problem.update(stamps or {})
         driver.run_agent(problem, 2, capture.NODE_DIR, list(capture.JUDGES), 7, 3)
     return driver
 
 
+def resumed_run(root: pathlib.Path) -> tuple[pathlib.Path, list[tuple[list[str], pathlib.Path]], ModuleType]:
+    """One run_agent over the crash and its resume; the run root, the launches and the driver."""
+    launches: list[tuple[list[str], pathlib.Path]] = []
+    driver = run_agent(root, spawner(launches))
+    return root, launches, driver
+
+
 @pytest.fixture(name="resumed")
 def resumed_fixture(tmp_path: pathlib.Path) -> tuple[pathlib.Path, list[tuple[list[str], pathlib.Path]], ModuleType]:
-    """One run_agent over the crash and its resume; yields the run root, the launches and the driver."""
-    launches: list[tuple[list[str], pathlib.Path]] = []
-    driver = run_agent(tmp_path, spawner(launches))
-    return tmp_path, launches, driver
+    """:func:`resumed_run` under the test's own directory."""
+    return resumed_run(tmp_path)
 
 
 def test_the_crash_resumes_its_session_in_the_same_folder_with_its_work(
@@ -217,6 +224,78 @@ def test_a_leg_the_watchdog_killed_does_not_file_the_clean_resumed_leg_as_an_api
     assert len(legs) == 2
     record = json.loads((tmp_path / capture.WORKDIR / "tokens.json").read_text(encoding="utf-8"))
     assert record["returncode"] == 0
+
+
+#: The leg the wall clock stopped in an earlier job: two turns, a third cut off, no closing result.
+TIMED_OUT_LEG = [init_line(), *turn("msg_a1", 1000, 100), *turn("msg_a2", 1200, 50), *turn("msg_a3", 1300, None)]
+#: An extension's problem stamps (``owed run --class extend``).
+EXTEND = {"launch_kind": "extend", "resume_from": "/runs/100/episodes/golden-setup/x.tar.zst"}
+
+
+def restore_timed_out_episode(root: pathlib.Path) -> None:
+    """A timed-out episode of an earlier job, as ``hpcagent-bench runs stage`` restores it for problem 7."""
+    worker = root / "resume" / "7" / "agents" / "node-0" / "problem-3-worker-1"
+    worker.mkdir(parents=True)
+    (worker / "claude.log").write_text("\n".join(TIMED_OUT_LEG) + "\n", encoding="utf-8")
+    ledger = {"attempt": 1, "cause": "limit", "cleared": False, "crashed": False, "resumed": False, "returncode": 124}
+    (worker / "attempts.jsonl").write_text(json.dumps(ledger | {"start_ms": 1, "end_ms": 2}) + "\n", encoding="utf-8")
+    (worker / "prompt.txt").write_text("the first job's prompt\n", encoding="utf-8")
+    for folder, work in (("agent-2", "an abandoned attempt\n"), ("agent-5", "the work so far\n")):
+        (root / "resume" / "7" / "shared" / folder).mkdir(parents=True)
+        (root / "resume" / "7" / "shared" / folder / "kernel.c").write_text(work, encoding="utf-8")
+
+
+def extension_env(root: pathlib.Path, spent: str) -> tuple[tuple[str, str], ...]:
+    return (
+        *capture.BASE_ENV,
+        ("RUN_DIR", str(root)),
+        ("AGENT_TIMEOUT_SECONDS", "200"),
+        ("AGENT_TIMEOUT_SPENT_SECONDS", spent),
+    )
+
+
+def test_an_extension_resumes_the_timed_out_session_in_its_own_folder_and_counts_both_parts(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The restored episode's session resumes (never a fresh agent) in its last folder under its own name, with its
+    files; the transcript is appended to, so both parts count against the token limits once (the request the clock
+    cut is lost); the ledger numbers on, and the record states the extension and its whole time limit."""
+    restore_timed_out_episode(tmp_path)
+    launches: list[tuple[list[str], pathlib.Path]] = []
+
+    def spawn(command: list[str], cwd: pathlib.Path, env: dict[str, str], stdout: TextIO, stderr: int) -> object:
+        launches.append((list(command), pathlib.Path(cwd)))
+        stdout.write("\n".join(RESUMED_LEG) + "\n")
+        stdout.flush()
+        return capture.RecordedProcess(0)
+
+    driver = run_agent(tmp_path, spawn, extension_env(tmp_path, "100"), stamps=EXTEND)
+    ((argv, cwd),) = launches
+    assert argv[argv.index("--resume") + 1] == SESSION
+    assert driver.CRASH_RESUME_PROMPT in argv
+    assert cwd == pathlib.Path("shared") / "agent-5"
+    assert (tmp_path / cwd / "kernel.c").read_text(encoding="utf-8") == "the work so far\n"
+    assert not (tmp_path / "resume").exists() or not any((tmp_path / "resume").iterdir())
+    workdir = tmp_path / capture.WORKDIR
+    assert (workdir / "prompt.txt").read_text(encoding="utf-8") == "the first job's prompt\n"
+    record = json.loads((workdir / "tokens.json").read_text(encoding="utf-8"))
+    assert record["tokens_billed"] == 1000 + 1200 + 1350 + 1500
+    assert record["tokens"] == record["tokens_billed"] + 1300
+    assert (record["launch_kind"], record["limits"]["timeout_seconds"], record["attempts"]) == ("extend", 200, 1)
+    lines = [json.loads(line) for line in (workdir / "attempts.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [(line["attempt"], line["cause"]) for line in lines] == [(1, "limit"), (2, "agent")]
+    folders = (tmp_path / "agent-folders.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["folder"] for line in folders] == ["agent-5"]
+
+
+def test_an_extension_with_no_time_left_never_starts(tmp_path: pathlib.Path) -> None:
+    """``AGENT_TIMEOUT_SECONDS`` is the episode's whole wall clock: one that the time already run uses up is
+    refused before any agent starts."""
+    restore_timed_out_episode(tmp_path)
+    launches: list[tuple[list[str], pathlib.Path]] = []
+    with pytest.raises(SystemExit, match="leaves no time"):
+        run_agent(tmp_path, spawner(launches), extension_env(tmp_path, "200"), stamps=EXTEND)
+    assert launches == []
 
 
 #: A runner's legs: (calls, each call's prompt and completion, how the leg ends, its exit code).
@@ -723,3 +802,43 @@ def test_an_episode_a_limit_stopped_without_a_submit_has_its_best_correct_score_
     assert (record["cause"], record["returncode"]) == ("limit", driver.RC_TOKEN_BUDGET)
     assert record["limits"]["auto_submit"] == "best_scored"
     assert [item["source"] for item in posted] == ([submitted] if submitted else [])
+
+
+if __name__ == "__main__":
+    import tempfile
+
+    def scratch() -> pathlib.Path:
+        return pathlib.Path(tempfile.mkdtemp())
+
+    test_the_crash_resumes_its_session_in_the_same_folder_with_its_work(resumed_run(scratch()))
+    test_the_task_counts_both_legs_once_without_the_cut_off_request(resumed_run(scratch()))
+    test_the_ledger_records_the_crash_and_keeps_the_first_legs_start(resumed_run(scratch()))
+    test_a_leg_the_watchdog_killed_does_not_file_the_clean_resumed_leg_as_an_api_timeout(scratch())
+    test_an_extension_resumes_the_timed_out_session_in_its_own_folder_and_counts_both_parts(scratch())
+    test_an_extension_with_no_time_left_never_starts(scratch())
+    test_a_crashed_runner_resumes_from_its_checkpoint_and_counts_both_legs(scratch())
+    test_attempt_cause_names_every_end_the_driver_tells_apart()
+    test_an_infra_crash_with_nothing_to_resume_is_relaunched_fresh_and_its_tokens_are_void(scratch())
+    test_the_agents_own_failure_ends_the_episode_without_a_relaunch(scratch())
+    for mode in ("resume", "fresh"):
+        test_a_crash_relaunched_fresh_voids_its_tokens(scratch(), mode)
+        test_attempts_an_earlier_launch_lost_count_against_the_episodes_attempt_limit(scratch(), mode)
+    test_a_session_cut_at_the_reply_cap_continues_in_place_as_often_as_it_happens(scratch())
+    test_infrastructure_past_the_last_allowed_attempt_ends_the_episode_as_relaunch_limit(scratch())
+    test_a_runner_run_ended_on_a_reply_cut_at_the_reply_cap_continues_and_counts_it(scratch())
+    for in_flight in (True, False):
+        test_a_runner_call_that_died_in_flight_counts_at_least_its_prompt_against_the_limits(scratch(), in_flight)
+    test_infrastructure_that_ends_an_episode_past_its_wall_clock_is_the_limit_not_a_rerun(scratch())
+    test_an_mcp_that_fails_on_a_later_attempt_is_infrastructure_of_an_episode_that_ran(scratch())
+    test_falling_back_from_resume_to_fresh_voids_only_the_last_leg(scratch())
+    test_fresh_mode_voids_each_lost_attempt_restarts_the_token_count_and_is_bounded(scratch(), "fresh")
+    test_a_token_limit_hit_by_the_lost_request_in_a_resumed_leg_trips(scratch())
+    for case in (
+        ([("score", 2.0, True), ("score", 5.0, True), ("score", 9.0, False), ("score", 5.0, True)], "/* score 3 */"),
+        ([("score", 9.0, False)], None),
+        ([("score", 5.0, True), ("submit", 0.0, False)], None),
+    ):
+        with pytest.MonkeyPatch.context() as patch:
+            test_an_episode_a_limit_stopped_without_a_submit_has_its_best_correct_score_submitted_by_the_harness(
+                scratch(), patch, *case
+            )

@@ -124,7 +124,8 @@ class RecordLimits(pydantic.BaseModel):
     #: episode with no /submit of its own (``AGENT_AUTO_SUBMIT``: ``best_scored``, ``off``; '' = not recorded).
     reply_cap: Count | None = None
     auto_submit: str = ""
-    #: ``common`` or ``experiment`` (a token limit the experiment overrode); '' where the render stamped none.
+    #: ``common`` or ``experiment`` (a token limit the experiment overrode), ``extended`` (a timed-out episode
+    #: continued to a longer time limit, ``owed run --class extend``); '' where the render stamped none.
     source: str = ""
 
     @pydantic.model_validator(mode="before")
