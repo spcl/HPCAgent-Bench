@@ -487,8 +487,8 @@ def pack_episode(run_dir: pathlib.Path, label: str, *, remove_loose: bool = Fals
     episode = next((one for one in episodes_of(run_dir) if one.label == label), None)
     if episode is None or not finished(run_dir, episode):
         raise SystemExit(f"artifacts: {run_dir} holds no ended episode {label}")
-    (run_dir / run_layout.EPISODES_DIRNAME).mkdir(exist_ok=True)
     with data_guard.unsealed(run_dir):
+        (run_dir / run_layout.EPISODES_DIRNAME).mkdir(exist_ok=True)
         return packed(run_dir, episode, workspace_members(run_dir), remove_loose=remove_loose, threads=threads)
 
 
@@ -498,8 +498,9 @@ def pack_run(run_dir: pathlib.Path, *, remove_loose: bool = False, threads: int 
     run_dir = data_guard.real(run_dir)
     refuse_running(run_dir)
     members = workspace_members(run_dir)
-    (run_dir / run_layout.EPISODES_DIRNAME).mkdir(exist_ok=True)
     with data_guard.unsealed(run_dir):
+        # Inside: a finished run directory is sealed read-only (data_guard.seal), so episodes/ is made unsealed too.
+        (run_dir / run_layout.EPISODES_DIRNAME).mkdir(exist_ok=True)
         every = episodes_of(run_dir)
         done = [episode for episode in every if finished(run_dir, episode)]
         written = [packed(run_dir, one, members, remove_loose=remove_loose, threads=threads) for one in done]
