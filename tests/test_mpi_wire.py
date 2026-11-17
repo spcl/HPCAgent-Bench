@@ -91,7 +91,7 @@ def test_infile_2d_block_rows() -> None:
     assert np.array_equal(np.concatenate(p.ptrs[0].tiles, axis=0), A)
 
 
-@pytest.mark.parametrize("dtype", ["float64", "float32", "int64", "int32"])
+@pytest.mark.parametrize("dtype", ["float64", "float32", "int64", "int32", "complex128", "uint16"])
 def test_infile_dtypes_roundtrip(dtype: str) -> None:
     b = binding(
         Arg(name="A", kind="ptr", dtype=dtype, is_const=False, role="output"),
@@ -110,10 +110,10 @@ def test_infile_dtypes_roundtrip(dtype: str) -> None:
 
 
 def test_infile_rejects_unserialisable_dtype() -> None:
-    b = binding(Arg(name="A", kind="ptr", dtype="complex128", is_const=False, role="output"))
+    b = binding(Arg(name="A", kind="ptr", dtype="bool", is_const=False, role="output"))
     desc = Descriptor(grid=Grid((1,)), arrays={"A": ArrayDist(replicated=True)})
     with pytest.raises(ValueError, match="not wire-serialisable"):
-        pack_infile(b, desc, {"A": np.zeros(3, dtype="complex128")}, {}, k_repeats=1)
+        pack_infile(b, desc, {"A": np.zeros(3, dtype="bool")}, {}, k_repeats=1)
 
 
 def test_unpack_rejects_bad_magic() -> None:

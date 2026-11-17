@@ -100,10 +100,29 @@ def write_maps(outfile: str | pathlib.Path, rank: int) -> None:
 
 
 #: dtype name -> wire type code (also the C ``MPI_Datatype`` / numpy selector). Explicit
-#: rather than derived, so the C codegen and the Python reader share one table.
-TYPE_CODES: dict[str, int] = {"float64": 0, "float32": 1, "int64": 2, "int32": 3, "uint8": 4, "bfloat16": 5}
+#: rather than derived, so the C codegen and the Python reader share one table. The drivers only
+#: move bytes, so any fixed-width element crosses: complex tiles (mandelbrot, quatrex_rgf) and
+#: uint16 images (histogram_equalization) included. Append only: a code never changes meaning.
+TYPE_CODES: dict[str, int] = {
+    "float64": 0,
+    "float32": 1,
+    "int64": 2,
+    "int32": 3,
+    "uint8": 4,
+    "bfloat16": 5,
+    "complex128": 6,
+    "complex64": 7,
+    "int16": 8,
+    "int8": 9,
+    "uint16": 10,
+    "uint32": 11,
+    "uint64": 12,
+}
 CODE_TO_DTYPE = {v: k for k, v in TYPE_CODES.items()}
-INT_CODES = frozenset({TYPE_CODES["int64"], TYPE_CODES["int32"], TYPE_CODES["uint8"]})
+#: The codes whose scalars travel as an int64 slot (the C driver reads an integer kind the same way).
+INT_CODES = frozenset(
+    TYPE_CODES[name] for name in ("int64", "int32", "int16", "int8", "uint64", "uint32", "uint16", "uint8")
+)
 
 
 def i64(values: Sequence[int]) -> bytes:
@@ -161,7 +180,7 @@ def pack_infile(
     ``scalars`` maps every scalar arg to its global value. The Descriptor partitions each array
     into owned tiles and localises the size symbols per rank; the reserved ABI 11 workspace
     request is resolved per rank against the LOCAL sizes (so ``8*N`` scales with the local
-    tile). Raises for an unmapped dtype.
+    tile, and ``ARRAY_BYTES`` is the bytes of the rank's tiles). Raises for an unmapped dtype.
     """
     ptrs = binding.pointers
     scalar_args = binding.scalars
@@ -193,7 +212,13 @@ def pack_infile(
     local_scalars: list[dict[str, float]] = [
         descriptor.local_size_scalars(cast("Mapping[str, float]", scalars), r) for r in range(nranks)
     ]
-    ws_bytes = [workspace_bytes_of(workspace_expr, binding, local_scalars[r]) for r in range(nranks)]
+    # ARRAY_BYTES on a rank is the bytes of the tiles it holds, as the sizes are its local ones.
+    ws_bytes = [
+        workspace_bytes_of(
+            workspace_expr, binding, local_scalars[r], array_bytes=sum(tiles[r].nbytes for tiles in ptr_tiles)
+        )
+        for r in range(nranks)
+    ]
 
     out = bytearray()
     n_out = sum(1 for a in ptrs if a.role == "output")
