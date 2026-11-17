@@ -661,7 +661,9 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
 class NonFiniteNormalizer(ast.NodeTransformer):
     """Canonicalise IEEE infinity/NaN spellings to ``np.inf``/``np.nan``, the one
     form every backend lowers (native maps it to ``INFINITY``/``NAN``/
-    ``ieee_value``; python backends keep it verbatim).
+    ``ieee_value``; python backends keep it verbatim). ``math.pi`` / ``math.e``
+    become ``np.pi`` / ``np.e`` the same way: the same IEEE value, one spelling
+    the backends fold to a literal.
 
     Covers ``math.inf``/``math.nan`` and ``float('inf'|'-inf'|'nan')`` (any
     casing, ``'infinity'`` spelling too). Without this a bare ``inf`` reaches
@@ -673,7 +675,7 @@ class NonFiniteNormalizer(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
-        if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in ("inf", "nan"):
+        if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in ("inf", "nan", "pi", "e"):
             return ast.copy_location(numpy_attribute(node.attr), node)
         return node
 
