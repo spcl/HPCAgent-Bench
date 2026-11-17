@@ -300,6 +300,11 @@ squeue -j <jobid> --steps --noheader --format='%i|%j|%T|%N'
 `FAILED 1:0` with steps `Killed` at the end is the normal teardown after the agents finished. Read
 the judge DBs, not `sacct`: exit state says nothing about how many kernels were graded.
 
+A job still PENDING can be corrected without resubmitting: `hpcagent-bench job retune <jobid> KEY=VALUE ... --reason "..."`
+edits its env snapshot (a backup beside it, a ledger entry in `experiments/.rendered/retune.jsonl`, copied into the run
+directory when the job starts); it refuses a running job, a limit, the setup's identity and a secret
+([docs/jobs.md](../docs/jobs.md#retune)).
+
 `RUN_ROOT` comes from the setup's `.env` (`$SCRATCH/hpcagent-bench-runs/<study>-<stamp>`); the
 run directory is `$RUN_ROOT/<jobid>`.
 

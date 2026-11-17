@@ -22,6 +22,7 @@ step, on GPU slot L of its node and the first thread of that slot's block of cor
 | `prepare` | fill every cache an experiment reads: sources, base SDFGs, reference grades, torch denominators, CPF forms | problems, tag or list kernels | [`prepare.sbatch`](../hpcagent_bench/cluster/prepare.sbatch) |
 | `baseline` | one compiler column over a tag (the canon sweep) | tag kernels | [`baseline.sbatch`](../hpcagent_bench/cluster/baseline.sbatch) |
 
+Two more words of `hpcagent-bench job` are not actions, they run on the login node: `submit` (below) and `retune` (below).
 Each action has one job script in `hpcagent_bench/cluster/`; its `#SBATCH` header pins no node shape, GPUs,
 partition or account. Start it with `hpcagent-bench job submit [--system NAME] [--ntasks-per-node N] [--cpus-per-task N]
 [--gpus-per-node N | --gpus-per-task N] ... <script> <args>`: each field is its flag, else its environment variable
@@ -158,6 +159,20 @@ directory accumulates rows run after run and is left as it is.
   `status`, `failure`, the dace `build`); a per-rank summary line (`N rows -- ok, unsupported, tool-missing,
   crashed, failed-in-column, nonzero-exit`); `run-framework --summarize canon.db --canon-run <run>` reports a run.
   A missing column compiler ends the task with status 2 and says so (`failure=tool_missing`, not a decline).
+
+## `retune`
+
+    hpcagent-bench job retune <jobid> KEY=VALUE ... --reason "why" [--add] [--dry-run]
+    hpcagent-bench job retune <jobid> --show
+
+A submitted setup job reads its env snapshot (`experiments/.rendered/<setup>-<stamp>-<hash>.env`, read-only) when it starts, so a
+setting corrected while it is PENDING takes effect: a serving argument found wrong after queueing, a node count. `retune`
+(`hpcagent_bench/cluster/retune.py`) finds the snapshot from the job's `services.sbatch` argument, refuses a job that is not
+PENDING, a run-protocol key (the limits, the submission mode), the setup's identity (`SETUP`, `RUN_ROOT`, `PROBLEMS_FILE`, every
+`HPCAGENT_BENCH_RECORD_*`), a secret and a key the env does not set (`--add` sets one), checks the serving rules
+(`serve_args.py`), copies the file to `<env>.retune-<n>.bak` (read-only), replaces it atomically, reads it back to show that
+only the requested lines differ, and appends one line per key (time, job, key, old, new, reason, user) to `retune.jsonl` beside
+it. The job copies those lines into its run directory as `retune.jsonl`. Tests: `tests/test_retune.py`.
 
 ## Adding an action
 
