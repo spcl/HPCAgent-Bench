@@ -2,17 +2,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Which tag kernels (runs: kernel x slot) a setup still owes, and the job that reruns them.
 
-``owed collect`` reads every job directory under the run roots: a run is delivered when a job graded it (not as a
-``score_error`` or ``adhoc`` grade) or when its latest episode ended without a judge fault after it by the agent's own
-cause (``agent``), by infrastructure past its last allowed attempt (``relaunch_limit``) or by a limit (``limit``): an
-unsolved task, final (docs/matched_limits.md). A grade of an episode the job cancelled delivers nothing: the analysis
-drops such an episode whole (:func:`hpcagent_bench.results.studies.drop_cancelled_episode_rows`). Otherwise it is owed
-as ``infra`` (a repair, while the episode has attempts left under ``AGENT_CRASH_ATTEMPTS``: :func:`infra_attempts`)
-or as ``task`` when a final grade found its task changed since. ``owed run --class`` reruns one setup's owed runs of
-one class from its last launch env and filtered problems via ``submit_common.sh``, under the setup's own limits;
-every problem states its launch, how the one before ended and its ``launch_kind``. ``owed check-limits`` (run by
-``submit_common.sh`` before every agent job) refuses a setup env that raises a limit an earlier launch of the setup
-under its run root, or a ``--ceiling``, ran under.
+``owed collect`` reads every job directory under the run roots and holds each setup to the tag runs its launch problems
+staged (:func:`designed_runs`: a relaunch of a reused setup stages only what its earlier runs left owed): a run is
+delivered when a job graded it (not as a ``score_error`` or ``adhoc`` grade) or when its latest episode ended without a
+judge fault after it by the agent's own cause (``agent``), by infrastructure past its last allowed attempt
+(``relaunch_limit``) or by a limit (``limit``): an unsolved task, final (docs/matched_limits.md). A grade of an episode
+the job cancelled delivers nothing: the analysis drops such an episode whole
+(:func:`hpcagent_bench.results.studies.drop_cancelled_episode_rows`). Otherwise it is owed as ``infra`` (a repair, while
+the episode has attempts left under ``AGENT_CRASH_ATTEMPTS``: :func:`infra_attempts`) or as ``task`` when a final grade
+found its task changed since. ``owed run --class`` reruns one setup's owed runs of one class from its last launch env
+and filtered problems via ``submit_common.sh``, under the setup's own limits; every problem states its launch, how the
+one before ended and its ``launch_kind``. ``owed check-limits`` (run by ``submit_common.sh`` before every agent job)
+refuses a setup env that raises a limit an earlier launch of the setup under its run root, or a ``--ceiling``, ran
+under.
 """
 
 import argparse
@@ -75,6 +77,7 @@ __all__ = [
     "faulted_at",
     "infra_attempts",
     "designed_runs",
+    "identity_launches",
     "earlier_launches",
     "job_setup",
     "latest_classes",
@@ -363,15 +366,27 @@ def launch_history(job_dirs: Iterable[pathlib.Path]) -> dict[Run, tuple[int, str
     return history
 
 
-def designed_runs(jobs: Sequence[Job], tag_kernels: Sequence[str]) -> list[Run]:
-    """Every run the identity owes until delivered: each tag kernel at every slot its jobs' launch
-    problems gave (``make_problems.py --repeat``), or once when they gave none."""
-    slots: set[int] = {1}
-    for job in jobs:
-        problems = launch_problems(job.path)
-        if problems is not None:
-            slots.update(problem_run(problem).slot for problem in read_lines(problems))
-    return [Run(kernel, slot) for kernel in tag_kernels for slot in sorted(slots)]
+def designed_runs(
+    job_dirs: Iterable[pathlib.Path], tag_kernels: Sequence[str], changed: Iterable[Run] = ()
+) -> list[Run]:
+    """Every run the identity owes until delivered: each tag run the launch problems of ``job_dirs`` (the identity's
+    launches, :func:`identity_launches`) staged, and each tag run of ``changed`` (:func:`task_changed`: a final grade
+    found its task changed, whatever was staged). A setup staged for part of the tag owes only that part: a reused
+    setup relaunched on what its earlier runs (under its own or another setup name) left owed, a setup launched on a
+    subset by design. Every tag kernel at every staged slot (``make_problems.py --repeat``; once when none) when a
+    launch's problems are gone."""
+    staged: set[Run] = set()
+    unknown = False
+    for job_dir in job_dirs:
+        problems = launch_problems(job_dir)
+        if problems is None:
+            unknown = True
+        else:
+            staged.update(problem_run(problem) for problem in read_lines(problems))
+    whole = unknown or not staged
+    staged.update(changed)
+    slots = sorted({1} | {run.slot for run in staged})
+    return [Run(kernel, slot) for kernel in tag_kernels for slot in slots if whole or Run(kernel, slot) in staged]
 
 
 def setup_launches(run_root: pathlib.Path, setup: str) -> list[pathlib.Path]:
@@ -379,6 +394,14 @@ def setup_launches(run_root: pathlib.Path, setup: str) -> list[pathlib.Path]:
     it, whether or not it recorded anything (a job that died before its first grade still spent an attempt)."""
     launched = sorted(run_root.glob(f"{LAUNCH_DIR}/*/.env"), key=lambda path: path.parent.name.zfill(20))
     return [run_root / path.parent.name for path in launched if read_env(path).get("SETUP") == setup]
+
+
+def identity_launches(jobs: Sequence[Job]) -> list[pathlib.Path]:
+    """Every job directory that launched the identity of ``jobs``, oldest first: ``jobs`` and every launch of its setup
+    under their run roots (:func:`setup_launches`)."""
+    roots = {job.path.parent for job in jobs}
+    launches = {path for root in roots for path in setup_launches(root, jobs[0].setup)} if jobs else set()
+    return sorted(launches | {job.path for job in jobs}, key=lambda path: path.name.zfill(20))
 
 
 def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Path] = ()) -> dict[Run, OwedClass]:
@@ -397,8 +420,7 @@ def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Pa
     changed = task_changed([*shards, *regrades], jobs[0].setup) if jobs else {}
     classes = latest_classes(job.path for job in jobs)
     # The attempts every launch of the setup spent, as ``owed run`` counts them, not only the jobs that recorded.
-    launches = {path for root in {job.path.parent for job in jobs} for path in setup_launches(root, jobs[0].setup)}
-    spent = infra_attempts(sorted(launches | {job.path for job in jobs}, key=lambda path: path.name.zfill(20)))
+    spent = infra_attempts(identity_launches(jobs))
     cap = crash_attempts(jobs[-1].path) if jobs else AGENT_CRASH_ATTEMPTS
     result: dict[Run, OwedClass] = {}
     for run in runs:
@@ -445,7 +467,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         args.out.mkdir(parents=True, exist_ok=True)
     for name in sorted(n for n in by_identity if selected(n, args.setups)):
         jobs = sorted(by_identity[name], key=lambda job: int(job.job))
-        runs = designed_runs(jobs, tag_kernels)
+        runs = designed_runs(identity_launches(jobs), tag_kernels, task_changed(regrades, name))
         classes = owed(jobs, runs, regrades)
         counts = collections.Counter(classes.values())
         print(
