@@ -237,3 +237,41 @@ record (`data_guard`) is unsealed/resealed through `data_guard.unsealed`. No too
 7. mini-SWE-agent / OpenHands resume state (`harness-checkpoint.json`, `openhands-state/`): keep verbatim in `session/` (proposed, small) or extract only?
 8. Pipeline split for the 5-replica setups at `experiments.toml:617`; and job naming `<setup>-p<k>` vs a suffix in the job comment.
 9. `episode.json` plain JSON per episode and also `index.jsonl`: keep both (proposed; index is rebuildable by `runs verify --reindex`), or index only?
+
+## Implemented (phase 2): where the code differs from the design above
+
+One commit per item on this branch. The decisions of the review: `claude.log` is kept (compressed), pack/cleanup is an optional
+post-experiment step, `infra` resumes by default, reservations defer experiments and trim prepare/goldens, the KV guard fails by
+default at 80000 tokens per Kimi agent, the mini-SWE/OpenHands resume state is kept verbatim, split parts keep the setup identity.
+
+1. **Serve.** The verb is `hpcagent-bench serve-bench submit|report` (`serve` is the judge service). `[bench.<name>]` has `model`,
+   `set`, `drop` and `env`. Rules are refused at submit (`env_spec check-staged`), in `serve-only.sbatch` and in the bench
+   (`BENCH_FORCE_RULES=1` skips). `RULES` holds the int4 expert-parallel rule only; the fraction and cuda-graph advice of the Kimi
+   page stays prose (the fraction ceiling differs per model). The KV guard reads the pool from the server logs: `serve-only.sbatch`
+   checks once after the API is up, an experiment job runs `serve_guard watch` from the batch shell (disowned, so `wait -n` is
+   unaffected) and cancels the job below the floor.
+2. **Submit.** `pipelines.py` splits every pp setup (also a single pipeline's rerun, pinning one pipeline); the stamp is the env key
+   `PIPELINE_PART=k/N` (in the job's `.agent-launch/<job>/.env`; not in `inference.json`). The jobs of a setup are named
+   `<setup>-p<k>`; env files `.env.<setup>.p<k>`. `reservations.py` ignores reservations over 7 days and ones the submitter
+   may use; an experiment job that does not fit begins after the reservation (`--begin`), prepare and goldens are trimmed to
+   at least 1 h, else deferred the same way. `tests/conftest.py` sets `RESERVATION_FIT=0` for every stub-sbatch test.
+3. **Retune.** The ledger is `retune.jsonl` beside the snapshot, copied into the run directory at the job's start.
+4. **Runs tooling.** `runs inventory` adds `hardware` and `limits_source` columns; the page is `EXPERIMENTS.generated.md`. The
+   cleaner is the top-level verb `clean caches` (not under `runs`), and also never touches a build folder under the working
+   directory of a running job.
+5. **Owed.** `--mode` is optional: its default is the class's (`infra` resume, `task` fresh, `extend` resume), and the mode used is
+   printed. A resumed repair states `spent_seconds` per problem (the driver prefers it to `AGENT_TIMEOUT_SPENT_SECONDS`, which
+   stays the job's value for an extension and is the least of them for a repair, so the job's time covers the longest left).
+   `launch_mode` is schema 33, `NOT NULL DEFAULT ''` as `launch_kind`; the extractor derives it for an older record from
+   `launch_kind` (extend resume, infra and task fresh) rather than from `resumes`/`fresh_relaunches`, which count the ends the
+   driver continued or restarted inside a job, not how the launch began.
+6. **Log storage.** The folder holds `logs.tar.zst` (every file the transcript extract is read from: stream logs, sessions,
+   checkpoints), `worker.tar.zst` (the rest of the worker directory), `workspace.tar.zst`, `transcript.extract.jsonl.zst` and
+   `episode.json`, not the `session/` and `stream.log.zst` of the table above: with the stream log kept, restoring and resuming
+   need no rebuild, and the whole tree stays one rule (a path at its place in the job). `runs repack` was not written: no v1 archive
+   exists outside the development branch. `collect copy` still reads the worker directories (`runs unpack` first).
+
+Tests: `tests/test_{serve_args,serve_guard,serve_bench,pipelines,reservations,submit_pipelines,retune,runs_inventory,clean_caches,
+artifacts,owed,matched_limits}.py`, each file ending with explicit calls. 11 tests fail the same way on the base commit in the
+Slurm environment (`test_recording`, `test_workspace`, `test_agent_driver_claude_bare[openai|anthropic]`: compiler and sealed-home
+setup), none in a file this branch changes but the last, whose `earlier` keyword the extension work left out of a stub.
