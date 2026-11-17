@@ -75,6 +75,11 @@ shapes:
   - [3, 1, 180]
   - [6, 0, 30]
   - [4, 2, 45]
+  - [11, 1, 0]
+  - [11, 2, 0]
+  - [11, 0, 0]
+  - [12, 1, 0]
+  - [12, 2, 0]
 
 # How much lighter each packet BEYOND the lead makes the colour, so `cpf-src` and
 # `cpf-src+lang-skills` read as one treatment family at two strengths. Large enough to read as a
