@@ -76,11 +76,29 @@ ENV HCC_AMDGPU_TARGET=${ROCM_ARCH_CSV} \
     GPU_ARCH_LIST=${ROCM_ARCH}
 COPY containers/images/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 
+# aiter: the base's editable checkout /sgl-workspace/aiter, moved to AITER_REV when one is given (empty keeps
+# the base's commit). Reinstalled editable without dependencies, then the flydsl that commit pins (its
+# requirements.txt): aiter's setup.py refuses any other flydsl, and the gate below re-checks the pin.
+ARG AITER_REV=""
+RUN set -eux; \
+    if [ -n "${AITER_REV}" ]; then \
+      cd /sgl-workspace/aiter; \
+      git fetch --quiet origin "${AITER_REV}"; \
+      git checkout --quiet --force "${AITER_REV}"; \
+      git submodule update --init --recursive --quiet; \
+      fly="$(grep -m1 -oE '^flydsl==[0-9][^; ]*' requirements.txt)"; \
+      /opt/venv/bin/python3 -m pip install --no-cache-dir "${fly}"; \
+      PREBUILD_KERNELS=0 GPU_ARCHS="${ROCM_ARCH}" /opt/venv/bin/python3 -m pip install --no-cache-dir --no-deps \
+        --no-build-isolation -e .; \
+    fi; \
+    git -C /sgl-workspace/aiter log --oneline -1
+
 # cupy, PINNED and INSIDE the image, as one tiny uv project (pyproject.toml and uv.lock beside this file)
 # synced into the vendor venv /opt/venv. `--inexact` removes nothing the vendor environment holds, and numpy
 # is skipped: it is the vendor's, and what served results are compared against.
 #
-# flydsl is the base's own: the vendor installs the version its aiter pins (aiter 581579ab: flydsl==0.4.2),
+# flydsl is aiter's: the vendor installs the version its aiter pins (aiter 581579ab: flydsl==0.4.2; an
+# AITER_REV build installs that commit's pin instead),
 # and kimi's int4 MoE reaches it through aiter (AITER_USE_FLYDSL_MOE_SORTING=1). A pin of our own would
 # move it off the version aiter's FlyDSL kernels are written against (PyPI's newest, 0.5.0 on 2026-11-17, is
 # past it). The gates below require that it imports from inside the image and satisfies every pin on it.
