@@ -3,7 +3,7 @@
 From finished study runs to the observations table the figures are drawn from, in four steps:
 collect, extract, regrade, hand off. Every step reads its sources read-only and refuses an output
 that overlaps a source (`hpcagent_bench/results/data_guard.py`); none of them deletes or moves data,
-except `collect archive --remove-sources` (below).
+except `collect archive --remove-sources` and `runs pack --remove-loose` (below).
 
 Which kernels a study still owes, and how runs resume, is in
 [experiments/README.md](../experiments/README.md#owed-kernels). The scoring rules the extracted rows feed
@@ -21,7 +21,8 @@ The runs root is protected: no collection, extraction or cleanup tool
 writes into them or removes anything under them. Add more protected roots with
 `HPCAGENT_BENCH_PROTECTED_ROOTS=/a:/b`.
 
-Run data is removed only through `hpcagent-bench collect archive --remove-sources`; anything else is
+Run data is removed only through `hpcagent-bench collect archive --remove-sources` and `hpcagent-bench runs pack
+--remove-loose`; anything else is
 refused by the file modes. At its end (merged or not) every job seals its graded record
 (`data_guard.seal`): the judge shards with their deferred queues and spooled libraries, the `shared/`
 folder (submitted files, prebuilt and agent libraries), the `agents/` folder (the episodes' transcripts
@@ -31,6 +32,31 @@ owner fails. Only these lift the seal, through the same function: a job that sta
 directory again (`run_cluster.sh` unseals it first), a re-merge (`merge_results.py`) and
 `grade-under apply` (both seal it again), and `collect archive --remove-sources`. By hand:
 `python -m hpcagent_bench.results.data_guard seal|unseal RUN_DIR`.
+
+### Episode archives
+
+`hpcagent-bench runs` (`hpcagent_bench/harness/artifacts.py`) keeps a finished job's episodes as one archive each,
+`<job>/episodes/<setup>/<label>.tar.zst`, so restoring an episode, or continuing it
+([matched_limits.md](matched_limits.md#extending-a-timed-out-episode)), is one command. An archive holds the episode's
+worker directory (`agents/node-N/problem-P-worker-W/`: transcript, session JSONL, prompt, `tokens.json`,
+`attempts.jsonl`) and every `shared/agent-K/` folder it worked in (`agent-folders.jsonl`), from the loose files and
+from `workspaces.tar` alike, at their paths in the job directory. Secrets never enter it (`mcp.json`, `litellm.yaml`,
+`.claude.json` and the other names `collect` never copies). `episodes/index.jsonl` lists each archive with its
+`label`, `setup`, `path`, `sha256`, `bytes` and `members`; the results DB holds no log. The compression is the
+standard library's (`tarfile` `w:zst`, Python 3.14).
+
+```bash
+hpcagent-bench runs pack "$RUNS/<study>/<job>"                  # every ended episode; a job still in squeue is refused
+hpcagent-bench runs pack --remove-loose "$RUNS/<study>/<job>"   # ... then each packed worker directory's files go
+hpcagent-bench runs verify "$RUNS/<study>/<job>"                # each archive's sha256 and member count, as indexed
+hpcagent-bench runs unpack [--label <label>] "$RUNS/<study>/<job>"  # restore in place, never over an existing file
+```
+
+`pack` is idempotent and skips an episode whose `attempts.jsonl` holds no line yet. Each archive is written under a
+temporary name, listed back against what was packed (every member's name and size), then renamed into place and
+indexed; only then does `--remove-loose` remove the worker directory's files but `tokens.json`, `attempts.jsonl` and
+the `cancelled` marker, which `owed` and a re-merge read in place. `collect copy` reads transcripts from the worker
+directories, so `runs unpack` a job before collecting it. The archives are part of the sealed graded record.
 
 ## End to end
 
@@ -168,6 +194,7 @@ hpcagent-bench plot kernel-speedups out/llr-cpu/llr40_observations.csv --experim
 | tool | does |
 |---|---|
 | `hpcagent-bench collect copy/verify/archive` (`hpcagent_bench/results/collect.py`) | copy-only collection, checksum verification, archive |
+| `hpcagent-bench runs pack/unpack/verify` (`hpcagent_bench/harness/artifacts.py`) | one archive per episode, restored in place |
 | `hpcagent-bench extract` (`hpcagent_bench/results/extract.py`) | the observations table, regrades pooled |
 | `hpcagent-bench grade-under worklist/run/apply` (`hpcagent_bench/harness/grade_under.py`) | list what is owed a final grade, grade a shard of it, merge the shards back |
 | `agent/hpcagent_agent/driver/token_cost.py` | per-episode token cost, per-run token totals |

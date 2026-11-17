@@ -11,6 +11,9 @@ and the agent driver).
         claude.log, tokens.json                   CLAUDE_LOG, TOKENS_NAME
       shared/agent-<w>/, shared/tasks/<kernel>/   SHARED_DIRNAME, AGENT_DIR_PREFIX, TASKS_DIRNAME
       workspaces.tar                              WORKSPACES_ARCHIVE (data_guard.archive, at the job's end)
+      episodes/<setup>/<label>.tar.zst            EPISODES_DIRNAME, EPISODE_ARCHIVE_SUFFIX (harness.artifacts)
+      episodes/index.jsonl                        EPISODES_INDEX
+      resume/<problem id>/                        RESUME_DIRNAME (an extended episode, restored at job start)
 
 ``agent/hpcagent_agent`` writes the agent-side names without importing this package; the agreement test in
 ``tests/test_no_hardcoded_paths.py`` holds both to the same spelling.
@@ -25,12 +28,16 @@ __all__ = [
     "CLAUDE_LOG",
     "DEFAULT_SHARED_DIR",
     "DB_FILENAME",
+    "EPISODES_DIRNAME",
+    "EPISODES_INDEX",
+    "EPISODE_ARCHIVE_SUFFIX",
     "HOST_COMPARE_NOTE",
     "JUDGE_DIRNAME",
     "MERGED_DB_NAME",
     "MERGE_FAILED_NAME",
     "RANK_DIR",
     "RANK_DIR_PREFIX",
+    "RESUME_DIRNAME",
     "SHARED_DIRNAME",
     "TASKS_DIRNAME",
     "TOKENS_NAME",
@@ -94,6 +101,13 @@ TASKS_DIRNAME: str = "tasks"
 #: A finished job's one archive of its agents' workspaces and worker scratch (:func:`hpcagent_bench.results.
 #: data_guard.archive`).
 WORKSPACES_ARCHIVE: str = "workspaces.tar"
+#: One archive per episode of a finished job (:mod:`hpcagent_bench.harness.artifacts`): ``<setup>/<label>`` plus
+#: :data:`EPISODE_ARCHIVE_SUFFIX`, indexed by :data:`EPISODES_INDEX`.
+EPISODES_DIRNAME: str = "episodes"
+EPISODE_ARCHIVE_SUFFIX: str = ".tar.zst"
+EPISODES_INDEX: str = "index.jsonl"
+#: Per problem id, the episode an extension continues, restored before any agent starts (``owed run --class extend``).
+RESUME_DIRNAME: str = "resume"
 
 
 def run_path(recorded: str, db: pathlib.Path) -> pathlib.Path:
