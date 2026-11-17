@@ -122,7 +122,9 @@ def retune(
     after = env_spec.assignments(env)
     differs = {key for key in current.keys() | after.keys() if current.get(key) != after.get(key)}
     if not differs <= set(edits) or any(after.get(key) != value for key, value in edits.items()):
-        shutil.copy2(backup, env)  # a rewrite that did more than asked is undone
+        partial.write_bytes(backup.read_bytes())  # a rewrite that did more than asked is undone, as it was made:
+        partial.chmod(mode)  # beside it and replaced (the env is read-only, so it is never written in place)
+        os.replace(partial, env)
         raise SystemExit(f"retune: {env} read back with other changes than {sorted(edits)}; restored from {backup}")
     entry: dict[str, Any] = {
         "time": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),

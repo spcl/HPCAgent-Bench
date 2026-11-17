@@ -6,12 +6,12 @@
     hpcagent-bench clean caches --root DIR [--root DIR ...] --apply    # remove it
 
 An allowlist, not a blocklist: only directories named :data:`TOOL_CACHES` (``__pycache__``, ``.ruff_cache``, ...) and
-``dacecache*`` build folders are candidates. Checked first, whatever the name: never a virtual environment (``.venv``,
-``venv``), the ``uv`` cache, a spack build cache, an image-build or container-image tree, the protected run roots and
-archives (:func:`hpcagent_bench.results.data_guard.protected_roots`), nor anything beneath a ``dacecache*`` or a directory a
-running job of the user works in (a build folder in use). A symlink is never followed or removed. There is no ``uv cache
-clean`` here, on purpose: the ``uv`` cache is mounted into image builds, and cleaning it broke one (2026-11-17); ``clean uv``
-refuses.
+``dacecache*``/``.dacecache*`` build folders are candidates. Checked first, whatever the name: never a virtual
+environment (``.venv``, ``venv``), the ``uv`` cache, a spack build cache, an image-build or container-image tree, the
+protected run roots and archives (:func:`hpcagent_bench.results.data_guard.protected_roots`), nor anything beneath a
+``dacecache*`` or a directory a running job of the user works in (a build folder in use). A symlink is never followed or
+removed. There is no ``uv cache clean`` here, on purpose: the ``uv`` cache is mounted into image builds, and cleaning it
+broke one (2026-11-17); ``clean uv`` refuses.
 """
 
 import argparse
@@ -26,12 +26,24 @@ from collections.abc import Iterator, Sequence
 
 from hpcagent_bench.results import data_guard
 
-__all__ = ["BUILD_FOLDERS", "NEVER_NAMES", "NEVER_PARTS", "TOOL_CACHES", "Candidate", "candidates", "main"]
+__all__ = [
+    "BUILD_FOLDERS",
+    "BUILD_KIND",
+    "NEVER_NAMES",
+    "NEVER_PARTS",
+    "TOOL_CACHES",
+    "Candidate",
+    "candidates",
+    "main",
+]
 
 #: Directories every tool regenerates on its next run, safe to remove at any time.
 TOOL_CACHES = frozenset({"__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache", ".hypothesis"})
-#: Build folders (DaCe's): regenerable, but in use while a job works in the tree.
-BUILD_FOLDERS = "dacecache*"
+#: Build folders (DaCe's: ``.dacecache`` by default, ``.dacecache_rank<N>`` per MPI rank, ``dacecache*`` when named):
+#: regenerable, but in use while a job works in the tree.
+BUILD_FOLDERS = ("dacecache*", ".dacecache*")
+#: The class a build folder is counted under.
+BUILD_KIND = "dacecache"
 #: Names that are never touched, nor entered: environments and the caches other work is built from.
 NEVER_NAMES = frozenset({".venv", "venv", "uv-cache", "buildcache", "site-packages", ".git"})
 #: A path part containing one of these (image builds, container images, run data, archives) is never touched.
@@ -91,9 +103,9 @@ def candidates(
                     continue
                 if name in TOOL_CACHES:
                     yield Candidate(path, name, inodes_of(path))
-                elif fnmatch.fnmatch(name, BUILD_FOLDERS):
+                elif any(fnmatch.fnmatch(name, pattern) for pattern in BUILD_FOLDERS):
                     if not any(data_guard.within(path, work) for work in working):
-                        yield Candidate(path, BUILD_FOLDERS, inodes_of(path))
+                        yield Candidate(path, BUILD_KIND, inodes_of(path))
                 else:
                     keep.append(name)
             dirs[:] = keep

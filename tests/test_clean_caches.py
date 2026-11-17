@@ -36,6 +36,8 @@ GO = [
     "proj/tests/.pytest_cache",
     "proj/.mypy_cache",
     "proj/build/dacecache_x",
+    "proj/.dacecache",
+    "relayout/.dacecache_rank0",
 ]
 
 
@@ -56,7 +58,13 @@ def test_a_protected_root_and_a_running_jobs_build_folder_are_left_alone(tmp_pat
             [tmp_path], protected=[tmp_path / "proj" / "tests"], busy=[tmp_path / "proj" / "build"]
         )
     ]
-    assert sorted(found) == ["proj/.mypy_cache", "proj/.ruff_cache", "proj/src/__pycache__"]
+    assert sorted(found) == [
+        "proj/.dacecache",
+        "proj/.mypy_cache",
+        "proj/.ruff_cache",
+        "proj/src/__pycache__",
+        "relayout/.dacecache_rank0",
+    ]
 
 
 def run(*args: str) -> str:
