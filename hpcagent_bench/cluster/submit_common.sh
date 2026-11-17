@@ -337,6 +337,26 @@ job_dependency() {
     printf '%s\n' "${any}${2:+${any:+,}afterok:$2}"
 }
 
+# fit_walltime <HH:MM:SS> <minimum HH:MM:SS> [begin] -- the time a job may have before the next reservation it is not part of
+# (reservations.py; reservations over 7 days are standing ones, ignored): sets FIT_WALLTIME (as asked when it fits, else
+# shortened down to the minimum) and FIT_BEGIN (when even the minimum does not fit: the end of the reservation, an
+# ISO time for sbatch --begin; "" = start when scheduled). RESERVATION_FIT=0 skips it; a dry run has no sbatch to fit.
+fit_walltime() {
+    FIT_WALLTIME="$1" FIT_BEGIN=""
+    [[ "${RESERVATION_FIT:-1}" != 0 && "${SUBMIT:-0}" == 1 ]] || return 0
+    local partition account out key value
+    partition=$(job_options --print partition) account=$(job_options --print account) || return 2
+    # a user's BEGIN may be any sbatch time ("now+2hours"); only an ISO one is read here (sbatch applies the rest)
+    local from=""
+    [[ "${3:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}$ ]] && from="$3"
+    out=$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.reservations fit --time "$1" --min "$2" \
+        ${partition:+--partition "${partition}"} ${account:+--account "${account}"} \
+        ${from:+--begin "${from}"}) || return 2
+    while IFS='=' read -r key value; do
+        case "${key}" in walltime) FIT_WALLTIME="${value}" ;; begin) FIT_BEGIN="${value}" ;; esac
+    done <<<"${out}"
+}
+
 # submit_setup_job <env> <setup> <walltime> [dependency] [begin] [detail]
 # SUBMIT=1 submits a read-only snapshot of <env> and its problems file (snapshot_env) as
 # services.sbatch's argument, with --dependency=<dependency> (job_dependency), held until <begin>,
@@ -363,6 +383,10 @@ submit_setup_job() {
     mapfile -t options <<<"${resolved}"
     [[ " ${options[*]} " != *" --account=root "* ]] \
         || { echo "submit_setup_job: account root is not a project account: pass --account or set SBATCH_ACCOUNT" >&2; return 2; }
+    # A job never ends in a reservation of others, and an experiment's time is never shortened (its episodes need their
+    # whole wall clock): one that does not fit before the next reservation begins after it.
+    fit_walltime "${walltime}" "${walltime}" "${begin}" || return 2
+    [[ -z "${FIT_BEGIN}" ]] || { echo "${setup}: ${walltime} does not fit before the next reservation: begins ${FIT_BEGIN}"; begin="${FIT_BEGIN}"; }
     snapshot=$(snapshot_env "${env}" "${setup}") || return 2
     local logs="${HPCAGENT_BENCH_SCRATCH}/logs"
     mkdir -p -- "${logs}"

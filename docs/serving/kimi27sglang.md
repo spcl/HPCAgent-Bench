@@ -43,9 +43,10 @@ The pool has not been measured against a working set; if the hit rate falls unde
 conversations, since the fraction has no headroom left.
 
 One pipeline serves 20 agents (24 request slots and decode graphs; the fraction leaves no room for a larger
-pool). More agents are served by more pipelines in the same job: `INFERENCE_NODES=8 INFERENCE_REPLICAS=2` runs
-two `pp=4` pipelines on consecutive nodes, each answering on its first node, and the driver stripes the agents over
-them by problem index (`AGENTS_PER_NODE=40` on one agent node: 20 per pipeline).
+pool). `submit.sh` splits a setup of more problems into one job per 20 (`-p1`, `-p2`, ...; [LAUNCH.md](../../experiments/LAUNCH.md#sizing-agents-and-walltime)).
+By hand, more pipelines serve in one job: `INFERENCE_NODES=8 INFERENCE_REPLICAS=2` runs two `pp=4` pipelines on consecutive
+nodes, each answering on its first node, and the driver stripes the agents over them by problem index (`AGENTS_PER_NODE=40`
+on one agent node: 20 per pipeline).
 
 ## Tuning record (2026-11-17)
 
