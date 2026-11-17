@@ -1560,7 +1560,8 @@ class FortranBodyEmitter(BaseEmitter):
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in INT_EXTRACTING_CALLS:
                 return True
             if isinstance(n, ast.Name):
-                return n.id in int_uses
+                # A declared integer local (an ``np.all``/``np.any`` 0/1 accumulator) is a flag too.
+                return n.id in int_uses or n.id in self._int_kinds
             return False
 
         # if arr[i]: where arr is an int parameter flag.
