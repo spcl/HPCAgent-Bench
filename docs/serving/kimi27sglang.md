@@ -47,6 +47,27 @@ pool). More agents are served by more pipelines in the same job: `INFERENCE_NODE
 two `pp=4` pipelines on consecutive nodes, each answering on its first node, and the driver stripes the agents over
 them by problem index (`AGENTS_PER_NODE=40` on one agent node: 20 per pipeline).
 
+## Tuning record (2026-11-17)
+
+Measured with `jobs/kimi-tune-1117/` (outside the repo): one `pp=4` server per job and an agent-shaped load
+(`agent_load.py`: per agent a 30k-token prefix, then turns of 1.5k new tokens and 400 output tokens,
+15 min at 20 agents, then 15 min at 40). Server logs: `$SCRATCH/inference-server/<job>/`. Read this before
+running a new sweep; every row below has been measured once.
+
+| Setting | Result | Job |
+|---|---|---|
+| fraction 0.48 (0.408 effective) | KV pool 0.15-1.0M tokens, different every run: PP3 holds about 165 GB of weights against a 167 GB budget. At 0.21M: cache hit 0%, TTFT p50 152 s, 1.9 tok/s per agent | 747586 |
+| same, pool 0.98M, 48 slots | cache hit 88%, TTFT p50 10 s, 4.3 tok/s per agent, decode 5.8 tok/s | 747584 |
+| fraction 0.55 | pool 3.7M, cache hit 98% at 20 agents; host memory ran out once after 4 h (746293) | 742817 |
+| 40 agents on one pipeline (24 slots) | about 13 requests always queued; waiting conversations are evicted and re-prefilled: 46% cache hit, 133M fresh prefill tokens in one job | 742706 |
+| `--max-running-requests` | SGLang splits it over the `pp` micro-batches (`pp_max_micro_batch_size = max_running_requests // pp_size`): 24 is 4 x 6 | source |
+| HiCache `--hicache-size 32` | slower: see [`knobs.md`](knobs.md#hicache-never) | 747589 |
+| `--attention-backend triton` | no aiter x0.85 on the fraction: 0.48 gives a 3.57M pool (more host memory used than aiter at 0.55) | 747585 |
+| `--ep-size 4` (auto MoE runner) | `illegal memory access` at CUDA-graph capture. The dispatcher keeps global expert ids for the aiter runner, while the int4 MoE on ROCm runs the Triton runner (`CompressedTensorsWNA16TritonMoE`), which indexes local ids | 747587 |
+| `--ep-size 4 --moe-runner-backend triton` | serves; API up in 1098 s against about 1490 s for plain `pp=4` | 747607 |
+| `--enable-dp-attention --dp-size 4` (with `pp=4`, EP4) | needs fraction above 0.4874 x 0.85; at 0.55 it serves, then the first gathered prefill faults (`HSA_STATUS_ERROR_EXCEPTION`, `unspecified launch failure`) | 747588, 747608 |
+| `tp16 ep16 dp-attention`, `pp=1` | needs fraction above 0.4874 at 0.85 (each rank keeps the attention weights); weights load in about 10 min | 747591 |
+
 ## Rules
 
 - Serve on SGLang (engine numbers are re-measured when agent tuning is done).
@@ -59,6 +80,6 @@ them by problem index (`AGENTS_PER_NODE=40` on one agent node: 20 per pipeline).
 - Gate a `--kv-cache-dtype` change on long context: fp8 checkpoints ship no calibrated KV scales, and
   a broken attention path still answers short prompts (`containers/inference/accuracy-gate.py`, about
   10k tokens of varied filler).
-- One client per endpoint; no HiCache ([`knobs.md`](knobs.md#hicache-never)); leave
+- One client per endpoint; no HiCache ([`knobs.md`](knobs.md#hicache-never), measured slower); leave
   `SGLANG_ROCM_FUSED_DECODE_MLA` off. `AITER_USE_FLYDSL_MOE_SORTING=1` and `pp=4` are for this
   checkpoint only.
