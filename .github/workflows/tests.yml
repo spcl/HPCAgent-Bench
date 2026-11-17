@@ -496,8 +496,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Two legs: the op suite (20+ min) and the integration-marked tree with agent-bench (about 25 min); one
-        # runner holding both ran past its step caps.
+        # Two legs: the op suite (20+ min) and the integration-marked tree with agent-bench and the generated llr40
+        # numba (about 20 min); one runner holding both ran past its step caps.
         leg:
           - id: ops
           - id: tree
@@ -540,6 +540,15 @@ jobs:
             tests/test_harbor.py \
             tests/test_optimizer_plugin.py \
             tests/test_agent_bench.py
+      # The numpyto-numba emit of every llr40 and solvers kernel, run against numpy in fresh interpreters on 1 and
+      # 24 threads: 8-10 min on two workers. Dealt into the unit sweep it put a shard past the job's 45 min cap; the
+      # tree leg (10 min) has the room.
+      - name: Phase 3n -- generated numba of llr40 + solvers (one parallel build, numpy's answer)
+        if: ${{ !cancelled() && matrix.leg.id == 'tree' }}
+        timeout-minutes: 20
+        run: |
+          python -m pytest -p no:cacheprovider -rfEs -n auto --durations=10 --timeout=600 --timeout-method=thread \
+            tests/test_numba_generated_llr40_solvers.py
       - uses: ./.github/actions/finish
         if: always()
         with:
