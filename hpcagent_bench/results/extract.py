@@ -610,6 +610,7 @@ EPISODE_LIMIT_COLUMNS: dict[str, str] = {
     "knowledge_chars": "episode_knowledge_chars",
     "limits_source": "episode_limits_source",
     "launch_kind": "episode_launch_kind",
+    "launch_mode": "episode_launch_mode",
     "crash_relaunch": "episode_crash_relaunch",
     "crash_attempts": "episode_crash_attempts",
     "reply_cap": "episode_reply_cap",
@@ -1488,6 +1489,11 @@ def read_all(databases: list[Database], args: Options) -> tuple[list[dict[str, A
     return distinct(observations), distinct(sources)
 
 
+#: The mode of a launch recorded before ``episodes.launch_mode`` (schema 33), from its ``launch_kind``: an extension
+#: always continued its session, a repair or a changed task always started from nothing.
+LAUNCH_MODE_OF_KIND: dict[str, str] = {"extend": "resume", "infra": "fresh", "task": "fresh"}
+
+
 def derive_launches(observations: list[dict[str, Any]]) -> None:
     """Fill ``episode_launch`` and ``episode_previous_launch_result`` of every episode row whose launch stamped none
     from the episodes ``observations`` hold, per (setup, kernel, slot) in start then job order, and name the origin
@@ -1503,6 +1509,8 @@ def derive_launches(observations: list[dict[str, Any]]) -> None:
             if row["episode_launch"] == "":
                 row["episode_launch"] = index + 1
                 row["episode_previous_launch_result"] = rows[index - 1]["episode_result"] if index else ""
+            if row["episode_launch_mode"] == "":
+                row["episode_launch_mode"] = LAUNCH_MODE_OF_KIND.get(row["episode_launch_kind"], "")
 
 
 def regraded(

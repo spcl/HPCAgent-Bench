@@ -206,6 +206,7 @@ __all__ = [
     "crashed_attempt_records",
     "dead_stream_threshold_seconds",
     "earlier_leg",
+    "ended_returncode",
     "directive_page",
     "ended_reason",
     "engine_totals",
@@ -1302,9 +1303,21 @@ def stamp_record(path: pathlib.Path, **fields: ProblemValue) -> None:
         path.write_text(json.dumps(record | fields, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def spent_seconds() -> float:
-    """:data:`SPENT_SECONDS_ENV`, 0 when unset."""
+def spent_seconds(problem: Problem) -> float:
+    """The wall clock the episode ``problem`` continues already ran: its own ``spent_seconds`` (a resumed repair's), else
+    :data:`SPENT_SECONDS_ENV` (an extension's, the same for every episode of the job), 0 when unset."""
+    own = problem.get("spent_seconds")
+    if isinstance(own, int) and not isinstance(own, bool):
+        return float(own)
     return float(os.environ.get(SPENT_SECONDS_ENV, "0") or 0)
+
+
+def ended_returncode(workdir: pathlib.Path) -> int:
+    """The returncode the restored episode's last attempt ended on (its ledger's last line): the wall clock for an
+    extension, whatever infrastructure did for a resumed repair."""
+    ledger = token_cost.attempt_ledger(workdir)
+    returncode = ledger[-1].get("returncode") if ledger else None
+    return returncode if isinstance(returncode, int) and not isinstance(returncode, bool) else RC_TIMEOUT
 
 
 def mark_resume(
@@ -3275,11 +3288,11 @@ def run_agent(
     # appends to the same transcript, its watchers re-read it whole, lost requests included) and start again only on a
     # fresh relaunch, whose lost attempt is void. docs/token_accounting.md states the asymmetry.
     # An extension runs what its whole limit leaves after the wall clock its episode already ran.
-    remaining = timeout_s - (spent_seconds() if restored else 0.0)
+    remaining = timeout_s - (spent_seconds(problem) if restored else 0.0)
     if timeout_s and remaining <= 0:
         raise SystemExit(
             f"agent_driver: {episode_id}: AGENT_TIMEOUT_SECONDS={timeout_s:.0f} leaves no time after "
-            f"{SPENT_SECONDS_ENV}={spent_seconds():.0f}"
+            f"{spent_seconds(problem):.0f} s already run"
         )
     deadline = time.monotonic() + remaining if timeout_s else 0.0
     # A stale marker from a previous attempt would end the relaunch before its first turn.
@@ -3354,8 +3367,10 @@ def run_agent(
             process: subprocess.Popen[bytes] | None = None
             since = 0
             if session:
-                log.write(f"\nagent_driver: extended to AGENT_TIMEOUT_SECONDS={timeout_s:.0f}; resuming {session}\n")
-                since = mark_resume(log, log_path, tokens_path, workdir, session, RC_TIMEOUT, ledger_offset + 1)
+                log.write(f"\nagent_driver: continued to AGENT_TIMEOUT_SECONDS={timeout_s:.0f}; resuming {session}\n")
+                since = mark_resume(
+                    log, log_path, tokens_path, workdir, session, ended_returncode(workdir), ledger_offset + 1
+                )
             if harness.mcp_gate:
                 try:
                     process, mcp_attempts = start_agent(
@@ -3542,8 +3557,8 @@ def run_agent(
         )
         reason += f" promoted={promoted}" if promoted else ""
         if restored and promoted:
-            leg = "earlier" if promoted.startswith(promote_unsubmitted.EARLIER_LEG) else "extension"
-            stamp_record(workdir / "tokens.json", promoted_leg=leg)
+            promoted_from = "earlier" if promoted.startswith(promote_unsubmitted.EARLIER_LEG) else "extension"
+            stamp_record(workdir / "tokens.json", promoted_leg=promoted_from)
     if is_claude and hit_turn_cap(turns):
         reason += " censored=turns"
     print(
@@ -3557,7 +3572,7 @@ def run_agent(
 #: runs as its own driver process under that setup's environment plus a worker token.
 FUSED_PROBLEM_KEYS = ("env_file", "setup")
 #: What a rerun in a new job stamps on its problems (``hpcagent_bench.problem_file.ProblemLine``).
-LAUNCH_PROBLEM_KEYS = ("launch", "previous_result", "launch_kind", "infra_attempts")
+LAUNCH_PROBLEM_KEYS = ("launch", "previous_result", "launch_kind", "launch_mode", "infra_attempts")
 #: The child's argv flag: ``agent_driver.py --fused-problem <problem index> <worker index> <agents>``.
 FUSED_PROBLEM_FLAG = "--fused-problem"
 #: Where the resolved setup overlays live (a fused job only).

@@ -61,6 +61,7 @@ __all__ = [
     "Episode",
     "build_parser",
     "episodes_of",
+    "holds_session",
     "index",
     "job_running",
     "main",
@@ -463,6 +464,12 @@ def redundant(run_dir: pathlib.Path, packed_episodes: Sequence[Episode], total: 
         else:
             found.append(archive)
     return found
+
+
+def holds_session(directory: pathlib.Path) -> bool:
+    """Whether the episode folder ``directory`` holds the transcript files a resume continues (:data:`LOGS`)."""
+    manifest = json.loads((directory / EPISODE_JSON).read_text(encoding="utf-8"))
+    return LOGS in manifest["files"]
 
 
 def finished(run_dir: pathlib.Path, episode: Episode) -> bool:

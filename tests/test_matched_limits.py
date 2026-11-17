@@ -227,6 +227,27 @@ def test_a_reruns_launch_stamp_reaches_its_row_and_an_unstamped_episode_is_deriv
     assert (later["episode_launch"], later["episode_previous_launch_result"]) == (2, "budget")
 
 
+def test_a_launch_mode_is_stored_and_a_record_without_one_reads_it_from_its_kind(tmp_path: pathlib.Path) -> None:
+    """``owed run --mode`` -> the problem's ``launch_mode`` -> record -> ``episodes.launch_mode`` -> observation
+    ``episode_launch_mode``; a launch stamped none (before schema 33) reads it from its ``launch_kind``: an extension
+    resumed, a repair and a changed task started from nothing, a first launch has none."""
+    job_dir = tmp_path / str(JOB)
+    shard(job_dir)
+    driver_record(job_dir, 0, [0], launch=2, previous_result="crash", launch_kind="infra", launch_mode="resume")
+    out = job_dir / "results.db"
+    merge_results.merge(job_dir, out)
+    with results_db.reading(out) as conn:
+        assert conn.execute("SELECT launch_mode FROM episodes WHERE label = ?", (LABEL,)).fetchone()[0] == "resume"
+    (row,) = episode_rows(out)
+    assert row["episode_launch_mode"] == "resume"
+    unstamped = [
+        row | {"slot": slot, "episode_launch": "", "episode_launch_kind": kind, "episode_launch_mode": ""}
+        for slot, kind in enumerate(["extend", "infra", "task", ""])
+    ]
+    extract.derive_launches(unstamped)
+    assert [one["episode_launch_mode"] for one in unstamped] == ["resume", "fresh", "fresh", ""]
+
+
 def test_a_single_attempt_names_no_previous_one_and_an_unnamed_returncode_is_a_crash(tmp_path: pathlib.Path) -> None:
     single = episodes.read_record(driver_record(tmp_path / "one", 0, [0]))
     crashed = episodes.read_record(driver_record(tmp_path / "two", 0, [1, 0]))
