@@ -136,6 +136,9 @@ PUBLISHED_PACKET_COLORS = {
     "cpf-src+lang-skills": "#ffa250",
     "divide-and-conquer+profiling": "#3fdaea",
     "caveman": "#1f77b4",
+    "cpf-src-bare": "#8ca252",
+    "cpf-cpu-src-bare": "#8ca252",
+    "cpf-gpu-src-bare": "#bd9e39",
 }
 
 #: Models are assigned from the front of `markers`, standalone optimizers from the back, so a new
