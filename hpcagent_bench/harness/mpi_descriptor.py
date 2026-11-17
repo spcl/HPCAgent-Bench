@@ -52,12 +52,14 @@ __all__ = [
     "layout_divisibility_refusal",
     "layout_flexible_allowlist",
     "local_shape",
+    "owned_count",
     "owned_indices",
     "replicatable_allowlist",
     "replication_refusal",
     "scatter",
     "split_along",
     "split_axis",
+    "split_symbol_mismatch",
     "symbol_axes_from_binding",
 ]
 
@@ -126,12 +128,29 @@ def axis_index_lists(shape: Sequence[int], dist: ArrayDist, grid: Grid, coords: 
     return [owned_indices(n, ax, grid, coords) for n, ax in zip(shape, dist.axes, strict=False)]
 
 
+def owned_count(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> int:
+    """``len(owned_indices(n, axis, grid, coords))`` without building the indices (ScaLAPACK NUMROC)."""
+    if axis.grid_dim is None:
+        return n
+    parts = grid.dims[axis.grid_dim]
+    coord = coords[axis.grid_dim]
+    if axis.scheme is Scheme.BLOCK:
+        lo, hi = block_bounds(n, parts, coord)
+        return hi - lo
+    width = effective_block_size(axis)
+    full, rest = divmod(n, width)  # whole blocks 0 .. full-1, then a short block `full` of `rest` elements
+    count = (full // parts + (1 if coord < full % parts else 0)) * width
+    return count + (rest if full % parts == coord else 0)
+
+
 def local_shape(shape: Sequence[int], dist: ArrayDist, grid: Grid, rank: int) -> tuple[int, ...]:
     """The shape of ``rank``'s local (owned-interior) tile."""
     if dist.replicated:
         return tuple(shape)
+    if len(dist.axes) != len(shape):
+        raise ValueError(f"ArrayDist has {len(dist.axes)} axes but the array has {len(shape)} dimension(s)")
     coords = grid.coords_of(rank)
-    return tuple(len(ix) for ix in axis_index_lists(shape, dist, grid, coords))
+    return tuple(owned_count(int(n), ax, grid, coords) for n, ax in zip(shape, dist.axes, strict=True))
 
 
 def scatter(a: np.ndarray, dist: ArrayDist, grid: Grid) -> list[np.ndarray]:
@@ -591,16 +610,24 @@ def degenerates_to_block(n: int, parts: int, axis: AxisDist) -> bool:
     exactly the contiguous blocks :func:`block_bounds` hands out.
 
     ``block`` is that partition by definition. A cyclic / block_cyclic axis coincides with it only
-    when one round of blocks covers the extent -- ``n`` divisible by ``parts`` with the declared
-    width equal to ``n // parts`` -- plus the two degenerate cases (one coordinate, or at most one
-    element). Anything else deals the SAME number of elements to each rank out of DIFFERENT global
+    when one round of blocks covers the extent (no coordinate owns two blocks) and each coordinate's
+    one block is its ``block_bounds`` range: width ``n // parts`` on a divisible extent, one element
+    per rank on an extent below ``parts``, or width ``ceil(n / parts)`` when only the last block is
+    short. Anything else deals the SAME number of elements to each rank out of DIFFERENT global
     indices, which is why a tile-shape check cannot see the difference.
     """
-    if axis.scheme is Scheme.BLOCK:
+    if axis.scheme is Scheme.BLOCK or parts <= 1 or n <= 1:
         return True
-    if parts <= 1 or n <= 1:
-        return True
-    return n % parts == 0 and effective_block_size(axis) == n // parts
+    width = effective_block_size(axis)
+    if -(-n // width) > parts:
+        return False
+
+    def owned(lo: int, hi: int) -> tuple[int, int] | None:
+        return (lo, hi) if hi > lo else None
+
+    return all(
+        owned(min(c * width, n), min((c + 1) * width, n)) == owned(*block_bounds(n, parts, c)) for c in range(parts)
+    )
 
 
 def block_partition_mismatch(descriptor: "Descriptor", shapes: Mapping[str, Sequence[int]]) -> str | None:
@@ -630,9 +657,9 @@ def block_partition_mismatch(descriptor: "Descriptor", shapes: Mapping[str, Sequ
                 f"the layout of {name!r} distributes dimension {axis_index} with scheme "
                 f"{axis.scheme.value!r} (block_size {effective_block_size(axis)}) over {parts} rank(s) "
                 f"of extent {n}, but each rank is given the CONTIGUOUS block "
-                f"{block_bounds(n, parts, 0)} .. of that extent. Distribute the whole dimension (block), or a "
-                f"block_cyclic width of exactly {n // parts if n % parts == 0 else 'n / ranks'} "
-                f"on an extent divisible by the rank count"
+                f"{block_bounds(n, parts, 0)} .. of that extent. Distribute the whole dimension (block): a "
+                f"cyclic or block_cyclic deal is that block at one rank count and extent only, and the grade "
+                f"launches every graded rank count and problem size"
             )
     return None
 
@@ -715,10 +742,50 @@ def layout_divisibility_refusal(
                     return (
                         f"the layout of {name!r} distributes dimension {axis_index} with scheme "
                         f"{axis.scheme.value!r} (block_size {width}) over an extent of {n}, which does "
-                        f"not divide evenly by block_size times every graded rank count "
-                        f"(P={p} among {sorted(graded_ranks)}). Pick a block_size and extent that "
-                        f"divide evenly at every graded P<=16, or distribute the whole dimension (block)"
+                        f"not divide evenly by block_size times the rank count P={p}. Pick a block_size "
+                        f"that divides every graded problem's extent evenly at every graded P<=16, or "
+                        f"distribute the whole dimension (block)"
                     )
+    return None
+
+
+def split_symbol_mismatch(
+    descriptor: "Descriptor", default: "Descriptor", shapes: Mapping[str, Sequence[int]]
+) -> str | None:
+    """The first size symbol whose split axes the layout deals out by different index sets, or ``None``.
+
+    A kernel's ``reference_dist`` pairs the tiles of the arrays one size symbol splits index by index (a rank's
+    ``x`` columns times its ``ln_weight`` entries; ``out`` returned in ``x``'s index set), so every such axis must
+    be dealt alike: the same scheme and block_size, a scheme that degenerates to the block counting as ``block``.
+    An array held whole reaches the reference on the default layout, so it counts as the default's scheme. The
+    symbols are ``default.symbol_axes`` (the binding's shapes)."""
+    for sym in sorted(default.symbol_axes):
+        dealt: dict[tuple[int, str], list[str]] = {}
+        for name, axis_index in default.symbol_axes[sym]:
+            shape = shapes.get(name)
+            if shape is None or name not in descriptor.arrays or name not in default.arrays:
+                continue
+            held = default if descriptor.holds_whole(name, shape) else descriptor
+            dist = held.dist_for(name, shape)
+            if dist.replicated or axis_index >= len(dist.axes) or dist.axes[axis_index].grid_dim is None:
+                continue
+            axis = dist.axes[axis_index]
+            n, parts = int(shape[axis_index]), held.grid.dims[axis.grid_dim]
+            width = min(effective_block_size(axis), max(1, n))
+            if degenerates_to_block(n, parts, axis):
+                scheme = "block"
+            else:
+                scheme = "cyclic" if width == 1 else f"block_cyclic (block_size {width})"
+            dealt.setdefault((axis.grid_dim, scheme), []).append(name)
+        if len(dealt) > 1:
+            groups = "; ".join(
+                f"{', '.join(repr(n) for n in sorted(names))} {scheme}" for (_, scheme), names in sorted(dealt.items())
+            )
+            return (
+                f"the layout deals size symbol {sym!r} differently across the arrays it splits ({groups}). The "
+                f"reference pairs those arrays' tiles index by index, so every array split on {sym!r} needs the "
+                f"same scheme and block_size"
+            )
     return None
 
 
@@ -738,9 +805,13 @@ def default_layout_refusal(
     layout they declare, so a split array is honoured when it realizes the default's AXIS (same
     grid dimension bound on every axis) with either the default's exact tiles, or -- for an array
     on the kernel's ``mpi.layout_flexible`` allowlist (:func:`layout_flexible_allowlist`) -- any
-    scheme on that same axis, subject to :func:`layout_divisibility_refusal`. Holding an array
-    whole is honoured too (the harness hands that rank a full copy);
-    :func:`replication_refusal` decides whether it is ALLOWED.
+    scheme on that same axis, subject to :func:`split_symbol_mismatch` (one scheme per size symbol)
+    and :func:`layout_divisibility_refusal`. Holding an array whole is honoured too (the harness
+    hands that rank a full copy); :func:`replication_refusal` decides whether it is ALLOWED.
+
+    The answer holds for ``descriptor``'s grid and ``shapes`` only: a caller judging a layout graded
+    at several rank counts and problem sizes asks once per (P, problem), as
+    ``service.distribution_refusal`` does.
     """
     permitted = set(flexible)
     for name in sorted(default.arrays):
@@ -762,6 +833,9 @@ def default_layout_refusal(
                 + ("any scheme on the SAME axis (it is layout_flexible), " if name in permitted else "")
                 + "or a replicate operation if it is on the replicatable allowlist"
             )
+    refused = split_symbol_mismatch(descriptor, default, shapes)
+    if refused is not None:
+        return refused
     refused = layout_divisibility_refusal(descriptor, flexible, shapes, graded_ranks)
     if refused is not None:
         return refused

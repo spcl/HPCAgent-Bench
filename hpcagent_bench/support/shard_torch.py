@@ -207,6 +207,9 @@ def generate(
     out = torch.empty(local, dtype=out_dtype, device=device)
     if out.numel() == 0:
         return out
+    if not spec.shape:  # a 0-d input: one value, at flat index 0
+        out.copy_(spec.values(torch.zeros((), dtype=torch.int64, device=device), key).to(out_dtype))
+        return out
     strides = [math.prod(spec.shape[d + 1 :]) for d in range(len(spec.shape))]
     inner = torch.zeros((), dtype=torch.int64, device=device)
     for d in range(1, len(spec.shape)):
