@@ -148,7 +148,50 @@ def harvest_local_shapes(
     from the constructor's ``dtype=`` kwarg, so the emitter can
     declare ``X = np.zeros((N,), dtype=np.complex128)`` as
     ``double _Complex X[N]``.
+
+    A ``Name = Name`` alias is applied only after a walk, so within that walk an expression reading
+    the alias has no extent for it and takes the extent of the operands it can resolve: the wrong
+    RANK whenever those are the lower-rank side (lenet's ``held = acc`` then ``held + bias`` came
+    back shaped like the rank-1 ``bias``, not the rank-4 activation). So an assignment that reads
+    an alias not yet resolved waits, and the walk repeats while it still resolves new names. A last
+    walk with nothing waiting answers for an alias whose source never resolves, as a single walk did.
     """
+    aliased = alias_targets(tree)
+    if aliased:
+        while True:
+            known = (len(shape_table), len(dtype_table or ()))
+            harvest_walk(tree, shape_table, dtype_table, scalar_helpers, aliased - shape_table.keys())
+            if (len(shape_table), len(dtype_table or ())) == known:
+                break
+    harvest_walk(tree, shape_table, dtype_table, scalar_helpers, frozenset())
+
+
+def alias_targets(tree: ast.AST) -> frozenset[str]:
+    """Every name ``tree`` binds by a ``Name = Name`` alias, which :func:`harvest_walk` resolves only after its walk."""
+    return frozenset(
+        stmt.targets[0].id
+        for stmt in walk_nodes(tree)
+        if isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and isinstance(optional_constructor(stmt.value), ast.Name)
+    )
+
+
+def reads_any(node: ast.AST, names: frozenset[str]) -> bool:
+    """Whether ``node`` reads one of ``names``."""
+    return any(isinstance(sub, ast.Name) and sub.id in names for sub in walk_nodes(node))
+
+
+def harvest_walk(
+    tree: ast.AST,
+    shape_table: dict[str, tuple[str, ...]],
+    dtype_table: dict[str, str] | None,
+    scalar_helpers: set[str] | None,
+    waiting: frozenset[str],
+) -> None:
+    """One walk of :func:`harvest_local_shapes`: every assignment except one reading a ``waiting`` alias, then the
+    aliases."""
     # A name bound BOTH ways -- ``padded = x`` in one branch, ``padded = np.zeros(...)`` in the
     # other -- must take the ALLOCATION's shape: the alias is derived, the allocation is the
     # declaration, and the allocation is the larger of the two wherever the branch exists to avoid
@@ -168,6 +211,8 @@ def harvest_local_shapes(
         if isinstance(rhs, ast.Name):
             # Name = Name alias -- inherit shape and dtype from the source, after every allocation.
             aliases.append((target.id, rhs.id))
+            continue
+        if waiting and reads_any(rhs, waiting):
             continue
         harvest_assign(target.id, rhs, shape_table, dtype_table, scalar_helpers)
     for name, src in aliases:
