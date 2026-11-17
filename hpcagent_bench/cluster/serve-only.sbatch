@@ -9,6 +9,13 @@
 #   PREWARM=1 MODEL=glm53 hpcagent_bench/cluster/serve-only.sbatch  boot, run every served shape once, exit: fills the kernel caches
 #   ACCESS=alps MODEL=kimi27sglang SERVE_BASE_ENV=mlgpu40:kimi27sglang hpcagent_bench/cluster/serve-only.sbatch
 #                                                                  keyed, for setups of ours on another partition (below)
+#   SERVE_BENCH=<name> MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch
+#                                                                  BENCH mode: the server arguments of [bench.<name>]
+#                                                                  (experiments.toml), an agent-shaped load instead of
+#                                                                  the endpoint, bench-<name>.json in the run dir, exit.
+#                                                                  `hpcagent-bench serve-bench submit` submits it per config
+#                                                                  (docs/serving/README.md); BENCH_FORCE_RULES=1 skips
+#                                                                  the serving rules (serve_args.py).
 # ACCESS: open (default) serves every interface without a key. alps (SGLang only) serves with the key KEY_FILE holds
 # (default ~/.config/hpcagent-bench/<MODEL>-endpoint.key, mode 600) on the address each node's name resolves to, never
 # the wildcard, metrics off, from a mode-700 run dir (docs/serving/private-endpoint.md, section 1). Once a request
@@ -60,11 +67,19 @@ SERVE_ENV="${SERVE_ENV_FILE:-}"
 . "${SCRIPT_DIR}/env_layers.sh"
 BASE_FLAT="$(render_env "${BASE_ENV}")" || exit 2
 SERVE_FLAT="$(env_spec serve)" || exit 2
+BENCH_FLAT=""
+if [[ -n "${SERVE_BENCH:-}" ]]; then
+    BENCH_FLAT="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.serve_args bench "${SERVE_BENCH}" \
+        --base "${BASE_ENV}" ${BENCH_FORCE_RULES:+--force-rules})" || exit 2
+fi
+# The serving rules (serve_args.RULES), before a node is held: what a launch would refuse is refused here.
+[[ -n "${BENCH_FORCE_RULES:-}" ]] || "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.serve_args check \
+    <(printf '%s\n' "${BASE_FLAT}" "${SERVE_FLAT}" "${BENCH_FLAT}"; [[ -z "${SERVE_ENV}" ]] || cat -- "${SERVE_ENV}") || exit 2
 set -a
 # shellcheck disable=SC1090
 . <(printf '%s\n' "${BASE_FLAT}")
 # shellcheck disable=SC1090
-. <(printf '%s\n' "${SERVE_FLAT}")
+. <(printf '%s\n' "${SERVE_FLAT}" "${BENCH_FLAT}")
 # shellcheck disable=SC1090
 [[ -z "${SERVE_ENV}" ]] || . "${SERVE_ENV}"
 set +a
@@ -161,7 +176,7 @@ fi
 mkdir -p "${RUN_DIR}"
 # The one file run_cluster.sh re-reads in the container, and the record of what this job served. ACCESS=alps adds the
 # key's --config and drops --enable-metrics from the experiment's server arguments.
-{ printf '%s\n' "${BASE_FLAT}" "${SERVE_FLAT}"; [[ -z "${SERVE_ENV}" ]] || cat -- "${SERVE_ENV}"
+{ printf '%s\n' "${BASE_FLAT}" "${SERVE_FLAT}" "${BENCH_FLAT}"; [[ -z "${SERVE_ENV}" ]] || cat -- "${SERVE_ENV}"
   printf 'GPUS_PER_NODE=%s\nINFERENCE_CE_ENV=%s\n' "${GPUS_PER_NODE:?}" "${INFERENCE_CE_ENV}"
   [[ "${ACCESS}" != alps ]] || printf 'INFERENCE_SGLANG_AUTH_CONFIG=%s\n' "${RUN_DIR}/sglang-auth.yaml"
 } >"${RUN_DIR}/serve.env"
@@ -231,13 +246,35 @@ until curl -sf --connect-timeout 10 --max-time 60 "${auth[@]}" "${endpoint}/mode
 done
 done
 
+api_up=$(( $(date +%s) - deadline + READY_TIMEOUT ))
+if [[ -n "${SERVE_BENCH:-}" ]]; then
+    # BENCH mode: the load replaces the endpoint; the guard only reports (a starved pool is a result here).
+    echo "bench: API up after ${api_up} s; config ${SERVE_BENCH}"
+    rc=0
+    KV_GUARD=warn "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.serve_bench run --base "${BASE_URL}" \
+        --model "${SERVED_MODEL}" --name "${SERVE_BENCH}" --run-dir "${RUN_DIR}" --api-up-s "${api_up}" \
+        --concurrency ${BENCH_CONCURRENCY:-20 40} --seconds "${BENCH_SECONDS:-900}" || rc=$?
+    grep -a "PP0 TP0] Decode batch" "${RUN_DIR}"/server-0.log | tail -n 3 || true
+    kill "${SERVER_PID}" 2>/dev/null || true
+    wait "${SERVER_PID}" 2>/dev/null || true
+    exit "${rc}"
+fi
+# The KV pool the server allocated against what its agents need (serve_guard.py): below the floor the job fails here,
+# not after hours of re-prefilling; KV_GUARD=warn reports it and serves.
+"${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.serve_guard check --env "${RUN_DIR}/serve.env" --run-dir "${RUN_DIR}" || {
+    echo "FAIL: the KV pool is below the floor (KV_GUARD=warn serves anyway)" >&2
+    kill "${SERVER_PID}" 2>/dev/null || true
+    wait "${SERVER_PID}" 2>/dev/null || true
+    exit 1
+}
+
 if [[ "${PREWARM:-0}" == 1 ]]; then
     # Prewarm: run the shapes a served model meets so every kernel aiter and Triton JIT-compile for
     # them lands in the persistent caches (run_cluster.sh: <JIT_CACHE_ROOT>/.aiter/aiter-<ver>-<arch>,
     # .triton/<EDF>), then end the job. Boot covers weights, KV sizing and decode graph capture; the
     # gates cover a tool call, reasoning, and prefill plus prefix-hit extend up to ~51k tokens; the
     # burst covers a mixed prefill batch. On a warm cache it compiles nothing and only costs the boot.
-    echo "prewarm: API up after $(( $(date +%s) - deadline + READY_TIMEOUT )) s"
+    echo "prewarm: API up after ${api_up} s"
     gates="${HPCAGENT_BENCH_REPO}/containers/inference"
     py="${HPCAGENT_BENCH_HOST_PYTHON:-python3}"
     rc=0

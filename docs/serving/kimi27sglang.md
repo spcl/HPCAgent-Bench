@@ -43,16 +43,19 @@ The pool has not been measured against a working set; if the hit rate falls unde
 conversations, since the fraction has no headroom left.
 
 One pipeline serves 20 agents (24 request slots and decode graphs; the fraction leaves no room for a larger
-pool). More agents are served by more pipelines in the same job: `INFERENCE_NODES=8 INFERENCE_REPLICAS=2` runs
-two `pp=4` pipelines on consecutive nodes, each answering on its first node, and the driver stripes the agents over
-them by problem index (`AGENTS_PER_NODE=40` on one agent node: 20 per pipeline).
+pool). `submit.sh` splits a setup of more problems into one job per 20 (`-p1`, `-p2`, ...; [LAUNCH.md](../../experiments/LAUNCH.md#sizing-agents-and-walltime)).
+By hand, more pipelines serve in one job: `INFERENCE_NODES=8 INFERENCE_REPLICAS=2` runs two `pp=4` pipelines on consecutive
+nodes, each answering on its first node, and the driver stripes the agents over them by problem index (`AGENTS_PER_NODE=40`
+on one agent node: 20 per pipeline).
 
 ## Tuning record (2026-11-17)
 
-Measured with `jobs/kimi-tune-1117/` (outside the repo): one `pp=4` server per job and an agent-shaped load
-(`agent_load.py`: per agent a 30k-token prefix, then turns of 1.5k new tokens and 400 output tokens,
-15 min at 20 agents, then 15 min at 40). Server logs: `$SCRATCH/inference-server/<job>/`. Read this before
-running a new sweep; every row below has been measured once.
+Measured with `hpcagent-bench serve-bench` ([README](README.md#8-benchmarking-a-configuration-and-the-guards); the
+`[bench.kimi-*]` tables of `experiments.toml` are the configurations): one `pp=4` server per job and an agent-shaped load
+(per agent a 30k-token prefix, then turns of 1.5k new tokens and 400 output tokens, 15 min at 20 agents, then 15 min at
+40). Server logs: `$SCRATCH/inference-server/<job>/`. Read this before running a new sweep; every row below has been
+measured once. The pool floor below is `KV_TOKENS_PER_AGENT = 80000` x 20 agents = 1.6M tokens; 0.52 (1.85M) passes, 0.48
+(0.15 to 1.0M) fails.
 
 | Setting | Result | Job |
 |---|---|---|
@@ -83,7 +86,7 @@ layout; split larger setups into separate jobs of 20.
 - Keep `--cuda-graph-max-bs-decode` at the live agent count plus slack (24 for 20 agents; graph capture
   takes memory after KV sizing; without the cap the failure looks like a fraction problem),
   `--max-running-requests` the same, `--page-size 64` (vendor `gfx942` recipe) and the
-  fraction at or below 0.55.
+  fraction at or below 0.55. `--ep-size` above 1 needs `--moe-runner-backend triton` (`MOE_CHECKPOINT`, refused otherwise).
 - Set `NCCL_NET_GDR_LEVEL=LOC`, keep PyNCCL on (about 20x slower decode without it), and confirm
   `grep -a "Using network" server-0.log` says `AWS Libfabric` ([`knobs.md`](knobs.md#multi-node-fabric)).
 - Gate a `--kv-cache-dtype` change on long context: fp8 checkpoints ship no calibrated KV scales, and

@@ -189,7 +189,7 @@ check_forms() {
 }
 
 # stage_setup <model> <language|base> <packet|none> <harness> -- writes one setup's problems and .env;
-# leaves SETUP, ENV and WALLTIME set
+# leaves SETUP, ENV and PART_ENVS (one env per job) with PART_WALLTIMES set
 stage_setup() {
     local model="$1" lang="$2" packet="$3" harness="$4" temperature="$5" base="${BASE}:$1" flat
     [[ "${packet}" != none ]] || packet=""
@@ -262,22 +262,6 @@ stage_setup() {
     [[ -z "${AGENT_NODES:-}" ]] || kvs+=("AGENT_NODES=${AGENT_NODES}")
     [[ -z "${JUDGE_NODES:-}" ]] || kvs+=("JUDGE_NODES=${JUDGE_NODES}")
     [[ -z "${temperature}" ]] || kvs+=("INFERENCE_TEMPERATURE=${temperature}")
-    # A pp model serves AGENTS_PER_PIPELINE agents per pipeline: a setup with fewer problems than its pipelines serve
-    # (an owed rerun of a few kernels) gets one pipeline per AGENTS_PER_PIPELINE problems and the agent nodes they need.
-    local per_pipeline replicas
-    per_pipeline=$(base_value "${flat}" AGENTS_PER_PIPELINE)
-    replicas=$(base_value "${flat}" INFERENCE_REPLICAS)
-    if [[ -n "${per_pipeline}" && -s "${problems}" ]] && (( ${replicas:-1} > 1 )); then
-        local need served per_node agent_nodes
-        need=$(( ($(grep -c . "${problems}") + per_pipeline - 1) / per_pipeline ))
-        if (( need < replicas )); then
-            served=$(( need * per_pipeline ))
-            per_node=${AGENTS_PER_NODE:-$(base_value "${flat}" AGENTS_PER_NODE)}
-            agent_nodes=$(( (served + ${per_node:-40} - 1) / ${per_node:-40} ))
-            kvs+=("INFERENCE_REPLICAS=${need}" "INFERENCE_NODES=$(( $(base_value "${flat}" INFERENCE_NODES) / replicas * need ))"
-                "AGENT_NODES=${agent_nodes}" "AGENTS_PER_NODE=$(( served / agent_nodes ))")
-        fi
-    fi
     if [[ -n "${packet}" ]]; then
         local line hints verified_only
         # The hint detail a -kinds packet serves its form at; the form check below reads the forms at it.
@@ -327,7 +311,23 @@ stage_setup() {
         "${agent}" "${tokens}" >>"${staged}"
     finalize_staged_env "${staged}" "${ENV}" || return 2
     [[ -z "${ENV_ONLY}" ]] || return 0
-    WALLTIME=${DEADLINE_WALLTIME:-${TIME_LIMIT:-$(job_walltime "${ENV}" "$(grep -c . "${problems}")")}}
+    # A pp model serves AGENTS_PER_PIPELINE agents per pipeline (pipelines.py): the setup is one job per pipeline's
+    # agents, dealt over by KernelBench level, under the one setup name; SPLIT_PIPELINES=0 keeps one job. A model with no
+    # pipeline size, or a setup of one pipeline's problems, is the one env it was.
+    local parts part part_problems
+    PART_ENVS=("${ENV}") PART_WALLTIMES=()
+    if [[ "${SPLIT_PIPELINES:-1}" != 0 ]]; then
+        for part in "${ENV}".p*; do
+            [[ -e "${part}" ]] || continue
+            refuse_if_queue_references "${PWD}/${part}" "${PWD}/${problems%.jsonl}.${part##*.}.jsonl" || return 2
+        done
+        parts=$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.pipelines split "${ENV}" "${problems}") || return 2
+        mapfile -t PART_ENVS <<<"${parts}"
+    fi
+    for part in "${PART_ENVS[@]}"; do
+        part_problems=$(sed -n 's/^PROBLEMS_FILE=//p' "${part}" | tail -n 1)
+        PART_WALLTIMES+=("${DEADLINE_WALLTIME:-${TIME_LIMIT:-$(job_walltime "${part}" "$(grep -c . "${part_problems}")")}}")
+    done
 }
 
 # setup_renders <lang> <packet> -> the prepare renders one setup reads, one per line: numba, its reference language
@@ -374,8 +374,11 @@ submit_prepare() {
     fi
     mkdir -p -- "${cache}" "${HPCAGENT_BENCH_SCRATCH}/logs"
     # the job's values ride sbatch's environment (its default --export=ALL), never --export: Slurm cancels such a job
+    # prepare resumes from its caches: a shorter job is useful, so it is trimmed to end before the next reservation
+    fit_walltime "${PREPARE_TIME:-06:00:00}" "${PREPARE_MIN_TIME:-01:00:00}" "${BEGIN}" || return 2
     jid=$(HPCAGENT_BENCH_REPO="${OPT}" JUDGE_EDF="${edf}" HPCAGENT_BENCH_REFERENCES_GENERATED_CACHE_DIR="${cache}" HPCAGENT_BENCH_USER_PLUGIN_DIRS= \
         sbatch_retry --parsable --no-requeue --nodes=1 --job-name="prepare-${EXPERIMENT}" --comment="renders=${renders};commit=$(prep_commit)" \
+        --time="${FIT_WALLTIME}" ${FIT_BEGIN:+--begin="${FIT_BEGIN}"} \
         --output="${HPCAGENT_BENCH_SCRATCH}/logs/prepare-%j.out" --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" \
         "${options[@]}" \
         "${CLUSTER_DIR}/prepare.sbatch" "${args[@]}" --renders "${renders}") || return 2
@@ -431,8 +434,10 @@ submit_goldens() {
         # shellcheck source=../../helpers/scripts/site_env.sh
         [[ -n "${EDF_PATH:-}" ]] || . "${OPT}/helpers/scripts/site_env.sh"
         edf="${EDF_PATH%%:*}/${judge}.toml"
+        fit_walltime "${GOLDENS_TIME:-06:00:00}" "${GOLDENS_MIN_TIME:-01:00:00}" "${BEGIN}" || return 2
         jid=$(HPCAGENT_BENCH_REPO="${OPT}" JUDGE_EDF="${edf}" HPCAGENT_BENCH_USER_PLUGIN_DIRS= HPCAGENT_BENCH_PYTHON_DEVICE="${device}" \
             sbatch_retry --parsable --no-requeue --nodes="${GOLDEN_NODES:-2}" --job-name="goldens-${EXPERIMENT}-${lang}" --comment="goldens;commit=$(prep_commit)" \
+            --time="${FIT_WALLTIME}" ${FIT_BEGIN:+--begin="${FIT_BEGIN}"} \
             --output="${HPCAGENT_BENCH_SCRATCH}/logs/goldens-%j.out" --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" \
             ${after:+--dependency="afterok:${after}"} ${after:+--kill-on-invalid-dep=yes} "${options[@]}" \
             "${CLUSTER_DIR}/prepare.sbatch" "${args[@]}" --language "${graded}" --steps grade) || return 2
@@ -450,7 +455,11 @@ for model in ${MODELS}; do
                 for temperature in ${TEMPERATURES}; do
                     stage_setup "${model}" "${lang}" "${packet}" "${harness}" "${temperature}" || exit 2
                     [[ -z "${ENV_ONLY}" ]] || continue
-                    WAVE_ENVS+=("${ENV}") WAVE_SETUPS+=("${SETUP}") WAVE_WALLTIMES+=("${WALLTIME}") WAVE_LANGS+=("${lang}")
+                    for part in "${!PART_ENVS[@]}"; do
+                        # the jobs of one setup (-p<k>) share its name in the records, so the analysis pools them
+                        WAVE_ENVS+=("${PART_ENVS[part]}") WAVE_WALLTIMES+=("${PART_WALLTIMES[part]}") WAVE_LANGS+=("${lang}")
+                        if (( ${#PART_ENVS[@]} > 1 )); then WAVE_SETUPS+=("${SETUP}-p$(( part + 1 ))"); else WAVE_SETUPS+=("${SETUP}"); fi
+                    done
                     mapfile -t -O "${#WAVE_RENDERS[@]}" WAVE_RENDERS < <(setup_renders "${lang}" "${packet}")
                 done
             done
