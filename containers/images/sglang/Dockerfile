@@ -23,8 +23,8 @@
 # number taken on 7.2.0 / 2.9.1 / aiter 0.1.19 is not comparable with one from this image.
 #
 # Pinned by DIGEST because a date-stamped tag is still a tag.
-ARG BASE_IMAGE=docker.io/lmsysorg/sglang-rocm:v0.5.20-rocm724-mi30x-20260926\
-@sha256:a964345c1089a9bbabc0894e6c4ebfddb6c80a695b6bb4c904f4c680db953c80
+ARG BASE_IMAGE=docker.io/lmsysorg/sglang-rocm:v0.5.23-rocm724-mi30x-20261117\
+@sha256:bd85c48d36fa7eb5595dd000ef6d8a0c2e0b33b2cfe66fc788771c9ef4cafbe5
 
 # ------------------------------------------------------------------------------------------------
 # One stage. This image builds NO fabric software at all -- no libfabric, no libcxi, no RCCL net
@@ -53,8 +53,8 @@ ARG BASE_IMAGE
 # local dir: path, and that must not become the published base.name.
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 LABEL org.opencontainers.image.title="hpcagent-bench-sglang" \
-      org.opencontainers.image.description="SGLang inference for MI300A: ROCm 7.2.4, host-supplied fabric, pinned flydsl" \
-      org.opencontainers.image.version="0.5.20" \
+      org.opencontainers.image.description="SGLang inference for MI300A: ROCm 7.2.4, host-supplied fabric" \
+      org.opencontainers.image.version="0.5.23" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
@@ -76,17 +76,14 @@ ENV HCC_AMDGPU_TARGET=${ROCM_ARCH_CSV} \
     GPU_ARCH_LIST=${ROCM_ARCH}
 COPY containers/images/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 
-# flydsl and cupy, PINNED and INSIDE the image, as one tiny uv project (pyproject.toml and uv.lock beside
-# this file) synced into the vendor venv /opt/venv. `--inexact` removes nothing the vendor environment holds,
-# and numpy is skipped: it is the vendor's, and what served results are compared against.
+# cupy, PINNED and INSIDE the image, as one tiny uv project (pyproject.toml and uv.lock beside this file)
+# synced into the vendor venv /opt/venv. `--inexact` removes nothing the vendor environment holds, and numpy
+# is skipped: it is the vendor's, and what served results are compared against.
 #
-# flydsl: the base carries 0.3.1; the setups run 0.3.2, and a package reached through an out-of-image
-# PYTHONPATH would be invisible to the image digest. It matters because kimi's int4 MoE dispatches through
-# it: AMD measure fused_moe at 87.8-89.7% of GPU time on this shape, and their W4A16 FlyDSL kernel at +162%
-# throughput / -47% TTFT. aiter reaches it when AITER_USE_FLYDSL_MOE_SORTING=1 and the package imports. The
-# wheel, not a source build: FlyDSL ships its own LLVM/MLIR and embeds the MLIR python bindings, and
-# pointing MLIR_PATH at a foreign one is a documented build failure. There is a cp312 manylinux wheel,
-# which is this image's interpreter.
+# flydsl is the base's own: the vendor installs the version its aiter pins (aiter 581579ab: flydsl==0.4.2),
+# and kimi's int4 MoE reaches it through aiter (AITER_USE_FLYDSL_MOE_SORTING=1). A pin of our own would
+# move it off the version aiter's FlyDSL kernels are written against. The gates below still require that it
+# imports from inside the image.
 #
 # cupy: the base ships none. From SOURCE: there is no ROCm wheel, the cupy-rocm-* names are dead and PyPI
 # carries only the sdist. The HIP switches are the project's [tool.uv.extra-build-variables]; the target
@@ -157,23 +154,6 @@ RUN set -eux; \
     cp -f "${built}" "${installed}"; \
     cmp "${built}" "${installed}"; \
     /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${installed}"
-
-# The DSA aiter decode (GLM-5.3, --dsa-decode-backend aiter) hands aiter exactly bs + 1 kv_indptr
-# entries. get_mla_metadata_v1 takes the batch count from the tensor's size, so the whole max_bs + 1
-# buffer makes every decode below max_bs plan stale batches and write past the output: an illegal
-# memory access in graph capture, or NaN where it does not fault. Upstream main has the unsliced
-# line (docs/serving/glm53.md has the reproducer).
-RUN /opt/venv/bin/python3 <<'PY'
-import pathlib
-import sys
-
-SRC = pathlib.Path("/sgl-workspace/sglang/python/sglang/srt/layers/attention/dsa_backend.py")
-OLD = "        kv_indptr = self.kv_indptr\n"
-text = SRC.read_text()
-if text.count(OLD) != 1:
-    sys.exit(f"{SRC}: expected one {OLD!r}, found {text.count(OLD)}; upstream changed, re-derive the edit")
-SRC.write_text(text.replace(OLD, "        kv_indptr = self.kv_indptr[: bs + 1]\n"))
-PY
 
 # After loading weights every tensor-parallel group waits in a monitored barrier hardcoded to 480 s. A group
 # spanning two nodes (GLM-5.3 at tp=8 pp=2) finishes loading up to 18 min apart from the shared filesystem,
@@ -446,7 +426,9 @@ ENV HSA_ENABLE_IPC_MODE_LEGACY=1 \
 #     rank) and --attention-backend aiter scales it by 0.85: per-model values and the pool they give
 #     are in docs/serving/ (qwen38.md, glm53.md, knobs.md).
 #
-# The only SGLang source edits are the sgl_kernel build and the DSA kv_indptr slice above.
+# The only SGLang source edits are the sgl_kernel build and the model-loading barrier timeout above. The
+# DSA kv_indptr slice (docs/serving/glm53.md) is upstream since v0.5.23: _prepare_aiter_dsa_decode_metadata
+# hands get_mla_metadata_v1 kv_indptr[: bs + 1].
 
 RUN /opt/venv/bin/python3 <<'PY'
 import json
