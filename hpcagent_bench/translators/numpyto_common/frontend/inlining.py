@@ -702,11 +702,12 @@ def is_multi_stmt_return_form(fn: ast.FunctionDef) -> bool:
 
 
 def computes(arg: ast.expr) -> bool:
-    """Whether evaluating ``arg`` does work (an operator or a call), as opposed to naming a value or a view of one
-    (``a``, ``a[i]``, ``a.T``), which a reader can repeat for free."""
-    return any(
-        isinstance(n, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.Call, ast.IfExp)) for n in ast.walk(arg)
-    )
+    """Whether evaluating ``arg`` does work on a value (an operator or a call over a name), as opposed to naming a
+    value or a view of one (``a``, ``a[i]``, ``a.T``), which a reader can repeat for free. A constant (``-1``) is
+    never bound: a parameter like ``axis`` must stay a literal."""
+    nodes = list(ast.walk(arg))
+    works = any(isinstance(n, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.Call, ast.IfExp)) for n in nodes)
+    return works and any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) for n in nodes)
 
 
 class InlineHelpers(ast.NodeTransformer):

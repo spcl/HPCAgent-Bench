@@ -23,6 +23,8 @@ import ast
 import copy
 from collections.abc import Iterator
 
+import numpy as np
+
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.lib_nodes.registry import ELEMENTWISE_SHAPE_OPS
@@ -186,7 +188,9 @@ class RowRewriter:
         call = ast.Call(func=copy.deepcopy(node.func), args=[pair[0] for pair in pairs], keywords=[])
         if all(rank is None for rank in ranks):
             return call, None
-        if numpy_call_attr(node) not in ELEMENTWISE_SHAPE_OPS:
+        name = numpy_call_attr(node) or ""
+        # a numpy ufunc is elementwise by definition (np.abs, np.exp, ...)
+        if name not in ELEMENTWISE_SHAPE_OPS and not isinstance(vars(np).get(name), np.ufunc):
             raise RowRefusal(f"{ast.unparse(node)}: not an elementwise call over the selected rows")
         return call, self.elementwise(node, list(zip(node.args, ranks, strict=True)))
 
