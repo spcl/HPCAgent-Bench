@@ -235,6 +235,7 @@ def packet_definition(plugin: Plugin, key: str, block: PacketTable) -> PacketDef
         tools=tuple(dict.fromkeys((*phase_tools, *block.tools, *stepped))),
         phases=tuple(packet_phase(plugin.name, name, mode, phases[name]) for name, mode in modes.items()),
         workflow=workflow_text(plugin, modes, phases),
+        route=plugin.name,
     )
 
 

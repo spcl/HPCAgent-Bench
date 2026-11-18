@@ -631,12 +631,12 @@ async def next_phase(request: Request) -> Response:
 
 
 def plugin_tool_paths(packets: Iterable[PacketDef]) -> tuple[str, ...]:
-    """``/<route>/<tool>`` of every tool a phased plugin packet carries (``next_phase`` has its own relay), each once
-    in packet order: the paths the judge's plugin routes serve."""
+    """``/<route>/<tool>`` of every tool a plugin packet carries (``next_phase`` has its own relay), each once in
+    packet order: the paths the judge's plugin routes serve."""
     paths = (
-        f"/{packet.phases[0].route}/{tool}"
+        f"/{packet.route}/{tool}"
         for packet in packets
-        if packet.phases
+        if packet.route
         for tool in packet.tools
         if tool != plugins.NEXT_PHASE
     )
