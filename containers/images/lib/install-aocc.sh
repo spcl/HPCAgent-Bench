@@ -5,9 +5,10 @@
 # AMD AOCC, the cc_aocc column's driver, from AMD's tarball into a user PREFIX without root. TARBALL is
 # aocc-compiler-<version>.tar, as a local path or a URL; the default is AMD's download link for VERSION (AMD may ask for
 # its EULA in a browser first, then pass the downloaded file). The column needs AOCC on LLVM >= 19 (-std=c23), so AOCC
-# 6 or later; AOCC 5.x is LLVM 17 and the column reports it tool_missing.
+# 6 or later; AOCC 5.x is LLVM 17 and the column reports it tool_missing. The tarball is checked against CHECKSUM
+# (<sha256|sha384|sha512>:<hex>) before it is unpacked; 6.0.0's is pinned, any other VERSION needs one.
 #
-#   install-aocc.sh PREFIX [TARBALL]          VERSION=<x.y.z> (default 6.0.0)
+#   install-aocc.sh PREFIX [TARBALL]          VERSION=<x.y.z> (default 6.0.0), CHECKSUM=<algo>:<hex>
 set -euo pipefail
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
@@ -21,6 +22,20 @@ PREFIX=$1
 VERSION=${VERSION:-6.0.0}
 major_minor=$(echo "${VERSION}" | cut -d. -f1-2 | tr . -)
 TARBALL=${2:-https://download.amd.com/developer/eula/aocc/aocc-${major_minor}/aocc-compiler-${VERSION}.tar}
+# AMD's aocc-compiler-6.0.0.tar, hashed 2026-11-18 (AMD publishes none).
+AOCC_600_SHA256=28b97b6c5d8ea6b3ea08a5e52b2c784d41dddb655e2251bdddd6932ef1888d92
+[[ "${VERSION}" != 6.0.0 ]] || CHECKSUM=${CHECKSUM:-sha256:${AOCC_600_SHA256}}
+[[ -n "${CHECKSUM:-}" ]] || { echo "AOCC ${VERSION} has no pinned checksum: set CHECKSUM=<algo>:<hex>" >&2; exit 2; }
+# verify FILE -- refuse FILE unless its digest is CHECKSUM (<sha256|sha384|sha512>:<hex>), as the vendor publishes it.
+verify() {
+    local algo="${CHECKSUM%%:*}" want="${CHECKSUM#*:}" got
+    case "${algo}" in
+        sha256 | sha384 | sha512) ;;
+        *) echo "CHECKSUM must be sha256:<hex>, sha384:<hex> or sha512:<hex>, got '${CHECKSUM}'" >&2; exit 2 ;;
+    esac
+    got="$("${algo}sum" "$1" | cut -d' ' -f1)"
+    [[ "${got}" == "${want,,}" ]] || { echo "$1: ${algo} ${got}, expected ${want}" >&2; exit 1; }
+}
 work=$(mktemp -d)
 trap 'rm -rf "${work}"' EXIT
 
@@ -30,6 +45,7 @@ else
     tarball="${work}/aocc.tar"
     curl -fSL -o "${tarball}" "${TARBALL}"
 fi
+verify "${tarball}"
 mkdir -p "${PREFIX}"
 tar -xf "${tarball}" -C "${PREFIX}"
 root=$(ls -d "${PREFIX}"/aocc-compiler-* | sort -V | tail -n 1)
