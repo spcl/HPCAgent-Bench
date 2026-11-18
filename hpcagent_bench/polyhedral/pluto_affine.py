@@ -481,7 +481,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
             upstream="n/a",
         ),
         PolyccIssue(
-            id="C-005",
+            id="C-004",
             kind="caveat",
             component="translator",
             severity="caveat",
