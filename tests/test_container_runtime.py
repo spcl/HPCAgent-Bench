@@ -249,6 +249,17 @@ def test_every_runtime_mounts_what_the_container_engine_mounts(tmp_path: pathlib
     assert expected <= {done.wrap[i + 1] for i, word in enumerate(done.wrap) if word == flag}
 
 
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_a_bind_whose_path_holds_a_space_stays_one_bind(tmp_path: pathlib.Path, runtime: str) -> None:
+    repo = tmp_path / "check out"
+    done = wrap(tmp_path, runtime, "judge-node", HPCAGENT_BENCH_REPO=str(repo))
+    assert done.returncode == 0, done.stderr
+    flag = "--bind" if runtime == "apptainer" else "--volume"
+    binds = [done.wrap[i + 1] for i, word in enumerate(done.wrap) if word == flag]
+    assert [bind for bind in binds if bind.startswith(f"{repo}:")], binds
+    assert not [bind for bind in binds if bind == str(tmp_path / "check")], "the path was split at its space"
+
+
 @pytest.mark.parametrize(
     ("installed", "program"), [(("singularity",), "singularity"), (("apptainer", "singularity"), "apptainer")]
 )
@@ -522,6 +533,7 @@ if __name__ == "__main__":
             )
             test_an_extra_bind_source_reaches_every_runtime_at_its_own_path(fresh(f"extra-{container}"), container)
             test_a_runtime_that_runs_an_image_refuses_to_run_without_one(fresh(f"image-{container}"), container)
+            test_a_bind_whose_path_holds_a_space_stays_one_bind(fresh(f"space-{container}"), container)
             for name in ("agent-node", "judge-node"):
                 test_every_runtime_mounts_what_the_container_engine_mounts(
                     fresh(f"ce-{container}-{name}"), container, name

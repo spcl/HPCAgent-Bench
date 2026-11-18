@@ -514,9 +514,10 @@ container_wrap() {
     for mount in $(role_mounts "${role}") "$@"; do
         volumes+=("${mount}:${mount}")
     done
-    for mount in $(role_binds "${role}"); do
-        volumes+=("${mount}")
-    done
+    # One bind per line: a path with a space stays one bind.
+    while IFS= read -r mount; do
+        [[ -z "${mount}" ]] || volumes+=("${mount}")
+    done < <(role_binds "${role}")
     for mount in "${volumes[@]}"; do
         binds+=("${SPELL[${CONTAINER_RUNTIME}.bind]}" "${mount}")
     done
