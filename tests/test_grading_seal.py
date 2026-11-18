@@ -950,3 +950,25 @@ def test_a_judge_that_mapped_a_gpu_runtime_still_seals_its_grading_child(tmp_pat
     )
     assert graded.returncode == 0, graded.stderr[-3000:]
     assert graded.stdout.strip().splitlines()[-1] == "[1.0, 1.0]"
+
+
+def mountinfo_line(mount_point: str, options: str) -> str:
+    return f"36 35 98:0 / {mount_point} {options} master:1 - ext4 /dev/root rw"
+
+
+@pytest.mark.parametrize(("work_options", "refused"), [("rw,relatime", True), ("ro,relatime", False)])
+def test_a_work_area_the_read_only_pass_cannot_make_writable_again_is_a_seal_fault(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, work_options: str, refused: bool
+) -> None:
+    """A failed mount_setattr on a kept path was ignored, so the grading child ran with a read-only work area and its
+    writes failed as the kernel's own; a mount that was read-only before the seal stays read-only as before."""
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text("\n".join([mountinfo_line("/", "rw"), mountinfo_line("/work", work_options)]) + "\n")
+    monkeypatch.setattr(seal_worker, "MOUNTINFO", str(mountinfo))
+    monkeypatch.setattr(seal, "submounts", lambda path: ["/work", "/"])
+    monkeypatch.setattr(seal, "mount_setattr", lambda path, *, read_only, recursive: path == "/")
+    if refused:
+        with pytest.raises(seal.SealError, match="/work"):
+            seal.read_only_but(writable=("/work",), readonly=())
+    else:
+        seal.read_only_but(writable=("/work",), readonly=())
