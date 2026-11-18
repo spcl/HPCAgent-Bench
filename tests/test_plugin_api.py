@@ -113,7 +113,10 @@ def test_the_check_names_what_a_declaration_gets_wrong(tmp_path: pathlib.Path, m
     ]
 
     monkeypatch.setitem(routes.ROUTES, "probe", routes.Route(lambda judge, request: None, frozenset()))
-    route.write_text("from ..wire import X\nfrom hpcagent_bench.plugin_api import route\n", encoding="utf-8")
+    route.write_text(
+        "from ..wire import X\nfrom hpcagent_bench.plugin_api import route\nfrom hpcagent_bench import plugin_api\n",
+        encoding="utf-8",
+    )
     good = plugin_at(plugin.root, MANIFEST + f'[gates]\n{post_run} = "os.path:join"\n')
     assert plugins.name_failures(good, frozenset()) == []
     assert plugins.gates_note(good) == (
