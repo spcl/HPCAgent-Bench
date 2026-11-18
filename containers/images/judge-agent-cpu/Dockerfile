@@ -275,7 +275,8 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       "clang-${LLVM_MAJOR}" "flang-${LLVM_MAJOR}" "lld-${LLVM_MAJOR}" "llvm-${LLVM_MAJOR}" \
-      "libomp-${LLVM_MAJOR}-dev" "libclang-rt-${LLVM_MAJOR}-dev" "libpolly-${LLVM_MAJOR}-dev"; \
+      "libomp-${LLVM_MAJOR}-dev" "libclang-rt-${LLVM_MAJOR}-dev" "libpolly-${LLVM_MAJOR}-dev" \
+      "mlir-${LLVM_MAJOR}-tools"; \
     rm -rf /var/lib/apt/lists/*
 
 # Toolchain gate: the bare names are the pinned majors, Graphite runs, flang can take the
@@ -287,7 +288,7 @@ RUN set -eux; \
       || { echo "bare gcc is $(gcc -dumpfullversion) at $(command -v gcc), not gcc ${GCC_MAJOR}" >&2; exit 1; }; \
     g++ -dumpversion | cut -d. -f1 | grep -qx "${GCC_MAJOR}"; \
     gfortran -dumpversion | cut -d. -f1 | grep -qx "${GCC_MAJOR}"; \
-    for driver in clang clang++ flang; do \
+    for driver in clang clang++ flang opt mlir-opt mlir-translate; do \
       case "$(command -v "${driver}")" in \
         "/usr/lib/llvm-${LLVM_MAJOR}/bin/"*) ;; \
         *) echo "${driver} is $(command -v "${driver}"), not LLVM ${LLVM_MAJOR}" >&2; exit 1;; \
