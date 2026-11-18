@@ -880,6 +880,9 @@ def logical_locals_(kir: KernelIR) -> set[str]:
     bool_sources = {a.name for a in kir.arrays if a.dtype in ("bool", "bool_")}
     # A DECLARED array carries the dtype of its own descriptor; a copy must never retype it.
     declared = {a.name for a in kir.arrays if a.dtype not in ("bool", "bool_")}
+    # Nor a local the lowering typed: ``np.cumsum(mask)`` counts in int64, and its first element is a
+    # plain copy of the mask, which made the running count LOGICAL and saturate at 1.
+    declared |= {nm for nm, dt in kir.local_dtypes.items() if dt not in ("bool", "bool_")}
     changed = True
     while changed:
         changed = False

@@ -691,7 +691,8 @@ class CallHoister(ast.NodeTransformer):
             # numpy accumulates a bool or integer operand in the platform integer, a float in its own dtype.
             src_dt = self.local_dtypes.get(node.args[0].id)
             if src_dt is not None:
-                self.local_dtypes[temp] = "int64" if src_dt == "bool" or dtypes.is_integer(src_dt) else src_dt
+                widened = src_dt in {"bool", "bool_"} or dtypes.is_integer(src_dt)
+                self.local_dtypes[temp] = "int64" if widened else src_dt
         if self.infer_complex(node) or op in FFT_TRANSFORMS:
             self.local_dtypes[temp] = "complex128"
         if op in SHAPE_PRESERVING_OPS and node.args and temp not in self.local_dtypes:
