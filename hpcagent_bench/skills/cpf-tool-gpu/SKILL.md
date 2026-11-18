@@ -48,7 +48,9 @@ each class means.
 | `sequential -- ordered call: <name> must run in iteration order`, `sequential -- early exit (break): ...` | the program itself needs the order: a call with an ordered side effect, or a `break` or `return` after which no iteration may run |
 | `sequential -- wavefront step ...`, `sequential -- wavefront of tiles ...`, `sequential -- inside one wavefront tile ...` | the axes of a skewed nest that carry its dependences |
 | `sequential -- kept in order by an earlier pass; ...` | the dependence test finds it independent; an earlier pass chose the order |
-| `unknown -- <reason>` | not proven either way, so it runs in order. The reason names the check that failed and the array or variable it failed on. Parallelize it only if no iteration touches an element another iteration writes, for every input |
+| `sequential -- kept in order: only a few iterations ...` | a short loop over small fixed sizes, kept in order because forking would not pay; not analyzed for dependences |
+| `sequential -- while loop: ...` | each test of the condition reads what the previous iteration computed |
+| `unknown -- <reason>` | not proven either way, so it runs in order. The reason names the check that failed, on which array or variable, and what would make the loop parallel (after `parallel if`). Parallelize it only if that holds for every input |
 
 A comment speaks for the code as written:
 
