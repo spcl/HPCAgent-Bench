@@ -38,6 +38,7 @@ INPUTS = (
             "setup_nodes.sh",
             "pin_env_kv.sh",
             "record_identity.sh",
+            "code_tree.sh",
         )
     ),
 )

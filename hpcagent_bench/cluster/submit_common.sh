@@ -16,6 +16,7 @@ EXPERIMENTS_DIR="${SUBMIT_REPO_DIR}/experiments"
 # Slurm output of the jobs this file submits: <scratch>/logs (hpcagent_bench.paths.scratch_dir).
 HPCAGENT_BENCH_SCRATCH="${HPCAGENT_BENCH_SCRATCH:-${SUBMIT_REPO_DIR}/.scratch}"
 . "${CLUSTER_DIR}/env_layers.sh"
+. "${CLUSTER_DIR}/code_tree.sh"
 
 # symbolic_path <root-var-name> <resolved-absolute-path> -- the path with the CURRENT value of
 # ${<root-var-name>} rewritten back to a literal "${<root-var-name>}" prefix, for a value written into
@@ -291,14 +292,33 @@ finalize_staged_env() {
 #: have queued that job, and a second one would run in the same run directory.
 SBATCH_TRANSIENT='cli_filter plugin terminated with error|Unable to contact slurm controller|temporarily unavailable'
 
+# refuse_unready_checkout <checkout> -- 2 when <checkout> has uncommitted changes to tracked files or a job from it would
+# stop at its first container (systems.checkout_problems).
+refuse_unready_checkout() {
+    "${HPCAGENT_BENCH_HOST_PYTHON}" -c 'import sys; from hpcagent_bench.cluster import systems
+sys.exit(systems.refuse_unready(sys.argv[1]))' "$1"
+}
+
+# job_code_tree <checkout> <staged env> -- the frozen tree (code_tree.sh) a job of <staged env> runs: that of the commit
+# the env records (HPCAGENT_BENCH_RECORD_COMMIT, else HEAD), when <checkout> is the top of a git checkout, which is
+# refused first when it is not ready. Empty for any other tree (an unpacked release records no commit): the job runs
+# it in place. Trees no queued job runs any longer are removed first.
+job_code_tree() {
+    local checkout="$1" commit
+    [[ "$(git -C "${checkout}" rev-parse --show-toplevel 2>/dev/null)" -ef "${checkout}" ]] || return 0
+    refuse_unready_checkout "${checkout}" || return 2
+    commit="$(sed -n 's/^HPCAGENT_BENCH_RECORD_COMMIT=//p' "$2" | tail -n 1)"
+    gc_code_trees "${checkout}"
+    freeze_code_tree "${checkout}" "${commit:-HEAD}"
+}
+
 # sbatch_retry <sbatch args...> -- sbatch, tried again after 10, 30 and 90 s on a SBATCH_TRANSIENT failure. Anything
 # else (an invalid account or partition) fails at once. Its stdout is the job id of the attempt that succeeded.
 # A checkout $HPCAGENT_BENCH_REPO with uncommitted changes, or whose job would stop at its first container
 # (systems.checkout_problems), is refused.
 sbatch_retry() {
     local delay errors status
-    "${HPCAGENT_BENCH_HOST_PYTHON}" -c 'import sys; from hpcagent_bench.cluster import systems
-sys.exit(systems.refuse_unready(sys.argv[1]))' "${HPCAGENT_BENCH_REPO:?the checkout to submit from}" || return 2
+    refuse_unready_checkout "${HPCAGENT_BENCH_REPO:?the checkout to submit from}" || return 2
     for delay in 10 30 90 ""; do
         status=0
         { errors=$(sbatch "$@" 2>&1 >&3 3>&-) || status=$?; } 3>&1
@@ -337,9 +357,26 @@ fit_walltime() {
     done <<<"${out}"
 }
 
+# pin_live_data_roots <live checkout> <frozen tree> -- exports what a job from <frozen tree> needs: the tree as its code
+# (HPCAGENT_BENCH_REPO) with the tree's venv as its host interpreter, and every data root that would otherwise default
+# into the tree kept on the live checkout (a value the caller set stays). Called in sbatch's subshell.
+pin_live_data_roots() {
+    local live="$1" tree="$2"
+    unset VIRTUAL_ENV
+    export HPCAGENT_BENCH_REPO="${tree}" HPCAGENT_BENCH_HOST_PYTHON="${tree}/.venv/bin/python"
+    export HPCAGENT_BENCH_SCRATCH="${HPCAGENT_BENCH_SCRATCH:-${live}/.scratch}"
+    export HPCAGENT_BENCH_GENERATED_CACHE_HOST="${HPCAGENT_BENCH_GENERATED_CACHE_HOST:-${live}/.cache/generated}"
+    export PACK_ROOT="${PACK_ROOT:-${live}/.cache/packs}"
+    # An env without RUN_ROOT runs under the live checkout's results/, where submit_pack_job packs it.
+    export RUN_ROOT="${RUN_ROOT:-${SUBMIT_REPO_DIR}/results/cluster}"
+    if [[ -z "${HPCAGENT_BENCH_SITE_ENV:-}" && -f "${live}/experiments/site.env" ]]; then
+        export HPCAGENT_BENCH_SITE_ENV="${live}/experiments/site.env"
+    fi
+}
+
 # submit_setup_job <env> <setup> <walltime> [dependency] [begin] [detail]
-# SUBMIT=1 submits a read-only snapshot of <env> and its problems file (snapshot_env) as
-# services.sbatch's argument, with --dependency=<dependency> (job_dependency), held until <begin>,
+# SUBMIT=1 submits a read-only snapshot of <env> and its problems file (snapshot_env) as the argument of the
+# services.sbatch of the job's frozen code tree (job_code_tree), with --dependency=<dependency> (job_dependency), held until <begin>,
 # at --nice=NICE (default the site layer's HPCAGENT_BENCH_NICE), held with HOLD=1, and sets SUBMITTED_JOB_ID to the
 # job id; anything else only reports and sets SUBMITTED_JOB_ID to <setup>, what a later wave's dry run names.
 # An afterok that fails cancels the job (--kill-on-invalid-dep): pending forever, it would block a resubmit of its
@@ -367,7 +404,10 @@ submit_setup_job() {
     # whole wall clock): one that does not fit before the next reservation begins after it.
     fit_walltime "${walltime}" "${walltime}" "${begin}" || return 2
     [[ -z "${FIT_BEGIN}" ]] || { echo "${setup}: ${walltime} does not fit before the next reservation: begins ${FIT_BEGIN}"; begin="${FIT_BEGIN}"; }
-    snapshot=$(snapshot_env "${env}" "${setup}") || return 2
+    # Absolute: the job reads it from a frozen tree, whose experiments/ holds none of the generated files.
+    snapshot=$(snapshot_env "${env}" "${setup}" "${PWD}/.rendered") || return 2
+    local code live="${HPCAGENT_BENCH_REPO:?the checkout to submit from}"
+    code=$(job_code_tree "${live}" "${snapshot}") || return 2
     local logs="${HPCAGENT_BENCH_SCRATCH}/logs"
     mkdir -p -- "${logs}"
     local -a args=(--parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${setup}"
@@ -382,7 +422,11 @@ submit_setup_job() {
     jid=$(unset CPF_DROPIN_DIR HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR HPCAGENT_BENCH_CPF_HINTS \
         HPCAGENT_BENCH_CPF_VERIFIED_ONLY
         export CLUSTER_SCRIPT_DIR="${CLUSTER_DIR}"
-        sbatch_retry "${args[@]}" "${CLUSTER_DIR}/services.sbatch" "${PWD}/${snapshot}") || return 2
+        if [[ -n "${code}" ]]; then
+            pin_live_data_roots "${live}" "${code}"
+            CLUSTER_SCRIPT_DIR="${code}/hpcagent_bench/cluster"
+        fi
+        sbatch_retry "${args[@]}" "${CLUSTER_SCRIPT_DIR}/services.sbatch" "${snapshot}") || return 2
     # --parsable prints <id> or <id>;<cluster>; a dependency names the id alone.
     SUBMITTED_JOB_ID="${jid%%;*}"
     echo "submitted ${setup} -> ${jid} (${nodes} nodes${detail}) env ${snapshot}"
