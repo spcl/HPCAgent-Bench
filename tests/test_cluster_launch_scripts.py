@@ -36,6 +36,15 @@ def bash(script: str, *args: str, env: dict[str, str] | None = None) -> subproce
     )
 
 
+def commit_tree(root: pathlib.Path) -> str:
+    """Commit every file under ``root`` into a new repository there; returns HEAD."""
+    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    return subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+
+
 def quote(text: str) -> str:
     """``text`` as one single-quoted bash word."""
     return "'" + text.replace("'", "'\\''") + "'"
@@ -274,10 +283,7 @@ def test_the_batch_step_reads_head_over_a_commit_the_submitter_exported(
     """sbatch exports the submitting shell's environment: a HPCAGENT_BENCH_SNAPSHOT_COMMIT there must not stand in for
     the checkout's HEAD in the batch step (it would pass the staged-commit check and stamp every row), while a role
     step keeps the batch step's value."""
-    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
-    subprocess.run([*git, "init", "-q"], check=True)
-    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)
-    head = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    head = commit_tree(tmp_path)
     block = lines_between(RUN_CLUSTER, 'if [[ -n "${SLURM_JOB_ID:-}" ]] && (( $# == 0 ))', "fi")
     env = {"SLURM_JOB_ID": "1", "REPO_DIR": str(tmp_path), "HPCAGENT_BENCH_SNAPSHOT_COMMIT": "inherited"}
     done = bash(
@@ -301,3 +307,18 @@ def test_a_checkout_with_an_empty_submodule_is_refused_before_sbatch(
     assert len(systems.checkout_problems(tmp_path)) == (0 if submodule_filled else 1)
     assert systems.refuse_unready(tmp_path) == (0 if submodule_filled else 2)
     assert "systems.refuse_unready" in (CLUSTER / "submit_common.sh").read_text()
+
+
+@pytest.mark.parametrize(("edit", "refused"), [("", False), ("tracked", True), ("untracked", False)])
+def test_a_checkout_with_uncommitted_changes_is_refused_before_sbatch(
+    tmp_path: pathlib.Path, edit: str, refused: bool
+) -> None:
+    """Every graded row records HEAD, so a job from a tree whose tracked files differ from HEAD would record code it
+    did not run. Untracked files (the generated .env and problems files) do not count."""
+    (tmp_path / "code.py").write_text("x = 1\n")
+    commit_tree(tmp_path)
+    if edit:
+        (tmp_path / ("code.py" if edit == "tracked" else "new.py")).write_text("x = 2\n")
+    problems = systems.checkout_problems(tmp_path)
+    assert any("uncommitted changes" in problem for problem in problems) is refused
+    assert systems.refuse_unready(tmp_path) == (2 if refused else 0)
