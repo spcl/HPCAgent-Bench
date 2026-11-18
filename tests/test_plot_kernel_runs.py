@@ -97,7 +97,7 @@ def test_the_rate_row_prints_solved_over_graded_per_model_and_column() -> None:
     fig = kernel_runs.kernel_runs_figure(costed_runs(stub_observations()), list(stub.KERNELS), allow_owed=True)
     counts = sorted(text.get_text() for text in fig.axes[2].texts)
     want = sorted(
-        f"{plan.solved}/{stub.RUNS - plan.owed}" + (f" +{plan.owed}?" if plan.owed else "")
+        f"{plan.solved}/{stub.RUNS - plan.owed}"
         for plan in stub.PLAN.values()
         for _ in SUFFIXES
     )
