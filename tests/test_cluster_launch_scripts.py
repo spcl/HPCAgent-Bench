@@ -322,3 +322,20 @@ def test_a_checkout_with_uncommitted_changes_is_refused_before_sbatch(
     problems = systems.checkout_problems(tmp_path)
     assert any("uncommitted changes" in problem for problem in problems) is refused
     assert systems.refuse_unready(tmp_path) == (2 if refused else 0)
+
+
+@pytest.mark.parametrize("nvidia", [False, True])
+def test_the_judge_narrows_the_variable_its_vendor_runtime_reads(tmp_path: pathlib.Path, nvidia: bool) -> None:
+    """ROCR_VISIBLE_DEVICES alone left every GPU of an NVIDIA node visible to the judge's children; there the judge's
+    slice goes to CUDA_VISIBLE_DEVICES as well, and an AMD node gets no CUDA variable."""
+    gpus = tmp_path / "gpus"
+    gpus.mkdir()
+    if nvidia:
+        (gpus / "0000:01:00.0").mkdir()
+    block = lines_between(RUN_CLUSTER, "narrow_judge_devices() {", "}")
+    done = bash(
+        f'{block}\nnarrow_judge_devices 0,1\necho "${{ROCR_VISIBLE_DEVICES}}|${{CUDA_VISIBLE_DEVICES-unset}}"',
+        env={"NVIDIA_GPUS_DIR": str(gpus)},
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == ("0,1|0,1" if nvidia else "0,1|unset")
