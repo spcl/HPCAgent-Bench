@@ -6,7 +6,7 @@
 # aocc-compiler-<version>.tar, as a local path or a URL; the default is AMD's download link for VERSION (AMD may ask for
 # its EULA in a browser first, then pass the downloaded file). The column needs AOCC on LLVM >= 19 (-std=c23), so AOCC
 # 6 or later; AOCC 5.x is LLVM 17 and the column reports it tool_missing. The tarball is checked against CHECKSUM
-# (<sha256|sha384|sha512>:<hex>) before it is unpacked; 6.0.0's is pinned, any other VERSION needs one.
+# (<sha256|sha384|sha512>:<hex>) before it is unpacked; AMD publishes no digest, so take it from a copy you trust.
 #
 #   install-aocc.sh PREFIX [TARBALL]          VERSION=<x.y.z> (default 6.0.0), CHECKSUM=<algo>:<hex>
 set -euo pipefail
@@ -22,10 +22,7 @@ PREFIX=$1
 VERSION=${VERSION:-6.0.0}
 major_minor=$(echo "${VERSION}" | cut -d. -f1-2 | tr . -)
 TARBALL=${2:-https://download.amd.com/developer/eula/aocc/aocc-${major_minor}/aocc-compiler-${VERSION}.tar}
-# AMD's aocc-compiler-6.0.0.tar, hashed 2026-11-18 (AMD publishes none).
-AOCC_600_SHA256=28b97b6c5d8ea6b3ea08a5e52b2c784d41dddb655e2251bdddd6932ef1888d92
-[[ "${VERSION}" != 6.0.0 ]] || CHECKSUM=${CHECKSUM:-sha256:${AOCC_600_SHA256}}
-[[ -n "${CHECKSUM:-}" ]] || { echo "AOCC ${VERSION} has no pinned checksum: set CHECKSUM=<algo>:<hex>" >&2; exit 2; }
+[[ -n "${CHECKSUM:-}" ]] || { echo "AOCC ${VERSION}: set CHECKSUM=<algo>:<hex> (AMD publishes none)" >&2; exit 2; }
 # verify FILE -- refuse FILE unless its digest is CHECKSUM (<sha256|sha384|sha512>:<hex>), as the vendor publishes it.
 verify() {
     local algo="${CHECKSUM%%:*}" want="${CHECKSUM#*:}" got
