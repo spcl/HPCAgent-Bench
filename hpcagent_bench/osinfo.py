@@ -20,7 +20,9 @@ __all__ = [
     "KFD_NODES_DIR",
     "NVIDIA_GPUS_DIR",
     "VISIBLE_DEVICE_ENV",
+    "compiler_version",
     "cpu_model",
+    "dace_commit",
     "default_mp_context",
     "driver_gpu_count",
     "gpu_model",
@@ -146,6 +148,33 @@ def gpu_model() -> str:
         return rocminfo_gpu_name(subprocess.check_output(["rocminfo"], timeout=30).decode(errors="replace"))
     except (OSError, subprocess.SubprocessError):
         return ""
+
+
+@lru_cache(maxsize=64, typed=True)
+def compiler_version(compiler: str) -> str:
+    """The first line of ``compiler --version``, or ``""`` when it does not answer. Cached per process."""
+    import subprocess
+
+    try:
+        done = subprocess.run([compiler, "--version"], capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = (done.stdout or done.stderr).strip().splitlines()
+    return lines[0].strip() if done.returncode == 0 and lines else ""
+
+
+@lru_cache(maxsize=1, typed=True)
+def dace_commit() -> str:
+    """The installed dace's commit (its ``direct_url.json``), or ``""`` when dace is absent or names none."""
+    from importlib import metadata
+
+    from hpcagent_bench.cpf import canonical  # deferred: it imports the translators
+
+    try:
+        record = metadata.distribution("dace").read_text("direct_url.json")
+    except metadata.PackageNotFoundError:
+        return ""
+    return canonical.commit_of(canonical.DirectUrl.model_validate_json(record)) if record else ""
 
 
 def default_mp_context() -> str:
