@@ -73,6 +73,9 @@
 # A multi-node inference endpoint (a vLLM behind >1 node) is a ray cluster of these
 # single-node containers exposing ONE URL -- no container ever spans nodes.
 #
+# An exec row's `programs` names the executables that implement it, first found on PATH wins (default: the row's
+# own name): apptainer's is `apptainer singularity`, as a site may ship only the older singularity.
+#
 # An exec row forwards the job environment with `<env> NAME`; `inherits_env=1` says the runtime inherits it instead.
 #
 # The names the local launcher forwards besides HPCAGENT_BENCH_*.
@@ -132,6 +135,7 @@ podman.harbor_env=podman
 # SIF conversion of the same OCI image (`apptainer build ... docker-archive:...`).
 apptainer.family=sif
 apptainer.kind=exec
+apptainer.programs=apptainer singularity
 apptainer.verb=run
 apptainer.bind=--bind
 apptainer.workdir=--pwd

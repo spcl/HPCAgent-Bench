@@ -12,6 +12,7 @@ error that says so. MPI gangs are Container Engine only (``container_gang_suppor
 import pathlib
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 
@@ -22,6 +23,8 @@ from hpcagent_bench import paths
 REPO = paths.ROOT
 SEAM = REPO / "hpcagent_bench" / "cluster" / "container_runtime.sh"
 RUNTIMES = ("apptainer", "podman", "docker")
+#: What container_wrap runs besides the runtime itself.
+SEAM_TOOLS = ("mkdir", "awk", "sed", "cat", "cut", "paste", "sort", "grep", "realpath", "basename", "dirname")
 EDF = 'image = "x"\nmounts = [\n    "/tmp:/tmp",\n]\nworkdir = "/old"\n'
 
 
@@ -229,6 +232,28 @@ def test_every_runtime_mounts_what_the_container_engine_mounts(tmp_path: pathlib
     assert done.returncode == 0, done.stderr
     flag = "--bind" if runtime == "apptainer" else "--volume"
     assert expected <= {done.wrap[i + 1] for i, word in enumerate(done.wrap) if word == flag}
+
+
+@pytest.mark.parametrize(
+    ("installed", "program"), [(("singularity",), "singularity"), (("apptainer", "singularity"), "apptainer")]
+)
+def test_the_apptainer_row_runs_singularity_where_apptainer_is_absent(
+    tmp_path: pathlib.Path, installed: tuple[str, ...], program: str
+) -> None:
+    """A site that ships only singularity runs the same SIF with it; where both exist, apptainer wins."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in installed:
+        (bin_dir / name).write_text("#!/bin/sh\n")
+        (bin_dir / name).chmod(0o755)
+    # A PATH of the seam's own tools alone, so a runtime this machine has installed cannot answer instead.
+    for tool in SEAM_TOOLS:
+        found = shutil.which(tool)
+        assert found is not None, tool
+        (bin_dir / tool).symlink_to(found)
+    done = wrap(tmp_path, "apptainer", "judge-node", PATH=str(bin_dir))
+    assert done.returncode == 0, done.stderr
+    assert done.wrap[:2] == [program, "run"]
 
 
 def test_an_apptainer_agent_keeps_the_host_home_and_working_directory_out(tmp_path: pathlib.Path) -> None:
@@ -497,6 +522,12 @@ if __name__ == "__main__":
                     fresh(f"ce-{container}-{name}"), container, name
                 )
         test_an_apptainer_agent_keeps_the_host_home_and_working_directory_out(fresh("apptainer-hostfs"))
+        test_the_apptainer_row_runs_singularity_where_apptainer_is_absent(
+            fresh("singularity-only"), ("singularity",), "singularity"
+        )
+        test_the_apptainer_row_runs_singularity_where_apptainer_is_absent(
+            fresh("apptainer-both"), ("apptainer", "singularity"), "apptainer"
+        )
         test_an_unknown_runtime_is_refused_with_the_known_ones_named(fresh("unknown"))
         test_a_gang_runs_under_the_container_engine_only_and_says_why()
         test_the_default_runtime_is_the_container_engine()

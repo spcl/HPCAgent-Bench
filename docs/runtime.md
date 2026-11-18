@@ -65,6 +65,7 @@ repository; a plugin cannot add one.
 |---|---|
 | `family`, `kind` | what it implements; `kind=exec` is a wrapper. Row order is preference order |
 | `verb` | the words after the program name |
+| `programs` | the executables that implement the row, first on PATH wins (default: the row's name); apptainer's lists `singularity` too |
 | `bind`, `workdir`, `env` | its flags for a mount, the working directory and a forwarded name |
 | `inherits_env=1` | the runtime inherits the environment, so no `env` flag is passed |
 | `rootfs_ro`, `tmpfs` | the read-only rootfs flag and the tmpfs flag of an AGENT step under `isolation.agent_rootfs=read-only`; empty names none — an image form immutable by default (a SIF), or scratch mounted as binds instead |

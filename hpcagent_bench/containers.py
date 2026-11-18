@@ -48,6 +48,7 @@ class WrapperSpelling:
     family: ContainerRuntime  # OCI (the shipped image, unconverted) | SIF | CE (conversions of it) | NATIVE
     kind: str  # "exec" (wraps the command) | "srun_env" (selected by an srun flag) | "none"
     harbor_env: str  # "singularity" | "docker" | "podman" | "" (empty = not a Harbor backend)
+    programs: tuple[str, ...]  # the executables implementing the row, in preference order (apptainer, singularity)
 
 
 def load_backends(path: pathlib.Path = BACKENDS_PATH) -> dict[ContainerRuntime, WrapperSpelling]:
@@ -67,6 +68,7 @@ def load_backends(path: pathlib.Path = BACKENDS_PATH) -> dict[ContainerRuntime, 
             family=ContainerRuntime.parse(fields["family"]),
             kind=fields["kind"],
             harbor_env=fields.get("harbor_env", ""),
+            programs=tuple(fields.get("programs", name).split()),
         )
         for name, fields in rows.items()
     }
@@ -100,8 +102,8 @@ def detect_backend(candidates: Sequence[ContainerRuntime] = KNOWN_BACKENDS) -> C
     for name in candidates:
         if name not in SPELLINGS:
             continue
-        probe = "srun" if SPELLINGS[name].kind == "srun_env" else name.text
-        if shutil.which(probe):
+        probes = ("srun",) if SPELLINGS[name].kind == "srun_env" else SPELLINGS[name].programs
+        if any(shutil.which(probe) for probe in probes):
             return name
     return None
 
