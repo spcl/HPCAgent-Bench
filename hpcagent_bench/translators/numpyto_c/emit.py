@@ -181,10 +181,13 @@ __all__ = [
 def c_type_(dtype: str) -> str:
     # dtype -> C type mapping lives in numpyto_common.dtypes (canonical int is int64_t);
     # a fixed, module-level static table, so the mapping is pure -- cached per emitted kernel.
+    if not dtype:
+        return "double"  # no dtype recorded: the float default
     try:
         return dtypes.c_type(dtype)
     except KeyError:
-        return "double"
+        # A typo or an unregistered dtype declared as double would compile and compute the wrong width.
+        raise NotImplementedError(f"no C type for dtype {dtype!r}") from None
 
 
 #: bare-name calls whose RESULT is an integer whatever the argument's dtype (see is_int_cast).

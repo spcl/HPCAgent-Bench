@@ -5457,7 +5457,7 @@ def refuse_captured_parameters(
             continue  # respelled onto a name the descriptors do not already spell
         if pname in binding.constants and pinned.get(pname) == binding.constants[pname]:
             continue  # both spellings are the same pinned knob, so one value serves both
-        if common_frontend.HELPERS_KEPT_DISABLED:
+        if common_frontend.HELPERS_KEPT_DISABLED.get():
             # The inlined form is where a refusal would land, and this helper is still here: it
             # resisted inlining, so refusing again only loses the kernel. It is emitted unrespelled.
             continue
@@ -5780,7 +5780,7 @@ def refuse_unsound_callee(
       ``stride`` as runtime ``dc.int64`` scalars and then SIZES a tap span with them, so the extent
       is data-dependent inside the body while the signature itself is solvable.
     """
-    if common_frontend.HELPERS_KEPT_DISABLED:
+    if common_frontend.HELPERS_KEPT_DISABLED.get():
         return
     unsolvable = unsolvable_signature_symbols(rendered)
     if unsolvable:
