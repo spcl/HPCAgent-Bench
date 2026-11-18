@@ -305,7 +305,9 @@ def test_an_agent_job_chains_only_the_pack_of_its_episodes_after_it(tmp_path: pa
     it packs its run directory (RUN_ROOT/<job id>) into episode folders once it ends however it ends, at the job's
     nice and account, and removes the loose files only after each archive reads back equal."""
     _, line, others = run_submit_setup_job_probe(
-        tmp_path, {"NICE": "1000", "SCRATCH": str(tmp_path)}, "RUN_ROOT=${SCRATCH:?}/hpcagent-bench-runs/exp-20261118\n"
+        tmp_path,
+        {"NICE": "1000", "SCRATCH": str(tmp_path), "PACK_AFTER": "1"},
+        "RUN_ROOT=${SCRATCH:?}/hpcagent-bench-runs/exp-20261118\n",
     )
     job = line.split("-> ", 1)[1].split()[0]
     assert len(others) == 1, others
