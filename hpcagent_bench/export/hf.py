@@ -332,6 +332,7 @@ def load_back(source: str | pathlib.Path, counts: dict[str, int], revision: str 
                 problems.append(f"{name}: loaded {ds.num_rows} rows, wrote {n}")
             if set(ds.column_names) != set(FIELDS):
                 problems.append(f"{name}: loaded columns {ds.column_names}")
+            del ds  # its memory-mapped arrow file is open: on NFS the cache cannot be removed while it is
     return problems
 
 
