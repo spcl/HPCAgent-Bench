@@ -303,6 +303,15 @@ def test_a_replay_that_raises_is_an_error_row_not_a_dead_gang(
     assert rows == [("strong", "error", "RuntimeError: relay gone"), ("weak", "error", "RuntimeError: relay gone")]
 
 
+def test_a_gang_starting_beside_another_gangs_empty_db_reads_it_as_nothing_graded(tmp_path: pathlib.Path) -> None:
+    """A gang reads every shard DB at start; another gang's DB caught between its creation and its schema (752845:
+    gang 2 died on gang 3's) has graded nothing, so it adds no key instead of failing the gang."""
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "scaling-grade-3.db").touch()
+    assert scaling_grade.graded_keys(out) == set()
+
+
 def test_a_replay_that_raised_stays_owed_on_resume(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A raised replay (a transient srun or gang failure) decided nothing: the next pass replays it,
     as a final grade's raised item is."""

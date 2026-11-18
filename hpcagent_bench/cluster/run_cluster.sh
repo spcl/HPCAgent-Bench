@@ -202,7 +202,8 @@ fi
 # Build artefacts live on the general scratch under JIT_CACHE_ROOT -- see run_vllm_node.
 HPCAGENT_BENCH_REPO="${REPO_DIR}"
 RUN_ROOT="${RUN_ROOT:-${HPCAGENT_BENCH_REPO}/results/cluster}"
-RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID:-local}"
+# HPCAGENT_BENCH_RUN_ID: an umbrella instance (jobs/umbrella) runs on a slice of a shared allocation.
+RUN_DIR="${RUN_ROOT}/${HPCAGENT_BENCH_RUN_ID:-${SLURM_JOB_ID:-local}}"
 # The names inside RUN_DIR, as hpcagent_bench/run_layout.py spells them (tests/test_no_hardcoded_paths.py checks
 # that the two agree).
 LAYOUT_JUDGE_DIRNAME="judge"
@@ -222,7 +223,7 @@ SHARED_MOUNT="/shared"
 AGENT_PAYLOAD_MOUNT="/opt/hpcagent-bench-agent"
 # What an agent step executes from experiments/, staged per job OUTSIDE RUN_DIR: an agent sees this
 # directory, never experiments/ with every setup's .env and problems file. See stage_agent_launch.
-AGENT_LAUNCH_DIR="${AGENT_LAUNCH_DIR:-${RUN_ROOT}/.agent-launch/${SLURM_JOB_ID:-local}}"
+AGENT_LAUNCH_DIR="${AGENT_LAUNCH_DIR:-${RUN_ROOT}/.agent-launch/${HPCAGENT_BENCH_RUN_ID:-${SLURM_JOB_ID:-local}}}"
 # Emitted lowerings, keyed by the CONTENT of each kernel's numpy source. Mounted at a FIXED
 # container path so nothing in the image needs to know the host layout -- same contract as
 # /opt/moe-configs. NOT image-keyed: a lowering is pure text, valid for any image.
@@ -1482,7 +1483,8 @@ fi
 # The KV pool the server allocates against what its agents need (serve_guard.py, KV_TOKENS_PER_AGENT of the model):
 # a pool below the floor cancels the job at server start, not after hours of re-prefilling; KV_GUARD=warn reports it.
 # Disowned: the `wait -n` below supervises the role steps only.
-if [[ -n "${KV_TOKENS_PER_AGENT:-}" && "${INFERENCE_SOURCE}" == node && "${DRY_RUN:-0}" != 1 && -n "${SLURM_JOB_ID:-}" ]]; then
+if [[ -n "${KV_TOKENS_PER_AGENT:-}" && "${INFERENCE_SOURCE}" == node && "${DRY_RUN:-0}" != 1 && -n "${SLURM_JOB_ID:-}"
+    && -z "${HPCAGENT_BENCH_RUN_ID:-}" ]]; then
     "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.serve_guard watch --env "${CLUSTER_ENV_FILE_ABS}" \
         --run-dir "${RUN_DIR}" --job "${SLURM_JOB_ID}" >>"${RUN_DIR}/kv-guard.log" 2>&1 &
     disown
@@ -1534,6 +1536,18 @@ resolve_step_id() {
 # instead -- every remaining step, never the batch shell itself (scancel without a step suffix
 # never reaches the shell that submitted it).
 signal_step() {
+    if [[ -z "${1:-}" && -n "${HPCAGENT_BENCH_RUN_ID:-}" ]]; then
+        # An umbrella instance owns only its nodes: signal its own steps, never the whole allocation.
+        local mine step_id step_nodes
+        mine="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" 2>/dev/null | sort)"
+        while IFS='|' read -r step_id step_nodes; do
+            [[ "${step_id}" =~ ^[0-9]+\.[0-9]+$ ]] || continue
+            if [[ -z "$(comm -23 <(scontrol show hostnames "${step_nodes}" 2>/dev/null | sort) <(printf '%s\n' "${mine}"))" ]]; then
+                scancel --signal=TERM "${step_id}" 2>/dev/null || true
+            fi
+        done < <(squeue -j "${SLURM_JOB_ID}" --steps --noheader --format='%i|%N' 2>/dev/null)
+        return 0
+    fi
     scancel --signal=TERM "${1:-${SLURM_JOB_ID:-}}" 2>/dev/null || true
 }
 

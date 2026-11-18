@@ -41,6 +41,40 @@ def quote(text: str) -> str:
     return "'" + text.replace("'", "'\\''") + "'"
 
 
+def test_a_fused_job_runs_each_line_on_its_own_nodes_and_hands_freed_nodes_to_the_next(tmp_path: pathlib.Path) -> None:
+    """Two 2-node runs fill a 4-node allocation; the 3-node run waits for both and then gets three of their nodes.
+    Each run sees only its slice and its own run id."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "scontrol").write_text("#!/bin/bash\nprintf 'n%s\\n' 1 2 3 4\n")
+    (bin_dir / "squeue").write_text("#!/bin/bash\necho 4102444800\n")  # 2100-01-01: hours left
+    for tool in ("scontrol", "squeue"):
+        (bin_dir / tool).chmod(0o755)
+    show = tmp_path / "show.sh"
+    show.write_text('echo "$HPCAGENT_BENCH_RUN_ID $SLURM_JOB_NODELIST $SLURM_NNODES $MARK"\n')
+    instances = tmp_path / "instances.txt"
+    instances.write_text(
+        f"# comment\na 2 {tmp_path} MARK=x -- bash {show}\nc 3 {tmp_path} -- bash {show}\nb 2 {tmp_path} -- bash {show}\n"
+    )
+    done = bash(
+        f"bash {quote(str(CLUSTER / 'launch_fused.sbatch'))} {quote(str(instances))}",
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "SLURM_JOB_ID": "9",
+            "SLURM_JOB_NODELIST": "n[1-4]",
+            "FUSED_POLL_S": "0.1",
+        },
+    )
+    assert done.returncode == 0, done.stderr
+    logs = tmp_path / "logs"
+    assert (logs / "9-a.out").read_text() == "901 n1,n2 2 x\n"
+    assert (logs / "9-b.out").read_text() == "902 n3,n4 2 \n"
+    assert (logs / "9-c.out").read_text().split()[0] == "903"
+    assert len((logs / "9-c.out").read_text().split()[1].split(",")) == 3
+    starts = [line.split()[2] for line in done.stdout.splitlines() if " start " in line]
+    assert starts == ["a", "b", "c"]
+
+
 @pytest.mark.parametrize(("left_s", "stopped"), [(600, True), (7200, False)])
 def test_the_job_stops_its_agents_a_reserve_before_its_end(left_s: int, stopped: bool) -> None:
     """The time limit kills every step KillWait after its TERM, before the records, grading and merge; the job's own
@@ -50,7 +84,7 @@ def test_the_job_stops_its_agents_a_reserve_before_its_end(left_s: int, stopped:
         f'squeue() {{ date -d "@$(( $(date +%s) + {left_s} ))" "+%Y-%m-%dT%H:%M:%S"; }}\n'
         "rounds=0\n"
         # The watch's first sleep is a minute; three rounds stand for three minutes, then the test ends it.
-        'sleep() { rounds=$((rounds + 1)); (( rounds <= 3 )) || exit 0; }\n'
+        "sleep() { rounds=$((rounds + 1)); (( rounds <= 3 )) || exit 0; }\n"
         'resolve_step_id() { echo "77.2"; }\n'
         'signal_step() { echo "signalled $1"; }\n'
     )
