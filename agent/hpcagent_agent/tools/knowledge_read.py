@@ -20,6 +20,8 @@ DESCRIPTION = (
 
 
 class KnowledgeReadInput(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")  # a misspelled argument is an error, not dropped
+
     document: str = pydantic.Field(min_length=1, description="The document path a knowledge_search hit named.")
     first_line: int | None = pydantic.Field(None, ge=1, description="First line to return (default 1).")
     lines: int | None = pydantic.Field(

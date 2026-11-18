@@ -26,6 +26,8 @@ PROMPT = "- `requests_check` -- what a `requests` object resolves to (signature,
 
 
 class RequestsCheckInput(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")  # a misspelled argument is an error, not dropped
+
     #: The kernel a call outside the driver names; the driver's assignment wins.
     kernel: SkipJsonSchema[str | None] = None
     requests: dict[str, Any] = pydantic.Field(description=http_json.REQUESTS_REFERENCE_TEXT)
