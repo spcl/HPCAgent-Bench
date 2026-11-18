@@ -471,8 +471,8 @@ def assert_affine(scop: pathlib.Path, kernel: str) -> None:
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def oracle_pluto_status(kernel: str) -> str:
-    """The numerical oracle's verdict on the polycc-transformed ``kernel``: ``ok``/``skip:``/``FAIL:``.
+def oracle_pluto_status(kernel: str, precision: str = "fp64") -> str:
+    """The numerical oracle's verdict on the polycc-transformed ``kernel`` at ``precision``: ``ok``/``skip:``/``FAIL:``.
 
     Asked of the SAME oracle every other native column is graded by
     (:func:`hpcagent_bench.numerical_oracle.run_kernel`, narrowed to its pluto backend), so this owns no
@@ -487,13 +487,14 @@ def oracle_pluto_status(kernel: str) -> str:
     """
     from hpcagent_bench import numerical_oracle
 
-    return numerical_oracle.run_kernel(kernel, only_backends={numerical_oracle.PLUTO}).get(
+    return numerical_oracle.run_kernel(kernel, precision=precision, only_backends={numerical_oracle.PLUTO}).get(
         numerical_oracle.PLUTO, "skip:no-verdict"
     )
 
 
-def assert_numeric_agreement(kernel: str) -> None:
-    """Decline the Pluto column for a kernel whose TRANSFORMED binary computes the wrong answer.
+def assert_numeric_agreement(kernel: str, precision: str = "fp64") -> None:
+    """Decline the Pluto column for a kernel whose TRANSFORMED binary computes the wrong answer at ``precision``,
+    the precision the column times (an fp32 measurement is checked at fp32, not by its fp64 sibling).
 
     :func:`assert_affine` reads subscripts and nothing else, so it cannot see a transform that is
     affine and wrong -- pet drops every statement whose only write is a scop-external scalar
@@ -505,12 +506,12 @@ def assert_numeric_agreement(kernel: str) -> None:
     The oracle's verdict is passed through verbatim rather than re-classified here -- it owns that
     taxonomy, and a second copy of it is a second thing to keep in step.
     """
-    status = oracle_pluto_status(kernel)
+    status = oracle_pluto_status(kernel, precision)
     if status != "ok":
         raise NotSupportedByFramework(
             FRAMEWORK,
             kernel,
-            f"the numerical oracle grades the polycc-transformed kernel "
+            f"the numerical oracle grades the polycc-transformed kernel at {precision} "
             f"'{status}', not 'ok'; polycc may silently miscompile a scop it accepts, so timing "
             f"this column would grade a wrong answer",
         )
