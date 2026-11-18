@@ -2763,6 +2763,8 @@ class RepCheckServer:
             self.check(message)
             source.send(None)
         except (EOFError, OSError):
+            if isinstance(source, trusted_clock.ClockServer):
+                source.release()
             return False
         except Exception as exc:  # noqa: BLE001 -- the call's error, raised after it; the child cannot go on
             traceback.clear_frames(exc.__traceback__)

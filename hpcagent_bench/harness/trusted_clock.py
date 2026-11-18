@@ -500,7 +500,17 @@ class ClockServer:
             samples = tuple(max(1, bracket - handshake) for bracket in self.brackets)
         return ClockSummary(samples, tuple(self.brackets), handshake, spread, "; ".join(dict.fromkeys(findings)))
 
+    def release(self) -> None:
+        """Disarm, and resume a child the kernel stopped as its end closed (a hang-up raises ``SIGIO`` too)."""
+        if not self.armed:
+            return
+        with contextlib.suppress(OSError):
+            fcntl.fcntl(self.parent, fcntl.F_SETFL, fcntl.fcntl(self.parent, fcntl.F_GETFL) & ~os.O_ASYNC)
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(self.pid, signal.SIGCONT)
+
     def close(self) -> None:
+        self.release()
         for end in (self.parent, self.child):
             with contextlib.suppress(OSError):
                 end.close()
