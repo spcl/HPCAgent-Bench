@@ -57,6 +57,12 @@ __all__ = [
     "AGENT_EFFORT",
     "AGENT_ENV_CREDENTIALS",
     "AGENT_ENV_DENYLIST",
+    "AGENT_ENV_HOST_PATHS",
+    "AGENT_ENV_NAMES",
+    "AGENT_ENV_PREFIXES",
+    "AGENT_ENV_SECRET",
+    "AGENT_ENV_SUFFIXES",
+    "agent_env_allowed",
     "AGENT_FOLDERS_LOG",
     "AGENT_FOLDER_PREFIX",
     "AGENT_MCP_ATTEMPTS",
@@ -693,6 +699,67 @@ AGENT_ENV_DENYLIST = (
 #: under the harness's own name (claude's ANTHROPIC_* from run_cluster.sh, a runner's OPENAI_API_KEY), the web search
 #: runs in the judge, and the PMI secret belongs to the agent step's own MPI wire-up.
 AGENT_ENV_CREDENTIALS = ("VLLM_API_KEY", "LITELLM_MASTER_KEY", "SERPAPI_API_KEY", "PMI_SHARED_SECRET")
+
+#: What a worker inherits of the driver's environment, by name: an allowlist, so a host or submitter variable no
+#: worker reads (HF_TOKEN, WANDB_API_KEY, GH_TOKEN, a module's paths) never reaches it. It covers the job keys the
+#: agent step is forwarded (container_runtime.sh JOB_ENV_SHARED and JOB_ENV_AGENT, tests/test_agent_env_allowlist.py
+#: checks), what the judge-agent images set with ENV, the toolchain and runtime knobs of a build, and what a harness
+#: CLI reads: its model's settings, proxies and CA bundles, locale, PATH and HOME.
+AGENT_ENV_NAMES = frozenset(
+    {
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LANGUAGE", "TZ", "TMPDIR", "HOSTNAME",
+        "LD_LIBRARY_PATH", "LD_PRELOAD", "LIBRARY_PATH", "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH",
+        "PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH", "CC", "CXX", "FC", "F77", "CFLAGS", "CXXFLAGS", "FFLAGS", "LDFLAGS",
+        "VIRTUAL_ENV", "PYTHONSAFEPATH", "PYTHONHASHSEED", "PYTHONUNBUFFERED", "LIBXSMM_ROOT",
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+        "RUN_DIR", "KERNEL", "KERNELS", "SETUP", "HARNESS", "TUNER", "KNOWLEDGE", "GPUS_PER_NODE", "GRADE_CPUS",
+        "COLOCATE", "LITELLM_PORT", "OMP_STACKSIZE", "OMP_THREAD_LIMIT", "CONTAINER_RUNTIME",
+        "API_FORCE_IDLE_TIMEOUT", "API_TIMEOUT_MS", "CONTEXT_LENGTH", "AGENTS_PER_NODE", "EFFORT_LADDER",
+        "AGGREGATE_PROBE_SECONDS", "THROUGHPUT_PROBE_REQUESTS", "TOOL_TIMEOUT_SECONDS", "PROMOTE_BUDGET_S",
+        "MAX_THINKING_TOKENS", "BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS", "BASH_MAX_OUTPUT_LENGTH",
+        "TOKENIZERS_PARALLELISM", "PLAYWRIGHT_BROWSERS_PATH",
+    }
+)  # fmt: skip
+#: Name families a worker inherits whole: the bench's own keys, the model and harness settings, and the toolchain,
+#: math library, GPU and MPI runtimes the images configure.
+AGENT_ENV_PREFIXES = (
+    "HPCAGENT_BENCH_", "AGENT_", "JUDGE_", "INFERENCE_", "VLLM_", "CPF_", "COLOCATE_",
+    "ANTHROPIC_", "CLAUDE_", "OPENAI_", "LITELLM_", "MSWEA_", "MCP_", "DISABLE_", "LC_", "XDG_", "UV_",
+    "OMP_", "KMP_", "GOMP_", "OPENBLAS_", "MKL_", "BLIS_", "NUMBA_", "DACE_", "SPACK_", "PAPI_",
+    "CUDA_", "NVIDIA_", "NV_", "ROCM_", "HIP_", "HSA_", "HCC_", "AMD_", "GPU_", "PYTORCH_", "TORCH_", "TRITON_",
+    "CUPY_", "XLA_", "OMPI_", "MPICH_", "UCX_", "FI_", "NCCL_", "RCCL_", "ROCR_", "MIOPEN_", "TORCHINDUCTOR_",
+)  # fmt: skip
+#: Install roots a toolchain names (HPTT_ROOT, OPENMPI_ROOT, CUDA_HOME).
+AGENT_ENV_SUFFIXES = ("_ROOT", "_HOME")
+#: Host paths an allowed family still holds: the checkout, its experiments/ and the job's own files, which the seal
+#: hides and a worker never needs to be told.
+AGENT_ENV_HOST_PATHS = frozenset(
+    {
+        "HPCAGENT_BENCH_REPO", "HPCAGENT_BENCH_HOST_PYTHON", "HPCAGENT_BENCH_USER_PLUGIN_DIRS", "RUN_ROOT",
+        "JIT_CACHE_ROOT", "SCRIPT_DIR", "CLUSTER_ENV_FILE", "PROBLEMS_FILE", "KERNELS_FILE", "SHARED_HOST_DIR",
+        "GENERATED_CACHE_HOST", "AGENT_LAUNCH_DIR",
+    }
+)  # fmt: skip
+#: A credential by its name (a ``*_TOKENS`` budget is none). The model's own key and token (ANTHROPIC_*, OPENAI_*)
+#: are the harness's, and the worker token is what a fused wave's worker signs its judge calls with: both pass.
+AGENT_ENV_SECRET = re.compile(r"TOKEN$|_TOKEN_|SECRET|PASSW|CREDENTIAL|_KEY$|_KEY_|AUTH")
+#: The families whose credentials a harness reaches its model with.
+AGENT_ENV_MODEL_PREFIXES = ("ANTHROPIC_", "OPENAI_")
+
+
+def agent_env_allowed(name: str) -> bool:
+    """Whether a worker inherits the driver's variable ``name`` (:data:`AGENT_ENV_NAMES`)."""
+    if name in AGENT_ENV_HOST_PATHS or name in AGENT_ENV_DENYLIST or name in AGENT_ENV_CREDENTIALS:
+        return False
+    if (
+        AGENT_ENV_SECRET.search(name)
+        and not name.startswith(AGENT_ENV_MODEL_PREFIXES)
+        and name != http_json.WORKER_TOKEN_ENV
+    ):
+        return False
+    return name in AGENT_ENV_NAMES or name.startswith(AGENT_ENV_PREFIXES) or name.endswith(AGENT_ENV_SUFFIXES)
+
 
 #: Serialises MCP startup across this node's agent threads.
 START_GATE = threading.Semaphore(AGENT_START_CONCURRENCY)
@@ -3011,9 +3078,7 @@ def agent_environment(
     problem: Problem, judge_url: str, judge_rank: int, problem_index: int, worker_index: int
 ) -> dict[str, str]:
     """The environment every harness starts from, before its own :meth:`Harness.env` layer."""
-    environment = os.environ.copy()
-    for leaked in (*AGENT_ENV_DENYLIST, *AGENT_ENV_CREDENTIALS):
-        environment.pop(leaked, None)
+    environment = {name: value for name, value in os.environ.items() if agent_env_allowed(name)}
     # Authoritative over the shared settings.json effortLevel. An EMPTY AGENT_EFFORT means the model takes no level:
     # pop the variable so the request carries no effort field.
     if AGENT_EFFORT:

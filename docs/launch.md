@@ -129,7 +129,8 @@ A port to another site or a cloud (an AWS VM, a ParallelCluster) changes these s
   judge's generated cache. Podman and docker steps have not run end to end on a cluster.
   Podman and docker take no host environment: a step forwards, by name, what its role reads (`JOB_ENV_*` in
   `container_runtime.sh`), so a new job key a role reads gets a line there. The Container Engine and apptainer inherit
-  the job's whole environment.
+  the job's whole environment; the agent driver then hands each worker only what `agent_driver.agent_env_allowed`
+  names (the bench's keys, the model's, the toolchain's and the image's), never a submitter token or a checkout path.
 - **Roles**: judge, agent and inference reach each other by URL only (above). Under Slurm (ParallelCluster) the
   existing launcher runs as it is; without Slurm, a launcher replaces `role_srun` and the node list in
   `hpcagent_bench/cluster/run_cluster.sh` and keeps the rest.
