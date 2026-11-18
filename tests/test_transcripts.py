@@ -183,6 +183,7 @@ def test_claude_usage_records_fold_to_the_drivers_counts(tmp_path: pathlib.Path)
     assert sum(int(record["output"]) for record in usage) == recorded["output"]
 
 
+@pytest.mark.smoke
 def test_claude_stream_and_session_give_one_extract(tmp_path: pathlib.Path) -> None:
     """A turn in both the stream log and the session file is extracted once, from the log; the session adds only
     what no log holds (here the task prompt and the CLI's attachments), and none of its request metadata."""
