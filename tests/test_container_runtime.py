@@ -143,6 +143,22 @@ def test_podman_and_docker_run_the_image_on_the_host_network_with_the_job_env(
     assert done.wrap[-1] == "example/bench:latest"
 
 
+@pytest.mark.parametrize(
+    ("runtime", "options"),
+    [("docker", ["seccomp=unconfined", "systempaths=unconfined"]), ("podman", ["unmask=ALL"])],
+)
+def test_an_oci_step_runs_with_what_the_seal_needs(tmp_path: pathlib.Path, runtime: str, options: list[str]) -> None:
+    """The seal needs user, mount and pid namespaces and a fresh /proc: docker's default seccomp profile refuses the
+    first and both runtimes mask /proc paths, so every step (the judge grades sealed, the agent works sealed) turns
+    off what its runtime would otherwise refuse."""
+    for role in ("judge-node", "agent-node"):
+        done = wrap(tmp_path, runtime, role)
+        assert done.returncode == 0, done.stderr
+        given = [done.wrap[i + 1] for i, word in enumerate(done.wrap) if word == "--security-opt"]
+        assert given == options
+        assert done.wrap.index("--security-opt") < done.wrap.index("example/bench:latest")
+
+
 @pytest.mark.parametrize("runtime", ["docker", "podman"])
 def test_docker_wrap_carries_limits(tmp_path: pathlib.Path, runtime: str) -> None:
     """The --container-memory and --container-cpus limits ride the OCI run verbs (--memory, --cpus), after the
@@ -459,6 +475,10 @@ if __name__ == "__main__":
                 fresh(f"run-{container}"), container
             )
             test_docker_wrap_carries_limits(fresh(f"limits-{container}"), container)
+        test_an_oci_step_runs_with_what_the_seal_needs(
+            fresh("seal-docker"), "docker", ["seccomp=unconfined", "systempaths=unconfined"]
+        )
+        test_an_oci_step_runs_with_what_the_seal_needs(fresh("seal-podman"), "podman", ["unmask=ALL"])
         for container in (*RUNTIMES, "ce"):
             test_only_an_oci_runtime_is_offered_the_container_limits(fresh(f"nolimit-{container}"), container)
         for container in RUNTIMES:

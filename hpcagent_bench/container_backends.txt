@@ -95,10 +95,14 @@ global.passthrough=ANTHROPIC_API_KEY HPCAGENT_BENCH_LOCAL_MODEL
 # sit under the host home.
 #
 # The OCI image under a daemon. Needs dockerd and a root-equivalent group, so it is the laptop / cloud-VM path, never
-# the HPC one. First because it is the implementation most users have.
+# the HPC one. First because it is the implementation most users have. The seal (seal.py, seal_worker.py) needs
+# user, mount and pid namespaces and a fresh /proc: docker's default seccomp profile refuses the namespaces and its
+# masked /proc paths refuse the mount, so the row turns both off (seccomp=unconfined, systempaths=unconfined, the
+# spelling of podman's unmask=ALL). A container then filters no syscalls: the seal is what isolates graded and
+# agent code, and the host is the one docker trusts with a root-equivalent group anyway.
 docker.family=oci
 docker.kind=exec
-docker.verb=run --rm --network host
+docker.verb=run --rm --network host --security-opt seccomp=unconfined --security-opt systempaths=unconfined
 docker.bind=--volume
 docker.workdir=-w
 docker.env=--env
