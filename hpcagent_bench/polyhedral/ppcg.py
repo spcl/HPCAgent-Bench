@@ -21,8 +21,11 @@ from hpcagent_bench.polyhedral.pluto import (
     OVERRIDE_INPUT_SUFFIX,
     POLYCC_MEMORY_LIMIT,
     assert_affine,
+    is_fresh,
+    mark_fresh,
     run_bounded,
     scop_inputs,
+    transform_key,
 )
 from hpcagent_bench.translators.numpyto_c.emit import NPB_HD_GUARD
 
@@ -55,6 +58,7 @@ __all__ = [
     "offloaded",
     "ppcg_exe",
     "ppcg_input",
+    "ppcg_key",
     "ppcg_lookup",
     "ppcg_problem",
     "resolve_backend",
@@ -444,6 +448,11 @@ def run_ppcg(
     return argv, proc
 
 
+def ppcg_key(scop: pathlib.Path, vendor: Language) -> str:
+    """The freshness key of ``scop``'s transform: its bytes, the ppcg binary and args, and the vendor (hipify)."""
+    return transform_key(scop, [str(ppcg_exe()), *PPCG_ARGS, vendor.name])
+
+
 def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Language | None = None) -> list[pathlib.Path]:
     """The ppcg-transformed GPU sources the ``ppcg`` column compiles, regenerated when stale; DECLINES rather than
     falling back to untransformed source."""
@@ -459,7 +468,8 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Language 
     for scop in scops:
         assert_affine(scop, base)
         produced = transformed_paths(scop, vendor)
-        if any(not p.exists() or p.stat().st_mtime < scop.stat().st_mtime for p in produced):
+        key = ppcg_key(scop, vendor)
+        if not is_fresh(produced, key):
             try:
                 argv, proc = run_ppcg(scop, vendor, timeout=config.current().oracle.polycc_timeout(base))
             except ValueError as exc:  # a pet respelling or a host rewrite that cannot read ppcg's output
@@ -468,6 +478,7 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Language 
                 raise NotSupportedByFramework(
                     FRAMEWORK, base, f"ppcg rejected {scop.name}: {proc.stderr.strip()[-500:]}"
                 )
+            mark_fresh(produced, key)
         # Re-read: a fresh passthrough published by an EARLIER call must still be declined.
         if not offloaded(produced[1].read_text()):
             raise NotSupportedByFramework(

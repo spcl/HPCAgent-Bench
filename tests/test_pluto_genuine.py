@@ -365,8 +365,7 @@ def test_a_scop_ppcg_passed_through_is_declined_rather_than_timed(
     host, device = ppcg_transform.transformed_paths(scop, Language.HIP)
     host.write_text(scop.read_text())
     device.write_text(f'#include "{scop.stem}_kernel.hu"\n')
-    os.utime(host, None)
-    os.utime(device, None)
+    ppcg_transform.mark_fresh([host, device], ppcg_transform.ppcg_key(scop, Language.HIP))
 
     def must_not_run(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401
         raise AssertionError("the published pair is fresh; ppcg must not be re-run")

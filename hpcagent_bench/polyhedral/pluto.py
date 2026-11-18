@@ -18,6 +18,7 @@ and ``polycc`` is the driver.
 
 import contextlib
 import functools
+import hashlib
 import os
 import pathlib
 import re
@@ -51,6 +52,9 @@ __all__ = [
     "assert_affine",
     "assert_numeric_agreement",
     "dedupe_scratch_declarations",
+    "is_fresh",
+    "key_path",
+    "mark_fresh",
     "oracle_pluto_status",
     "override_scop_inputs",
     "override_source",
@@ -63,6 +67,7 @@ __all__ = [
     "run_polycc_once",
     "scop_inputs",
     "specialize_override",
+    "transform_key",
     "transformed_path",
     "transformed_sources",
 ]
@@ -231,13 +236,40 @@ def specialize_override(text: str, base: str, fptype: str) -> str:
 def publish_text(dst: pathlib.Path, text: str) -> bool:
     """Atomically place ``text`` at ``dst``; no-op when it is already there. True if written.
 
-    Unchanged content is not rewritten: :func:`transformed_sources` re-runs polycc when the input's
-    mtime is newer than its transform.
+    Unchanged content is not rewritten, so a scop's bytes (the :func:`transform_key`) stay put.
     """
     if dst.is_file() and dst.read_text() == text:
         return False
     write_atomic(dst, text.encode())
     return True
+
+
+def transform_key(scop: pathlib.Path, argv: Sequence[str]) -> str:
+    """What a transform of ``scop`` depends on: its bytes, the tool's argv, and the tool binary (size, mtime)."""
+    digest = hashlib.sha256(scop.read_bytes())
+    for arg in argv:
+        digest.update(arg.encode() + b"\0")
+    with contextlib.suppress(OSError):  # a tool path that does not resolve keys by its name alone
+        stat = pathlib.Path(argv[0]).resolve().stat()
+        digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode())
+    return digest.hexdigest()
+
+
+def key_path(out: pathlib.Path) -> pathlib.Path:
+    """The sidecar holding the :func:`transform_key` that produced ``out``."""
+    return out.with_name(f"{out.name}.key")
+
+
+def is_fresh(outputs: Sequence[pathlib.Path], key: str) -> bool:
+    """Whether every output exists and was produced under ``key`` (an mtime compare misses a changed tool,
+    changed args, and a scop rewritten within the filesystem's mtime resolution)."""
+    sidecar = key_path(outputs[0])
+    return all(p.is_file() for p in outputs) and sidecar.is_file() and sidecar.read_text() == key
+
+
+def mark_fresh(outputs: Sequence[pathlib.Path], key: str) -> None:
+    """Record ``key`` for ``outputs``, after they were published."""
+    write_atomic(key_path(outputs[0]), key.encode())
 
 
 def override_scop_inputs(cpp_backend: pathlib.Path, override: pathlib.Path, base: str) -> list[pathlib.Path]:
@@ -527,13 +559,15 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str) -> list[pathlib.Pa
     scops = scop_inputs(cpp_backend, base)
     if not scops:
         raise NotSupportedByFramework(FRAMEWORK, base, "the translator emitted no #pragma scop for this kernel")
-    if polycc_exe() is None:
+    exe = polycc_exe()
+    if exe is None:
         raise ToolMissing(FRAMEWORK, base, "polycc is not installed on this host")
     out: list[pathlib.Path] = []
     for scop in scops:
         assert_affine(scop, base)
         dst = transformed_path(scop)
-        if not dst.exists() or dst.stat().st_mtime < scop.stat().st_mtime:
+        key = transform_key(scop, [exe, *POLYCC_ARGS])
+        if not is_fresh([dst], key):
             try:
                 _, proc = run_polycc(scop, dst, timeout=config.current().oracle.polycc_timeout(base))
             except subprocess.TimeoutExpired:
@@ -544,5 +578,6 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str) -> list[pathlib.Pa
                 raise NotSupportedByFramework(
                     FRAMEWORK, base, f"polycc rejected {scop.name}: {proc.stderr.strip()[-500:]}"
                 )
+            mark_fresh([dst], key)
         out.append(dst)
     return out

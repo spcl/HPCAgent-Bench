@@ -25,6 +25,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import tempfile
 
 from hpcagent_bench import config, flags
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework, ToolMissing
@@ -179,37 +180,44 @@ def transform_scop(scop: pathlib.Path, base: str) -> list[pathlib.Path]:
     binding_path = scop.parent / f"{base}_{precision.group(1) if precision else ''}_pluto_binding.json"
     if not binding_path.is_file():
         raise NotSupportedByFramework(FRAMEWORK, base, f"no pluto binding {binding_path.name} for {scop.name}")
-    stem = scop.parent / f"{scop.stem}_polygeist_gpu"
-    affine = stem.with_suffix(".affine.mlir")
-    lowered = stem.with_suffix(".llvm.mlir")
-    resource_dir = run_tool(["clang", "-print-resource-dir"], scop, base).stdout.strip()
-    run_tool(
-        [
-            "cgeist",
-            str(scop),
-            *CGEIST_ARGS,
-            f"--function={function}",
-            f"-resource-dir={resource_dir}",
-            "-o",
-            str(affine),
-        ],
-        scop,
-        base,
-    )
-    affine.write_text(entry_point(affine.read_text(), function))
-    mapped = stem.with_suffix(".gpu.mlir")
-    run_tool(["polygeist-opt", str(affine), *GPU_PASSES, "-o", str(mapped)], scop, base)
-    if "gpu.launch_func" not in mapped.read_text():
-        raise NotSupportedByFramework(FRAMEWORK, base, f"no loop nest of {scop.name} maps to the GPU")
-    hosted = stem.with_suffix(".host.mlir")
-    pipeline = GPU_LOWERING.format(chip=flags.detect_gfx())
-    run_tool(["polygeist-opt", str(mapped), f"--pass-pipeline={pipeline}", "-o", str(hosted)], scop, base)
-    run_tool(["mlir-opt", str(hosted), "--gpu-module-to-binary", "-o", str(lowered)], scop, base)
-    ll = stem.with_suffix(".ll")
-    run_tool(["mlir-translate", "--mlir-to-llvmir", str(lowered), "-o", str(ll)], scop, base)
-    shim = stem.parent / f"{stem.name}_shim.c"
-    shim.write_text(shim_source(function, read_binding(binding_path).args))
-    return [ll, shim]
+    final = scop.parent / f"{scop.stem}_polygeist_gpu"
+    # Built in a scratch dir beside the scop and published with os.replace: a failed or concurrent build never
+    # leaves a half-written .ll or shim at the paths the column compiles.
+    with tempfile.TemporaryDirectory(dir=scop.parent, prefix=".polygeist_gpu_") as scratch:
+        stem = pathlib.Path(scratch) / final.name
+        affine = stem.with_suffix(".affine.mlir")
+        lowered = stem.with_suffix(".llvm.mlir")
+        resource_dir = run_tool(["clang", "-print-resource-dir"], scop, base).stdout.strip()
+        run_tool(
+            [
+                "cgeist",
+                str(scop),
+                *CGEIST_ARGS,
+                f"--function={function}",
+                f"-resource-dir={resource_dir}",
+                "-o",
+                str(affine),
+            ],
+            scop,
+            base,
+        )
+        affine.write_text(entry_point(affine.read_text(), function))
+        mapped = stem.with_suffix(".gpu.mlir")
+        run_tool(["polygeist-opt", str(affine), *GPU_PASSES, "-o", str(mapped)], scop, base)
+        if "gpu.launch_func" not in mapped.read_text():
+            raise NotSupportedByFramework(FRAMEWORK, base, f"no loop nest of {scop.name} maps to the GPU")
+        hosted = stem.with_suffix(".host.mlir")
+        pipeline = GPU_LOWERING.format(chip=flags.detect_gfx())
+        run_tool(["polygeist-opt", str(mapped), f"--pass-pipeline={pipeline}", "-o", str(hosted)], scop, base)
+        run_tool(["mlir-opt", str(hosted), "--gpu-module-to-binary", "-o", str(lowered)], scop, base)
+        ll = stem.with_suffix(".ll")
+        run_tool(["mlir-translate", "--mlir-to-llvmir", str(lowered), "-o", str(ll)], scop, base)
+        shim = stem.parent / f"{stem.name}_shim.c"
+        shim.write_text(shim_source(function, read_binding(binding_path).args))
+        published = [final.with_suffix(".ll"), final.parent / f"{final.name}_shim.c"]
+        ll.replace(published[0])
+        shim.replace(published[1])
+    return published
 
 
 def transformed_sources(cpp_backend: pathlib.Path, base: str) -> list[pathlib.Path]:

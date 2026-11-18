@@ -224,8 +224,8 @@ def test_fp32_and_fp64_artifacts_cannot_overwrite_each_other(tmp_path: pathlib.P
 
 
 def test_rematerializing_an_unchanged_override_does_not_bump_mtimes(tmp_path: pathlib.Path) -> None:
-    """Freshness in `transformed_sources` is an mtime compare, so rewriting identical bytes every
-    build would re-run polycc on every kernel forever."""
+    """Rewriting identical bytes every build would move mtimes that build steps compare (the
+    column's ``.so`` freshness in ``native_runtime``) for no change in content."""
     bench_dir = tmp_path / "kern"
     write_override(bench_dir, "mm")
     first = pluto_transform.scop_inputs(bench_dir / "cpp_backend", "mm", bench_dir=bench_dir)
