@@ -1,16 +1,13 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Running Polygeist: the ONE place the ``polygeist_cpu`` / ``polygeist_gpu`` pipelines are spelled.
+"""Running Polygeist: the ONE place the ``polygeist_gpu`` pipeline is spelled.
 
 The columns compile what this module writes from the C target's scop (``_pluto_input.c``, the file polycc reads,
 selected by :func:`hpcagent_bench.polyhedral.pluto.scop_inputs`): ``cgeist`` lowers it to affine MLIR,
 ``polygeist-opt`` parallelizes it with MLIR's own passes, and the image's LLVM turns it into LLVM IR that the
-column's clang compiles (``compilers.yaml``: ``clang-polygeist`` / ``clang-polygeist-gpu``).
+column's clang compiles (``compilers.yaml``: ``clang-polygeist-gpu``). The CPU polyhedral column is Pluto's.
 
-* CPU: ``affine-parallelize`` marks the outermost parallel loop (``max-nested=1``: a nested one would open a
-  parallel region per iteration), ``convert-scf-to-openmp`` makes it an OpenMP worksharing loop (see
-  :data:`CPU_PASSES` for why Polymer does not run).
-* GPU: ``affine-parallelize`` up to three levels, each parallel nest tiled 16x16x1 into blocks and threads,
+``affine-parallelize`` up to three levels, each parallel nest tiled 16x16x1 into blocks and threads,
   ``convert-parallel-loops-to-gpu`` launches it, ROCDL compiles the kernel for ``<gfx>:xnack+``. The arrays stay
   where the caller allocated them (``HSA_XNACK=1``, see :func:`run_env`), so there is no data-movement step.
   Polymer is not run here: its tiled bounds are ``min``/``max`` expressions the GPU mapping does not accept, and a
@@ -37,7 +34,6 @@ from hpcagent_bench.translators.numpyto_common.dtypes import SCALAR_KINDS, info_
 
 __all__ = [
     "CGEIST_ARGS",
-    "CPU_PASSES",
     "FRAMEWORK",
     "GPU_LOWERING",
     "GPU_PASSES",
@@ -53,17 +49,6 @@ FRAMEWORK = "polygeist"
 
 #: cgeist, C scop -> affine MLIR. ``--raise-scf-to-affine`` is what makes the loops affine at all.
 CGEIST_ARGS: tuple[str, ...] = ("-S", flags.OPT_LEVEL, "--raise-scf-to-affine")
-
-#: polygeist-opt, CPU: outermost parallel loop to OpenMP, LLVM dialect with descriptor ABI. Not
-#: ``--polyhedral-opt``: the image builds Polymer, but its Pluto schedule computed heat_3d wrong (max rel error
-#: 3e16 against numpy) and ran gemm 4.7x slower than this pipeline at preset S.
-CPU_PASSES: tuple[str, ...] = (
-    "--affine-parallelize=max-nested=1",
-    "--lower-affine",
-    "--canonicalize",
-    "--convert-scf-to-openmp",
-    "--convert-polygeist-to-llvm=use-c-style-memref=0",
-)
 
 #: polygeist-opt, GPU: parallel nests to tiled ``gpu.launch_func`` kernels.
 GPU_PASSES: tuple[str, ...] = (
@@ -187,14 +172,14 @@ def run_tool(cmd: list[str], scop: pathlib.Path, base: str) -> subprocess.Comple
     return proc
 
 
-def transform_scop(scop: pathlib.Path, base: str, device: str) -> list[pathlib.Path]:
-    """``[<stem>_polygeist_<device>.ll, <stem>_polygeist_<device>_shim.c]`` for one scop."""
+def transform_scop(scop: pathlib.Path, base: str) -> list[pathlib.Path]:
+    """``[<stem>_polygeist_gpu.ll, <stem>_polygeist_gpu_shim.c]`` for one scop."""
     function = scop_function(scop.read_text())
     precision = re.search(r"_(fp\d+)_", scop.name)
     binding_path = scop.parent / f"{base}_{precision.group(1) if precision else ''}_pluto_binding.json"
     if not binding_path.is_file():
         raise NotSupportedByFramework(FRAMEWORK, base, f"no pluto binding {binding_path.name} for {scop.name}")
-    stem = scop.parent / f"{scop.stem}_polygeist_{device}"
+    stem = scop.parent / f"{scop.stem}_polygeist_gpu"
     affine = stem.with_suffix(".affine.mlir")
     lowered = stem.with_suffix(".llvm.mlir")
     resource_dir = run_tool(["clang", "-print-resource-dir"], scop, base).stdout.strip()
@@ -212,17 +197,14 @@ def transform_scop(scop: pathlib.Path, base: str, device: str) -> list[pathlib.P
         base,
     )
     affine.write_text(entry_point(affine.read_text(), function))
-    if device == "cpu":
-        run_tool(["polygeist-opt", str(affine), *CPU_PASSES, "-o", str(lowered)], scop, base)
-    else:
-        mapped = stem.with_suffix(".gpu.mlir")
-        run_tool(["polygeist-opt", str(affine), *GPU_PASSES, "-o", str(mapped)], scop, base)
-        if "gpu.launch_func" not in mapped.read_text():
-            raise NotSupportedByFramework(FRAMEWORK, base, f"no loop nest of {scop.name} maps to the GPU")
-        hosted = stem.with_suffix(".host.mlir")
-        pipeline = GPU_LOWERING.format(chip=flags.detect_gfx())
-        run_tool(["polygeist-opt", str(mapped), f"--pass-pipeline={pipeline}", "-o", str(hosted)], scop, base)
-        run_tool(["mlir-opt", str(hosted), "--gpu-module-to-binary", "-o", str(lowered)], scop, base)
+    mapped = stem.with_suffix(".gpu.mlir")
+    run_tool(["polygeist-opt", str(affine), *GPU_PASSES, "-o", str(mapped)], scop, base)
+    if "gpu.launch_func" not in mapped.read_text():
+        raise NotSupportedByFramework(FRAMEWORK, base, f"no loop nest of {scop.name} maps to the GPU")
+    hosted = stem.with_suffix(".host.mlir")
+    pipeline = GPU_LOWERING.format(chip=flags.detect_gfx())
+    run_tool(["polygeist-opt", str(mapped), f"--pass-pipeline={pipeline}", "-o", str(hosted)], scop, base)
+    run_tool(["mlir-opt", str(hosted), "--gpu-module-to-binary", "-o", str(lowered)], scop, base)
     ll = stem.with_suffix(".ll")
     run_tool(["mlir-translate", "--mlir-to-llvmir", str(lowered), "-o", str(ll)], scop, base)
     shim = stem.parent / f"{stem.name}_shim.c"
@@ -230,8 +212,8 @@ def transform_scop(scop: pathlib.Path, base: str, device: str) -> list[pathlib.P
     return [ll, shim]
 
 
-def transformed_sources(cpp_backend: pathlib.Path, base: str, device: str) -> list[pathlib.Path]:
-    """The LLVM IR and C shims the ``polygeist_<device>`` column compiles, regenerated on every build.
+def transformed_sources(cpp_backend: pathlib.Path, base: str) -> list[pathlib.Path]:
+    """The LLVM IR and C shims the ``polygeist_gpu`` column compiles, regenerated on every build.
 
     Declines -- never returns the untransformed source -- when a tool is missing, when the translator emitted no
     scop, or when any step of the pipeline rejects one."""
@@ -242,6 +224,6 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, device: str) -> li
     if missing:
         raise ToolMissing(FRAMEWORK, base, f"not on PATH: {', '.join(missing)}")
     try:
-        return [path for scop in scops for path in transform_scop(scop, base, device)]
+        return [path for scop in scops for path in transform_scop(scop, base)]
     except ValueError as exc:  # no function around the scop, or cgeist emitted none to rename
         raise NotSupportedByFramework(FRAMEWORK, base, str(exc)) from None
