@@ -283,6 +283,7 @@ def test_pack_without_local_submits_a_job_and_local_runs_politely(
     assert (run / EPISODE_DIR / "episode.json").is_file()
 
 
+@pytest.mark.smoke
 def test_the_cli_verb_packs_verifies_and_restores(tmp_path: pathlib.Path) -> None:
     run = run_dir(tmp_path)
     for verb in (

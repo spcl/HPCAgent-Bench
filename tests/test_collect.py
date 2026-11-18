@@ -209,6 +209,7 @@ def test_copy_refuses_two_roots_with_one_destination(sources: pathlib.Path, tmp_
         collect.copy(twins, tmp_path / "data")
 
 
+@pytest.mark.smoke
 def test_archive_cli_verifies_then_tars_and_keeps_the_copy(sources: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """``collect copy`` then ``collect archive``: the tar holds the copy, and the copy stays."""
     out = tmp_path / "data"

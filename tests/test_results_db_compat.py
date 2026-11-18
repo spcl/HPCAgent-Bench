@@ -61,6 +61,7 @@ def test_the_schema_is_the_one_0_2_1_froze_plus_the_lazy_tables_and_added_column
         assert {name for name, _sql in schema_objects(old) - current} == altered
 
 
+@pytest.mark.smoke
 def test_a_0_2_1_file_opens_merges_and_extracts(tmp_path: pathlib.Path) -> None:
     source = tmp_path / "v021.db"
     shutil.copy(V021_DB, source)
