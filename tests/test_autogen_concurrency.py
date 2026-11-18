@@ -62,10 +62,6 @@ def test_four_ranks_generating_one_sibling_all_import_it() -> None:
     assert outcomes == ["ok"] * 4, outcomes
 
 
-if __name__ == "__main__":
-    test_four_ranks_generating_one_sibling_all_import_it()
-
-
 def test_two_threads_never_hold_one_kernels_autogen_lock_at_once(tmp_path: pathlib.Path) -> None:
     """``lockf`` alone excludes processes only: a second thread's ``lockf`` returned at once and both generated."""
     inside: list[str] = []
@@ -85,3 +81,7 @@ def test_two_threads_never_hold_one_kernels_autogen_lock_at_once(tmp_path: pathl
     for t in threads:
         t.join()
     assert not overlap, overlap
+
+
+if __name__ == "__main__":
+    test_four_ranks_generating_one_sibling_all_import_it()
