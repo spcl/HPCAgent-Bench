@@ -269,6 +269,58 @@ plugin_dirs() {
     plugin_entries | cut -d: -f3 | paste -sd:
 }
 
+# role_binds <role> -- the binds a step of <role> takes besides the shared folder and role_mounts, as src:dst or
+# src:dst:ro, one per line. derived_edf (ce) and container_wrap (the exec runtimes) both read it, so an agent or a
+# judge sees the same plugins, launch hook, node venv root and skill pages under every runtime.
+role_binds() {
+    local role="$1" bind
+    # The judge image holds an editable install of hpcagent_bench pointing at /opt/hpcagent-bench and no code of
+    # it: every role that runs that image (the judge and each helper step importing the package) mounts the
+    # checkout there. The agent and the engine run other images and never see it there.
+    case "${role}" in
+        agent* | vllm* | inference*) ;;
+        *) printf '%s:%s\n' "${HPCAGENT_BENCH_REPO}" "${JUDGE_PACKAGE_MOUNT}" ;;
+    esac
+    # The plugins and the checkout's launch hook, read-only for every role that runs benchmark code (an agent able
+    # to write a tool would change what the rest of its own job runs).
+    case "${role}" in
+        vllm* | inference*) ;;
+        *)
+            case "${role}" in agent*) plugin_agent_binds ;; *) plugin_binds ;; esac | while IFS= read -r bind; do
+                printf '%s:ro\n' "${bind}"
+            done
+            printf '%s:ro\n' "$(launch_hook_bind "${HPCAGENT_BENCH_REPO}")"
+            # The node's /dev/shm with exec: the hook's one launch venv per node (launch_venv.sh).
+            printf '%s\n' "/dev/shm:/opt/node-shm"
+            ;;
+    esac
+    case "${role}" in
+        # The tools and the launch directory, read-only: an agent able to write either would
+        # change what the rest of its own job runs. agent_driver.py is the only reader of the
+        # tools path, so no other role gets it.
+        agent*)
+            agent_ro_binds "${role}" | while IFS= read -r bind; do
+                printf '%s:ro\n' "${bind}"
+            done
+            # The mount point the seal binds the worker's own setup's skill pages over, read-only: without it the
+            # seal binds none (seal_worker.skills_mount) and a skill setup runs without its treatment.
+            mkdir -p "${SHARED_HOST_DIR}/skills" 2>/dev/null || true
+            printf '%s\n' "${SHARED_HOST_DIR}/skills:/skills:ro"
+            # NOT the generated cache: it holds every kernel's lowering in every language. An
+            # agent is staged its own kernel's translation, in its own language, once
+            # (materialize_shared.sh -> stage_signature.py --reference).
+            ;;
+        # The judge is the role that CALLS emit_reference_source to grade, so the generated
+        # cache has to reach it or every lookup is a miss that re-emits at ~4 s.
+        judge*)
+            if [[ -n "${GENERATED_CACHE_HOST:-}" ]]; then
+                mkdir -p "${GENERATED_CACHE_HOST}" 2>/dev/null || true
+                printf '%s:%s\n' "${GENERATED_CACHE_HOST}" "${GENERATED_CACHE_MOUNT}"
+            fi
+            ;;
+    esac
+}
+
 derived_edf() {
     # derived_edf <registered EDF name> <role tag> -- leaves in EDF_FILE a per-run COPY of that EDF
     # which also mounts the shared folder. An EDF is a static registered file, so a run-specific
@@ -327,49 +379,11 @@ derived_edf() {
         printf 'mounts = [\n'
         mkdir -p "${SHARED_HOST_DIR}" "${GENERATED_CACHE_HOST}" 2>/dev/null || true
         printf '    "%s:%s",\n' "${SHARED_HOST_DIR}" "${SHARED_MOUNT}"
-        # The judge image holds an editable install of hpcagent_bench pointing at /opt/hpcagent-bench and no code of
-        # it: every role that runs that image (the judge and each helper step importing the package) mounts the
-        # checkout there. The agent and the engine run other images and never see it there.
-        case "${role}" in
-            agent* | vllm* | inference*) ;;
-            *) printf '    "%s:%s",\n' "${HPCAGENT_BENCH_REPO}" "${JUDGE_PACKAGE_MOUNT}" ;;
-        esac
-        # The plugins and the checkout's launch hook, read-only for every role that runs benchmark code (an agent able
-        # to write a tool would change what the rest of its own job runs).
-        case "${role}" in
-            vllm* | inference*) ;;
-            *)
-                case "${role}" in agent*) plugin_agent_binds ;; *) plugin_binds ;; esac | while IFS= read -r plugin_bind; do
-                    printf '    "%s:ro",\n' "${plugin_bind}"
-                done
-                printf '    "%s:ro",\n' "$(launch_hook_bind "${HPCAGENT_BENCH_REPO}")"
-                # The node's /dev/shm with exec: the hook's one launch venv per node (launch_venv.sh).
-                printf '    "/dev/shm:/opt/node-shm",\n'
-                ;;
-        esac
-        case "${role}" in
-            # The tools and the launch directory, read-only: an agent able to write either would
-            # change what the rest of its own job runs. agent_driver.py is the only reader of the
-            # tools path, so no other role gets it.
-            agent*)
-                agent_ro_binds "${role}" | while IFS= read -r ro_bind; do
-                    printf '    "%s:ro",\n' "${ro_bind}"
-                done
-                # The mount point the seal binds the worker's own setup's skill pages over, read-only.
-                mkdir -p "${SHARED_HOST_DIR}/skills" 2>/dev/null || true
-                printf '    "%s/skills:/skills:ro",\n' "${SHARED_HOST_DIR}"
-                # The node's own /tmp: the read-only container's only writable scratch before the seal.
-                printf '    "/tmp:/tmp",\n'
-                # NOT the generated cache: it holds every kernel's lowering in every language. An
-                # agent is staged its own kernel's translation, in its own language, once
-                # (materialize_shared.sh -> stage_signature.py --reference).
-                ;;
-            # The judge is the role that CALLS emit_reference_source to grade, so the generated
-            # cache has to reach it or every lookup is a miss that re-emits at ~4 s.
-            judge*)
-                printf '    "%s:%s",\n' "${GENERATED_CACHE_HOST}" "${GENERATED_CACHE_MOUNT}"
-                ;;
-        esac
+        role_binds "${role}" | while IFS= read -r bind; do
+            printf '    "%s",\n' "${bind}"
+        done
+        # The node's own /tmp: the read-only agent container's only writable scratch before the seal.
+        [[ "${role}" != agent* ]] || printf '    "/tmp:/tmp",\n'
         # mkdir before naming: a bind source that does not exist stops the container from
         # starting, and the JIT root is created by run_vllm_node INSIDE the container -- too late
         # to be its own mount source. Cheap, idempotent, and runs on the batch host where these
@@ -450,9 +464,9 @@ backend_load() {
 # judge-node, agent-node, vllm-node, or a caller's own label). Under ce, <ce-env> is a registered EDF name, rewritten
 # per role by derived_edf, or an absolute path to a .toml, used as it is (a step that wants the EDF's own mounts).
 # Under an exec row of the backend table <image> is a .sif path or an image reference, bound to the shared folder, the
-# role's mounts, its read-only binds and any extra bind source (same path inside). An AGENT step of a read-only
-# isolation.agent_rootfs (agent_rootfs_mode) also takes the runtime's rootfs_ro flag and its writable scratch mounts
-# (agent_rootfs_scratch) in front of the image. Returns 2 naming what is missing: an unknown runtime, an unnamed EDF
+# role's mounts, its role_binds (the ones the CE EDF carries too) and any extra bind source (same path inside). An
+# AGENT step of a read-only isolation.agent_rootfs (agent_rootfs_mode) also takes the runtime's rootfs_ro flag and its
+# writable scratch mounts (agent_rootfs_scratch) in front of the image. Returns 2 naming what is missing: an unknown runtime, an unnamed EDF
 # or image, or an isolation.agent_rootfs value that is neither writable nor read-only.
 container_wrap() {
     local role="$1" ce_env="$2" image="$3" mount name known=ce
@@ -484,13 +498,9 @@ container_wrap() {
     for mount in $(role_mounts "${role}") "$@"; do
         volumes+=("${mount}:${mount}")
     done
-    for mount in $(agent_ro_binds "${role}"); do
-        volumes+=("${mount}:ro")
+    for mount in $(role_binds "${role}"); do
+        volumes+=("${mount}")
     done
-    case "${role}" in
-        agent* | vllm* | inference*) ;;
-        *) volumes+=("${HPCAGENT_BENCH_REPO}:${JUDGE_PACKAGE_MOUNT}") ;;
-    esac
     for mount in "${volumes[@]}"; do
         binds+=("${SPELL[${CONTAINER_RUNTIME}.bind]}" "${mount}")
     done
@@ -512,6 +522,9 @@ container_wrap() {
     # tree, and CE agents are read-only through their EDF instead -- derived_edf).
     if [[ "${role}" == agent* ]]; then
         local mode
+        local -a hostfs=()
+        read -r -a hostfs <<<"${SPELL[${CONTAINER_RUNTIME}.agent_hostfs]:-}"
+        rootfs+=("${hostfs[@]}")
         mode="$(agent_rootfs_mode)" || return 2
         if [[ "${mode}" == read-only ]]; then
             [[ -n "${SPELL[${CONTAINER_RUNTIME}.rootfs_ro]:-}" ]] && rootfs+=("${SPELL[${CONTAINER_RUNTIME}.rootfs_ro]}")

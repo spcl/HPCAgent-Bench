@@ -68,6 +68,7 @@ repository; a plugin cannot add one.
 | `bind`, `workdir`, `env` | its flags for a mount, the working directory and a forwarded name |
 | `inherits_env=1` | the runtime inherits the environment, so no `env` flag is passed |
 | `rootfs_ro`, `tmpfs` | the read-only rootfs flag and the tmpfs flag of an AGENT step under `isolation.agent_rootfs=read-only`; empty names none — an image form immutable by default (a SIF), or scratch mounted as binds instead |
+| `agent_hostfs` | the flags that keep the runtime's default host binds (apptainer: the home and the working directory) out of an AGENT step; empty for a runtime that binds nothing by default |
 | `gpu.nvidia`, `gpu.amd` | device flags of the local launcher, which refuses other hardware without them |
 | `image_form`, `image_default` | `tag` or `sif`, and the name with `{hw}` |
 | `harbor_env` | its Harbor provider, empty for none |
