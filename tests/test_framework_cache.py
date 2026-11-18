@@ -84,6 +84,26 @@ def test_generated_source_cache_hit_restore_and_invalidation(tmp_path: pathlib.P
     assert fc.load_generated(cache, canonical, sha256_hex(b"source-v2")) is False
 
 
+def test_interleaved_writers_leave_a_miss_never_the_other_writers_source(tmp_path: pathlib.Path) -> None:
+    """Two emitters of one kernel under different fingerprints: A writes its payload, B writes payload and sidecar,
+    then A writes its sidecar. The cache now holds B's source under A's fingerprint, which A must not be served."""
+    kdir = tmp_path / "k"
+    kdir.mkdir()
+    cache = fc.kernel_cache_dir(kdir)
+    canonical = kdir / "k_dace.py"
+    fp_a, fp_b = sha256_hex(b"source-a"), sha256_hex(b"source-b")
+    canonical.write_text("# gen B\n")
+    fc.save_generated(cache, canonical, fp_b, 1.0)
+    cached = cache / canonical.name
+    fc.sidecar_path(cached).write_bytes(fc.sidecar_text(fp_a, b"# gen A\n"))  # A's sidecar lands last
+    canonical.write_text("# gen A\n")
+    assert fc.load_generated(cache, canonical, fp_a) is False, "B's source under A's fingerprint must MISS"
+    assert fc.load_generated(cache, canonical, fp_b) is False, "the sidecar no longer names B's fingerprint"
+    assert canonical.read_text() == "# gen A\n", "a miss restores nothing"
+    fc.sidecar_path(cached).write_text(fp_b)
+    assert fc.load_generated(cache, canonical, fp_b) is False, "a sidecar without the payload hash is stale"
+
+
 def widget_kernel(benchmarks_root: pathlib.Path) -> pathlib.Path:
     """Write a minimal valid kernel (manifest + numpy reference) under a tmp benchmarks root."""
     kdir = benchmarks_root / "loop_level_reasoning" / "widget"

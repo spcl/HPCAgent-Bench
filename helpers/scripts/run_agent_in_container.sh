@@ -58,11 +58,11 @@ resolve_image() {
 # Does this backend's CLI exist and its image resolve on disk / in the store?
 backend_ready() {
   local backend="$1" hw="$2" image
-  command -v "$backend" >/dev/null 2>&1 || return 1
+  command -v "$(backend_program "$backend")" >/dev/null 2>&1 || return 1
   image="$(resolve_image "$backend" "$hw")"
   case "${SPELL[$backend.image_form]}" in
     sif) [ -f "$image" ] ;;
-    tag) "$backend" image inspect "$image" >/dev/null 2>&1 ;;
+    tag) "$(backend_program "$backend")" image inspect "$image" >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
 }
@@ -126,7 +126,7 @@ fi
 # <backend> <verb> (<env> NAME)* [GPU flags] <bind> REPO:REPO <bind> REPO:<package mount> <workdir> REPO <image> <command>
 IMAGE="$(resolve_image "$SELECTED" "$HW")"
 read -ra VERB <<< "${SPELL[$SELECTED.verb]}"
-ARGV=("$SELECTED" "${VERB[@]}")
+ARGV=("$(backend_program "$SELECTED")" "${VERB[@]}")
 if [ "${SPELL[$SELECTED.inherits_env]:-0}" != 1 ]; then
   for name in $(launch_env_names); do ARGV+=("${SPELL[$SELECTED.env]}" "$name"); done
 fi

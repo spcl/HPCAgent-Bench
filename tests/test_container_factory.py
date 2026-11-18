@@ -66,6 +66,14 @@ def test_detect_backend_probes_path_rather_than_assuming(monkeypatch: pytest.Mon
     assert containers.detect_backend() is None
 
 
+def test_a_site_with_only_singularity_has_the_sif_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Older sites ship singularity, not apptainer: the sif row runs either, so `sif` finds it there."""
+    monkeypatch.setattr(containers.shutil, "which", lambda name: "/usr/bin/" + name if name == "singularity" else None)
+    assert containers.detect_backend((R.APPTAINER,)) == R.APPTAINER
+    monkeypatch.setattr(containers.shutil, "which", lambda name: None)
+    assert containers.detect_backend((R.APPTAINER,)) is None
+
+
 def test_resolve_backend_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     # PATH is pinned so the family fallback is deterministic rather than a property of whichever
     # runtime this developer happens to have installed.

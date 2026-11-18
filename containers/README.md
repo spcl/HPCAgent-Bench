@@ -364,7 +364,8 @@ anonymous CI egress with a 403 that reads as a missing repository):
 Two compilers no image carries are installed by hand into a user prefix, without root, for the `cc_icx` and
 `cc_aocc` columns: `lib/install-icx.sh PREFIX INSTALLER` runs Intel's standalone DPC++/C++ offline installer
 (`--silent --eula accept --install-dir PREFIX`), and `lib/install-aocc.sh PREFIX [TARBALL]` unpacks AMD's AOCC
-tarball (AOCC 6 or later: the column needs LLVM 19 for `-std=c23`). Each prints the lines to source: `setvars.sh`
+tarball (AOCC 6 or later: the column needs LLVM 19 for `-std=c23`). Both refuse a download whose digest is not
+`CHECKSUM=<sha256|sha384|sha512>:<hex>` (Intel lists one per installer; AOCC 6.0.0's is pinned in the script). Each prints the lines to source: `setvars.sh`
 puts `icx` on `PATH`; `HPCAGENT_BENCH_AOCC_ROOT` names AOCC's tree, whose `clang` stays off `PATH`. Without them the
 columns report `tool_missing`.
 
