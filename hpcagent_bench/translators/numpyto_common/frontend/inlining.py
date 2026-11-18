@@ -1,6 +1,7 @@
 """Helper inlining: inlinable forms, the inliner, static-flag guards, constant-list loop unrolling."""
 
 import ast
+import collections
 import copy
 from collections.abc import Sequence
 
@@ -25,6 +26,7 @@ __all__ = [
     "SubstNames",
     "collect_assigned_names",
     "collect_inlinable_helpers",
+    "computes",
     "constant_truth",
     "flatten_nested_helpers",
     "fold_constant_branches",
@@ -699,6 +701,14 @@ def is_multi_stmt_return_form(fn: ast.FunctionDef) -> bool:
     return isinstance(last, ast.Return) and last.value is not None
 
 
+def computes(arg: ast.expr) -> bool:
+    """Whether evaluating ``arg`` does work (an operator or a call), as opposed to naming a value or a view of one
+    (``a``, ``a[i]``, ``a.T``), which a reader can repeat for free."""
+    return any(
+        isinstance(n, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.Call, ast.IfExp)) for n in ast.walk(arg)
+    )
+
+
 class InlineHelpers(ast.NodeTransformer):
     """Substitute calls to recognised helpers with their inline body.
 
@@ -764,6 +774,15 @@ class InlineHelpers(ast.NodeTransformer):
                     rename[ln] = name_(f"{prefix}{ln}")
                     if ln in arg_map:
                         reassigned_params.append(ln)
+                # A computed argument (``softmax_rows(x @ w.T)``) read more than once is evaluated once, as Python
+                # does, into a prefixed local: substituted, every read recomputed it into a transient of its own.
+                reads = collections.Counter(
+                    n.id for s in body for n in ast.walk(s) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                )
+                for pn_, arg_ in arg_map.items():
+                    if pn_ not in local_names and reads[pn_] > 1 and computes(arg_):
+                        rename[pn_] = name_(f"{prefix}{pn_}")
+                        reassigned_params.append(pn_)
                 # Substitute throughout the helper body and the return
                 # expression.
                 renamer = SubstNames(rename)
