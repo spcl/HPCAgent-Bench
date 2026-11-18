@@ -20,6 +20,8 @@
 #       bash hpcagent_bench/cluster/grade-under.sbatch <worklist> <out>
 # A run inherits this job's environment (the submitter's, as sbatch passes it) plus its own KEY=VALUE words: name
 # there what differs between checkouts, the interpreter's import path among them.
+# FUSED_NODES (default the allocation's): the nodes this launcher may use, for a second launcher started as a step
+# (srun --overlap) on nodes the first one's ended runs freed.
 # FUSED_MIN_LEFT_S (default 3600): a queued run is not started with less than this left in the allocation.
 # Each run logs to <instances dir>/logs/<job>-<name>.{out,err}; this script logs starts and ends.
 
@@ -34,10 +36,12 @@ MIN_LEFT_S="${FUSED_MIN_LEFT_S:-3600}"
 POLL_S="${FUSED_POLL_S:-30}"
 mkdir -p -- "${LOG_DIR}"
 
-mapfile -t free_nodes < <(scontrol show hostnames "${SLURM_JOB_NODELIST:?not inside an allocation}")
+mapfile -t free_nodes < <(scontrol show hostnames "${FUSED_NODES:-${SLURM_JOB_NODELIST:?not inside an allocation}}")
 mapfile -t queue < <(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "${INSTANCES}")
 declare -A name_of nodes_of
-k=0
+# FUSED_FIRST_INDEX: a second launcher inside the same job (on the nodes the first one's ended runs freed) numbers
+# its runs on from there, so no run id repeats.
+k=$((${FUSED_FIRST_INDEX:-1} - 1))
 
 seconds_left() {
     local end
