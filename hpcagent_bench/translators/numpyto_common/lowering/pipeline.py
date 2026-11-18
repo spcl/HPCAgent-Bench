@@ -55,7 +55,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.constructors import (
     MgridLowering,
     ZerosRewriter,
 )
-from hpcagent_bench.translators.numpyto_common.lowering.fft_grid import FftGridReshapeRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.forward_subst import (
     ForwardSubstituteInvariantScalars,
     SelfAssignDropper,
@@ -67,7 +66,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.masks import (
     collect_bool_names,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MathRewriter
-from hpcagent_bench.translators.numpyto_common.lowering.reshape_attr import ShapeAttrToReshape
 from hpcagent_bench.translators.numpyto_common.lowering.scatter import ScatterAtRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import collect_dim_aliases, harvest_local_shapes
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import (
@@ -86,7 +84,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.signature import (
 from hpcagent_bench.translators.numpyto_common.lowering.slice_fusion import LiftFreshArrayFromSlices, SliceFusion
 from hpcagent_bench.translators.numpyto_common.lowering.ssa import ssa_rename_reassigned
 from hpcagent_bench.translators.numpyto_common.lowering.sugar import (
-    DaceMapRewriter,
     MembershipToComparisons,
     UnrollConstRangeComprehension,
 )
@@ -353,7 +350,6 @@ def lp_normalize_calls(ctx: LoweringContext) -> None:
     MathRewriter(
         set(ash.keys()) | set(ctx.lib_shape_table.keys()), defer_array_capable=True, user_functions=user_functions(ctx)
     ).visit(tree)
-    DaceMapRewriter().visit(tree)
     # ``a = b = v``: ``v`` once -- a temp for a scalar, one name for an array's one buffer.
     chain_ranks = {name: len(shape) for name, shape in ash.items()}
     chain_ranks.update((desc.name, 0) for desc in descs(ctx.kir.scalars, ctx.kir.symbols))
@@ -404,10 +400,6 @@ def lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
     # pair of per-element init loops -- before the main harvest so the resulting
     # fresh arrays get their shape registered like any other local.
     MgridLowering().visit(tree)
-    ast.fix_missing_locations(tree)
-    # Pre-pass: rewrite ``x.shape = expr`` -> ``x = np.reshape(x, expr)``. Handles
-    # chained ``Xi.shape = Yi.shape = expr`` too. Mandelbrot2 canonical uses this.
-    ShapeAttrToReshape().visit(tree)
     ast.fix_missing_locations(tree)
     # Forward-substitute a shape-tuple local (``shp = (Lb, Lb, Lb, nstate)`` --
     # the seed-time fold of a declared-array-based ``shp = Y.shape``) into its uses
@@ -615,16 +607,10 @@ def lp_normalize_index_access(ctx: LoweringContext) -> None:
 
 
 def lp_libnode_expand(ctx: LoweringContext) -> None:
-    """FFT-grid + reshape normalisation, then the LibNode expander (reductions /
+    """Reshape normalisation, then the LibNode expander (reductions /
     matmul / linalg); a second free-name promotion for structural scalars."""
     tree = ctx.tree
-    # Flat-grid FFT idiom (vexx invfft/fwfft: reshape-to-grid -> fftn over the
-    # grid axes -> reshape-back) -> materialised reshape + fft temps, so the
-    # reshape/DFT expanders below see bare Names with known shapes.
-    FftGridReshapeRewriter(ctx.lib_shape_table, ctx.local_dtypes, [0]).visit(tree)
-    ast.fix_missing_locations(tree)
-    # Normalize ``X.reshape(a, b)`` method form to ``np.reshape(X, (a, b))``
-    # AFTER the FFT idiom match (which consumes its own reshape chains) so the
+    # Normalize ``X.reshape(a, b)`` method form to ``np.reshape(X, (a, b))`` so the
     # single expand_reshape path serves lulesh's varargs spelling.
     ReshapeMethodRewriter().visit(tree)
     # A reshape or a slice view is lowered as a copy; a store through the view must still reach the array it views.
