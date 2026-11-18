@@ -35,18 +35,29 @@ def tree_digest(root: pathlib.Path) -> dict[str, str]:
 
 
 @pytest.fixture
-def sources(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[pathlib.Path]:
+def judge_writer(tmp_path: pathlib.Path) -> Iterator[sqlite3.Connection]:
+    """The open writer of the :func:`sources` job's WAL judge DB: its rows live in the -wal only, as in a running
+    job; a test closes it to finish the job."""
+    db = tmp_path / "src" / "runs" / "camp-1" / "900" / "judge" / "rank-0" / "hpcagent_bench0.db"
+    db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db)
+    conn.execute("pragma journal_mode=wal")
+    conn.execute("create table submissions (x)")
+    conn.execute("insert into submissions values (42)")
+    conn.commit()
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
+def sources(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, judge_writer: sqlite3.Connection
+) -> pathlib.Path:
     """A runs root with one job (a WAL judge DB, metadata, an episode's worker directory with its transcripts, logs,
     agent home and secrets, a job-level home) and a regrade dir."""
     monkeypatch.setenv("SCRATCH", str(tmp_path / "scratch"))
     src = tmp_path / "src"
     job = src / "runs" / "camp-1" / "900"
-    (job / "judge" / "rank-0").mkdir(parents=True)
-    conn = sqlite3.connect(job / "judge" / "rank-0" / "hpcagent_bench0.db")
-    conn.execute("pragma journal_mode=wal")
-    conn.execute("create table submissions (x)")
-    conn.execute("insert into submissions values (42)")
-    conn.commit()  # left open: the rows live in the -wal only, as in a running job
     for rel, text in (*TRANSCRIPTS.items(), *SECRETS.items(), *UNCOLLECTED.items()):
         (job / rel).parent.mkdir(parents=True, exist_ok=True)
         (job / rel).write_text(text)
@@ -58,8 +69,7 @@ def sources(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     with connect(src / "regrades" / "w1" / "regrade-cells-0.db") as c:
         c.execute("create table regrade_cells (x)")
     (src / "regrades" / "w1" / "worklist.jsonl").write_text("{}\n")
-    yield src
-    conn.close()
+    return src
 
 
 #: An episode's worker directory, relative to its job.
@@ -425,11 +435,12 @@ def test_a_pre_release_shard_whose_sources_are_elsewhere_verifies_once_converted
 
 
 def test_archive_removes_the_sources_only_through_remove_sources_after_every_check(
-    sources: pathlib.Path, tmp_path: pathlib.Path
+    sources: pathlib.Path, judge_writer: sqlite3.Connection, tmp_path: pathlib.Path
 ) -> None:
     """``collect archive --remove-sources`` is the one removal of run data: it lifts a finished job's seal and removes
     the collected roots once the copy verifies, the tar matches it and every root is in it as it is now; the copy
     and the tar then still give back every graded answer."""
+    judge_writer.close()  # the jobs finished
     source_hash, _, _ = graded_run(sources / "runs")
     data_guard.seal(sources / "runs" / "camp-1" / "901", writable=False)
     out = tmp_path / "data"
@@ -441,6 +452,25 @@ def test_archive_removes_the_sources_only_through_remove_sources_after_every_che
     with results_db.reading(copied_db(out), finished=True) as conn:
         assert conn.execute("SELECT 1 FROM sources WHERE hash = ?", (source_hash,)).fetchone() is not None
     assert next(tmp_path.glob("data.tar.*")).is_file()
+
+
+def test_archive_removes_nothing_while_a_process_holds_a_file_of_a_root_open(
+    sources: pathlib.Path, judge_writer: sqlite3.Connection, tmp_path: pathlib.Path
+) -> None:
+    """A judge DB writer still open (a running job) refuses the removal with every root whole -- on NFS its open
+    file stops ``rmtree`` half-way through the root; once the writer closed, the roots go."""
+    out = tmp_path / "data"
+    collect.copy(roots(sources), out)
+    before = tree_digest(sources)
+    with pytest.raises(SystemExit, match="nothing removed: a process holds files of the roots open"):
+        collect.main(["archive", "--remove-sources", str(out)])
+    assert tree_digest(sources) == before
+
+    judge_writer.close()
+    assert collect.main(["archive", "--remove-sources", str(out)]) == 0
+    assert not (sources / "runs").exists()
+    assert not (sources / "regrades").exists()
+    assert not list(sources.iterdir()), "a root was left renamed aside"
 
 
 def test_archive_removes_nothing_when_a_root_holds_a_grade_the_copy_lacks(

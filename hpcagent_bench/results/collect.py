@@ -23,6 +23,7 @@ import enum
 import fnmatch
 import json
 import multiprocessing
+import os
 import pathlib
 import shutil
 import sqlite3
@@ -92,6 +93,7 @@ __all__ = [
     "main",
     "missing_transcripts",
     "needed_jobs",
+    "open_files_under",
     "over_extracts",
     "plan",
     "quick_check",
@@ -776,9 +778,42 @@ def remove_sources(out: pathlib.Path, *, threads: int = 8) -> list[pathlib.Path]
         raise SystemExit(f"{', '.join(map(str, refused))}: a protected root itself is not removed")
     if problems := uncopied(out, threads=threads):
         raise SystemExit("nothing removed:\n" + "\n".join(problems))
-    for root in roots:
-        data_guard.remove(root)
+    if held := open_files_under(roots):
+        # A writer still running (on NFS its open file also blocks the removal half-way).
+        raise SystemExit("nothing removed: a process holds files of the roots open:\n" + "\n".join(held))
+    # All or nothing: every root is first renamed aside (atomic), and a failed rename puts the others back.
+    staged: list[tuple[pathlib.Path, pathlib.Path]] = []
+    try:
+        for root in roots:
+            aside = root.with_name(f".{root.name}.removing-{os.getpid()}")
+            root.rename(aside)
+            staged.append((root, aside))
+    except OSError as exc:
+        for root, aside in reversed(staged):
+            aside.rename(root)
+        raise SystemExit(f"nothing removed: {exc}") from None
+    for _, aside in staged:
+        data_guard.remove(aside)
     return roots
+
+
+def open_files_under(roots: Sequence[pathlib.Path]) -> list[str]:
+    """Files under ``roots`` that a process on this host holds open (``/proc/<pid>/fd``; this process included)."""
+    homes = [data_guard.real(root) for root in roots]
+    held: set[str] = set()
+    for fds in pathlib.Path("/proc").glob("[0-9]*/fd"):
+        try:
+            entries = list(fds.iterdir())
+        except OSError:  # another user's process, or one that exited
+            continue
+        for fd in entries:
+            try:
+                link = os.readlink(fd)
+            except OSError:  # closed meanwhile
+                continue
+            if link.startswith("/") and any(pathlib.Path(link).is_relative_to(home) for home in homes):
+                held.add(f"{link} (pid {fds.parent.name})")
+    return sorted(held)
 
 
 def build_parser() -> argparse.ArgumentParser:
