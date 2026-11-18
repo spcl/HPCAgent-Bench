@@ -2505,6 +2505,9 @@ class FortranBodyEmitter(BaseEmitter):
             if per_axis is not None:
                 return per_axis
         if args_e and attr in ONE_OPERAND_CALLS:
+            if attr in WHOLE_ARRAY_REDUCTIONS and (len(node.args) > 1 or node.keywords):
+                # The whole-array form reads the operand alone; dropping axis/where/dtype/out changes the result.
+                raise NotImplementedError(f"np.{attr} with an axis or keyword the per-axis lowering did not take")
             return ONE_OPERAND_CALLS[attr].format(args_e[0])
         if len(args_e) >= 2 and attr in TWO_OPERAND_CALLS:
             return TWO_OPERAND_CALLS[attr].format(args_e[0], args_e[1])

@@ -10,12 +10,15 @@ import importlib.util
 import multiprocessing
 import multiprocessing.queues
 import multiprocessing.synchronize
+import pathlib
+import threading
+import time
 import traceback
 
 import pytest
 
 from hpcagent_bench import osinfo, paths
-from hpcagent_bench.autogen import ensure, file_for
+from hpcagent_bench.autogen import autogen_lock, ensure, file_for
 from hpcagent_bench.spec import BenchSpec
 
 #: A small dense kernel with a generated (not hand-written) dace sibling.
@@ -61,3 +64,24 @@ def test_four_ranks_generating_one_sibling_all_import_it() -> None:
 
 if __name__ == "__main__":
     test_four_ranks_generating_one_sibling_all_import_it()
+
+
+def test_two_threads_never_hold_one_kernels_autogen_lock_at_once(tmp_path: pathlib.Path) -> None:
+    """``lockf`` alone excludes processes only: a second thread's ``lockf`` returned at once and both generated."""
+    inside: list[str] = []
+    overlap: list[str] = []
+
+    def hold(name: str) -> None:
+        with autogen_lock(tmp_path):
+            if inside:
+                overlap.append(f"{name} entered while {inside[0]} held the lock")
+            inside.append(name)
+            time.sleep(0.3)
+            inside.remove(name)
+
+    threads = [threading.Thread(target=hold, args=(f"t{i}",)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not overlap, overlap
