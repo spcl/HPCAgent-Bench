@@ -123,9 +123,10 @@ def episodes_of(run_dir: pathlib.Path) -> list[Episode]:
         folders.setdefault(entry["episode_id"], []).append(
             pathlib.PurePosixPath(run_layout.SHARED_DIRNAME, entry["folder"])
         )
+    workers = collect.worker_dirs(run_dir, folders)
     found: list[Episode] = []
     for label, shared in folders.items():
-        worker = collect.worker_dir(run_dir, label)
+        worker = workers.get(label)
         if worker is not None and worker.is_dir():
             found.append(Episode(label, pathlib.PurePosixPath(worker.relative_to(run_dir)), tuple(shared)))
     return found
