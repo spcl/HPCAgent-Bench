@@ -6,6 +6,7 @@ import re
 
 import pytest
 from dace.codegen.targets.experimental_cuda_helpers import scope_strategies
+from dace.libraries.standard.nodes import scan as scans
 from dace.transformation.passes import loop_specialization as guards
 from dace.transformation.passes.canonicalize import annotate_loop_kinds as kinds
 from dace.transformation.passes.canonicalize import segment_confined_loops as segments
@@ -23,6 +24,8 @@ COMMON = (
     kinds.REDUCTION,
     kinds.ORDERED_CALL,
     kinds.EARLY_EXIT,
+    scans.PARALLEL_SCAN_HINT,
+    scans.SEQUENTIAL_SCAN_HINT,
     kinds.SEQUENTIAL_PROVEN,
     kinds.SEQUENTIAL_PINNED,
     kinds.UNKNOWN,
