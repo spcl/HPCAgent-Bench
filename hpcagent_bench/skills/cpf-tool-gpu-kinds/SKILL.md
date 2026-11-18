@@ -1,7 +1,7 @@
 ---
 name: cpf-tool-gpu-kinds
-description: "How to read the answer of the `canonical_parallel_form` tool: DaCe's GPU canonical parallel form (CPF) of this kernel, the host unit and the HIP or CUDA device unit, already parallelized, every loop and kernel marked `// par`, `// seq` or `// unknown`. Read it whenever `canonical_parallel_form` is in your tool list, before you design a parallelization of your own."
-when: "you are about to parallelize or optimize this kernel: call `canonical_parallel_form` once, before you design a scheme of your own, and read this to use its parallelized HIP or CUDA form, annotated `// par`, `// seq` or `// unknown`"
+description: "How to read the answer of the `canonical_parallel_form` tool: DaCe's GPU canonical parallel form (CPF) of this kernel, the host unit and the HIP or CUDA device unit, already parallelized, every loop and kernel marked `// par`, `// par reduction`, `// seq` or `// unknown`. Read it whenever `canonical_parallel_form` is in your tool list, before you design a parallelization of your own."
+when: "you are about to parallelize or optimize this kernel: call `canonical_parallel_form` once, before you design a scheme of your own, and read this to use its parallelized HIP or CUDA form, annotated `// par`, `// par reduction`, `// seq` or `// unknown`"
 applies: {explicit: true, languages: [hip, cuda]}
 ---
 
@@ -38,12 +38,15 @@ its loops and their marks into your own kernel.
 Every loop and every kernel carries exactly one comment:
 
 - `// par`: proven independent iterations, safe to run in parallel.
-- `// seq`: a proven carried dependence, keep the order.
-- `// unknown`: not decided by the analysis.
+- `// par reduction`: the iterations combine their results into one variable. Running them in parallel
+  needs a reduction (per-block partial results combined after, or an atomic).
+- `// seq`: keep the order. It is a proven carried dependence, an ordered call or an early exit, or the
+  fallback of a loop the form also runs in parallel under a guard (independence not proven for its inputs).
+- `// unknown`: not decided by the analysis. It runs in order; parallelize it only if no iteration
+  touches an element another iteration writes, for every input.
 
-A few `// seq` loops carry no dependence and are kept in order on purpose (the fallback arm of a loop
-the form also runs in parallel under a guard, the inner tile of a wavefront); keep their order too. An
-`// unknown` loop runs in order in this form, and it may well be parallel.
+Each comment covers one loop or kernel as written: fusing or reordering loops or kernels needs its own dependence check,
+also between two `// par` loops or kernels.
 
 No other comment is a verdict. A `__global__` kernel launch runs a `// par` loop as its grid, and nested
 `// par` loops run on the threads, warps or lanes of one block. A `// seq` or `// unknown` loop sits
@@ -61,13 +64,14 @@ for (int64_t t = 1; t < T; t += 1) launch_step(x, w, N, t);  // host unit
 __global__ void step(double *x, const double *w, int64_t N, int64_t t);  // x[t, i] = w[i] * x[t - 1, i]
 ```
 
-The kernel's grid needs no dependence check, and the `t` loop stays ordered: step 2 reads what step 1
+The kernel's grid is proven independent, and the `t` loop stays ordered: step 2 reads what step 1
 wrote. What is open is cost: the `T - 1` launches (one persistent kernel could replace them), block
 size, coalesced access. Parallelism across `t` takes rewriting the recurrence, not a schedule.
 
 ## Your job
 
 A fixed pipeline made every loop it proved independent parallel (some kernels have none); its schedule
-choices are static heuristics, not measurements. Reason about dependences only for `// unknown` loops.
-Spend your effort on what it applies only in its basic form, and on restructuring: block sizes, fusing
-launches, staging through shared memory, coalescing, data layout. **The form is a floor, not a target.**
+choices are static heuristics, not measurements. Reason about dependences for `// unknown` loops, and
+whenever you fuse or reorder loops. Spend your effort on what it applies only in its basic form, and on
+restructuring: block sizes, fusing launches, staging through shared memory, coalescing, data layout.
+**The form is a floor, not a target.**
