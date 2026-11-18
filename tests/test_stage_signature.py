@@ -121,7 +121,7 @@ def test_a_failed_emit_on_a_restage_keeps_the_staged_reference(
         raise RuntimeError("emit failed")
 
     stager = load_stager()
-    monkeypatch.setattr(stager, "generated_reference_source", fail)
+    monkeypatch.setattr(stager, "starting_source", fail)
     with pytest.raises(RuntimeError, match="emit failed"):
         stager.main()
     assert (dest / "k_reference.c").read_bytes() == staged_before, "the staged reference was destroyed"
