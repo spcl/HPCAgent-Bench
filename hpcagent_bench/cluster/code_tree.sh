@@ -60,8 +60,10 @@ freeze_code_tree() {
             if [[ -d "${checkout}/${seeds}" ]]; then
                 cp -Rp -- "${checkout}/${seeds}/." "${tree}/${seeds}/" || exit 2
             fi
-            # Never the caller's venv: UV_PROJECT_ENVIRONMENT or VIRTUAL_ENV would point uv at the live tree's.
-            (cd -- "${tree}" && env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT="${tree}/.venv" uv sync --frozen -q) >&2 \
+            # Never the caller's venv: UV_PROJECT_ENVIRONMENT or VIRTUAL_ENV would point uv at the live tree's. Copies,
+            # not uv's default hardlinks into its cache: many hardlinks to one file break capstor.
+            (cd -- "${tree}" && env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT="${tree}/.venv" UV_LINK_MODE=copy \
+                uv sync --frozen -q) >&2 \
                 || exit 2
         fi
         touch -- "${tree}/${CODE_TREE_MARKER}"

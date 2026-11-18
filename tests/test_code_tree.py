@@ -58,7 +58,7 @@ def run(tmp_path: pathlib.Path, script: str, **env: str) -> subprocess.Completed
     bash_stub(
         stubs,
         "uv",
-        f'echo "$PWD ${{VIRTUAL_ENV-unset}} $*" >> {tmp_path / "uv.calls"}\n'
+        f'echo "$PWD ${{VIRTUAL_ENV-unset}} ${{UV_LINK_MODE-hardlink}} $*" >> {tmp_path / "uv.calls"}\n'
         'mkdir -p "${UV_PROJECT_ENVIRONMENT}/bin"\n'
         f'printf \'#!/bin/sh\\nexec {sys.executable} "$@"\\n\' > "${{UV_PROJECT_ENVIRONMENT}}/bin/python"\n'
         'chmod +x "${UV_PROJECT_ENVIRONMENT}/bin/python"',
@@ -101,7 +101,9 @@ def test_a_job_runs_its_staged_commit_after_the_checkout_moved(tmp_path: pathlib
     assert (tree / SEEDS_REL / "secret_seeds.json").read_text() == '{"seed": 7}\n'
     assert (tree / ".venv" / "bin" / "python").exists()
     calls = (tmp_path / "uv.calls").read_text().splitlines()
-    assert calls == [f"{tree} unset sync --frozen -q"], "one venv per commit, in the tree, never the live one"
+    assert calls == [f"{tree} unset copy sync --frozen -q"], (
+        "one venv per commit, in the tree, of copies, never the live one"
+    )
     assert git(tree, "status", "--porcelain", "--untracked-files=no") == ""
 
 
