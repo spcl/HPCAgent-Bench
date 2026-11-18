@@ -224,7 +224,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
       python3 python3-venv python3-dev \
       build-essential gcc g++ gfortran \
-      gdb valgrind util-linux hwloc msr-tools numactl heaptrack likwid strace ltrace binutils \
+      gdb valgrind util-linux hwloc msr-tools numactl heaptrack strace ltrace binutils \
       ca-certificates git curl wget openssh-client gnupg ripgrep fd-find jq less tree htop \
       unzip vim nano file bzip2 xz-utils patch diffutils gzip gawk \
       automake autoconf libtool bison flex texinfo gettext \
@@ -933,6 +933,28 @@ RUN set -eux; \
       printf '%s\n' "${avail}" | grep -q "${component}" \
         || { echo "PAPI was built without the ${component} component" >&2; exit 1; }; \
     done
+
+# likwid from source, not Ubuntu's package. That package predates the MI300A CPU (family 0x19, model 0x90): likwid-perfctr
+# answers "Unsupported AMD Zen Processor" and knows no group. The model is in likwid after 5.5.1 (55575b48f7, "Add AMD
+# MI300A (Zen4)"), so a master commit is pinned. ACCESSMODE=perf_event: a container reaches no MSR, and the kernel's
+# perf_event interface is the one likwid can count through (live on the mi300 judge image, job 750681: Zen4 detected,
+# FLOPS_DP counted). No daemon and no frequency module, both need MSRs. The build only checks the binary runs: the
+# groups depend on the CPU of the node that builds the image.
+ARG LIKWID_REF=653ba0a01a4ce4bb6eeac66aa2a2ffb947239ea5
+RUN set -eux; \
+    git init -q /tmp/likwid; \
+    git -C /tmp/likwid remote add origin https://github.com/RRZE-HPC/likwid.git; \
+    gitretry -C /tmp/likwid fetch -q --depth 1 origin "${LIKWID_REF}"; \
+    git -C /tmp/likwid checkout -q FETCH_HEAD; \
+    cd /tmp/likwid; \
+    sed -i -e 's#^PREFIX ?= .*#PREFIX ?= /usr/local#' -e 's#^ACCESSMODE = .*#ACCESSMODE = perf_event#' \
+      -e 's#^BUILDDAEMON = .*#BUILDDAEMON = false#' -e 's#^BUILDFREQ = .*#BUILDFREQ = false#' config.mk; \
+    make -j"$(nproc)"; \
+    make install; \
+    cd /; \
+    rm -rf /tmp/likwid; \
+    ldconfig; \
+    likwid-perfctr -v
 
 # ---------------------------------------------------------------------------------------------
 # 10. Pluto -- polycc, the polyhedral source-to-source tool the `pluto` framework shells out to,
