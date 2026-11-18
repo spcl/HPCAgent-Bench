@@ -243,10 +243,9 @@ def tile_problems(launches: Sequence[Launch]) -> list[str]:
 
 
 def graded_inputs(kernel: str) -> list[metric.ScoreCell]:
-    """The inputs the ML final grade times: the final protocol's draws near XL, aligned to ``mpi.ranks``."""
+    """The inputs the ML final grade times: the final protocol's draws near XL, aligned for the sweep's largest P."""
     with config.scoped_environment(grade_under.final_settings({}, grade_under.FINAL)):
-        cells = grade_under.protocol_inputs(grade_under.FINAL, kernel, True)
-        return metric.ml_aligned(BenchSpec.load(kernel), cells, config.current().mpi.ranks)
+        return grade_under.ml_graded_inputs(BenchSpec.load(kernel), kernel, grade_under.FINAL)
 
 
 @pytest.mark.parametrize("kernel", KERNELS)
