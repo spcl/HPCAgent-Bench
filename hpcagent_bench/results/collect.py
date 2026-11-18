@@ -21,6 +21,7 @@ import contextlib
 import dataclasses
 import enum
 import fnmatch
+import json
 import multiprocessing
 import pathlib
 import shutil
@@ -43,6 +44,7 @@ from hpcagent_bench.run_layout import (
     MERGE_FAILED_NAME,
     MERGED_DB_NAME,
     RANK_DIR,
+    TOKENS_NAME,
     TRANSCRIPT_DIRS,
     WORKER_GLOB,
     run_path,
@@ -467,13 +469,42 @@ def job_dir_of(db: pathlib.Path) -> pathlib.Path | None:
     return None
 
 
+def worker_dirs(job_dir: pathlib.Path, labels: Iterable[str]) -> dict[str, pathlib.Path]:
+    """The worker directory (``agents/node-N/problem-P-worker-W``, where its harness wrote its transcript and logs) of
+    each of ``labels`` in ``job_dir``; a label of no driver episode is left out.
+
+    The driver names the folder for the problem's id and the label for the problem's place in the node's list. The two
+    differ in a job of a subset of problems (an owed rerun, an mlscale node), so the folder whose record
+    (``tokens.json``) names the label is its folder; the composed name stands only for a folder no record claims (an
+    episode cut off before its record)."""
+    recorded: dict[str, pathlib.Path] = {}
+    for path in sorted(job_dir.glob(f"{WORKER_GLOB}/{TOKENS_NAME}")):
+        try:
+            episode = json.loads(path.read_text(encoding="utf-8")).get("episode_id")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(episode, str) and episode:
+            recorded[episode] = path.parent
+    claimed = set(recorded.values())
+    found: dict[str, pathlib.Path] = {}
+    for label in labels:
+        match = recording.LABEL.fullmatch(label)
+        if match is None:
+            continue
+        composed = (
+            job_dir / AGENTS_DIRNAME / f"node-{match['node']}" / f"problem-{match['problem']}-worker-{match['worker']}"
+        )
+        if label in recorded:
+            found[label] = recorded[label]
+        elif composed not in claimed:
+            found[label] = composed
+    return found
+
+
 def worker_dir(job_dir: pathlib.Path, label: str) -> pathlib.Path | None:
-    """The worker directory of episode ``label`` in ``job_dir`` (``agents/node-N/problem-P-worker-W``, where its
-    harness wrote its transcript and logs); None for a label of no driver episode."""
-    match = recording.LABEL.fullmatch(label)
-    if match is None:
-        return None
-    return job_dir / AGENTS_DIRNAME / f"node-{match['node']}" / f"problem-{match['problem']}-worker-{match['worker']}"
+    """The worker directory of episode ``label`` in ``job_dir`` (:func:`worker_dirs`); None for a label of no driver
+    episode or one whose composed folder another episode's record claims."""
+    return worker_dirs(job_dir, (label,)).get(label)
 
 
 def missing_transcripts(
@@ -484,7 +515,7 @@ def missing_transcripts(
     job_dir = job_dir_of(db)
     if job_dir is None or (job := recording.job_of_dir(job_dir)) == results_db.LOCAL_JOB:
         return []
-    folders = {f for f in (worker_dir(job_dir, label) for episode_job, label in episodes if episode_job == job) if f}
+    folders = set(worker_dirs(job_dir, (label for episode_job, label in episodes if episode_job == job)).values())
     missing = {f for f in folders if not any(p.is_file() for p in f.rglob("*"))}
     if not full:
         missing |= {

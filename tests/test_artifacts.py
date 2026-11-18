@@ -273,6 +273,24 @@ def test_the_cli_verb_packs_verifies_and_restores(tmp_path: pathlib.Path) -> Non
     assert (run / WORKER / "claude.log").read_text() == LOOSE[f"{WORKER}/claude.log"]
 
 
+def test_an_episode_whose_folder_is_named_for_its_problem_id_is_found_by_its_record(tmp_path: pathlib.Path) -> None:
+    """In a job of a subset of problems (an owed rerun) the driver names the folder for the problem's id (19) and the
+    label for the problem's place in the node's list (p0); the record (``tokens.json``) says whose folder it is."""
+    run = tmp_path / "run"
+    worker, label = "agents/node-0/problem-19-worker-0", "exp-kimi-c.n0.p0.w0"
+    write(
+        run,
+        {
+            f"{worker}/claude.log": "transcript\n",
+            f"{worker}/tokens.json": json.dumps({"episode_id": label, "cause": "limit"}) + "\n",
+            f"{worker}/attempts.jsonl": '{"attempt": 1, "cause": "limit"}\n',
+        },
+    )
+    (run / "agent-folders.jsonl").write_text(json.dumps({"episode_id": label, "folder": "agent-0"}) + "\n")
+    (directory,) = artifacts.pack_run(run)
+    assert json.loads((directory / "episode.json").read_text())["worker"] == worker
+
+
 def test_a_sealed_run_directory_is_packed_and_sealed_again(tmp_path: pathlib.Path) -> None:
     """A finished job's run directory is sealed read-only (data_guard.seal); the pack chained after the job makes
     ``episodes/`` and removes the loose files inside the unsealed window, and leaves the directory sealed."""
@@ -306,4 +324,5 @@ if __name__ == "__main__":
     with pytest.MonkeyPatch.context() as patch:
         test_pack_without_local_submits_a_job_and_local_runs_politely(scratch(), patch)
     test_the_cli_verb_packs_verifies_and_restores(scratch())
+    test_an_episode_whose_folder_is_named_for_its_problem_id_is_found_by_its_record(scratch())
     test_a_sealed_run_directory_is_packed_and_sealed_again(scratch())
