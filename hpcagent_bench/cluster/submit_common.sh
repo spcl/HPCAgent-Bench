@@ -421,7 +421,7 @@ submit_pack_job() {
     shift 2
     [[ "${PACK_AFTER:-1}" == 1 ]] || return 0
     root=$(sed -n 's/^RUN_ROOT=//p' "${env}" | tail -1)
-    root=$(eval "printf '%s' \"${root:-\${SUBMIT_REPO_DIR}/results/cluster}\"") || return 2
+    if [[ -n "${root}" ]]; then root=$(eval "printf '%s' \"${root}\"") || return 2; else root="${SUBMIT_REPO_DIR}/results/cluster"; fi
     local -a args=(--parsable --dependency="afterany:${job}" --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}"
         --time="${PACK_TIME:-02:00:00}" --job-name="runs-pack-${job}" --output="${HPCAGENT_BENCH_SCRATCH}/logs/runs-pack-%j.out"
         --export="ALL,HPCAGENT_BENCH_REPO=${SUBMIT_REPO_DIR},HPCAGENT_BENCH_PYTHON=${HPCAGENT_BENCH_HOST_PYTHON}")
