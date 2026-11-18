@@ -133,10 +133,16 @@ def register_flavors() -> None:
         if plugin.manifest.flavors:
             # A folder plugin's optimizer imports as hpcagent_bench_plugins.<name>.<module>.
             agent_plugins.import_package(plugin)
+    taken: set[str] = set()
     for plugin, key, block in blocks:
         for base in block.extends:
             if base not in FRAMEWORKS:
                 raise ValueError(f"plugin {plugin.name!r}: flavor {key!r} extends {base!r}, which is no column")
+            if (name := f"{base}_{key}") in FRAMEWORKS or name in taken:
+                raise ValueError(f"plugin {plugin.name!r}: flavor {key!r} makes column {name!r}, which is taken")
+            taken.add(name)
+    for plugin, key, block in blocks:
+        for base in block.extends:
             add_flavor(base, key, block.name, block.full_name, block.optimizer)
 
 
@@ -449,7 +455,8 @@ def import_failure(plugin: Plugin) -> str:
 
 
 def flavor_failure(key: str, block: FlavorBlock) -> str:
-    """Why flavor ``key``'s optimizer is no ``FlavorOptimizer``; ``""`` when it is."""
+    """Why flavor ``key``'s optimizer is no ``FlavorOptimizer``, or, keeping its ``solve``, extends a column without
+    exactly one pipeline for ``tune``; ``""`` when neither."""
     from hpcagent_bench.harness.optimizers import FlavorOptimizer  # deferred: only the check needs the harness
 
     module, _, name = block.optimizer.partition(":")
@@ -457,9 +464,12 @@ def flavor_failure(key: str, block: FlavorBlock) -> str:
         found = modules.optional(importlib.import_module(module), name)
     except ImportError as exc:
         return f"flavor {key!r}: optimizer {block.optimizer!r} does not import: {exc}"
-    if isinstance(found, type) and issubclass(found, FlavorOptimizer):
-        return ""
-    return f"flavor {key!r}: optimizer {block.optimizer!r} is no FlavorOptimizer"
+    if not (isinstance(found, type) and issubclass(found, FlavorOptimizer)):
+        return f"flavor {key!r}: optimizer {block.optimizer!r} is no FlavorOptimizer"
+    unpiped = [base for base in block.extends if base in FRAMEWORKS and len(FRAMEWORKS[base].pipelines) != 1]
+    if found.solve is FlavorOptimizer.solve and unpiped:
+        return f"flavor {key!r}: extends {unpiped}, which have no single pipeline to tune (override solve instead)"
+    return ""
 
 
 def api_failure(plugin: Plugin) -> str:
@@ -471,6 +481,8 @@ def api_failure(plugin: Plugin) -> str:
         for node in ast.walk(ast.parse((plugin.root / "routes" / f"{stem}.py").read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
                 imported = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "hpcagent_bench":
+                imported = [f"hpcagent_bench.{alias.name}" for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 imported = [node.module]
             else:
