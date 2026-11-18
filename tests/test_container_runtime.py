@@ -116,8 +116,23 @@ def test_ce_without_an_edf_name_says_so(tmp_path: pathlib.Path) -> None:
     assert "no EDF for judge-node" in done.stderr
 
 
+def only_installed(tmp_path: pathlib.Path, installed: tuple[str, ...]) -> str:
+    """A PATH holding stubs of the ``installed`` runtimes and the seam's own tools alone, so a runtime this machine
+    has installed cannot answer instead."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in installed:
+        (bin_dir / name).write_text("#!/bin/sh\n")
+        (bin_dir / name).chmod(0o755)
+    for tool in SEAM_TOOLS:
+        found = shutil.which(tool)
+        assert found is not None, tool
+        (bin_dir / tool).symlink_to(found)
+    return str(bin_dir)
+
+
 def test_apptainer_binds_the_shared_folder_and_the_roles_mounts(tmp_path: pathlib.Path) -> None:
-    done = wrap(tmp_path, "apptainer", "judge-node", gpu_flags="--rocm")
+    done = wrap(tmp_path, "apptainer", "judge-node", gpu_flags="--rocm", PATH=only_installed(tmp_path, ("apptainer",)))
     assert done.returncode == 0, done.stderr
     assert done.srun == []
     assert done.wrap[:3] == ["apptainer", "run", "--rocm"]
@@ -241,17 +256,7 @@ def test_the_apptainer_row_runs_singularity_where_apptainer_is_absent(
     tmp_path: pathlib.Path, installed: tuple[str, ...], program: str
 ) -> None:
     """A site that ships only singularity runs the same SIF with it; where both exist, apptainer wins."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    for name in installed:
-        (bin_dir / name).write_text("#!/bin/sh\n")
-        (bin_dir / name).chmod(0o755)
-    # A PATH of the seam's own tools alone, so a runtime this machine has installed cannot answer instead.
-    for tool in SEAM_TOOLS:
-        found = shutil.which(tool)
-        assert found is not None, tool
-        (bin_dir / tool).symlink_to(found)
-    done = wrap(tmp_path, "apptainer", "judge-node", PATH=str(bin_dir))
+    done = wrap(tmp_path, "apptainer", "judge-node", PATH=only_installed(tmp_path, installed))
     assert done.returncode == 0, done.stderr
     assert done.wrap[:2] == [program, "run"]
 
