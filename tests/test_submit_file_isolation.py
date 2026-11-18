@@ -161,29 +161,6 @@ def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -
 
 
 @pytest.mark.parametrize(
-    ("seconds", "knobs", "want", "note"),
-    [
-        pytest.param("57600", {"HPCAGENT_BENCH_MAX_TIME_HOURS": "23"}, "57600", "", id="under-the-limit"),
-        pytest.param(
-            "115200", {"HPCAGENT_BENCH_MAX_TIME_HOURS": "23"}, "72000", "capped to 72000 s", id="past-the-limit"
-        ),
-        pytest.param("115200", {"HPCAGENT_BENCH_SYSTEM": "beverin"}, "72000", "capped", id="system-entry"),
-        pytest.param("115200", {}, "115200", "", id="no-known-limit"),
-    ],
-)
-def test_a_wall_clock_is_clamped_to_the_partition_limit_less_staging(
-    tmp_path: pathlib.Path, seconds: str, knobs: dict[str, str], want: str, note: str
-) -> None:
-    """A wall clock past the partition clamps to (23 - 3) h = 20 h, a --time the partition grants, and says so;
-    under the limit, or with no limit the environment or system names, the time is kept."""
-    result = run_common(tmp_path, f"clamp_time {seconds}", {"STAGING_HOURS": "3", **knobs})
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == want
-    assert note in result.stderr
-    assert bool(result.stderr) == bool(note)
-
-
-@pytest.mark.parametrize(
     "key",
     [
         "AGENT_MAX_TOKENS",

@@ -86,27 +86,6 @@ parse_job_flags() {
     done
 }
 
-# clamp_time <seconds> -> <seconds>, clamped so one batch plus STAGING_HOURS still fits the partition's longest time
-# limit (max_time_hours, from the system or HPCAGENT_BENCH_MAX_TIME_HOURS): a --time past it is one the partition
-# never grants, and the job stays PENDING forever. Without a known limit nothing is clamped; a clamp is said on
-# stderr, in a dry run too.
-clamp_time() {
-    local seconds=$1 limit cap
-    limit=$(job_options --print max_time_hours) || return 2
-    if [[ -n "${limit}" ]]; then
-        cap=$(( (limit - STAGING_HOURS) * 3600 ))
-        (( cap > 0 )) || {
-            echo "clamp_time: STAGING_HOURS=${STAGING_HOURS} leaves no room under the ${limit} h time limit" >&2
-            return 2
-        }
-        (( seconds <= cap )) || {
-            echo "clamp_time: ${seconds} s is past the ${limit} h time limit less ${STAGING_HOURS} h of staging: capped to ${cap} s" >&2
-            seconds="${cap}"
-        }
-    fi
-    printf '%s\n' "${seconds}"
-}
-
 # job_walltime <env> <kernels> -> the job's --time: setup_walltime. A setup that needs more than the partition's
 # max_time_hours is refused, never capped: a capped job would end before its last agent batch had
 # AGENT_TIMEOUT_SECONDS, while every episode still records the full limit.

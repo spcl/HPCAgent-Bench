@@ -267,6 +267,26 @@ def test_a_job_refuses_a_checkout_other_than_its_staged_commit(recorded: str, sn
     assert ("staged at" in done.stderr) is refused
 
 
+@pytest.mark.parametrize(("role", "recorded"), [("", "HEAD"), ("judge", "inherited")])
+def test_the_batch_step_reads_head_over_a_commit_the_submitter_exported(
+    tmp_path: pathlib.Path, role: str, recorded: str
+) -> None:
+    """sbatch exports the submitting shell's environment: a HPCAGENT_BENCH_SNAPSHOT_COMMIT there must not stand in for
+    the checkout's HEAD in the batch step (it would pass the staged-commit check and stamp every row), while a role
+    step keeps the batch step's value."""
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    head = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    block = lines_between(RUN_CLUSTER, 'if [[ -n "${SLURM_JOB_ID:-}" ]] && (( $# == 0 ))', "fi")
+    env = {"SLURM_JOB_ID": "1", "REPO_DIR": str(tmp_path), "HPCAGENT_BENCH_SNAPSHOT_COMMIT": "inherited"}
+    done = bash(
+        f'set -euo pipefail\n{block}\necho "${{HPCAGENT_BENCH_SNAPSHOT_COMMIT}}"', *filter(None, [role]), env=env
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == (head if recorded == "HEAD" else "inherited")
+
+
 @pytest.mark.parametrize("submodule_filled", [True, False])
 def test_a_checkout_with_an_empty_submodule_is_refused_before_sbatch(
     tmp_path: pathlib.Path, submodule_filled: bool
