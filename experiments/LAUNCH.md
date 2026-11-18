@@ -3,7 +3,7 @@
 How to size, submit, watch and cancel an experiment setup on Beverin (AMD MI300A, partition `mi300`),
 regrade and extract its results, and which serving configurations complete. Beverin is the worked example: the
 submitter takes the same flags on any Slurm cluster ([`docs/configuration.md`](../docs/configuration.md#job-shape-per-system)). Every command runs from
-`experiments/` on a login node. A job snapshots the checkout when it STARTS, not when it is submitted
+`experiments/` on a login node. A job runs the checkout's code at the commit it was staged at
 ([README.md](README.md#isolation)). Jobs never resubmit themselves. Setups and the role split:
 [README.md](README.md); Slurm flags per serving role: [`docs/serving/`](../docs/serving/README.md).
 
@@ -401,8 +401,10 @@ pointers today), and `icon_aes_graupel` only on a dace extended that starts its 
 - **Requests logged but zero `Avg generation throughput` means a wedged engine.** Cancel it.
 - **The image moves with the engine.** Change `INFERENCE_CE_ENV` together with `INFERENCE_ENGINE`.
   The judge logs `Application startup complete` before the model server dies.
-- **The code tree is frozen at job START, not at submit** ([README.md](README.md#isolation)); a
-  PENDING job picks up every commit that lands before then. Data roots stay on the live tree.
+- **Never move the checkout while its setups are PENDING or RUNNING.** A job reads the checkout's code when it
+  starts, and `run_cluster.sh` stops a job whose checkout is no longer at the staged commit
+  (`FATAL: staged at <commit>, the checkout ... is at <commit>`); a RUNNING job loads modules from the live tree.
+  Develop in another worktree. Data roots stay on the live tree.
 - **The skills packet is frozen into the problems file.** Re-run the submitter after editing a
   `SKILL.md`.
 - **Never edit an env file or launcher while its jobs run**; roles re-source them.
