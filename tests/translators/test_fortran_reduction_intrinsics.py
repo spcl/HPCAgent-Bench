@@ -24,6 +24,7 @@ import re
 import tempfile
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
@@ -175,3 +176,9 @@ def test_the_intrinsics_match_numpy_on_every_backend() -> None:
         src = build(call)[0]
         status = run_op(src, "f", {"a": a}, {"out": (8,)}, SYMS, shapes=SHAPES, backends=NATIVE)
         assert status == {"c": "ok", "cpp": "ok", "fortran": "ok"}, (call, status)
+
+
+def test_a_reduction_keyword_is_refused_not_dropped() -> None:
+    """The expander refuses ``where=``; the whole-array fallback then read the operand alone and emitted ``SUM(a)``."""
+    with pytest.raises(NotImplementedError):
+        fortran("np.sum(a, where=a > 0.0)")

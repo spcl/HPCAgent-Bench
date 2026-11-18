@@ -586,6 +586,7 @@ def expand_arg_reduction(
     a = first_name(args)
     if a is None:
         raise NotImplementedError(f"np.{op} needs Name first arg")
+    reject_zero_size_reduction(args, kwargs, shape_table)
     shape = resolve_shape(a, shape_table)
     axes, keepdims = read_axis_keepdims(args, kwargs)
     n_dim = len(shape)

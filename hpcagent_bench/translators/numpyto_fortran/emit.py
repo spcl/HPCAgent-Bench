@@ -480,14 +480,27 @@ def floordiv_int_helper(ik: str) -> str:
 
 
 def floordiv_real_helper(dk: str) -> str:
-    """Contained float ``//``: numpy floor_divide returns a real floor, and real MODULO is
-    divisor-signed like numpy's mod, so this matches on sign and propagates NaN/Inf."""
+    """Contained float ``//``: numpy's npy_divmod quotient (fmod, sign fixup, round to the nearest floor), which
+    the C helper mirrors; a bare ``(a - modulo(a, b)) / b`` can land just off an integer."""
     return f"""\
 
     elemental function npb_floordiv_r(a, b) result(r)
         real({dk}), intent(in) :: a, b
-        real({dk}) :: r
-        r = (a - modulo(a, b)) / b
+        real({dk}) :: r, m, d
+        if (b == 0.0_{dk}) then
+            r = a / b
+            return
+        end if
+        m = mod(a, b)
+        d = (a - m) / b
+        if (m /= 0.0_{dk} .and. ((b < 0.0_{dk}) .neqv. (m < 0.0_{dk}))) d = d - 1.0_{dk}
+        if (d == 0.0_{dk}) then
+            r = sign(0.0_{dk}, a / b)
+            return
+        end if
+        r = aint(d)
+        if (r > d) r = r - 1.0_{dk}
+        if (d - r > 0.5_{dk}) r = r + 1.0_{dk}
     end function npb_floordiv_r
 """
 
@@ -2492,6 +2505,9 @@ class FortranBodyEmitter(BaseEmitter):
             if per_axis is not None:
                 return per_axis
         if args_e and attr in ONE_OPERAND_CALLS:
+            if attr in WHOLE_ARRAY_REDUCTIONS and (len(node.args) > 1 or node.keywords):
+                # The whole-array form reads the operand alone; dropping axis/where/dtype/out changes the result.
+                raise NotImplementedError(f"np.{attr} with an axis or keyword the per-axis lowering did not take")
             return ONE_OPERAND_CALLS[attr].format(args_e[0])
         if len(args_e) >= 2 and attr in TWO_OPERAND_CALLS:
             return TWO_OPERAND_CALLS[attr].format(args_e[0], args_e[1])

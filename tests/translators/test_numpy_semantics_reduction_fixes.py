@@ -31,6 +31,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     expand_std,
     expand_sum,
 )
+from hpcagent_bench.translators.numpyto_common.lib_nodes.reductions import expand_arg_reduction
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import reduce_axis_stmts
 from tests.translators.op_oracle import all_ok, run_op
 
@@ -168,6 +169,13 @@ def test_min_zero_length_reduction_axis_refuses() -> None:
     args, kws = call_args("np.min(a, axis=1)")
     with pytest.raises(NotImplementedError):
         expand_min(target(), args, {"a": ("N", "0")}, kws)
+
+
+def test_argmax_zero_length_axis_refuses() -> None:
+    # numpy raises "attempt to get argmax of an empty sequence"; the loop's seed read a[0] out of bounds.
+    args, kws = call_args("np.argmax(a)")
+    with pytest.raises(NotImplementedError):
+        expand_arg_reduction(target(), args, {"a": ("0",)}, kws, "argmax")
 
 
 def test_max_zero_length_kept_axis_ok() -> None:
