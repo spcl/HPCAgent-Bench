@@ -28,7 +28,8 @@ def main(argv: Sequence[str]) -> int:
     cpus = parse_cpus(argv[0])
     if cpus and sys.platform.startswith("linux"):
         os.sched_setaffinity(0, cpus)
-    os.execvp(argv[1], list(argv[1:]))
+    os.execvp(argv[1], list(argv[1:]))  # noqa: S606 -- exec replaces the wrapper with the launcher
+    return 0
 
 
 if __name__ == "__main__":
