@@ -37,6 +37,7 @@ __all__ = [
     "CPU_BASELINE_CLANG_PLUTO",
     "CPU_BASELINE_GCC",
     "CPU_BASELINE_GFORTRAN",
+    "CPU_BASELINE_ICX",
     "CPU_BASELINE_NVCXX",
     "CPU_BASELINE_NVHPC",
     "CUDA_BASELINE",
@@ -169,6 +170,10 @@ CPU_BASELINE_GCC = (
 
 #: GCC baseline for Fortran: without the C decl header (gfortran reaches libmvec through the distro driver spec).
 CPU_BASELINE_GFORTRAN = f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fstrict-aliasing -fPIC"
+
+#: Intel icx baseline: the clang one, after ``-fp-model=precise`` (icx defaults to ``fast``, i.e. -ffast-math), with
+#: icx's own ``-fopenmp`` (Intel's libiomp5, the __kmpc_ ABI libomp shares). AMD AOCC takes CPU_BASELINE_CLANG as is.
+CPU_BASELINE_ICX = f"-fp-model=precise {CPU_BASELINE_CLANG.replace(_OPENMP_CLANG, '-fopenmp')}"
 
 #: NVHPC baseline for C / C++ / Fortran (nvc relaxes and reassociates by default; ``-tp``/``-mp`` spellings).
 CPU_BASELINE_NVHPC = f"-O3 -tp=native -mp {FP_CONTRACT_NVHPC} -fPIC"

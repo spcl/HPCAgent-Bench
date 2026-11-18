@@ -486,6 +486,12 @@ upgraded in place when opened for writing; v0.5.0 refuses a v1.0a1 file.
   rewrote only the first such loop, and v0.2.1 through v0.5.0 none (`07178fb48`), which ran tsvc_2_s2275, s231,
   s235, s275, vag, s4112 and s2710 about 24x slower than the paper's numba column; the parfor fixes of that change
   stay. 27 of the 54 llr40 and solvers kernels carry a prange.
+- **F52.** Two C compiler columns, `cc_icx` (Intel oneAPI `icx`) and `cc_aocc` (AMD AOCC's `clang`), build the C
+  source at `cc_llvm`'s flags and OpenMP (icx adds `-fp-model=precise`, since its default is fast math), with no
+  autopar variant. AOCC resolves as `$HPCAGENT_BENCH_AOCC_ROOT/bin/clang`, else `aoc` on `PATH`, at LLVM 19 or
+  later. A column whose forced compiler is absent now declines as `tool_missing` and fails `preflight --tools-only`
+  (it was a `load_error`); this covers `cc_llvm`, `cc_nvhpc` and the other columns that force a compiler.
+  `containers/images/lib/install-icx.sh` and `install-aocc.sh` install either compiler into a user prefix.
 
 ### Carried from the v1.0 development stack
 

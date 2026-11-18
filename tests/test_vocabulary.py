@@ -128,6 +128,8 @@ PINNED_FRAMEWORKS = (
     "polygeist_cpu",
     "polygeist_gpu",
     "numba_fastmath",
+    "cc_icx",
+    "cc_aocc",
 )
 
 PINNED = {
