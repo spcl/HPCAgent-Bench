@@ -478,15 +478,18 @@ def finished(run_dir: pathlib.Path, episode: Episode) -> bool:
     return bool(attempt_ledger(run_dir / episode.worker))
 
 
-def pack_episode(run_dir: pathlib.Path, label: str, *, remove_loose: bool = False, threads: int = 0) -> pathlib.Path:
+def pack_episode(
+    run_dir: pathlib.Path, label: str, *, remove_loose: bool = False, threads: int = 0, cut: bool = False
+) -> pathlib.Path:
     """Archive episode ``label`` of ``run_dir`` (idempotent): written under a temporary name, read back against the
     files it was made from, then renamed into place and indexed; only then, with ``remove_loose``, and after the token
     totals of its extract are shown equal to its logs', its worker directory's loose files go (:data:`LOOSE_KEEP`
-    stays). Refused for a job still in squeue and an episode with no ended attempt."""
+    stays). Refused for a job still in squeue and an episode with no ended attempt, unless ``cut``: its job's end cut
+    it off (owed.cut_episodes), so it is packed to be resumed."""
     run_dir = data_guard.real(run_dir)
     refuse_running(run_dir)
     episode = next((one for one in episodes_of(run_dir) if one.label == label), None)
-    if episode is None or not finished(run_dir, episode):
+    if episode is None or not (cut or finished(run_dir, episode)):
         raise SystemExit(f"artifacts: {run_dir} holds no ended episode {label}")
     with data_guard.unsealed(run_dir):
         (run_dir / run_layout.EPISODES_DIRNAME).mkdir(exist_ok=True)
