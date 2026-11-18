@@ -253,6 +253,17 @@ def test_a_named_harness_is_recorded_and_reads_its_own_prompt(tmp_path: pathlib.
     assert miniswe["AGENT_PROMPT_LAYERS"] == "harness-cli" != claude["AGENT_PROMPT_LAYERS"]
 
 
+def test_every_harness_on_a_track_reads_the_tracks_build_contract(tmp_path: pathlib.Path) -> None:
+    """The GPU build contract is the track's, not claude's: a model on another harness gets the same build block on
+    top of its own harness layer, so harnesses differ only in how they call tools."""
+    root = tree(tmp_path)
+    done = submit(root, BASE="harness", KERNELS_FILE="subset.txt", LANGUAGES="hip", HARNESSES="claude miniswe")
+    assert done.returncode == 0, done.stderr
+    claude, miniswe = setup_env(root, "wave-qwen38-hip"), setup_env(root, "wave-qwen38-hip-miniswe")
+    assert claude["AGENT_PROMPT_LAYERS"] == "gpu"
+    assert miniswe["AGENT_PROMPT_LAYERS"] == "harness-cli,gpu"
+
+
 def harness_packet_plugins(root: pathlib.Path) -> pathlib.Path:
     """A user plugin folder whose packet ``on_openhands`` names the harness its setups run on."""
     folder = root / "user-plugins" / "onharness"
