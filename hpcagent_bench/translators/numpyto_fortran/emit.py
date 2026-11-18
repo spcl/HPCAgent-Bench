@@ -185,6 +185,10 @@ INT_CONV_INTRINSIC: dict[str, str] = {"int": "INT"}
 def fortran_type(dtype: str) -> str:
     # Single dtype registry (numpyto_common.dtypes); int is int64 (canonical).
     # Dtypes with no Fortran kind (float16/128, complex256) fall back to double.
+    if dtype.startswith("uint"):
+        # Fortran has no unsigned integer: integer(c_int64_t) stores a uint64 bit for bit, but compares, divides
+        # and converts every value above the signed maximum as a negative number.
+        raise NotImplementedError(f"Fortran has no unsigned integer type for dtype {dtype!r}")
     try:
         return dtypes.fortran_kind(dtype)
     except KeyError:
