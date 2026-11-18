@@ -69,18 +69,16 @@ freeze_code_tree() {
     printf '%s\n' "${tree}"
 }
 
-# gc_code_trees <checkout> -- removes every tree under code_tree_root that no PENDING or RUNNING job of this user names
-# on its submit line (sacct SubmitLine: the tree's services.sbatch) and that is past its grace period, under its lock
-# (a freeze in progress keeps it). Without squeue and sacct nothing is removed: nothing says which trees are in use.
+# gc_code_trees <checkout> -- removes every tree under code_tree_root that no PENDING or RUNNING job of this user runs
+# (squeue's command: the tree's services.sbatch) and that is past its grace period, under its lock (a freeze in
+# progress keeps it). When squeue cannot answer nothing is removed: nothing says which trees are in use.
 gc_code_trees() {
-    local checkout="$1" root jids lines="" tree sha
+    local checkout="$1" root lines tree sha
     root="$(code_tree_root)"
     [[ -d "${root}" ]] || return 0
-    command -v squeue >/dev/null 2>&1 && command -v sacct >/dev/null 2>&1 || return 0
-    jids="$(squeue -u "${USER:-$(id -un)}" -h -t PENDING,RUNNING,CONFIGURING,COMPLETING,SUSPENDED -o '%i')" || return 0
-    if [[ -n "${jids}" ]]; then
-        lines="$(sacct -j "$(paste -sd, - <<<"${jids}")" -X -P -o SubmitLine --noheader)" || return 0
-    fi
+    command -v squeue >/dev/null 2>&1 || return 0
+    lines="$(squeue -u "${USER:-$(id -un)}" -h -t PENDING,RUNNING,CONFIGURING,COMPLETING,SUSPENDED -o '%o')" \
+        || return 0
     for tree in "${root}"/*/; do
         tree="${tree%/}" sha="${tree##*/}"
         [[ "${sha}" =~ ^[0-9a-f]{40}$ && "${lines}" != *"${tree}/"* ]] || continue
