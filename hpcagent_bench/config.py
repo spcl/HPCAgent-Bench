@@ -469,6 +469,7 @@ class Measurement(Section):
     local_repeat: PositiveInt
     warmup: NonNegativeInt
     vary_inputs: bool
+    parent_clock: bool
     pin_threads: bool
     timing_lock: str
     timing_backend: Statistic

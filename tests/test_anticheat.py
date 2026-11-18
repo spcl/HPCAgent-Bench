@@ -37,6 +37,7 @@ PINNED_GATES = (
     "final_grade",
     "foreign_library",
     "identity_output",
+    "trusted_clock",
 )
 
 
