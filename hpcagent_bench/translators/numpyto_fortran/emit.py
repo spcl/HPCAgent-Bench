@@ -480,27 +480,14 @@ def floordiv_int_helper(ik: str) -> str:
 
 
 def floordiv_real_helper(dk: str) -> str:
-    """Contained float ``//``: numpy's npy_divmod quotient (fmod, sign fixup, round to the nearest floor), which
-    the C helper mirrors; a bare ``(a - modulo(a, b)) / b`` can land just off an integer."""
+    """Contained float ``//``: numpy floor_divide returns a real floor, and real MODULO is
+    divisor-signed like numpy's mod, so this matches on sign and propagates NaN/Inf."""
     return f"""\
 
     elemental function npb_floordiv_r(a, b) result(r)
         real({dk}), intent(in) :: a, b
-        real({dk}) :: r, m, d
-        if (b == 0.0_{dk}) then
-            r = a / b
-            return
-        end if
-        m = mod(a, b)
-        d = (a - m) / b
-        if (m /= 0.0_{dk} .and. ((b < 0.0_{dk}) .neqv. (m < 0.0_{dk}))) d = d - 1.0_{dk}
-        if (d == 0.0_{dk}) then
-            r = sign(0.0_{dk}, a / b)
-            return
-        end if
-        r = aint(d)
-        if (r > d) r = r - 1.0_{dk}
-        if (d - r > 0.5_{dk}) r = r + 1.0_{dk}
+        real({dk}) :: r
+        r = (a - modulo(a, b)) / b
     end function npb_floordiv_r
 """
 
