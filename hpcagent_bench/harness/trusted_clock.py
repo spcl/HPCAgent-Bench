@@ -69,6 +69,8 @@ SO_TIMESTAMPNS = 35
 MESSAGE_BYTES = 1 << 16
 #: Bytes the child shows the parent before it is armed: a failed read means no access to the child's memory.
 PROBE = b"hpcagent-bench trusted clock probe"
+#: The rep alarm each null call runs under, as a timed call runs under its rep's: re-armed after GO the same way.
+CALIBRATION_ALARM_S = 3600.0
 #: Machines the protocol is built and tested on; anything else keeps the child's clock.
 MACHINES = frozenset({"x86_64", "aarch64"})
 
@@ -264,18 +266,21 @@ class ChildClock:
             raise ClockError(f"the parent refused the trusted clock: {reply.get('why', reply['k'])}")
         calls = CALIBRATION_CALLS
         while calls:
+            signal.setitimer(signal.ITIMER_REAL, CALIBRATION_ALARM_S)
             self.bracket(no_call, (), no_outputs, null=True)
             calls -= 1
+        signal.setitimer(signal.ITIMER_REAL, 0)
 
     def bracket[R](
         self,
         call: Callable[[], R],
         inputs: Sequence[Exposed],
-        done: Callable[[R], Mapping[str, object]],
+        done: Callable[[R], bytes],
         *,
         null: bool = False,
     ) -> R:
-        """``call()`` between READY (``inputs``) and DONE (``done(result)``); the rep alarm is off while stopped."""
+        """``call()`` between READY (``inputs``) and DONE (``done(result)``, a :func:`done_message`); the rep alarm
+        is off while the child is stopped."""
         remaining = signal.setitimer(signal.ITIMER_REAL, 0)[0]
         self.sock.send(encode({"k": "ready", "null": null, "arrays": [found.wire() for found in inputs]}))
         go = self.sock.recv(MESSAGE_BYTES)
@@ -284,7 +289,7 @@ class ChildClock:
         if remaining > 0:
             signal.setitimer(signal.ITIMER_REAL, remaining)
         result = call()
-        message = encode({"k": "done", **done(result)})
+        message = done(result)
         signal.setitimer(signal.ITIMER_REAL, 0)
         self.sock.send(message)
         return result
@@ -294,14 +299,18 @@ def no_call() -> None:
     """The null kernel of the calibration."""
 
 
-def no_outputs(result: None) -> dict[str, object]:
-    """What a null call reports done: nothing."""
+def done_message(outputs: Sequence[Exposed] = (), event_ns: int = 0) -> bytes:
+    """DONE with a host call's outputs, or a device call's event time."""
+    return encode({"k": "done", "arrays": [found.wire() for found in outputs], "event_ns": event_ns})
+
+
+#: What a null call (and a warmup's host call) reports done: nothing.
+DONE = done_message()
+
+
+def no_outputs(result: object) -> bytes:
     del result
-    return {}
-
-
-def done_outputs(outputs: Sequence[Exposed]) -> dict[str, object]:
-    return {"arrays": [found.wire() for found in outputs]}
+    return DONE
 
 
 class Hold(Protocol):
