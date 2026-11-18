@@ -50,9 +50,7 @@ def judge_writer(tmp_path: pathlib.Path) -> Iterator[sqlite3.Connection]:
 
 
 @pytest.fixture
-def sources(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, judge_writer: sqlite3.Connection
-) -> pathlib.Path:
+def sources(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, judge_writer: sqlite3.Connection) -> pathlib.Path:
     """A runs root with one job (a WAL judge DB, metadata, an episode's worker directory with its transcripts, logs,
     agent home and secrets, a job-level home) and a regrade dir."""
     monkeypatch.setenv("SCRATCH", str(tmp_path / "scratch"))
