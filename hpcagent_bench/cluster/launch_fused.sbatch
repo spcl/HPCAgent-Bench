@@ -37,6 +37,12 @@ POLL_S="${FUSED_POLL_S:-30}"
 mkdir -p -- "${LOG_DIR}"
 
 mapfile -t free_nodes < <(scontrol show hostnames "${FUSED_NODES:-${SLURM_JOB_NODELIST:?not inside an allocation}}")
+# Started as a step (srun --overlap), this shell's SLURM_CPUS_ON_NODE is the STEP's (-c1: one CPU), and every run's
+# role steps size their --cpus-per-task from it (run_cluster.sh role_srun): name the job's own per-node count instead.
+if [[ -n "${SLURM_STEP_ID:-}" ]]; then
+    read -r job_cpus job_nodes < <(squeue -h -j "${SLURM_JOB_ID}" -o '%C %D')
+    export SLURM_CPUS_ON_NODE=$((job_cpus / job_nodes))
+fi
 mapfile -t queue < <(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "${INSTANCES}")
 declare -A name_of nodes_of
 # FUSED_FIRST_INDEX: a second launcher inside the same job (on the nodes the first one's ended runs freed) numbers
