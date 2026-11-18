@@ -63,6 +63,7 @@ __all__ = [
     "reshape_name_shape",
     "reshape_tuple_shape",
     "routed_extent",
+    "scan_shape",
     "values_operand_shape",
 ]
 
@@ -337,6 +338,20 @@ def diagonal_shape(
     return UNHANDLED
 
 
+def scan_shape(
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
+) -> RuleResult:
+    """``np.cumsum`` / ``np.cumprod`` of a known Name keep its shape along an axis (or over a 1-D
+    operand); without an axis an N-D operand flattens, which the scan expander refuses anyway. Unsized,
+    an inline ``np.cumsum(m, axis=0)[rows, cols]`` stayed buried in the subscript and reached the emitter."""
+    if not (args and isinstance(args[0], ast.Name)):
+        return UNHANDLED
+    shape = hoister.shape_table.get(args[0].id)
+    if not shape or (len(shape) > 1 and kwarg_or_pos(args, keywords, 1, "axis") is None):
+        return UNHANDLED
+    return tuple(shape)
+
+
 #: ``(ops, rule)`` in the order :meth:`CallHoister.derive_output_shape` tries them; the first rule
 #: covering the op that does not answer :data:`UNHANDLED` sizes the hoisted temp.
 OUTPUT_SHAPE_RULES: tuple[tuple[frozenset[str] | set[str], Callable[..., RuleResult]], ...] = (
@@ -359,6 +374,7 @@ OUTPUT_SHAPE_RULES: tuple[tuple[frozenset[str] | set[str], Callable[..., RuleRes
     (ELEMENTWISE_SHAPE_OPS, elementwise_shape),
     (frozenset({"hstack"}), hstack_shape),
     (frozenset({"diff"}), diff_shape),
+    (frozenset({"cumsum", "cumprod"}), scan_shape),
     (frozenset({"transpose", "triu", "flip"}), permuted_shape),
     (
         frozenset({"sum", "max", "min", "mean", "prod", "std", "var", "argmax", "argmin", "linalg.norm"}),
@@ -671,6 +687,11 @@ class CallHoister(ast.NodeTransformer):
         is ignored), stays int64 rather than round-tripping through a double."""
         if op in {"argmax", "argmin", "argsort"}:
             self.local_dtypes[temp] = "int64"
+        if op in {"cumsum", "cumprod"} and node.args and isinstance(node.args[0], ast.Name):
+            # numpy accumulates a bool or integer operand in the platform integer, a float in its own dtype.
+            src_dt = self.local_dtypes.get(node.args[0].id)
+            if src_dt is not None:
+                self.local_dtypes[temp] = "int64" if src_dt == "bool" or dtypes.is_integer(src_dt) else src_dt
         if self.infer_complex(node) or op in FFT_TRANSFORMS:
             self.local_dtypes[temp] = "complex128"
         if op in SHAPE_PRESERVING_OPS and node.args and temp not in self.local_dtypes:
