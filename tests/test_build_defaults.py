@@ -320,8 +320,11 @@ def test_spack_builds_with_the_nodes_cores_one_job_per_8_gb(
     and petsc's links on a 512 GB MI300A node at 96 jobs. The budget is the cores, at most one job per 8 GB."""
     meminfo = tmp_path / "meminfo"
     meminfo.write_text(f"MemTotal:       {mem_gb * 1024 * 1024} kB\n", encoding="utf-8")
-    done = bash(f'nproc() {{ echo {cores}; }}; ce_spack_jobs >/dev/null; echo "${{SPACK_BUILD_JOBS}}"', repo,
-                {"CE_MEMINFO": str(meminfo)})
+    done = bash(
+        f'nproc() {{ echo {cores}; }}; ce_spack_jobs >/dev/null; echo "${{SPACK_BUILD_JOBS}}"',
+        repo,
+        {"CE_MEMINFO": str(meminfo)},
+    )
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == str(jobs)
 
