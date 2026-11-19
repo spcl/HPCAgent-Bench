@@ -371,7 +371,9 @@ run_vllm_node() {
     export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${cache_root}/.triton/${cache_key}}"
     export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-${cache_root}/.inductor/${cache_key}}"
     export TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-${cache_root}/.torch-ext/${cache_key}}"
-    mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${AITER_JIT_DIR}" "${VLLM_CACHE_ROOT}" \
+    # AITER_JIT_DIR is unset without the persistent cache (HPCAGENT_BENCH_AITER_PERSIST=0, a failed seed) on an image
+    # whose EDF names none (vLLM's): under set -u its bare expansion would end the role.
+    mkdir -p "${HOME}" "${XDG_CACHE_HOME}" ${AITER_JIT_DIR:+"${AITER_JIT_DIR}"} "${VLLM_CACHE_ROOT}" \
         "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}" "${TORCH_EXTENSIONS_DIR}" 2>/dev/null || true
 
     if [[ "${INFERENCE_ENGINE:-vllm}" != "sglang" ]]; then
