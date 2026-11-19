@@ -38,12 +38,12 @@ The comment above a loop or kernel starts with its class. A `parallel` or `seque
 | `parallel -- thread block: ...`, `parallel -- warp: ...` | runs on the threads or warps of one block |
 | `parallel -- block tile: ...`, `parallel -- lane-strided: ...`, `parallel -- warp tile: ...` | the lanes of one block share the iterations |
 | `parallel -- the iterations are independent` (may end `; assumes <predicates>, trapped at entry`) | proven independent. The `check_assumption` blocks at entry abort unless the predicates hold, so they hold inside the loop |
-| `parallel -- under guard: <guard>` | proven independent whenever the guard holds; the guard is checked at entry. Its other arm is the `sequential -- fallback arm` below |
+| `parallel -- under guard: <guard>` | proven independent whenever the guard holds; the guard is checked at entry. Its other arm is the `sequential -- fallback when not` row below |
 | `parallel -- segment-confined: ...` | each iteration reads and writes only its own segment of an array; the `why:` line says what makes that so |
 | `parallel -- wavefront front ...`, `parallel -- wavefront tile column ...` | proven independent along one front of a skewed nest |
 | `sequential -- carried: <access> (witness: <two iterations>[, <sizes>])` | proven: the two iterations touch the same element, so running this loop's iterations concurrently is wrong. Its second line says what would lift the order: an algorithmic change (break an anti dependence, privatize, rewrite the recurrence as a scan or reduction) or, when it names one, a skew with the parallel nest inside |
-| `sequential -- pinned by an earlier pass; ...`, `sequential -- fallback arm, runs when not (<guard>)` | kept in order on purpose: no dependence forces it. The fallback arm runs only when the guard fails |
-| `sequential -- wavefront diagonal ...`, `sequential -- wavefront tile diagonal ...`, `sequential -- inner tile of a wavefront ...` | the axes of a skewed nest that carry its dependences; the unskewed nest is the alternative the comment names |
+| `sequential -- pinned by an earlier pass; ...`, `sequential -- fallback when not (<guard>)` | kept in order on purpose: no dependence forces it. The fallback arm runs only when the guard fails |
+| `sequential -- wavefront diagonal ...`, `sequential -- wavefront tile diagonal ...`, `sequential -- wavefront tile interior ...` | the axes of a skewed nest that carry its dependences; the unskewed nest is the alternative the comment names |
 | `unknown -- <reason>` (`never examined for dependences` included) | not decided, so run in order. The only loops whose dependences are worth your reasoning; the reason names the access to settle |
 
 A verdict speaks for the code as written:
