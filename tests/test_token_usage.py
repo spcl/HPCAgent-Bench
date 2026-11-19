@@ -68,7 +68,7 @@ def test_non_llm_agent_costs_zero_tokens() -> None:
 
 
 # the SDK -> TokenUsage capture seam (untested otherwise: every agent test
-# injects complete_fn, bypassing the real _backend)
+# injects complete_fn, bypassing the real model_reply)
 
 
 class _FakeAnthropicUsage(pydantic.BaseModel):
@@ -183,6 +183,6 @@ def test_local_hf_agent_counts_the_prompt_and_the_generated_tokens(monkeypatch: 
 
     monkeypatch.setattr(agent, "load_hf_model", lambda model_id: (Tok(), Model()))
     local = agent.LocalHFAgent(complete_fn=lambda prompt: "unused")
-    local._complete_fn = None
+    local.complete_fn = None
     assert local.complete("p") == "reply"
     assert (local.usage.input_tokens, local.usage.output_tokens) == (4, 3)
