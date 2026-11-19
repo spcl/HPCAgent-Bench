@@ -42,7 +42,7 @@ from hpcagent_agent.driver import (
     token_cost,
 )
 from hpcagent_agent.driver.harnesses import Closing, Context, Harness
-from hpcagent_agent.driver.token_cost import ATTEMPTS_NAME, as_block
+from hpcagent_agent.driver.token_cost import ATTEMPTS_NAME, as_block, as_list
 from hpcagent_agent.harness import runner_common, subagents
 from hpcagent_agent.tools import http_json, mcp_server
 from hpcagent_agent.tools import score as score_tool
@@ -111,7 +111,6 @@ __all__ = [
     "METRIC_RUNNING",
     "METRIC_WAITING",
     "MODEL_ERROR_MARKS",
-    "MODE_SLOT",
     "NATIVE_TOOLS_ENV",
     "NETWORK_RELAYS_ENV",
     "NO_INTERNET",
@@ -163,7 +162,6 @@ __all__ = [
     "Restored",
     "ResultEvent",
     "WorkerNetwork",
-    "accumulate_total_tokens",
     "acquire_start_slot",
     "agent_cpus",
     "agent_env_allowed",
@@ -182,7 +180,6 @@ __all__ = [
     "as_entries",
     "as_float",
     "as_int",
-    "as_list",
     "as_problem",
     "attempt_cause",
     "await_mcp",
@@ -314,7 +311,6 @@ __all__ = [
     "tool_registry",
     "transcript_closing",
     "transcript_total_tokens",
-    "usage_total",
     "vllm_urls",
     "wait_for_agent",
     "wait_for_engine",
@@ -339,11 +335,6 @@ ProblemValue = str | int | float | bool | list[object] | dict[str, object] | Non
 
 #: One problem as the driver passes it around; keys it does not read are carried through untouched.
 Problem = dict[str, ProblemValue]
-
-
-def as_list(raw: object) -> list[object]:
-    """One parsed JSON array; a value that is not an array reads as an empty one."""
-    return cast("list[object]", raw) if isinstance(raw, list) else []
 
 
 def as_entries(raw: object) -> list[object]:
@@ -1135,10 +1126,6 @@ def build_list_status_text(problem: Problem) -> str:
     )
 
 
-#: A prompt slot the submission mode fills: ``{{MODE:<section>}}``, one per section of its template.
-MODE_SLOT = submission_mode.SLOT
-
-
 def mode_sections(mode: submission_mode.SubmissionMode | None = None) -> dict[str, str]:
     """The sections of the submission mode's template: the shared-folder copy when staged, else the package's."""
     mode = submission_mode.current() if mode is None else mode
@@ -1668,20 +1655,6 @@ def skill_reminder(task_text: str, language: str, device: str = "cpu", harness: 
     return " ".join(parts)
 
 
-def usage_total(usage: dict[str, object]) -> int | None:
-    """One turn's TOTAL consumed tokens (input + both cache fields + output); ``None`` when no field parsed.
-    Delegates to ``token_cost.usage_total``."""
-    return token_cost.usage_total(usage)
-
-
-def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) -> int:
-    """Fold stream-json transcript lines into {message id: total tokens}; return the running total.
-
-    A turn repeats its whole usage on every block event, so the LAST usage per id is kept. Unparsable lines are
-    skipped. Delegates to ``token_cost.accumulate_total_tokens``."""
-    return token_cost.accumulate_total_tokens(lines, total_by_message)
-
-
 def read_new_lines(path: pathlib.Path, offset: int) -> tuple[int, list[str]]:
     """Whole lines appended to ``path`` since ``offset``, plus the new offset; a partial tail is left unconsumed and
     a missing file is no error."""
@@ -1698,7 +1671,7 @@ def read_new_lines(path: pathlib.Path, offset: int) -> tuple[int, list[str]]:
 
 
 def transcript_total_tokens(
-    log_path: pathlib.Path, fold: Callable[[list[str], dict[str, int]], int] = accumulate_total_tokens
+    log_path: pathlib.Path, fold: Callable[[list[str], dict[str, int]], int] = token_cost.accumulate_total_tokens
 ) -> int:
     """Total tokens the finished agent consumed, folded from its whole transcript (0 if unreadable); ``fold`` is the
     harness's reader."""
@@ -2662,7 +2635,7 @@ def watch_token_budget(
     log_path: pathlib.Path,
     max_tokens: int,
     state: AgentState,
-    fold: Callable[[list[str], dict[str, int]], int] = accumulate_total_tokens,
+    fold: Callable[[list[str], dict[str, int]], int] = token_cost.accumulate_total_tokens,
 ) -> None:
     """Kill ``process`` once its transcript reports more than ``max_tokens`` total tokens (``fold`` reads it)."""
     offset = 0
@@ -2743,7 +2716,7 @@ def harness_spec(name: str) -> Harness:
         mcp_gate=True,
         command=claude_command,
         env=claude_env,
-        fold_tokens=accumulate_total_tokens,
+        fold_tokens=token_cost.accumulate_total_tokens,
         fold_output_tokens=token_cost.accumulate_output_tokens,
         closing=claude_closing,
         resume_point=claude_session,

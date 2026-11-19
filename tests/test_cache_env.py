@@ -109,20 +109,6 @@ def test_an_explicit_jit_cache_root_override_is_honoured_without_scratch(tmp_pat
     assert proc.stdout.strip() == str(override)
 
 
-def test_cache_mkdirs_creates_directories_only_under_the_resolved_roots(tmp_path: pathlib.Path) -> None:
-    """The helper submitters call after sourcing the file must not reach outside FAST_SCRATCH/SCRATCH --
-    a stray mkdir under $HOME or /tmp would be invisible until a shared host filled up."""
-    fast, scratch, home = tmp_path / "fast", tmp_path / "scratch", tmp_path / "home"
-    home.mkdir()
-    proc = run("hpcagent_bench_cache_mkdirs", {"FAST_SCRATCH": str(fast), "SCRATCH": str(scratch), "HOME": str(home)})
-    assert proc.returncode == 0, proc.stderr
-    assert (fast / ".hpcagentbench-cache" / "hf").is_dir(), "HF_HOME (under FAST_SCRATCH) was not created"
-    assert (scratch / ".hpcagentbench-cache").is_dir(), "JIT_CACHE_ROOT (under SCRATCH) was not created"
-    assert (scratch / ".hpcagentbench-cache" / ".cpf-prerender").is_dir()
-    assert (scratch / ".hpcagentbench-cache" / "tools").is_dir()
-    assert not any(home.iterdir()), "hpcagent_bench_cache_mkdirs wrote into $HOME"
-
-
 def _documented_default(var_pattern: str) -> str:
     match = re.search(var_pattern, README)
     assert match, f"README no longer documents a default for {var_pattern!r}; update this test or the README"

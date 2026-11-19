@@ -32,7 +32,6 @@ __all__ = [
     "sidecar_path",
     "sidecar_text",
     "source_fingerprint",
-    "stored_fingerprint",
 ]
 
 if TYPE_CHECKING:
@@ -137,15 +136,6 @@ def credit_production(artifact: pathlib.Path, name: phase_clock.Phase) -> None:
 def sidecar_text(fingerprint: str, payload: bytes) -> bytes:
     """What a sidecar holds: the fingerprint and the sha256 of the payload written under it."""
     return f"{fingerprint} {sha256_hex(payload)}".encode()
-
-
-def stored_fingerprint(artifact: pathlib.Path) -> str | None:
-    """The fingerprint recorded for ``artifact``, or ``None`` when no readable sidecar exists."""
-    try:
-        fields = sidecar_path(artifact).read_text().split()
-    except OSError:
-        return None
-    return fields[0] if fields else None
 
 
 def fresh(artifact: pathlib.Path, fingerprint: str, payload: bytes) -> bool:

@@ -26,7 +26,6 @@ core_dumps.disable()
 API_EXPORTS = (
     "init",
     "score",
-    "submit",
     "Kernel",
     "RunConfig",
     "RunMode",

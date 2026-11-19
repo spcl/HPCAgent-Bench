@@ -188,7 +188,7 @@ def draw(curves: list[scaling.Curve], args: Options) -> list[pathlib.Path]:
         if fig is None:
             print(f"nothing drawable for --figure {figure.text}", file=sys.stderr)
             continue
-        written.append(scaling.save(fig, stem, width_in=args.print_width))
+        written.append(plotstyle.save(fig, stem, width_in=args.print_width))
     return written
 
 

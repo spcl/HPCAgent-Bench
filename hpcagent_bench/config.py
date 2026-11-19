@@ -80,10 +80,8 @@ __all__ = [
     "environment",
     "get",
     "overridden",
-    "override_snapshot",
     "parse_env",
     "reload",
-    "restore_overrides",
     "scoped_environment",
     "set_override",
 ]
@@ -1230,16 +1228,6 @@ def set_override(dotted: str, value: object) -> None:
 def clear_override(dotted: str) -> None:
     """Remove the override of ``dotted`` (no-op when none is set)."""
     OVERRIDES.drop(dotted)
-
-
-def override_snapshot() -> dict[str, object]:
-    """A copy of the override table, for :func:`restore_overrides`."""
-    return OVERRIDES.snapshot()
-
-
-def restore_overrides(snapshot: Mapping[str, object]) -> None:
-    """Replace the override table with ``snapshot``."""
-    OVERRIDES.replace(snapshot)
 
 
 @contextlib.contextmanager

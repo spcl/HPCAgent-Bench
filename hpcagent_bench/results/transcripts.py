@@ -41,13 +41,13 @@ import pathlib
 import shutil
 import subprocess
 from collections.abc import Callable, Iterator, Sequence
-from typing import cast
 
 from hpcagent_agent.driver import harnesses, token_cost
-from hpcagent_agent.driver.token_cost import as_block
+from hpcagent_agent.driver.token_cost import as_block, as_list
 from hpcagent_agent.harness import run_miniswe, run_openhands, runner_common
 
 from hpcagent_bench import canary
+from hpcagent_bench.cache_files import file_sha256
 from hpcagent_bench.run_layout import CLAUDE_LOG, TOKENS_NAME
 
 __all__ = [
@@ -65,7 +65,6 @@ __all__ = [
     "Record",
     "Request",
     "Requests",
-    "as_list",
     "canary_from_memory",
     "claude_records",
     "claude_sources",
@@ -78,7 +77,6 @@ __all__ = [
     "extract",
     "extractor",
     "file_record",
-    "file_sha",
     "harness_of",
     "history",
     "logs",
@@ -178,11 +176,6 @@ def canary_from_memory(records: Sequence[Record]) -> bool:
         if record.get("kind") not in WRITTEN_KINDS
     ]
     return canary.from_memory(shown, written)
-
-
-def as_list(raw: object) -> list[object]:
-    """A JSON array with the weakest true statement about its members; anything else reads as empty."""
-    return cast("list[object]", raw) if isinstance(raw, list) else []
 
 
 def encode(value: object) -> str:
@@ -814,17 +807,12 @@ def extract(worker: pathlib.Path, harness: str, files: Sequence[pathlib.Path]) -
         "schema": SCHEMA,
         "harness": harness,
         "sources": [
-            {"path": path.relative_to(worker).as_posix(), "bytes": path.stat().st_size, "sha256": file_sha(path)}
+            {"path": path.relative_to(worker).as_posix(), "bytes": path.stat().st_size, "sha256": file_sha256(path)}
             for path in files
         ],
         "canary_from_memory": canary_from_memory(records),
     }
     return "".join(encode(record) + "\n" for record in (header, *records)).encode()
-
-
-def file_sha(path: pathlib.Path) -> str:
-    with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def zstd() -> str:

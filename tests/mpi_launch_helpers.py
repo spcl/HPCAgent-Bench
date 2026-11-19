@@ -22,6 +22,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import numpy as np
 import pytest
 from relayout.ops import Location, Scheme
 
@@ -58,6 +59,11 @@ SUM_PY_KERNEL = (
     "    y[...] = comm.allreduce(local, op=MPI.SUM)\n"
 )
 BLOCK0 = ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK),))
+
+
+def local_exchange(blocks: list[np.ndarray]) -> list[np.ndarray]:
+    """The all-to-all of a single rank: its one block, sent to itself."""
+    return blocks
 
 
 def yax_binding() -> Binding:

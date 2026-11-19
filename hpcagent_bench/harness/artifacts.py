@@ -46,12 +46,12 @@ from hpcagent_agent.driver.promote_unsubmitted import AGENT_FOLDERS_LOG
 from hpcagent_agent.driver.token_cost import ATTEMPTS_NAME, attempt_ledger
 
 from hpcagent_bench import paths, run_layout
-from hpcagent_bench.cache_files import append_line
+from hpcagent_bench.cache_files import append_line, file_sha256
 from hpcagent_bench.harness import episodes, sandbox
 from hpcagent_bench.harness.recording import setup_of
 from hpcagent_bench.problem_file import read_lines
 from hpcagent_bench.results import collect, data_guard, transcripts
-from hpcagent_bench.results.transcripts import file_sha, zstd
+from hpcagent_bench.results.transcripts import zstd
 
 __all__ = [
     "EPISODE_JSON",
@@ -258,8 +258,7 @@ def source_prints(sources: Iterable[tuple[str, Source]], workspaces: tarfile.Tar
         elif source.is_symlink():
             fingerprint = (0, f"->{os.readlink(source)}")
         elif source.is_file():
-            with source.open("rb") as data:
-                fingerprint = (source.stat().st_size, hashlib.file_digest(data, "sha256").hexdigest())
+            fingerprint = (source.stat().st_size, file_sha256(source))
         else:
             fingerprint = None
         if fingerprint is not None:
@@ -384,7 +383,7 @@ def manifest_of(
         "files": {name: len(entries) for name, entries in tars.items()},
         "omitted": omitted_prints(run_dir, omitted),
         "members": {
-            file.name: {"sha256": file_sha(file), "bytes": file.stat().st_size}
+            file.name: {"sha256": file_sha256(file), "bytes": file.stat().st_size}
             for file in sorted(directory.iterdir())
             if file.name != EPISODE_JSON
         },
@@ -460,7 +459,7 @@ def slim_episode(directory: pathlib.Path, threads: int = 0) -> bool:
     manifest["schema"] = SCHEMA
     manifest["omitted"] = dict(sorted(omitted.items()))
     manifest["members"] = {
-        file.name: {"sha256": file_sha(file), "bytes": file.stat().st_size}
+        file.name: {"sha256": file_sha256(file), "bytes": file.stat().st_size}
         for file in sorted(directory.iterdir())
         if file.name != EPISODE_JSON and not file.name.startswith(".")
     }
@@ -523,7 +522,7 @@ def packed(
             "path": str(episode.directory),
             "result": record.get("result") if isinstance(record := manifest["record"], dict) else None,
             "bytes": sum(file.stat().st_size for file in directory.iterdir()),
-            "members": {name: file_sha(directory / name) for name in (*manifest["members"], EPISODE_JSON)},
+            "members": {name: file_sha256(directory / name) for name in (*manifest["members"], EPISODE_JSON)},
         }
         append_line(
             run_dir / run_layout.EPISODES_DIRNAME / run_layout.EPISODES_INDEX, json.dumps(entry, sort_keys=True)
@@ -547,7 +546,7 @@ def proven(
     totals its logs do. Raises SystemExit naming the first difference."""
     manifest = json.loads((directory / EPISODE_JSON).read_text(encoding="utf-8"))
     for name, member in manifest["members"].items():
-        if file_sha(directory / name) != member["sha256"]:
+        if file_sha256(directory / name) != member["sha256"]:
             raise SystemExit(f"artifacts: {directory / name} is not what {EPISODE_JSON} states; nothing removed")
     with contextlib.ExitStack() as stack:
         workspaces = (
@@ -701,7 +700,7 @@ def verify_run(run_dir: pathlib.Path) -> list[str]:
             file = run_dir / str(entry["path"]) / name
             if not file.is_file():
                 problems.append(f"{label}: {file} is missing")
-            elif file_sha(file) != sha:
+            elif file_sha256(file) != sha:
                 problems.append(f"{label}: {file} sha256 differs from the index")
     return problems
 

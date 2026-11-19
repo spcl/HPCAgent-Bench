@@ -31,6 +31,7 @@ __all__ = [
     "PacketDevice",
     "PacketPhase",
     "Transform",
+    "base_adapters",
     "check_vocabulary",
 ]
 
@@ -201,6 +202,11 @@ KINDS: dict[str, Kind[ModelEntry] | Kind[str] | Kind[PacketDef] | Kind[Column]] 
 }
 
 
+def base_adapters(base: str) -> set[str]:
+    """The Framework adapters the non-optimizer columns of ``base`` run through; a base needs exactly one."""
+    return {column.adapter for column in FRAMEWORKS.entries.values() if column.base == base and not column.optimizer}
+
+
 def check_vocabulary() -> None:
     """The cross-entry rules, run once the vocabulary is registered: slots, one adapter per base, composed packets
     exist."""
@@ -209,9 +215,7 @@ def check_vocabulary() -> None:
         if slotless:
             raise RegistryError(f"{kind.name}: {slotless} have no slot, so no colour or marker")
     for base in {column.base for column in FRAMEWORKS.entries.values()}:
-        adapters = {
-            column.adapter for column in FRAMEWORKS.entries.values() if column.base == base and not column.optimizer
-        }
+        adapters = base_adapters(base)
         if len(adapters) != 1:
             raise RegistryError(
                 f"frameworks: base {base!r} names Framework adapters {sorted(adapters)}; it needs exactly one"

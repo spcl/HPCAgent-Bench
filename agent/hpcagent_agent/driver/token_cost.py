@@ -60,6 +60,7 @@ __all__ = [
     "accumulate_output_tokens",
     "accumulate_total_tokens",
     "as_block",
+    "as_list",
     "attempt_ledger",
     "attempt_totals",
     "attempt_transcripts",
@@ -159,6 +160,11 @@ def as_block(raw: object) -> dict[str, object]:
     if not isinstance(raw, dict):
         return {}
     return {str(key): value for key, value in cast("dict[object, object]", raw).items()}
+
+
+def as_list(raw: object) -> list[object]:
+    """One parsed JSON array with the weakest TRUE statement about its members; anything else reads as empty."""
+    return cast("list[object]", raw) if isinstance(raw, list) else []
 
 
 def count(block: dict[str, object], key: str) -> int:

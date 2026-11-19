@@ -264,12 +264,12 @@ def fold(driver_path: pathlib.Path, root: pathlib.Path) -> object:
     with isolated(root, BASE_ENV):
         driver = load_driver(driver_path)
         total_by_message: dict[str, int] = {}
-        running = [driver.accumulate_total_tokens([line], total_by_message) for line in lines]
+        running = [driver.token_cost.accumulate_total_tokens([line], total_by_message) for line in lines]
         return as_json(
             {
                 "running_total_by_line": running,
                 "total_by_message": total_by_message,
-                "whole": driver.accumulate_total_tokens(lines, {}),
+                "whole": driver.token_cost.accumulate_total_tokens(lines, {}),
                 "missing_transcript": driver.transcript_total_tokens(root / "absent.log"),
                 "logs": {
                     name: {

@@ -7,7 +7,6 @@ aggregates are geomeans with 95% intervals; the torch.distributed baseline is th
 import dataclasses
 import enum
 import math
-import pathlib
 from collections.abc import Iterable, Sequence
 from typing import TypedDict
 
@@ -92,7 +91,6 @@ __all__ = [
     "rank_axis",
     "rank_ticks",
     "restrict",
-    "save",
     "scaling_rows",
     "series",
     "series_handles",
@@ -1052,9 +1050,3 @@ def dropped_table(curves_: Sequence[Curve]) -> pd.DataFrame:
         for curve in single_point_curves(curves_)
     ]
     return pd.DataFrame(rows)
-
-
-def save(fig: matplotlib.figure.Figure, stem: pathlib.Path, width_in: float = 0.0) -> pathlib.Path:
-    """Write the PDF and the PNG under ``stem`` and close the figure; ``width_in`` saves a print-size
-    figure at exactly its placed width (:func:`~hpcagent_bench.stats.style.placed_box`)."""
-    return plotstyle.save(fig, stem, width_in=width_in)

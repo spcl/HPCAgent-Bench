@@ -277,7 +277,9 @@ def test_ensure_never_restores_a_stale_cache_entry_over_a_hand_override(
         cache = fc.kernel_cache_dir(kdir)
         (cache / override.name).write_text("# hpcagent_bench-autogen -- generated\nX = 0\n")
         fc.sidecar_path(cache / override.name).write_text(fingerprint)
-        assert fc.stored_fingerprint(cache / override.name) == fingerprint, "the stale entry must be a HIT"
+        assert fc.sidecar_path(cache / override.name).read_text().split()[0] == fingerprint, (
+            "the stale entry must be a HIT"
+        )
 
         autogen.ensure("widget", ["numba"])
         assert override.read_text() == hand

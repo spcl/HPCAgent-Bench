@@ -20,7 +20,6 @@ __all__ = [
     "KFD_NODES_DIR",
     "NVIDIA_GPUS_DIR",
     "VISIBLE_DEVICE_ENV",
-    "compiler_version",
     "cpu_model",
     "dace_commit",
     "default_mp_context",
@@ -148,19 +147,6 @@ def gpu_model() -> str:
         return rocminfo_gpu_name(subprocess.check_output(["rocminfo"], timeout=30).decode(errors="replace"))
     except (OSError, subprocess.SubprocessError):
         return ""
-
-
-@lru_cache(maxsize=64, typed=True)
-def compiler_version(compiler: str) -> str:
-    """The first line of ``compiler --version``, or ``""`` when it does not answer. Cached per process."""
-    import subprocess
-
-    try:
-        done = subprocess.run([compiler, "--version"], capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    lines = (done.stdout or done.stderr).strip().splitlines()
-    return lines[0].strip() if done.returncode == 0 and lines else ""
 
 
 @lru_cache(maxsize=1, typed=True)

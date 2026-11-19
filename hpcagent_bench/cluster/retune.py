@@ -20,7 +20,6 @@ import argparse
 import datetime
 import getpass
 import json
-import os
 import pathlib
 import re
 import shutil
@@ -30,6 +29,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.cluster import env_spec, serve_args
 
 __all__ = ["LEDGER", "REFUSED_KEYS", "job_env", "main", "retune"]
@@ -115,16 +115,11 @@ def retune(
     shutil.copy2(env, backup)
     backup.chmod(stat.S_IRUSR)
     mode = stat.S_IMODE(env.stat().st_mode)
-    partial = env.with_name(f".{env.name}.retune")
-    partial.write_text(text, encoding="utf-8")
-    partial.chmod(mode)
-    os.replace(partial, env)
+    write_atomic(env, text.encode("utf-8"), mode)
     after = env_spec.assignments(env)
     differs = {key for key in current.keys() | after.keys() if current.get(key) != after.get(key)}
     if not differs <= set(edits) or any(after.get(key) != value for key, value in edits.items()):
-        partial.write_bytes(backup.read_bytes())  # a rewrite that did more than asked is undone, as it was made:
-        partial.chmod(mode)  # beside it and replaced (the env is read-only, so it is never written in place)
-        os.replace(partial, env)
+        write_atomic(env, backup.read_bytes(), mode)  # a rewrite that did more than asked is undone, as it was made
         raise SystemExit(f"retune: {env} read back with other changes than {sorted(edits)}; restored from {backup}")
     entry: dict[str, Any] = {
         "time": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),

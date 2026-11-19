@@ -435,9 +435,9 @@ def restore_config_overrides() -> Iterator[None]:
     A snapshot rather than a list of keys to clear, so the next global someone pins is covered
     too, and restoring rather than clearing so an override a session fixture set legitimately
     survives."""
-    snapshot = config.override_snapshot()
+    snapshot = config.OVERRIDES.snapshot()
     yield
-    config.restore_overrides(snapshot)
+    config.OVERRIDES.replace(snapshot)
 
 
 #: The re-imports made while a test's fixtures were set up (a module-scoped fixture's included), kept across its call.
@@ -469,9 +469,9 @@ def restore_module_config_overrides() -> Iterator[None]:
     ``service.preset=S``) sets its overrides before any per-test snapshot is taken, so the per-test
     restore keeps them as the starting state, and without this they outlive the module into the
     next one on that worker (timed shapes drawn around ``S``: ``{"N": 4}``, ``{"N": 3}``, ...)."""
-    snapshot = config.override_snapshot()
+    snapshot = config.OVERRIDES.snapshot()
     yield
-    config.restore_overrides(snapshot)
+    config.OVERRIDES.replace(snapshot)
 
 
 @pytest.fixture

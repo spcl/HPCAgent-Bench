@@ -1206,11 +1206,11 @@ def test_a_child_sealed_around_its_tracer_enters_no_seal_of_its_own(
     request.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(profiling, "child_request", lambda text: {})
     monkeypatch.setattr(profiling, "run_workload", workload)
-    before = config.override_snapshot()
+    before = config.OVERRIDES.snapshot()
     try:
         argv = gpu_profiling.measured_argv(request, sealed_outside=sealed_outside)
         assert gpu_profiling.main(argv[argv.index(gpu_profiling.MODULE) + 1 :]) == 0
     finally:
-        config.restore_overrides(before)
+        config.OVERRIDES.replace(before)
     (plan,) = plans
     assert (plan is None) is sealed_outside, plan

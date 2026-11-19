@@ -26,7 +26,7 @@ from hpcagent_bench.columns import ALL_PRECISIONS, FRAMEWORKS, IEEE_PRECISIONS
 from hpcagent_bench.frameworks import Benchmark
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.harness import disk_cache
-from hpcagent_bench.vocabulary import Arch, Column
+from hpcagent_bench.vocabulary import Arch, Column, base_adapters
 
 __all__ = [
     "ALL_PRECISIONS",
@@ -66,7 +66,6 @@ __all__ = [
     "float_complex_for",
     "framework_bases",
     "framework_class",
-    "framework_flavors",
     "generate_framework",
     "is_array_value",
     "is_dense",
@@ -394,11 +393,6 @@ class TorchCudaEventTiming:
         return TimingResult(python=python_t, native=native_t)
 
 
-def framework_flavors(base: str) -> list[str]:
-    """The flat framework names that are flavors of ``base`` (e.g. "native" -> ["cc", "llvm", ...])."""
-    return [name for name, column in FRAMEWORKS.entries.items() if column.base == base]
-
-
 def check_flavor_registry() -> None:
     """Validate the naming scheme (``hpcagent_bench.columns``) at import: a flavor declares both ``column`` and
     ``flavor``, names a registered column, composes back into its name and runs on its column's ``arch``; a column
@@ -455,9 +449,7 @@ def adapter_class(adapter: str) -> "type[Framework]":
 
 def base_framework_class(base: str) -> "type[Framework]":
     """The adapter class every column of ``base`` shares (``tvm`` -> ``TVMFramework``)."""
-    adapters = {
-        column.adapter for column in FRAMEWORKS.entries.values() if column.base == base and not column.optimizer
-    }
+    adapters = base_adapters(base)
     if len(adapters) != 1:
         raise KeyError(f"framework base {base!r} has Framework adapters {sorted(adapters)}; it needs exactly one")
     return adapter_class(adapters.pop())

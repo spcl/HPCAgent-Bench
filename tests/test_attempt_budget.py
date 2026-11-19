@@ -163,7 +163,7 @@ def test_overridden_restores_what_was_there() -> None:
     config.clear_override("runtime.mp_context")
     with config.overridden("runtime.mp_context", MpContext.FORKSERVER):
         assert config.get("runtime.mp_context") == "forkserver"
-    assert "runtime.mp_context" not in config.override_snapshot()
+    assert "runtime.mp_context" not in config.OVERRIDES.snapshot()
     config.set_override("runtime.mp_context", MpContext.FORK)
     try:
         with config.overridden("runtime.mp_context", MpContext.FORKSERVER):

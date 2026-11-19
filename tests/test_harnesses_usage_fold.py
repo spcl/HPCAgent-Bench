@@ -3,7 +3,7 @@
 """C6-live: ``experiments/harnesses.call_tokens`` / ``accumulate_usage_tokens`` are the LIVE
 ``AGENT_MAX_TOKENS`` enforcement path for the non-claude harnesses (mini-SWE, the native runners) -- ``agent_driver.watch_token_budget`` calls ``harness.fold_tokens``, which for a runner
 IS ``accumulate_usage_tokens`` (``harnesses.runner``). Nothing exercised either function directly
-before this file; ``agent_driver.py``'s own stream-json fold (``accumulate_total_tokens``,
+before this file; ``token_cost``'s stream-json fold (``accumulate_total_tokens``,
 ``usage_total``) has a full suite in ``tests/test_agent_driver_budget.py`` and this one mirrors it
 for the runner side, which reads a different four fields from a different file shape (one JSON
 object per LINE, one line per model call, no ``message.id`` to dedupe by at all).
@@ -48,7 +48,7 @@ def test_call_tokens_treats_missing_and_junk_fields_as_absent_not_zero(
     harnesses: ModuleType, record: dict, expected: int | None
 ) -> None:
     """A record with none of the four fields is ``None`` -- a line worth skipping, not a call that
-    cost nothing -- exactly the distinction ``agent_driver.usage_total`` draws for the claude side
+    cost nothing -- exactly the distinction ``token_cost.usage_total`` draws for the claude side
     (``tests/test_agent_driver_budget.py::test_usage_total_treats_missing_and_junk_fields_as_zero``).
     A junk or boolean field is dropped rather than crashing the fold or being counted as its truthy
     integer value."""
@@ -77,7 +77,7 @@ def test_accumulate_usage_tokens_sums_every_call_line(harnesses: ModuleType) -> 
 
 def test_accumulate_usage_tokens_keys_calls_by_position_not_by_content(harnesses: ModuleType) -> None:
     """A claude transcript's turns share a ``message.id`` and the driver dedupes on it
-    (``agent_driver.accumulate_total_tokens``); usage.jsonl has no such id -- ONE LINE IS ONE CALL --
+    (``token_cost.accumulate_total_tokens``); usage.jsonl has no such id -- ONE LINE IS ONE CALL --
     so two identical lines are two calls, each counted, never folded into one by their being equal.
     A runner that re-wrote the same call twice (a retried request logged both times, say) would be
     double-counted here, which is the behaviour a future ``message.id``-style dedupe must not add
@@ -103,7 +103,7 @@ def test_accumulate_usage_tokens_running_total_survives_across_polls(harnesses: 
 
 def test_accumulate_usage_tokens_skips_non_object_and_malformed_lines(harnesses: ModuleType) -> None:
     """A half-written tail while the runner is mid-append, and a stray non-JSON line, cost nothing
-    and do not raise -- the same tolerance ``agent_driver.accumulate_total_tokens`` has for a
+    and do not raise -- the same tolerance ``token_cost.accumulate_total_tokens`` has for a
     partially flushed claude transcript."""
     total_by_call: dict[str, int] = {}
     lines = [

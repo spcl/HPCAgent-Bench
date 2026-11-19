@@ -49,7 +49,6 @@ __all__ = [
     "hypercube_grid",
     "is_partition",
     "kernel_ndims",
-    "local_exchange",
     "local_shape",
     "logical_cells",
     "owned_count",
@@ -727,11 +726,6 @@ def replication_refusal(
 #: An all-to-all over the ranks of one launch: this rank's one flat ``uint8`` block per destination rank in, the
 #: block every rank sent this one out (by source rank). Every rank calls it with one block per rank.
 Exchange = Callable[[list[np.ndarray]], list[np.ndarray]]
-
-
-def local_exchange(blocks: list[np.ndarray]) -> list[np.ndarray]:
-    """The :data:`Exchange` of a single rank: its one block, sent to itself."""
-    return blocks
 
 
 def held_whole(dist: ArrayDist) -> bool:
