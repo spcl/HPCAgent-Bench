@@ -417,6 +417,15 @@ def test_staging_refuses_more_agents_than_the_pipelines_serve(tmp_path: pathlib.
     assert ("pipelines of 20" in done.stderr) is not bool(nodes)
 
 
+def test_staging_counts_a_repeated_key_as_the_job_sourcing_the_env_does(tmp_path: pathlib.Path) -> None:
+    """services.sbatch sources the env, so the LAST assignment of a key is the job's: a staged node count read from an
+    earlier one would allocate a job that refuses to start."""
+    staged = tmp_path / ".env.some-setup"
+    staged.write_text("INFERENCE_NODES=2\nAGENT_NODES=3\nJUDGE_NODES=1\nAGENT_NODES=1\n")
+    done = bash(f"set -euo pipefail\n. {CLUSTER / 'setup_nodes.sh'}\nsetup_nodes {staged}")
+    assert (done.returncode, done.stdout.strip()) == (0, "4"), done.stderr
+
+
 @pytest.mark.parametrize(
     ("recorded", "snapshot", "refused"),
     [("0123456789", "0123456789abcdef", False), ("", "0123456789abcdef", False), ("0123456789", "fedcba987654", True)],
