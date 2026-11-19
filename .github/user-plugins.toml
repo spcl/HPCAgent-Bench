@@ -5,7 +5,7 @@
 
 [plugins.nestforge]
 repository = "https://github.com/spcl/NestForge.git"
-commit = "f16b6f089a2a0f07df666d2500e543d6ff2167a8"
+commit = "abdc64b6b9f237c41e15818fee3bbef8f2b224d3"
 folder = "plugin/nestforge"
 
 [plugins.alloy]
