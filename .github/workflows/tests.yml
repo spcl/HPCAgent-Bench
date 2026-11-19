@@ -340,8 +340,8 @@ jobs:
           dirs="$(python helpers/scripts/user_plugins.py checkout "$RUNNER_TEMP/user-plugins" ${{ matrix.plugin }})"
           echo "HPCAGENT_BENCH_USER_PLUGIN_DIRS=$dirs" >> "$GITHUB_ENV"
           HPCAGENT_BENCH_USER_PLUGIN_DIRS="$dirs" python -m hpcagent_bench.plugins install
-          # The judge imports each plugin's routes at startup: fail here, naming the interpreter, if they do not import.
-          HPCAGENT_BENCH_USER_PLUGIN_DIRS="$dirs" python -c 'import importlib.util, sys; print(sys.executable, sys.version, sys.meta_path); print(importlib.util.find_spec("nestforge")); from hpcagent_bench import plugins; plugins.load(); print("routes import")'
+          # The judge imports each plugin's routes at startup: fail here, before any test, if they do not import.
+          HPCAGENT_BENCH_USER_PLUGIN_DIRS="$dirs" python -c 'from hpcagent_bench import plugins; plugins.load()'
       - name: Stub episodes and every packet's prompts
         timeout-minutes: 35
         run: |
