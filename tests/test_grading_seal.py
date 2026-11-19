@@ -1000,3 +1000,16 @@ def test_a_work_area_the_read_only_pass_leaves_read_only_is_a_seal_fault(
             seal.read_only_but(writable=("/work",), readonly=())
     else:
         seal.read_only_but(writable=("/work",), readonly=())
+
+
+def test_a_mount_point_with_a_non_ascii_name_is_listed(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """mountinfo escapes only space, tab, newline and backslash: any other byte of a mount point arrives raw."""
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text("36 35 98:0 / /data/müller rw master:1 - ext4 /dev/root rw\n", encoding="utf-8")
+    real_open = pathlib.Path.open
+    monkeypatch.setattr(
+        pathlib.Path,
+        "open",
+        lambda self, *a, **k: real_open(mountinfo if str(self) == "/proc/self/mountinfo" else self, *a, **k),
+    )
+    assert seal.submounts("/data") == ["/data/müller"]

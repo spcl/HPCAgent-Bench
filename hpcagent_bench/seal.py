@@ -208,7 +208,7 @@ def submounts(path: str) -> list[str]:
     """
     prefix = path.rstrip("/")
     found = set()
-    with pathlib.Path("/proc/self/mountinfo").open(encoding="ascii") as handle:
+    with pathlib.Path("/proc/self/mountinfo").open(encoding="utf-8") as handle:
         for line in handle:
             mount_point = seal_worker.unescape(line.split(" ", 5)[4])
             if mount_point == prefix or mount_point.startswith(f"{prefix}/"):
