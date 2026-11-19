@@ -13,6 +13,8 @@ entry carries its reason and must still name a tracked file:
 * ``import-path``: no file edits ``sys.path`` or ``PYTHONPATH``; the packages are installed.
 * ``no-requeue``: every submittable batch script carries ``#SBATCH --no-requeue``: a NODE_FAIL
   requeue reruns the job id into the same run directory and stacks duplicate rows.
+* ``mem-zero``: every submittable batch script carries ``#SBATCH --mem=0``: without it the job's memory follows its
+  CPU share, and on an APU (host and GPU share one pool) a step dies in the OOM killer with no traceback.
 * ``scratch``: ``.scratch/`` tracks only its ``.gitkeep``.
 * ``gitignore``: no tracked file matches an ignore rule, except a hand override at a generated benchmark name.
 * ``gfx-literal``: AMD archs come from containers/images/gpu_arch.env, never spelled in builds,
@@ -42,7 +44,7 @@ import pathlib
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 SELF = "helpers/scripts/checks/check_repo_rules.py"
@@ -176,17 +178,34 @@ def sbatch_header(text: str) -> list[str]:
     return [line for line in header if SBATCH_DIRECTIVE.match(line)]
 
 
-def no_requeue(files: list[str]) -> list[str]:
-    out = []
+MEM_GUARD = "#SBATCH --mem=0"
+
+
+def batch_headers(files: list[str]) -> Iterator[tuple[str, list[str]]]:
+    """Each submittable batch script (a .sbatch, or a shell script with an #SBATCH header) with its directives."""
     for rel in files:
         text = text_of(rel)
         if text is None:
             continue
         directives = sbatch_header(text)
-        entry = rel.endswith(".sbatch") or (SHELL_SHEBANG.match(text) and directives)
-        if entry and not any(line.split()[:2] == REQUEUE_GUARD.split() for line in directives):
-            out.append(f"{rel}: batch script without `{REQUEUE_GUARD}`")
-    return out
+        if rel.endswith(".sbatch") or (SHELL_SHEBANG.match(text) and directives):
+            yield rel, directives
+
+
+def no_requeue(files: list[str]) -> list[str]:
+    return [
+        f"{rel}: batch script without `{REQUEUE_GUARD}`"
+        for rel, directives in batch_headers(files)
+        if not any(line.split()[:2] == REQUEUE_GUARD.split() for line in directives)
+    ]
+
+
+def mem_zero(files: list[str]) -> list[str]:
+    return [
+        f"{rel}: batch script without `{MEM_GUARD}`"
+        for rel, directives in batch_headers(files)
+        if not any(line.split()[:2] == MEM_GUARD.split() for line in directives)
+    ]
 
 
 # scratch, gitignore
@@ -590,6 +609,7 @@ RULES: dict[str, Callable[[list[str]], list[str]]] = {
     "hash-seed": hash_seed,
     "import-path": import_path,
     "no-requeue": no_requeue,
+    "mem-zero": mem_zero,
     "scratch": scratch,
     "gitignore": gitignore,
     "gfx-literal": gfx_literal,

@@ -9,6 +9,7 @@
 #SBATCH --job-name=preflight-image
 #SBATCH --nodes=1
 #SBATCH --exclusive
+#SBATCH --mem=0
 #SBATCH --time=00:15:00
 #SBATCH --output=%x-%j.out
 #SBATCH --no-requeue
