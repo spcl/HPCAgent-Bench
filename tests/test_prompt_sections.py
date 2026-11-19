@@ -369,3 +369,5 @@ if __name__ == "__main__":
         test_the_correctness_section_states_the_strict_gate_as_configured,
     ):
         run_case(case)
+    run_case(test_a_section_removed_and_inserted_again_renders_once)
+    run_case(test_a_replaced_inserted_block_ends_in_a_blank_line_as_in_the_agent_prompt)

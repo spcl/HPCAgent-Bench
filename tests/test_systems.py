@@ -362,10 +362,13 @@ if __name__ == "__main__":
         test_a_resource_extra_is_its_flag_then_its_variable_then_the_systems(patch, pathlib.Path(tempfile.mkdtemp()))
     with pytest.MonkeyPatch.context() as patch:
         test_repeated_print_names_print_one_value_per_line(patch, pathlib.Path(tempfile.mkdtemp()))
-    test_job_submit_exports_the_resolved_resource_extras(pathlib.Path(tempfile.mkdtemp()))
     test_a_script_keeps_the_fields_its_header_pins_and_the_system_fills_the_rest(pathlib.Path(tempfile.mkdtemp()))
     test_a_flag_beats_the_header_which_beats_our_variables_but_not_slurms(pathlib.Path(tempfile.mkdtemp()))
     test_a_partition_picks_the_system_of_the_cluster_that_serves_it(pathlib.Path(tempfile.mkdtemp()))
     test_an_image_job_runs_on_its_roles_partition_unless_a_flag_or_a_system_names_another(
         pathlib.Path(tempfile.mkdtemp())
     )
+    test_a_named_site_layer_that_does_not_exist_is_an_error_not_ignored(pathlib.Path(tempfile.mkdtemp()))
+    test_a_site_layer_value_reaches_the_environment(pathlib.Path(tempfile.mkdtemp()))
+    test_job_submit_forwards_the_resolved_resource_extras_through_sbatchs_environment(pathlib.Path(tempfile.mkdtemp()))
+    test_job_submit_holds_the_job_with_the_flag_or_submit_shs_hold_knob(pathlib.Path(tempfile.mkdtemp()))

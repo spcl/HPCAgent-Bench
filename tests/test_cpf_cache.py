@@ -344,7 +344,6 @@ if __name__ == "__main__":
         test_a_modified_form_is_a_miss,
         test_a_registry_key_resolves_like_its_short_name,
         test_an_unknown_kernel_is_a_miss_naming_it,
-        test_a_gpu_setup_is_served_the_device_form_for_a_host_dialect,
         test_a_gpu_form_stages_as_the_two_units_a_gpu_submission_is,
         test_check_prints_one_line_per_missing_kernel_and_fails,
         test_stage_copies_the_form_under_the_task_basename,
@@ -354,3 +353,9 @@ if __name__ == "__main__":
         test_a_failed_render_is_a_miss_naming_its_error,
     ):
         test(pathlib.Path(tempfile.mkdtemp()))
+    for backend, device_suffix in (("hip", ".hip"), ("cuda", ".cu")):
+        with pytest.MonkeyPatch.context() as patch:
+            test_a_gpu_setup_is_served_the_device_form_of_its_hosts_backend_for_a_host_dialect(
+                pathlib.Path(tempfile.mkdtemp()), patch, backend, device_suffix
+            )
+    test_check_and_stage_strip_the_kernel_names_the_render_and_verify_commands_strip(pathlib.Path(tempfile.mkdtemp()))

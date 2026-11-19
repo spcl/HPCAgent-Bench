@@ -351,10 +351,6 @@ def test_memory_backed_storage_is_refused(tmp_path: pathlib.Path) -> None:
         config.clear_override("record.db_path")
 
 
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
-
-
 @pytest.mark.smoke
 def test_aggregate_db_cli_merges_explicit_per_rank_sources_once(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
@@ -391,3 +387,7 @@ def test_aggregate_db_cli_without_sources_scans_beside_the_destination(
     seed_shard(recording.shard_db_path(1, dest), run="s1.r1", kernels=["gemm"], timestamp=2)
     assert cli.main(["aggregate-db", "--db", dest]) == 0
     assert _count(dest, "grades") == 4
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))

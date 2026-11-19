@@ -978,3 +978,5 @@ if __name__ == "__main__":
     test_the_divide_and_conquer_skill_quotes_the_hotspot_limit_it_tells_the_reader_to_respect()
     test_every_when_trigger_is_a_quoted_yaml_scalar()
     test_no_skill_page_sends_the_agent_to_a_repo_path_the_seal_hides()
+    with pytest.MonkeyPatch.context() as patch:
+        test_the_rocprof_skill_names_the_offload_languages_the_route_traces(patch)

@@ -84,4 +84,7 @@ def test_two_threads_never_hold_one_kernels_autogen_lock_at_once(tmp_path: pathl
 
 
 if __name__ == "__main__":
+    import tempfile
+
     test_four_ranks_generating_one_sibling_all_import_it()
+    test_two_threads_never_hold_one_kernels_autogen_lock_at_once(pathlib.Path(tempfile.mkdtemp()))

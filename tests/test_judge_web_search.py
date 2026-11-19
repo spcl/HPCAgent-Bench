@@ -235,3 +235,14 @@ def test_cli_answers_a_bad_setting_with_the_json_error_body() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+    test_web_search_tool_answers_via_fake_serpapi_crawl_and_llm()
+    with pytest.MonkeyPatch.context() as patch:
+        test_missing_serpapi_key_raises_not_provisioned_not_a_bare_runtime_error(patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_real_search_failure_is_still_a_plain_runtime_error(patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_cli_marks_a_not_provisioned_refusal_with_a_cause(patch)
+    test_cli_answers_a_bad_setting_with_the_json_error_body()
+    for missing in ("WEBSEARCH_LLM_BASE_URL", "WEBSEARCH_LLM_MODEL"):
+        with pytest.MonkeyPatch.context() as patch:
+            test_missing_llm_config_raises_not_provisioned(patch, missing)

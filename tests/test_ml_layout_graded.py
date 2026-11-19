@@ -398,3 +398,8 @@ if __name__ == "__main__":
     test_amax_or_neg_inf_takes_the_max_identity_on_an_empty_axis()
     with tempfile.TemporaryDirectory() as folder:
         test_dist_softmax_reference_takes_an_empty_tile(pathlib.Path(folder))
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_global_symbol_split_two_ways_is_refused_by_name(patch)
+    test_a_global_symbols_padded_extent_is_its_split_allocated_extent()
+    for dist_kernel in DIST_KERNELS:
+        test_every_default_layout_has_one_value_per_size_symbol(dist_kernel)

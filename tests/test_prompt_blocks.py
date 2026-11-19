@@ -204,6 +204,8 @@ def test_show_names_the_overlay_behind_every_changed_block() -> None:
 
 
 if __name__ == "__main__":
+    import tempfile
+
     test_the_base_prompt_renders_as_written_without_its_section_lines()
     for _name in BUILT_IN:
         test_every_built_in_overlay_resolves_on_the_repositorys_prompt(_name)
@@ -219,3 +221,13 @@ if __name__ == "__main__":
     test_inserts_after_one_anchor_render_in_their_listed_order()
     test_a_disabled_block_does_not_render_and_a_removed_one_is_gone()
     test_show_names_the_overlay_behind_every_changed_block()
+    test_every_built_in_overlay_changes_one_of_the_two_prompts()
+    test_an_include_line_takes_the_partial_in_its_place_and_keeps_the_list_layout(pathlib.Path(tempfile.mkdtemp()))
+    test_an_include_of_a_missing_partial_is_refused(pathlib.Path(tempfile.mkdtemp()))
+    test_a_dropped_in_overlay_file_is_a_new_prompt_variant(pathlib.Path(tempfile.mkdtemp()))
+    test_a_malformed_or_untyped_overlay_file_is_a_value_error(pathlib.Path(tempfile.mkdtemp()))
+    test_an_include_names_a_partial_in_its_folder_only(pathlib.Path(tempfile.mkdtemp()))
+    test_a_staged_prompt_md_renders_as_the_resolved_prompt_it_was_written_from()
+    test_a_staged_prompt_md_leaves_out_a_block_an_overlay_turned_off()
+    for task_overlay in TASK_OVERLAYS:
+        test_every_built_in_task_overlay_resolves_on_the_task_prompts_sections(task_overlay)

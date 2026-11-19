@@ -600,3 +600,14 @@ if __name__ == "__main__":
         test_rows_do_not_depend_on_optional_manifest_keys(patch)
     test_written_dataset_loads_back_with_datasets(pathlib.Path(tempfile.mkdtemp()))
     test_load_back_reads_the_folder_not_an_earlier_export_of_the_same_name(pathlib.Path(tempfile.mkdtemp()))
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_release_uploads_to_its_own_branch_and_tags_that_exact_commit(pathlib.Path(tempfile.mkdtemp()), patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_release_tag_that_exists_is_refused_before_any_upload(pathlib.Path(tempfile.mkdtemp()), patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_rolling_push_touches_only_the_default_branch(pathlib.Path(tempfile.mkdtemp()), patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_release_push_tags_the_card_and_loads_back_from_the_hub_at_that_tag(
+            pathlib.Path(tempfile.mkdtemp()), patch
+        )
+    test_a_release_tag_is_a_v_prefixed_release_or_pre_release()

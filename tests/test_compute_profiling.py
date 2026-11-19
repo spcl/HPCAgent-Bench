@@ -769,4 +769,51 @@ def test_an_amd_counted_run_is_sealed_outside_rocprof_compute(
 
 
 if __name__ == "__main__":
+    import tempfile
+
     test_ncu_raw_page_columns_are_read_from_the_value_row_under_each_metric_id()
+    test_the_top_kernels_table_is_read_hottest_first_with_the_wrapped_name_joined()
+    test_a_cell_the_tool_wrote_as_na_is_null_never_zero()
+    test_a_table_without_peak_columns_reports_its_min_and_max_and_null_peak()
+    test_an_analysis_table_the_tool_did_not_write_is_named_as_missing(pathlib.Path(tempfile.mkdtemp()))
+    test_an_analysis_without_its_top_kernels_table_is_a_report_missing_refusal(pathlib.Path(tempfile.mkdtemp()))
+    test_rocprof_compute_records_without_the_roofline_and_hands_the_child_after_the_separator()
+    test_ncu_exports_the_raw_page_as_csv_and_the_details_page_with_its_body_tables()
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_regex_device_kernel_is_refused_before_the_host_is_probed(patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_an_amd_host_without_rocprof_compute_is_refused_by_that_name(patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_an_amd_host_that_fails_the_device_gate_is_refused_with_the_trace_s_cause(patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_an_nvidia_host_with_ncu_and_a_device_answers_the_executable(patch, pathlib.Path(tempfile.mkdtemp()))
+    with pytest.MonkeyPatch.context() as patch:
+        test_an_amd_counted_run_reads_the_tables_and_leaves_the_whole_report_to_stage(
+            patch, pathlib.Path(tempfile.mkdtemp())
+        )
+    with pytest.MonkeyPatch.context() as patch:
+        test_an_amd_recording_whose_child_never_printed_a_result_is_the_program_s_failure(
+            patch, pathlib.Path(tempfile.mkdtemp())
+        )
+    with pytest.MonkeyPatch.context() as patch:
+        test_an_amd_counted_run_whose_top_kernels_table_is_empty_saw_no_kernels(patch, pathlib.Path(tempfile.mkdtemp()))
+    with pytest.MonkeyPatch.context() as patch:
+        test_an_nvidia_counted_launch_exports_its_details_and_raw_metrics_beside_the_report(
+            patch, pathlib.Path(tempfile.mkdtemp())
+        )
+    with pytest.MonkeyPatch.context() as patch:
+        test_an_nvidia_raw_export_with_no_known_metric_names_the_details_file_instead(
+            patch, pathlib.Path(tempfile.mkdtemp())
+        )
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_counted_submission_stages_its_report_into_the_agent_s_shared_folder(
+            patch, pathlib.Path(tempfile.mkdtemp())
+        )
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_counted_submission_that_wedges_is_a_timed_out_refusal(patch, pathlib.Path(tempfile.mkdtemp()))
+    test_a_payload_built_from_the_real_tables_stays_small_enough_to_keep_in_context(pathlib.Path(tempfile.mkdtemp()))
+    test_the_service_and_the_module_agree_on_which_compute_profiler_serves_which_language()
+    test_every_cause_the_compute_module_raises_is_a_documented_gpu_cause()
+    test_no_message_the_compute_module_returns_hands_the_agent_a_command()
+    with pytest.MonkeyPatch.context() as patch:
+        test_an_amd_counted_run_is_sealed_outside_rocprof_compute(patch, pathlib.Path(tempfile.mkdtemp()))

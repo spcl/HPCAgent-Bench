@@ -420,3 +420,5 @@ if __name__ == "__main__":
     for worker_token in ("", "worker-secret"):
         with pytest.MonkeyPatch.context() as patch, header_echo() as url:
             test_every_judge_client_sends_the_token_only_inside_a_fused_job(worker_token, url, patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_nested_scoped_environment_layers_over_the_outer_one(patch)

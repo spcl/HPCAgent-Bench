@@ -585,4 +585,10 @@ if __name__ == "__main__":
         test_a_read_only_agent_rootfs_binds_the_scratch_under_apptainer(fresh("ro-bind-apptainer"))
         test_the_agent_rootfs_mode_defaults_to_writable_and_refuses_an_unknown_value()
         test_an_agent_step_refuses_to_launch_on_an_unknown_agent_rootfs(fresh("ro-bad"))
+    test_a_new_backend_is_one_table_row_for_both_launchers(pathlib.Path(tempfile.mkdtemp()))
+    test_an_edf_resolves_in_the_first_search_directory_holding_it_with_its_image_digest(
+        pathlib.Path(tempfile.mkdtemp())
+    )
+    for role in (*ROLE_ONLY, "prepare"):
+        test_a_step_forwards_what_its_role_reads_and_nothing_of_the_host(role)
     print("ok")

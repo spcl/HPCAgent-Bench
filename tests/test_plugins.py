@@ -463,4 +463,18 @@ if __name__ == "__main__":
         registry.REGISTRY.pop("probe_echo", None)
         with judge_factory() as make:
             test_a_post_route_answers_its_own_episode_only(make, patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_plugin_packet_named_like_a_shipped_page_is_refused_and_adds_nothing(
+            pathlib.Path(tempfile.mkdtemp()), patch
+        )
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_packet_that_only_changes_the_prompt_keeps_its_key_in_a_spec(patch)
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_plugins_children_start_in_the_openmp_context_of_the_runtime_it_names(
+            pathlib.Path(tempfile.mkdtemp()), patch
+        )
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_flavor_optimizer_names_the_plugin_that_declares_it(pathlib.Path(tempfile.mkdtemp()), patch)
+    test_an_openmp_runtime_the_bench_does_not_serve_is_refused(pathlib.Path(tempfile.mkdtemp()))
+    test_concurrent_first_registrations_register_each_packet_once()
     print("ok")

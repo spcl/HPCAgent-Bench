@@ -334,52 +334,6 @@ def test_the_solve_rate_interval_inverts_the_score_test_its_tost_reads() -> None
     assert significance.rate_interval(significance.Discordant(3, 3), 40, 0.1)[1] < high
 
 
-if __name__ == "__main__":
-    test_every_registry_resolves_its_documented_default()
-    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
-        "statistics.paired_test",
-        "unknown paired test 'wilcox'; registered: sign-flip",
-    )
-    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
-        "statistics.proportion_test",
-        "unknown proportion test 'wilcox'; registered: fisher",
-    )
-    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
-        "statistics.paired_proportion_test", "unknown paired proportion test 'wilcox'; registered: mcnemar"
-    )
-    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
-        "statistics.correction", "unknown correction 'wilcox'; registered: benjamini-hochberg"
-    )
-    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
-        "statistics.two_sample_test", f"unknown timing test 'wilcox'; registered: {TIMING_NAMES}"
-    )
-    test_a_user_registered_test_is_picked_up_by_name()
-    test_mcnemar_is_exact_on_the_discordant_kernels(0, 0, 1.0)
-    test_mcnemar_is_exact_on_the_discordant_kernels(1, 1, 1.0)
-    test_mcnemar_is_exact_on_the_discordant_kernels(5, 0, 0.0625)
-    test_mcnemar_is_exact_on_the_discordant_kernels(0, 5, 0.0625)
-    test_mcnemar_is_exact_on_the_discordant_kernels(2, 0, 0.5)
-    test_mcnemar_is_exact_on_the_discordant_kernels(7, 1, 0.0703125)
-    test_mcnemar_is_exact_on_the_discordant_kernels(9, 1, 0.021484375)
-    test_the_corrections_match_the_hand_worked_values()
-    test_a_family_verdict_names_its_correction_and_skips_an_untested_member()
-    test_the_verdict_and_alternative_spellings_are_the_stored_ones()
-    test_two_identical_samples_carry_no_difference()
-    test_the_default_paired_table_corrects_each_leg_on_its_own()
-    test_the_final_grade_keeps_its_timing_test_and_its_stamp()
-    test_the_reporting_protocol_defaults()
-    test_alpha_is_the_level_of_every_verdict_and_interval()
-    test_a_correction_runs_once_per_leg_or_once_per_family()
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_protocol_cannot_declare_an_unregistered_timing_test(patch)
-    test_the_interval_excludes_zero_exactly_when_the_test_rejects()
-    test_a_p_of_exactly_alpha_is_not_rejected_and_its_interval_holds_zero()
-    test_a_log_t_interval_and_the_sign_flip_test_can_disagree_and_one_construction_cannot()
-    test_the_solve_rate_interval_inverts_the_score_test_its_tost_reads()
-    for discordant in [(0, 0), (3, 3), (6, 1), (9, 2), (1, 12), (14, 0)]:
-        test_the_solve_rate_p_agrees_with_its_interval(discordant)
-
-
 def null_logs(step: float, pairs: int = 5) -> list[float]:
     """Per-kernel log ratios whose mean is exactly 0: ``pairs`` up and ``pairs`` down by the same ``step``."""
     return [step, -step] * pairs
@@ -537,3 +491,64 @@ def test_repeated_episodes_split_a_log_ratios_spread_into_run_to_run_and_kernel_
     assert all(math.isnan(value) for value in single)
     # a kernel one side has no episode for is left out
     assert significance.variance_components([[0.0, 2.0], []], [[1.0], [1.0]])[0] == pytest.approx(math.sqrt(2.0))
+
+
+if __name__ == "__main__":
+    import tempfile
+
+    test_every_registry_resolves_its_documented_default()
+    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
+        "statistics.paired_test",
+        "unknown paired test 'wilcox'; registered: sign-flip",
+    )
+    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
+        "statistics.proportion_test",
+        "unknown proportion test 'wilcox'; registered: fisher",
+    )
+    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
+        "statistics.paired_proportion_test", "unknown paired proportion test 'wilcox'; registered: mcnemar"
+    )
+    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
+        "statistics.correction", "unknown correction 'wilcox'; registered: benjamini-hochberg"
+    )
+    test_an_unknown_name_stops_the_run_listing_the_registered_ones(
+        "statistics.two_sample_test", f"unknown timing test 'wilcox'; registered: {TIMING_NAMES}"
+    )
+    test_a_user_registered_test_is_picked_up_by_name()
+    test_mcnemar_is_exact_on_the_discordant_kernels(0, 0, 1.0)
+    test_mcnemar_is_exact_on_the_discordant_kernels(1, 1, 1.0)
+    test_mcnemar_is_exact_on_the_discordant_kernels(5, 0, 0.0625)
+    test_mcnemar_is_exact_on_the_discordant_kernels(0, 5, 0.0625)
+    test_mcnemar_is_exact_on_the_discordant_kernels(2, 0, 0.5)
+    test_mcnemar_is_exact_on_the_discordant_kernels(7, 1, 0.0703125)
+    test_mcnemar_is_exact_on_the_discordant_kernels(9, 1, 0.021484375)
+    test_the_corrections_match_the_hand_worked_values()
+    test_a_family_verdict_names_its_correction_and_skips_an_untested_member()
+    test_the_verdict_and_alternative_spellings_are_the_stored_ones()
+    test_two_identical_samples_carry_no_difference()
+    test_the_default_paired_table_corrects_each_leg_on_its_own()
+    test_the_final_grade_keeps_its_timing_test_and_its_stamp()
+    test_the_reporting_protocol_defaults()
+    test_alpha_is_the_level_of_every_verdict_and_interval()
+    test_a_correction_runs_once_per_leg_or_once_per_family()
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_protocol_cannot_declare_an_unregistered_timing_test(patch)
+    test_the_interval_excludes_zero_exactly_when_the_test_rejects()
+    test_a_p_of_exactly_alpha_is_not_rejected_and_its_interval_holds_zero()
+    test_a_log_t_interval_and_the_sign_flip_test_can_disagree_and_one_construction_cannot()
+    test_the_solve_rate_interval_inverts_the_score_test_its_tost_reads()
+    for discordant in [(0, 0), (3, 3), (6, 1), (9, 2), (1, 12), (14, 0)]:
+        test_the_solve_rate_p_agrees_with_its_interval(discordant)
+    test_every_table_states_the_settings_it_was_made_with(pathlib.Path(tempfile.mkdtemp()))
+    test_a_tight_null_is_equivalent_with_the_exact_one_sided_sign_flip_p()
+    test_a_wide_null_is_inconclusive_not_equivalent()
+    test_a_doubling_is_different_and_its_equivalence_p_says_outside()
+    test_a_small_but_certain_change_inside_the_margin_stays_different()
+    test_the_margin_is_configured_and_must_be_a_ratio_above_one()
+    test_difference_and_equivalence_are_corrected_as_two_families()
+    test_the_minimum_detectable_effect_has_the_stated_power()
+    test_the_detectable_effect_survives_a_corrected_alpha_on_few_kernels()
+    test_solve_rates_are_equivalent_only_when_the_score_test_excludes_both_ends_of_the_margin()
+    test_repeated_episodes_split_a_log_ratios_spread_into_run_to_run_and_kernel_to_kernel()
+    for spread in (0.2, 0.3, 0.4, 0.5):
+        test_equivalence_passes_exactly_when_the_90_percent_interval_is_inside_the_margin(spread)

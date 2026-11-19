@@ -407,3 +407,5 @@ if __name__ == "__main__":
     test_the_workspace_archive_keeps_text_and_libraries_and_lists_binary_data_it_omits(scratch())
     with pytest.MonkeyPatch.context() as patch:
         test_a_schema_2_archive_is_slimmed_in_place_and_indexed_again(scratch(), patch)
+    test_a_pack_cut_off_before_it_indexed_its_folder_is_indexed_by_the_next_pack(scratch())
+    test_a_torn_last_line_in_the_job_s_logs_does_not_stop_packing(scratch())

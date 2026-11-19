@@ -305,3 +305,4 @@ if __name__ == "__main__":
         {"axes": [{"grid_dim": 0}], "replicated": True},
     ]:
         test_an_array_layout_no_grid_can_scatter_is_refused(raw)
+    test_the_cyclic_grid_refusal_says_what_why_and_the_way_out()
