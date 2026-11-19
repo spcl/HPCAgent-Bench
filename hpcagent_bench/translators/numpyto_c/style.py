@@ -89,10 +89,7 @@ def header_names(includes: tuple[str, ...]) -> frozenset[str]:
     compiler = languages.resolve_compiler(driver)
     if compiler is None:
         raise RuntimeError(f"llm-friendly style needs the C driver {driver} to read the system headers' names")
-    headers = [
-        *languages.library_build_flags(Language.C, languages.ALWAYS_LINKED_LIBRARIES)[0],
-        *languages.library_build_flags(Language.C, languages.FFT_LINKED_LIBRARIES)[0],
-    ]
+    headers = languages.c_header_flags()
     unit = "".join(f"#include <{name}>\n" for name in includes)
     done = subprocess.run(
         [compiler, *headers, "-E", "-dD", "-x", "c", "-"], input=unit, capture_output=True, text=True, check=False
