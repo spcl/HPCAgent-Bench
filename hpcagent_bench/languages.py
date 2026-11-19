@@ -1794,14 +1794,7 @@ def family_report_flags(family: str) -> str:
 def report_flags(lang: Language, *, compiler: str | None = None) -> str:
     """The optimization-report flags for ``lang`` (or a ``compiler`` block); ``""`` for a compiler with no report
     channel."""
-    compilers = load_compilers()
-    if compiler is not None:
-        if compiler not in compilers:
-            raise KeyError(f"no such compiler {compiler!r} in compilers.yaml")
-        block = compilers[compiler]
-    else:
-        _, block = compiler_for_lang(compilers, lang)
-    return family_report_flags(block_family(block))
+    return family_report_flags(block_family(resolved_compiler_for(lang, compiler).block))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1876,13 +1869,7 @@ def compile_variant(
     if lang not in LANG_EXT:
         raise unknown_language(lang)
 
-    compilers = load_compilers()
-    if compiler is not None:
-        if compiler not in compilers:
-            raise KeyError(f"no such compiler {compiler!r} in compilers.yaml")
-        block = compilers[compiler]
-    else:
-        compiler, block = compiler_for_lang(compilers, lang)
+    block = resolved_compiler_for(lang, compiler).block
 
     if src is None:
         variants = [p for (vl, p) in discover_variants(spec) if vl == lang]
@@ -2174,13 +2161,7 @@ def build_shared_lib_commands(
         fft_compile, fft_link = library_build_flags(lang, FFT_LINKED_LIBRARIES)
         extra_compile = [*extra_compile, *fft_compile]
         extra_link = [*extra_link, *fft_link]
-    compilers = load_compilers()
-    if compiler is not None:
-        if compiler not in compilers:
-            raise KeyError(f"no such compiler {compiler!r} in compilers.yaml")
-        block = compilers[compiler]
-    else:
-        compiler, block = compiler_for_lang(compilers, lang)
+    block = resolved_compiler_for(lang, compiler).block
 
     src = pathlib.Path(src)
     out_so = pathlib.Path(out_so)
