@@ -21,6 +21,8 @@ import stat
 
 import pydantic
 
+from hpcagent_bench.cache_files import write_atomic
+
 __all__ = ["CAP_BYTES", "FOLDER", "NAME", "TABLE", "PluginRecord", "archive", "found", "keep", "read"]
 
 LOG = logging.getLogger(__name__)
@@ -53,10 +55,7 @@ def keep(folder: pathlib.Path, plugin: str, schema_version: int, data: pydantic.
     if len(text.encode("utf-8")) > CAP_BYTES:
         raise ValueError(f"{plugin}'s record is {len(text.encode('utf-8'))} bytes, over the {CAP_BYTES}-byte cap")
     path = folder / FOLDER / f"{plugin}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    staged = path.with_name(f".{path.name}.{os.getpid()}")
-    staged.write_text(text, encoding="utf-8")
-    staged.replace(path)
+    write_atomic(path, text.encode("utf-8"))
     return path
 
 
