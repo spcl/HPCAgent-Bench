@@ -34,6 +34,7 @@ __all__ = [
     "DeferredSubmit",
     "ReplayReport",
     "append",
+    "append_line",
     "freeze",
     "thaw",
     "pending",
@@ -86,18 +87,22 @@ def queue_path() -> pathlib.Path:
     return db.with_name(db.stem + QUEUE_SUFFIX)
 
 
+def append_line(path: pathlib.Path, line: str) -> None:
+    """Append ``line`` and a newline to ``path``, flushed to disk; a torn last line (a process killed mid-write) is
+    ended first, so the new line stays readable. The caller serializes writers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        torn = size > 0 and os.pread(handle.fileno(), 1, size - 1) != b"\n"
+        handle.write((b"\n" if torn else b"") + line.encode("utf-8") + b"\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def append(path: pathlib.Path, entry: DeferredSubmit) -> None:
-    """Append ``entry`` to ``path`` as one JSON line, flushed to disk before the answer goes out; a torn last line
-    (a judge killed mid-write) is ended first, so the new entry stays readable."""
-    line = json.dumps(dataclasses.asdict(entry), sort_keys=True) + "\n"
+    """Append ``entry`` to ``path`` as one JSON line (:func:`append_line`), on disk before the answer goes out."""
     with QUEUE_LOCK:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a+b") as handle:
-            size = handle.seek(0, os.SEEK_END)
-            torn = size > 0 and os.pread(handle.fileno(), 1, size - 1) != b"\n"
-            handle.write((b"\n" if torn else b"") + line.encode("utf-8"))
-            handle.flush()
-            os.fsync(handle.fileno())
+        append_line(path, json.dumps(dataclasses.asdict(entry), sort_keys=True))
 
 
 #: The write bits :func:`freeze` clears.
@@ -239,8 +244,8 @@ def replay(queues: Sequence[pathlib.Path], judge_url: str, workers: int) -> Repl
         # Thawed first: a done entry is never replayed again, so nothing would thaw its folder afterwards.
         if entry.folder:
             thaw(pathlib.Path(entry.folder))
-        with lock, queue.with_name(queue.name + DONE_SUFFIX).open("a", encoding="utf-8") as handle:
-            handle.write(entry.request_id + "\n")
+        with lock:
+            append_line(queue.with_name(queue.name + DONE_SUFFIX), entry.request_id)
         return True
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
