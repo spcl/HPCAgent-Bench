@@ -47,6 +47,10 @@ NCCL_PROTO = "^LL128"
 FI_CXI_DEFAULT_CQ_SIZE = "131072"
 FI_CXI_DEFAULT_TX_SIZE = "16384"
 FI_CXI_DISABLE_HOST_REGISTER = "1"
+# The site compilers of the cc_icx and cc_nvhpc columns, filled in by install_edfs.sh once installed
+# (containers/README.md#site-compilers); without them the columns report tool_missing.
+# <site_icx_root>
+# <site_nvhpc_root>
 # FI_PROVIDER is deliberately NOT set: this image also runs MPI, and MPICH inherits it and
 # aborts MPI_Init against a libfabric with no cxi provider. RCCL reaches cxi through the hook's
 # plugin anyway.

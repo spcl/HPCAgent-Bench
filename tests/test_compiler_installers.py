@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The hand installers of the cc_icx and cc_aocc compilers (``containers/images/lib/install-{icx,aocc}.sh``) run or
+"""The hand installers of the cc_icx, cc_aocc and cc_nvhpc compilers (``containers/images/lib/install-*.sh``) run or
 unpack a vendor download only when its digest is the CHECKSUM given (or pinned): a swapped or truncated download
 never executes. The tests feed each a local stand-in, so nothing is fetched."""
 
@@ -65,6 +65,7 @@ def test_the_icx_installer_runs_only_under_the_checksum_it_was_given(tmp_path: p
     good = run("install-icx.sh", [str(prefix), str(installer)], tmp_path, CHECKSUM=digest(installer, "sha384"))
     assert good.returncode == 0, good.stderr
     assert "icx 1.0" in good.stdout
+    assert f"export HPCAGENT_BENCH_ICX_ROOT={prefix}/compiler/1.0" in good.stdout
 
 
 @pytest.mark.parametrize("given", ["", "md5:abc"])
@@ -96,3 +97,48 @@ def test_aocc_without_a_checksum_is_refused_before_any_download(tmp_path: pathli
     assert refused.returncode == 2, refused.stderr
     assert "set CHECKSUM" in refused.stderr
     assert not (tmp_path / "aocc").exists()
+
+
+def fake_nvhpc_tarball(tmp_path: pathlib.Path) -> pathlib.Path:
+    """A stand-in for NVIDIA's tarball: an ``install`` that copies ``install_components`` into NVHPC_INSTALL_DIR, with
+    a ``compilers/bin/nvc`` and a bundled ``cuda`` tree beside it."""
+    tree = tmp_path / "src" / "nvhpc_2026_2611_Linux_x86_64_cuda_13.4"
+    release = tree / "install_components" / "Linux_x86_64" / "26.11"
+    (release / "compilers" / "bin").mkdir(parents=True)
+    (release / "cuda" / "bin").mkdir(parents=True)
+    (release / "compilers" / "bin" / "nvc").write_text("#!/bin/sh\necho nvc 26.11-0\n")
+    (release / "cuda" / "bin" / "nvcc").write_text("#!/bin/sh\n")
+    (tree / "install").write_text('#!/bin/sh\ncp -r "$(dirname "$0")/install_components/." "$NVHPC_INSTALL_DIR"\n')
+    for path in (tree / "install", release / "compilers" / "bin" / "nvc"):
+        path.chmod(0o755)
+    tarball = tmp_path / f"{tree.name}.tar.gz"
+    with tarfile.open(tarball, "w:gz") as archive:
+        archive.add(tree, arcname=tree.name)
+    return tarball
+
+
+def test_the_nvhpc_tarball_unpacks_only_under_its_checksum_and_leaves_cuda_out(tmp_path: pathlib.Path) -> None:
+    """NVIDIA publishes md5 alone, so the NVHPC installer (and only it) takes one; a CPU column needs no CUDA."""
+    if os.uname().machine != "x86_64":
+        pytest.skip("the stand-in tarball is the x86_64 one")
+    tarball = fake_nvhpc_tarball(tmp_path)
+    prefix = tmp_path / "nvhpc"
+    unnamed = run("install-nvhpc.sh", [str(prefix), str(tarball)], tmp_path)
+    assert unnamed.returncode == 2 and "md5sum.txt" in unnamed.stderr
+    wrong = run("install-nvhpc.sh", [str(prefix), str(tarball)], tmp_path, CHECKSUM="md5:" + "0" * 32)
+    assert wrong.returncode == 1, wrong.stderr
+    assert not prefix.exists(), "a download that fails its checksum must never be unpacked"
+    good = run("install-nvhpc.sh", [str(prefix), str(tarball)], tmp_path, CHECKSUM=digest(tarball, "md5"))
+    assert good.returncode == 0, good.stderr
+    root = prefix / "Linux_x86_64" / "26.11" / "compilers"
+    assert f"export HPCAGENT_BENCH_NVHPC_ROOT={root}" in good.stdout
+    assert not (prefix / "Linux_x86_64" / "26.11" / "cuda").exists()
+
+
+def test_only_the_nvhpc_installer_accepts_an_md5(tmp_path: pathlib.Path) -> None:
+    installer = fake_icx_installer(tmp_path)
+    refused = run(
+        "install-icx.sh", [str(tmp_path / "icx"), str(installer)], tmp_path, CHECKSUM=digest(installer, "md5")
+    )
+    assert refused.returncode == 2, refused.stderr
+    assert not (tmp_path / "icx").exists()

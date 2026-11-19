@@ -361,17 +361,36 @@ anonymous CI egress with a 403 that reads as a missing repository):
 | tblis | `lib/build-tblis.sh` | v1.3.0: the 2.x line vendors a BLIS whose haswell asm gcc 16 rejects |
 | Pluto | `lib/build-pluto.sh` | `polycc` against distro clang 17 (judge-agent images and CI only) |
 
-Two compilers no image carries are installed by hand into a user prefix, without root, for the `cc_icx` and
-`cc_aocc` columns: `lib/install-icx.sh PREFIX INSTALLER` runs Intel's standalone DPC++/C++ offline installer
-(`--silent --eula accept --install-dir PREFIX`), and `lib/install-aocc.sh PREFIX [TARBALL]` unpacks AMD's AOCC
-tarball (AOCC 6 or later: the column needs LLVM 19 for `-std=c23`). Both refuse a download whose digest is not
-`CHECKSUM=<sha256|sha384|sha512>:<hex>` (Intel lists one per installer; AOCC 6.0.0's is pinned in the script). Each prints the lines to source: `setvars.sh`
-puts `icx` on `PATH`; `HPCAGENT_BENCH_AOCC_ROOT` names AOCC's tree, whose `clang` stays off `PATH`. Without them the
-columns report `tool_missing`.
-
 BLIS comes from apt for the same gcc 16 reason. OpenBLAS holds the `libblas.so.3`/`liblapack.so.3`
 alternatives. `perf` comes from `linux-perf` where the base packages it, else from the
 `linux-tools-*` binary directly.
+
+### Site compilers
+
+Three compilers no image carries are installed by hand into a user prefix, without root, for the `cc_icx`, `cc_aocc`
+and `cc_nvhpc` columns. Run the installs inside a Slurm job: each download is several GB.
+
+| column | script | what it runs | digest | prints |
+|---|---|---|---|---|
+| `cc_icx` | `lib/install-icx.sh PREFIX INSTALLER` | Intel's standalone DPC++/C++ offline installer (`--silent --eula accept --install-dir PREFIX`) | `sha384`, listed by Intel next to each installer | `HPCAGENT_BENCH_ICX_ROOT` |
+| `cc_aocc` | `lib/install-aocc.sh PREFIX [TARBALL]` | unpacks AMD's AOCC tarball (AOCC 6 or later: the column needs LLVM 19 for `-std=c23`) | AMD publishes none; 6.0.0's is pinned in the script | `HPCAGENT_BENCH_AOCC_ROOT` |
+| `cc_nvhpc` | `lib/install-nvhpc.sh PREFIX [TARBALL]` | NVIDIA's HPC SDK tarball installer (`NVHPC_SILENT`, single install); `CPU_ONLY=1` (default) leaves CUDA, the math and comm libraries, profilers and examples out | `md5` only, from NVIDIA's `md5sum.txt` (the one script that accepts md5) | `HPCAGENT_BENCH_NVHPC_ROOT` |
+
+Each refuses a download whose digest is not `CHECKSUM=<algo>:<hex>` (`lib/verify_checksum.sh`). Each root names the
+directory holding the driver's `bin/`; `languages.COMPILER_ROOT_ENV` takes the driver from there before `PATH`, so
+the vendor's `clang` or `nvc` never shadows another, and a set root without its driver resolves nothing. Without a
+root or a driver on `PATH` the column reports `tool_missing`.
+
+The AMD judge picks them up from `${HPCAGENT_BENCH_SITE_COMPILERS:-$SCRATCH/site-compilers}`:
+
+```bash
+sbatch ... --wrap 'containers/images/lib/install-icx.sh $SCRATCH/site-compilers/icx <installer> && \
+    containers/images/lib/install-nvhpc.sh $SCRATCH/site-compilers/nvhpc'   # CHECKSUM=... for each
+containers/images/install_edfs.sh
+```
+
+`install_edfs.sh` fills `HPCAGENT_BENCH_ICX_ROOT` and `HPCAGENT_BENCH_NVHPC_ROOT` into the judge EDFs and mounts each
+prefix, only for the compilers installed there (the `# <site_*_root>` lines of `judge-agent-amd/judge.edf.toml.in`).
 
 ## OpenMP contexts
 

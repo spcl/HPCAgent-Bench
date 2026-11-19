@@ -23,16 +23,8 @@ VERSION=${VERSION:-6.0.0}
 major_minor=$(echo "${VERSION}" | cut -d. -f1-2 | tr . -)
 TARBALL=${2:-https://download.amd.com/developer/eula/aocc/aocc-${major_minor}/aocc-compiler-${VERSION}.tar}
 [[ -n "${CHECKSUM:-}" ]] || { echo "AOCC ${VERSION}: set CHECKSUM=<algo>:<hex> (AMD publishes none)" >&2; exit 2; }
-# verify FILE -- refuse FILE unless its digest is CHECKSUM (<sha256|sha384|sha512>:<hex>), as the vendor publishes it.
-verify() {
-    local algo="${CHECKSUM%%:*}" want="${CHECKSUM#*:}" got
-    case "${algo}" in
-        sha256 | sha384 | sha512) ;;
-        *) echo "CHECKSUM must be sha256:<hex>, sha384:<hex> or sha512:<hex>, got '${CHECKSUM}'" >&2; exit 2 ;;
-    esac
-    got="$("${algo}sum" "$1" | cut -d' ' -f1)"
-    [[ "${got}" == "${want,,}" ]] || { echo "$1: ${algo} ${got}, expected ${want}" >&2; exit 1; }
-}
+# shellcheck source=verify_checksum.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/verify_checksum.sh"
 work=$(mktemp -d)
 trap 'rm -rf "${work}"' EXIT
 
