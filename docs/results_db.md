@@ -41,7 +41,9 @@ is no reader of another layout.
   ended `submitted` (`merge_results.submitted_records`): a submitted episode was graded, so its shard was
   lost. From then on a reader reads `results.db` and skips the
   shards it holds (`studies.merged_shard`). The merge builds beside `results.db` and moves it there only
-  once complete (`results_db.rebuilding`). A job that could not merge leaves `MERGE_FAILED`, and a reader then
+  once complete (`results_db.rebuilding`). A re-merge folds the old `results.db` in after the shards
+  (`merge_results.fold_applied`), so the grades `grade-under apply` added stay, and so do the finals it left: a shard
+  final it rewrote into a regrade's is dropped again. A job that could not merge leaves `MERGE_FAILED`, and a reader then
   reads its shards, not a `results.db` beside the marker.
 - **A reader takes SQLite's locking protocol** (`mode=ro`), the only read safe beside a writer: a short writer's close
   removes the `-wal`, so a file without one may still be written. On a WAL file it leaves a `-shm` and an empty `-wal`.

@@ -18,7 +18,7 @@ import pytest
 
 from hpcagent_bench import cli
 from hpcagent_bench.cluster import merge_results
-from hpcagent_bench.harness import recording, results_db
+from hpcagent_bench.harness import grade_under, recording, results_db, timing
 from hpcagent_bench.results import data_guard
 from hpcagent_bench.run_layout import MERGE_FAILED_NAME, MERGED_DB_NAME
 from tests.results_rows import attempts, submissions
@@ -234,9 +234,9 @@ def test_merge_results_cut_short_by_a_corrupt_shard_leaves_no_partial_results_db
     assert not list(tmp_path.glob("results.db*"))
 
 
-def test_merge_results_never_rebuilds_away_a_graded_source_only_its_results_db_holds(tmp_path: pathlib.Path) -> None:
-    """``grade-under apply --into results.db`` writes grades no shard holds; merging the job again must refuse rather
-    than rebuild them away, and leave the results DB, the graded source in it retrievable by its hash."""
+def test_a_re_merge_keeps_a_graded_source_only_its_results_db_holds(tmp_path: pathlib.Path) -> None:
+    """``grade-under apply --into results.db`` writes grades no shard holds; merging the job again keeps them, and
+    the graded source in it stays retrievable by its hash."""
     seed_shard(str(tmp_path / "judge" / "rank-0" / "hpcagent_bench0.db"), run="r0", kernels=["gemm"])
     out = tmp_path / "results.db"
     merge_results.merge(tmp_path, out)
@@ -246,15 +246,67 @@ def test_merge_results_never_rebuilds_away_a_graded_source_only_its_results_db_h
         grade, _ = results_db.add_grade(conn, episode, "gemm", "promoted", ts_ms=3, values=stamp)
         digest = results_db.store_source(conn, grade, "host", "c", "the promoted answer")
         conn.commit()
-    before = out.read_bytes()
+    before = graded(out)
 
-    with pytest.raises(results_db.DataLossError, match="left as it was"):
-        merge_results.merge(tmp_path, out)
+    merge_results.merge(tmp_path, out)
 
-    assert out.read_bytes() == before
+    assert graded(out) == before
     with results_db.reading(out) as conn:
         assert conn.execute("SELECT text FROM sources WHERE hash = ?", (digest,)).fetchone()[0] == "the promoted answer"
     assert not list(tmp_path.glob("results.db.tmp*"))
+
+
+def graded(path: pathlib.Path) -> list[tuple[object, ...]]:
+    """Every grade of ``path`` by natural key, with its verdict and the grade it re-timed."""
+    with results_db.reading(path) as conn:
+        rows = conn.execute(
+            "SELECT e.label, g.kernel, g.ts_ms, g.kind, g.speedup, g.timing_reduction, o.ts_ms FROM grades g "
+            "JOIN episodes e ON e.id = g.episode_id LEFT JOIN grades o ON o.id = g.of_grade_id"
+        )
+        return sorted(tuple(row) for row in rows)
+
+
+@pytest.mark.parametrize(
+    ("stamp", "on_change"),
+    [
+        (timing.FINAL_GRADE_REDUCTION, results_db.ProtocolChange.NEW_ROW),
+        ("mwd-v3", results_db.ProtocolChange.NEW_ROW),
+        ("mwd-v3", results_db.ProtocolChange.REPLACE),
+    ],
+)
+def test_a_re_merge_after_grade_under_apply_keeps_the_applied_finals(
+    tmp_path: pathlib.Path, stamp: str, on_change: results_db.ProtocolChange
+) -> None:
+    """``grade-under apply`` rewrote the shard's final grade of a submission (``collapse_finals``) into the
+    regrade's; merging the job again (to fold in a late episode record) succeeds and keeps exactly the finals the
+    apply left, whatever its protocol policy, never the shard's rewritten one."""
+    shard = tmp_path / "judge" / "rank-0" / "hpcagent_bench0.db"
+    seed_shard(str(shard), run="r0", kernels=["gemm"], with_canon=False)
+    final = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "task_hash": "test-task"}
+    final |= {"build_ok": 1, "correct": 1, "speedup": 1.5, "credited_speedup": 1.5}
+    with contextlib.closing(recording.connect(str(shard))) as conn:
+        (submit, episode) = conn.execute("SELECT id, episode_id FROM grades WHERE ts_ms = 1").fetchone()
+        live = final | {"of_grade_id": submit, "timing_reduction": timing.FINAL_GRADE_REDUCTION}
+        results_db.add_grade(conn, episode, "gemm", "final", ts_ms=1, values=live)
+        conn.commit()
+    out = tmp_path / "results.db"
+    merge_results.merge(tmp_path, out)
+    regrade = tmp_path / "regrade" / "regrade-cells-0.db"
+    with contextlib.closing(results_db.open_db(regrade)) as conn:
+        with results_db.reading(out) as source:
+            (submit,) = source.execute("SELECT id FROM grades WHERE ts_ms = 1 AND kind = 'submit'").fetchone()
+        copied = results_db.copy_grade(out, submit, conn)
+        (episode,) = conn.execute("SELECT episode_id FROM grades WHERE id = ?", (copied,)).fetchone()
+        values = final | {"of_grade_id": copied, "speedup": 3.0, "credited_speedup": 3.0, "timing_reduction": stamp}
+        results_db.add_grade(conn, episode, "gemm", "final", ts_ms=50, values=values)
+        conn.commit()
+    grade_under.apply_shards(out, [regrade.parent], on_change)
+    applied = graded(out)
+    assert (("r0", "gemm", 50, "final", 3.0, stamp, 1)) in applied
+
+    merge_results.merge(tmp_path, out)
+
+    assert graded(out) == applied
 
 
 def test_a_re_merge_writes_through_a_finished_jobs_seal_and_seals_it_again(tmp_path: pathlib.Path) -> None:
