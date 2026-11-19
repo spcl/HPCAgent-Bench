@@ -471,12 +471,16 @@ RUN set -eux; \
 # spack.yaml is WRITTEN, not built up by `spack config add`: a fresh environment has `view: true`,
 # a bool, and the first `config add view:default:...` walks into it and dies with `argument of
 # type 'bool' is not iterable` -- forty minutes after the gcc build it sits behind.
+# The spec names the variants: a bare gcc@16.2.0 also matches the external gcc spack detected, and `location -i`
+# refuses an ambiguous spec ("matches multiple packages").
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
-    "${spack}" install --fail-fast "gcc@${GCC_VERSION} +graphite +binutils"; \
-    "${spack}" compiler find --scope site "$("${spack}" location -i "gcc@${GCC_VERSION}")"; \
-    ln -sfn "$("${spack}" location -i "gcc@${GCC_VERSION}")" /opt/gcc; \
-    spack-cache-push "gcc@${GCC_VERSION}"; \
+    gcc_spec="gcc@${GCC_VERSION} +graphite +binutils"; \
+    "${spack}" install --fail-fast "${gcc_spec}"; \
+    gcc_prefix="$("${spack}" location -i "${gcc_spec}")"; \
+    "${spack}" compiler find --scope site "${gcc_prefix}"; \
+    ln -sfn "${gcc_prefix}" /opt/gcc; \
+    spack-cache-push "${gcc_spec}"; \
     mkdir -p "${SPACK_ENV_DIR}"; \
     printf '%s\n' \
       'spack:' \
