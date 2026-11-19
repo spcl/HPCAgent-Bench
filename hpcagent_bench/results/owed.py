@@ -59,7 +59,7 @@ from hpcagent_bench.harness.recording import slot_of
 from hpcagent_bench.kernel_key import kernel_stem
 from hpcagent_bench.paths import git_dirty, git_head
 from hpcagent_bench.problem_file import ProblemLine, raw_lines, read_lines
-from hpcagent_bench.results import collect
+from hpcagent_bench.results import collect, inventory
 from hpcagent_bench.results.recorded_rows import ADHOC_EPISODE_ID, RERUN_PREFIXES, TASK_CHANGED_PREFIX
 from hpcagent_bench.run_layout import AGENTS_DIRNAME, CLAUDE_LOG, TOKENS_NAME
 from hpcagent_bench.stats.population import HARNESS_FAULT_REASON
@@ -580,10 +580,14 @@ def launch_env(job_dir: pathlib.Path) -> pathlib.Path:
 
 
 def launch_order(job_dir: pathlib.Path) -> tuple[float, str]:
-    """Sort key of job directories, oldest launch first: when the job staged its launch env (its mtime; the file is
-    written once, as the job starts), then its run id. The run id alone orders nothing: an umbrella instance's is
-    ``<allocation><k>`` (launch_fused.sbatch), far above a plain job that started after it. A job without a launch
-    env (from before launches were staged) sorts before every one with, by run id."""
+    """Sort key of job directories, oldest launch first: the start its batch shell stamped into it
+    (:func:`inventory.launch_stamp`), else (a run from before the stamp) when it staged its launch env (its mtime;
+    the file is written once, as the job starts), then its run id. The run id alone orders nothing: an umbrella
+    instance's is ``<allocation><k>`` (launch_fused.sbatch), far above a plain job that started after it. A job
+    with neither (from before launches were staged) sorts before every one with, by run id."""
+    stamp = inventory.launch_stamp(job_dir)
+    if stamp is not None:
+        return float(stamp.started_s), job_dir.name.zfill(20)
     try:
         started = launch_env(job_dir).stat().st_mtime
     except FileNotFoundError:

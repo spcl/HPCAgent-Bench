@@ -16,7 +16,7 @@ import tempfile
 import pytest
 from hpcagent_agent.driver import agent_driver
 
-from hpcagent_bench import paths, tags
+from hpcagent_bench import paths, run_layout, tags
 from hpcagent_bench.harness import recording, results_db
 from hpcagent_bench.problem_file import ProblemLine, read_lines
 from hpcagent_bench.results import owed
@@ -260,6 +260,18 @@ def test_launches_are_ordered_by_when_they_started_not_by_their_run_id(
     assert owed.owed(jobs, [owed.Run(kernel)]) == {}
     assert owed.main(["collect", "--runs", str(tmp_path), "--tag", TAG]) == 0
     assert capsys.readouterr().out.rstrip().endswith(f"newest {tmp_path / repair}")
+
+
+def test_a_launch_stamp_orders_launches_before_the_launch_env_mtime(tmp_path: pathlib.Path) -> None:
+    """The start run_cluster.sh stamps into the run directory decides the order; a launch env touched later (a
+    copy that did not keep its mtime) does not."""
+    for job, stamped, touched in (("75284501", 1_000, 3_000), ("753100", 2_000, 1_500)):
+        launch(tmp_path, job, [problem_of(TAG_KERNELS[0])])
+        make_job(tmp_path, job, "exp")
+        os.utime(tmp_path / owed.LAUNCH_DIR / job / ".env", (touched, touched))
+        stamp = {"slurm_job_id": job[:6], "run_id": job, "nodes": 1, "started_s": stamped}
+        (tmp_path / job / run_layout.LAUNCH_STAMP_NAME).write_text(json.dumps(stamp))
+    assert owed.setup_launches(tmp_path, "exp") == [tmp_path / "75284501", tmp_path / "753100"]
 
 
 def test_a_submit_the_judge_refused_with_its_own_fault_is_owed(tmp_path: pathlib.Path) -> None:

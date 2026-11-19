@@ -35,8 +35,10 @@ __all__ = [
     "SACCT_FIELDS",
     "UNMERGED",
     "JobRow",
+    "LaunchStamp",
     "NodeHours",
     "inventory",
+    "launch_stamp",
     "main",
     "nodehours",
     "own_spans",
@@ -82,6 +84,39 @@ class JobRow(NamedTuple):
     root: str
     job: str
     path: pathlib.Path
+
+
+class LaunchStamp(NamedTuple):
+    """A run directory's :data:`~hpcagent_bench.run_layout.LAUNCH_STAMP_NAME` (run_cluster.sh write_launch_stamp):
+    the Slurm allocation it ran in, its run id, its nodes, its start and (once its steps stopped) its end, epoch
+    seconds."""
+
+    slurm_job_id: str
+    run_id: str
+    nodes: int
+    started_s: int
+    ended_s: int | None = None
+
+    @property
+    def instance(self) -> bool:
+        """Whether the run was one instance of a shared allocation (an umbrella's), not a Slurm job of its own."""
+        return self.run_id != self.slurm_job_id
+
+
+def launch_stamp(run_dir: pathlib.Path) -> LaunchStamp | None:
+    """The launch stamp of ``run_dir``; None for a run from before the stamp, or one whose stamp is unreadable."""
+    try:
+        data = json.loads((run_dir / run_layout.LAUNCH_STAMP_NAME).read_text(encoding="utf-8"))
+        ended = data.get("ended_s")
+        return LaunchStamp(
+            str(data["slurm_job_id"]),
+            str(data["run_id"]),
+            int(data["nodes"]),
+            int(data["started_s"]),
+            None if ended is None else int(ended),
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 class NodeHours(NamedTuple):
@@ -228,14 +263,20 @@ def sampled_span(csv_path: pathlib.Path) -> tuple[datetime.datetime, datetime.da
 
 
 def own_spans(jobs: Iterable[JobRow], known: Collection[str]) -> list[NodeHours]:
-    """A row for each job of ``jobs`` that sacct did not answer for (not in ``known``) and whose nodes sampled
-    themselves: an umbrella instance, whose run id ``<allocation><k>`` (launch_fused.sbatch) is no Slurm job, or a
-    job sacct no longer holds. Its nodes are the hosts its monitor CSVs name, its elapsed the span from the first
-    sample to the last (the minutes before the monitors start are not in it), its state :data:`ENDED` when its
-    merge completed, else :data:`UNMERGED`."""
+    """A row for each job of ``jobs`` that sacct did not answer for (not in ``known``): an umbrella instance, whose
+    run id ``<allocation><k>`` (launch_fused.sbatch) is no Slurm job, or a job sacct no longer holds. Its nodes and
+    elapsed are its :func:`launch_stamp`'s when that holds its end; else (a run from before the stamp, or one whose
+    end it never reached) the hosts its monitor CSVs name and the span from their first sample to the last (the
+    minutes before the monitors start are not in it). Its state is :data:`ENDED` when its merge completed, else
+    :data:`UNMERGED`."""
     rows = []
     for job in jobs:
         if job.job in known:
+            continue
+        state = ENDED if results_db.finished_db(job.path) else UNMERGED
+        stamp = launch_stamp(job.path.parent)
+        if stamp is not None and stamp.ended_s is not None:
+            rows.append(NodeHours(job.job, "", state, stamp.nodes, stamp.ended_s - stamp.started_s))
             continue
         hosts, spans = set(), []
         for csv_path in sorted((job.path.parent / MONITOR_DIR).glob("*.csv")):
@@ -244,7 +285,6 @@ def own_spans(jobs: Iterable[JobRow], known: Collection[str]) -> list[NodeHours]
                 spans.append(span)
         if spans:
             elapsed = max(end for _, end in spans) - min(start for start, _ in spans)
-            state = ENDED if results_db.finished_db(job.path) else UNMERGED
             rows.append(NodeHours(job.job, "", state, len(hosts), int(elapsed.total_seconds())))
     return rows
 
@@ -300,9 +340,12 @@ def main(command: str, runs: Sequence[pathlib.Path], out: pathlib.Path, sacct: p
     by_job: dict[str, Row] = {}
     for row in rows:
         by_job.setdefault(str(row["job"]), row)
-    jobs = sorted(by_job)
+    # A stamped umbrella instance's run id is no Slurm job: sacct is not asked, and a row it holds under that number
+    # is another job's.
+    instances = {job.job for job in job_dbs(runs) if (stamp := launch_stamp(job.path.parent)) and stamp.instance}
+    jobs = sorted(set(by_job) - instances)
     text = sacct.read_text(encoding="utf-8") if sacct else sacct_text(jobs)
-    answered = parse_sacct(text)
+    answered = [run for run in parse_sacct(text) if run.job not in instances]
     table, medians = nodehours([*answered, *own_spans(job_dbs(runs), {run.job for run in answered})], by_job)
     write_csv(out / "nodehours.csv", NODEHOUR_COLUMNS, table)
     for kind, per in medians.items():
