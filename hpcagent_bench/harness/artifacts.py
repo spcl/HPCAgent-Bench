@@ -27,6 +27,7 @@ import argparse
 import contextlib
 import dataclasses
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -37,7 +38,7 @@ import sys
 import tarfile
 import tempfile
 from collections.abc import Iterable, Iterator, Sequence
-from typing import Any, Literal
+from typing import IO, Any, Literal
 
 from hpcagent_agent.driver import agent_driver, promote_unsubmitted, token_cost
 from hpcagent_agent.driver.agent_driver import CANCELLED_MARKER
@@ -310,9 +311,7 @@ def plan(
     grouped: dict[str, list[tuple[str, Source]]] = {name: [] for name in TARS}
     omitted: list[tuple[str, Source]] = []
     with contextlib.ExitStack() as stack:
-        workspaces = (
-            stack.enter_context(tarfile.open(run_dir / run_layout.WORKSPACES_ARCHIVE)) if archived else None
-        )
+        workspaces = stack.enter_context(tarfile.open(run_dir / run_layout.WORKSPACES_ARCHIVE)) if archived else None
         for name, source in [*loose, *archived]:
             tar = LOGS if name in logs else WORKER if name.startswith(f"{episode.worker}/") else WORKSPACE
             if tar == WORKSPACE and regular(source) and binary_data(head_of(source, workspaces)):
@@ -403,6 +402,88 @@ def omitted_prints(run_dir: pathlib.Path, omitted: Sequence[tuple[str, Source]])
     return {name: {"bytes": size, "sha256": digest} for name, (size, digest) in sorted(prints.items())}
 
 
+class Rejoined(io.RawIOBase):
+    """A member's stream with its first bytes, already read to sniff it, put back in front."""
+
+    def __init__(self, head: bytes, rest: IO[bytes]) -> None:
+        super().__init__()
+        self.head = head
+        self.rest = rest
+
+    def readable(self) -> bool:
+        return True
+
+    def read(self, size: int = -1) -> bytes:
+        """Up to ``size`` bytes (all with -1), full reads across the seam: tarfile takes a short read for the end."""
+        taken = self.head if size < 0 else self.head[:size]
+        self.head = self.head[len(taken) :]
+        if size < 0:
+            return taken + self.rest.read()
+        return taken + (self.rest.read(size - len(taken)) if len(taken) < size else b"")
+
+
+def slim_episode(directory: pathlib.Path, threads: int = 0) -> bool:
+    """Rewrite a schema-2 episode folder's workspace tar without its binary data (:func:`binary_data`), as a pack
+    writes it now: the omitted files go to ``episode.json``'s ``omitted``. The new tar must hold every other file
+    with its bytes before it replaces the old one. False when the folder is already schema 3."""
+    manifest = json.loads((directory / EPISODE_JSON).read_text(encoding="utf-8"))
+    if int(manifest["schema"]) >= SCHEMA:
+        return False
+    omitted: dict[str, dict[str, Any]] = {}
+    kept_prints: dict[str, Print] = {}
+    old = directory / WORKSPACE
+    if old.is_file():
+        new = directory / f".{WORKSPACE}.slim"
+        with zst_tar(old, "r") as source, zst_tar(new, "w", threads) as target:
+            for member in source:
+                data = source.extractfile(member) if member.isreg() else None
+                head = data.read(SNIFF_BYTES) if data is not None else b""
+                if data is not None and binary_data(head):
+                    digest = hashlib.sha256(head)
+                    while block := data.read(1 << 20):
+                        digest.update(block)
+                    omitted[member.name] = {"bytes": member.size, "sha256": digest.hexdigest()}
+                    continue
+                if data is not None:
+                    hashed = Hashed(Rejoined(head, data))
+                    target.addfile(member, hashed)
+                    kept_prints[member.name] = (member.size, hashed.digest.hexdigest())
+                else:
+                    target.addfile(member)
+                    if member.issym():
+                        kept_prints[member.name] = (0, f"->{member.linkname}")
+        if tar_prints(new) != kept_prints:
+            new.unlink()
+            raise SystemExit(f"artifacts: the slimmed {old} does not read back equal; left as it was")
+        new.replace(old)
+    manifest["schema"] = SCHEMA
+    manifest["omitted"] = dict(sorted(omitted.items()))
+    manifest["members"] = {
+        file.name: {"sha256": file_sha(file), "bytes": file.stat().st_size}
+        for file in sorted(directory.iterdir())
+        if file.name != EPISODE_JSON and not file.name.startswith(".")
+    }
+    (directory / EPISODE_JSON).write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return True
+
+
+class Hashed(io.RawIOBase):
+    """A reader that hashes (sha256) every byte read through it."""
+
+    def __init__(self, inner: io.RawIOBase) -> None:
+        super().__init__()
+        self.inner = inner
+        self.digest = hashlib.sha256()
+
+    def readable(self) -> bool:
+        return True
+
+    def read(self, size: int = -1) -> bytes:
+        block = self.inner.read(size)
+        self.digest.update(block)
+        return block
+
+
 def packed(
     run_dir: pathlib.Path,
     episode: Episode,
@@ -430,7 +511,9 @@ def packed(
         partial.rename(directory)
     elif index(run_dir).get(episode.label) is None:
         proven(run_dir, episode, directory, tars, totals=False)
-    if index(run_dir).get(episode.label) is None:
+    # An archive packed before schema 3 is slimmed in place and indexed again.
+    slimmed = slim_episode(directory, threads)
+    if slimmed or index(run_dir).get(episode.label) is None:
         manifest = json.loads((directory / EPISODE_JSON).read_text(encoding="utf-8"))
         entry = {
             "label": episode.label,

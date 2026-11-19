@@ -145,6 +145,34 @@ def test_the_workspace_archive_keeps_text_and_libraries_and_lists_binary_data_it
     assert artifacts.verify_run(run) == []
 
 
+def test_a_schema_2_archive_is_slimmed_in_place_and_indexed_again(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The revision runs were packed as schema 2, binary data and all. A pack of such a run rewrites its workspace tar
+    without the binary data, lists it under ``omitted``, and indexes the folder again; every other file reads back."""
+    run = run_dir(tmp_path)
+    dump = b"\0\1\2" * 4000
+    (run / FOLDER / "work").mkdir(parents=True)
+    (run / FOLDER / "work" / "dump.bin").write_bytes(dump)
+    with monkeypatch.context() as old:
+        old.setattr(artifacts, "SCHEMA", 2)
+        old.setattr(artifacts, "binary_data", lambda head: False)
+        (directory,) = artifacts.pack_run(run)
+    assert f"{FOLDER}/work/dump.bin" in members(directory, "workspace.tar.zst")
+    assert artifacts.pack_run(run) == [directory]
+    assert members(directory, "workspace.tar.zst") == WORKSPACE
+    manifest = json.loads((directory / "episode.json").read_text())
+    assert manifest["schema"] == 3
+    assert manifest["omitted"] == {
+        f"{FOLDER}/work/dump.bin": {"bytes": len(dump), "sha256": hashlib.sha256(dump).hexdigest()}
+    }
+    assert artifacts.index(run)[LABEL]["schema"] == 3
+    assert artifacts.verify_run(run) == []
+    restored = tmp_path / "restored"
+    artifacts.unpack_episode(directory, restored)
+    assert tree(restored) == digests(LOOSE | ARCHIVED)
+
+
 def test_unpack_restores_the_episode_exactly_but_its_secrets(tmp_path: pathlib.Path) -> None:
     """The restored worker directory and folder hold every byte the episode left, at the driver's paths."""
     (directory,) = artifacts.pack_run(run_dir(tmp_path))
@@ -377,3 +405,5 @@ if __name__ == "__main__":
     test_an_episode_whose_folder_is_named_for_its_problem_id_is_found_by_its_record(scratch())
     test_a_sealed_run_directory_is_packed_and_sealed_again(scratch())
     test_the_workspace_archive_keeps_text_and_libraries_and_lists_binary_data_it_omits(scratch())
+    with pytest.MonkeyPatch.context() as patch:
+        test_a_schema_2_archive_is_slimmed_in_place_and_indexed_again(scratch(), patch)
