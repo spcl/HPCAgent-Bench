@@ -121,6 +121,33 @@ def test_a_fused_job_releases_the_nodes_of_ended_runs_once_nothing_is_queued(
         assert all("n1" in line.split("NodeList=")[1] for line in released), "the batch host is never released"
 
 
+def test_a_fused_job_logs_each_runs_own_exit_status(tmp_path: pathlib.Path) -> None:
+    """The end line of a run carries the run's exit status, not that of the $(date) on the same line."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "scontrol").write_text("#!/bin/bash\nprintf 'n%s\\n' 1 2\n")
+    (bin_dir / "squeue").write_text("#!/bin/bash\necho 4102444800\n")
+    for tool in ("scontrol", "squeue"):
+        (bin_dir / tool).chmod(0o755)
+    fails = tmp_path / "fails.sh"
+    fails.write_text("exit 3\n")
+    instances = tmp_path / "instances.txt"
+    instances.write_text(f"ok 1 {tmp_path} -- true\nfails 1 {tmp_path} -- bash {fails}\n")
+    done = bash(
+        f"bash {quote(str(CLUSTER / 'launch_fused.sbatch'))} {quote(str(instances))}",
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "SLURM_JOB_ID": "9",
+            "SLURM_JOB_NODELIST": "n[1-2]",
+            "FUSED_POLL_S": "0.1",
+            "FUSED_AUTO_FREE": "0",
+        },
+    )
+    assert done.returncode == 0, done.stderr
+    ends = {line.split()[2]: line.split()[3] for line in done.stdout.splitlines() if " end " in line}
+    assert ends == {"ok": "status=0", "fails": "status=3"}, done.stdout
+
+
 def test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps(tmp_path: pathlib.Path) -> None:
     """A launcher run as a one-CPU step (srun --overlap -c1) must not pass that step's CPU count or CPU binding to its
     runs: a role srun without its own --cpu-bind applies the inherited SLURM_CPU_BIND, which pinned every inference

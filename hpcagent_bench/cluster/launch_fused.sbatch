@@ -148,8 +148,10 @@ while ((${#name_of[@]})); do
     sleep "${POLL_S}"
     for pid in "${!name_of[@]}"; do
         kill -0 "${pid}" 2>/dev/null && continue
+        # The status before any expansion of the echo: its $(date) would reset $? to 0.
         wait "${pid}"
-        echo "$(date -Is) end ${name_of[${pid}]} status=$? nodes=${nodes_of[${pid}]}"
+        status=$?
+        echo "$(date -Is) end ${name_of[${pid}]} status=${status} nodes=${nodes_of[${pid}]}"
         IFS=, read -r -a back <<<"${nodes_of[${pid}]}"
         free_nodes+=("${back[@]}")
         unset "name_of[${pid}]" "nodes_of[${pid}]"
