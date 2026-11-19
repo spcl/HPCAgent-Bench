@@ -6,7 +6,6 @@ from typing import Any
 
 import pydantic
 import pytest
-
 from hpcagent_agent.tools import registry
 
 

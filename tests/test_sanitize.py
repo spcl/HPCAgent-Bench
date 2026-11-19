@@ -18,7 +18,6 @@ import pytest
 
 from hpcagent_bench.support.sanitize import strip_comments
 
-
 # Sample snippets
 
 C_SRC = """\

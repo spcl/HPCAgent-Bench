@@ -239,7 +239,7 @@ def test_the_away_from_zero_variant_keeps_every_undeclared_input_within_a_factor
     spec = hidden_wiring_spec()
     u = auto_initialize(spec, Preset.S, precision, seed=7, hidden_variant=NARROW_VARIANT)[0]
     wide = u.astype(np.float64)
-    assert 0 < wide.min() and wide.max() <= 2 * wide.min()
+    assert wide.min() > 0 and wide.max() <= 2 * wide.min()
 
 
 def test_h4_widens_and_h5_narrows_the_spread_relative_to_h1() -> None:
@@ -349,5 +349,5 @@ def test_a_custom_initializer_without_a_variant_gets_the_away_from_zero_draw() -
     ]
     assert inputs
     for name in inputs:
-        assert 1.0 <= float(narrow[name].min()) and float(narrow[name].max()) <= 2.0, name
+        assert float(narrow[name].min()) >= 1.0 and float(narrow[name].max()) <= 2.0, name
     assert any(float(plain[name].min()) < 1.0 for name in inputs)

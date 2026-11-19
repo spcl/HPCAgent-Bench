@@ -1187,7 +1187,7 @@ def test_solve_rates_are_called_equivalent_only_against_a_stated_margin(
     assert set(table.coverage_conclusion) == {"equivalent"}
     # the 90% interval of the rate difference the TOST reads: around 0, inside thirty points, not inside ten
     assert (table.rate_difference == 0.0).all()
-    assert ((-0.3 < table.coverage_equivalence_ci_low) & (table.coverage_equivalence_ci_high < 0.3)).all()
+    assert ((table.coverage_equivalence_ci_low > -0.3) & (table.coverage_equivalence_ci_high < 0.3)).all()
     assert (table.coverage_equivalence_ci_low < 0.0).all()
     paired_setups.main(arguments)
     table = pd.read_csv(out)

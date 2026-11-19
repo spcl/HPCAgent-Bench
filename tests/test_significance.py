@@ -327,7 +327,7 @@ def test_the_solve_rate_interval_inverts_the_score_test_its_tost_reads() -> None
                 pairs = significance.Discordant(only_left, only_right)
                 same = significance.rate_equivalence(pairs, n, margin=0.1)
                 assert same.low <= (only_left - only_right) / n <= same.high
-                assert (same.pvalue < 0.05) == (-0.1 < same.low and same.high < 0.1)
+                assert (same.pvalue < 0.05) == (same.low > -0.1 and same.high < 0.1)
     assert significance.configured().paired_proportion.name == "mcnemar"
     low, high = significance.rate_interval(significance.Discordant(3, 3), 40, 0.05)
     assert low == pytest.approx(-high)

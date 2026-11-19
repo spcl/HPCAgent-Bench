@@ -136,7 +136,7 @@ def test_a_submit_waits_past_the_routers_own_upstream_wait(monkeypatch: pytest.M
         monkeypatch.delenv("JUDGE_UPSTREAM_TIMEOUT_SECONDS", raising=False)
     http_json = fresh("http_json")
     router = fresh("judge_service")
-    assert router.UPSTREAM_TIMEOUT_SECONDS == float(configured or http_json.DEFAULT_UPSTREAM_TIMEOUT_S)
+    assert float(configured or http_json.DEFAULT_UPSTREAM_TIMEOUT_S) == router.UPSTREAM_TIMEOUT_SECONDS
     assert http_json.terminal_timeout() == router.UPSTREAM_TIMEOUT_SECONDS + http_json.TERMINAL_MARGIN_S
 
 

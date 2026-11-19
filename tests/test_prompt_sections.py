@@ -13,7 +13,6 @@ import tempfile
 from collections.abc import Callable
 
 import pytest
-
 from hpcagent_agent import prompt_blocks
 
 from hpcagent_bench import config, paths, prompt_build

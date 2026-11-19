@@ -13,7 +13,6 @@ import subprocess
 import sys
 
 import pytest
-
 from hpcagent_agent.driver import harnesses
 
 from hpcagent_bench import paths, study_tags

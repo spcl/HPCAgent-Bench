@@ -36,10 +36,8 @@ def test_unmarked_time_is_transform_and_marked_time_is_its_phase() -> None:
 
 
 def test_a_nested_phase_takes_its_own_seconds_from_the_outer_one() -> None:
-    with phase_clock.measuring() as clock:
-        with phase_clock.phase(Phase.CODEGEN):
-            with phase_clock.phase(Phase.COMPILE):
-                time.sleep(0.05)
+    with phase_clock.measuring() as clock, phase_clock.phase(Phase.CODEGEN), phase_clock.phase(Phase.COMPILE):
+        time.sleep(0.05)
     assert clock.seconds[Phase.COMPILE] >= 0.05
     assert clock.seconds[Phase.CODEGEN] < 0.05
 

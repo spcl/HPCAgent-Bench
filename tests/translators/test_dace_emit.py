@@ -31,12 +31,8 @@ from hpcagent_bench.frameworks import generate_framework
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.translators.numpyto_c.dace_emit import (
     AnnotateEmptyDtype,
-    array_annotation,
     BindMethodReceiver,
     BroadcastScalarWhere,
-    copy_view_bindings,
-    dace_chained_assign_split,
-    dace_dtype,
     DesugarChainedCompare,
     DesugarContractionFreeEinsum,
     DesugarReverseSlice,
@@ -44,28 +40,32 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import (
     DesugarUnreplacedCalls,
     DivisibleStridedSpan,
     DropIdentityAsarray,
-    emit_dace,
-    float_names,
     FoldLiteralMath,
-    freeze_pinned_extent_scalars,
-    freeze_shape_only_parameters,
-    inline_slice_only_extents,
-    loop_target_ranks,
     LowerCallsDaceCannotReplace,
     MaterializeWrittenReshape,
-    mixed_view_names,
     NormalizeReshape,
-    plan_size_promotion,
     PointwiseScatterToLoop,
     RenderedProgram,
     ResolveInferredReshape,
     ResolveShapeReads,
     RewriteBuiltinDtype,
     RewriteFrameworkDtype,
-    size_assertions,
-    sliced_extents,
     SplitReassignedSize,
     SplitTupleAssign,
+    array_annotation,
+    copy_view_bindings,
+    dace_chained_assign_split,
+    dace_dtype,
+    emit_dace,
+    float_names,
+    freeze_pinned_extent_scalars,
+    freeze_shape_only_parameters,
+    inline_slice_only_extents,
+    loop_target_ranks,
+    mixed_view_names,
+    plan_size_promotion,
+    size_assertions,
+    sliced_extents,
     uniquify_nested_loop_targets,
     value_binding,
     version_reallocations,
@@ -1757,7 +1757,7 @@ def test_a_negative_slice_bound_counts_from_the_end_of_its_axis() -> None:
     extents = sliced_extents(ast.parse(subscript, mode="eval").body, {"Q": ["N", "M", "L", "K"]}, set())
     sizes = {"N": 7, "M": 6, "L": 5, "K": 4}
     Q = np.zeros(tuple(sizes.values()))
-    assert tuple(eval(token, sizes) for token in extents) == eval(subscript).shape
+    assert tuple(eval(token, sizes) for token in extents) == eval(subscript, {"Q": Q}).shape
     assert sliced_extents(ast.parse("Q[1:-k]", mode="eval").body, {"Q": ["N"]}, {"k"}) is None
 
 

@@ -12,7 +12,6 @@ import sys
 import tempfile
 
 import pytest
-
 from hpcagent_agent import prompt_blocks
 
 from hpcagent_bench import paths, prompt_build

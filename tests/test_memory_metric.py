@@ -175,7 +175,13 @@ def transient_peak_then_reset() -> tuple[int, int, int]:
     del spike
     peak = native_call.peak_rss()
     native_call.reset_peak_rss()
-    current = int(next(line.split()[1] for line in open("/proc/self/status") if line.startswith("VmRSS:")))
+    current = int(
+        next(
+            line.split()[1]
+            for line in pathlib.Path("/proc/self/status").read_text().splitlines()
+            if line.startswith("VmRSS:")
+        )
+    )
     return peak, native_call.peak_rss(), current
 
 

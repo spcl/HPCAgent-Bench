@@ -8,9 +8,8 @@ from typing import Any
 
 import anyio
 import pytest
-from mcp import types
-
 from hpcagent_agent.tools import mcp_server
+from mcp import types
 
 
 class Session:

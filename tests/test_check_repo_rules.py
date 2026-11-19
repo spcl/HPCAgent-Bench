@@ -138,7 +138,7 @@ def test_the_user_pattern_matches_a_name_only_as_a_path_component_or_address() -
 def test_the_running_user_pattern_is_off_under_a_generic_account() -> None:
     """Under ``root``/``runner`` a ``/root/`` or ``/home/runner`` path is generic: no running-user pattern."""
     module = rules()
-    assert module.GENERIC_ACCOUNTS >= {"root", "runner"}
+    assert {"root", "runner"} <= module.GENERIC_ACCOUNTS
     labels = list(module.USER_PATTERNS)
     assert labels == ([] if module.RUNNING_USER in module.GENERIC_ACCOUNTS else [labels[0]])
 
