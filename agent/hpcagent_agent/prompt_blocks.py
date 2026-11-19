@@ -221,7 +221,11 @@ def render(prompt: Prompt) -> str:
             continue
         fills = dict(block.vars)
         # One pass: a filled value is never searched for slots again.
-        out.append(SLOT.sub(lambda slot: fills.get(slot.group(1), slot.group(0)), block.text))
+
+        def fill(slot: re.Match[str], fills: Mapping[str, str] = fills) -> str:
+            return fills.get(slot.group(1), slot.group(0))
+
+        out.append(SLOT.sub(fill, block.text))
     return "".join(out)
 
 

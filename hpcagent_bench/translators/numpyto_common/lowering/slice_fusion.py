@@ -30,9 +30,9 @@ from hpcagent_bench.translators.numpyto_common.lowering.overlap import (
 )
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import is_scalar_helper_call
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, negative_literal_offset
-from hpcagent_bench.translators.numpyto_common.parallelism import index_exprs
 from hpcagent_bench.translators.numpyto_common.lowering.slice_scalarize import SliceToScalarRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.views import refuse_scalarising_a_contraction
+from hpcagent_bench.translators.numpyto_common.parallelism import index_exprs
 from hpcagent_bench.translators.numpyto_common.subscripts import has_slice_subscript
 
 __all__ = [

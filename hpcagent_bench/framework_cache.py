@@ -6,6 +6,7 @@ atomic. The sidecar also holds the sha256 of the payload it was written with, so
 payload and sidecar replacements leave a MISS, never one writer's payload under the other's fingerprint. DaCe is
 imported lazily."""
 
+import contextlib
 import functools
 import os
 import pathlib
@@ -19,8 +20,8 @@ from hpcagent_bench.translators.numpyto_common.emit_io import is_generated
 __all__ = [
     "bench_tree_fingerprint",
     "credit_production",
-    "fresh",
     "dace_tree_fingerprint",
+    "fresh",
     "kernel_cache_dir",
     "load_generated",
     "load_sdfg",
@@ -129,10 +130,8 @@ def seconds_path(artifact: pathlib.Path) -> pathlib.Path:
 def credit_production(artifact: pathlib.Path, name: phase_clock.Phase) -> None:
     """Credit a cache hit on ``artifact`` with its stored production seconds to phase ``name``
     (:func:`phase_clock.credit`)."""
-    try:
+    with contextlib.suppress(OSError, ValueError):
         phase_clock.credit(float(seconds_path(artifact).read_text().strip()), name)
-    except (OSError, ValueError):
-        pass
 
 
 def sidecar_text(fingerprint: str, payload: bytes) -> bytes:

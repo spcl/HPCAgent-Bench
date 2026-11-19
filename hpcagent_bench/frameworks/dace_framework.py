@@ -34,10 +34,10 @@ from dace.frontend.python.parser import DaceProgram
 from dace.transformation.dataflow import MapCollapse
 
 from hpcagent_bench import array_facts, languages, modules, paths, phase_clock
-from hpcagent_bench.cpf import bridge as cpf_bridge
-from hpcagent_bench.cpf import canonical as cpf_canonical
 from hpcagent_bench import flags as bench_flags
 from hpcagent_bench.categories import Language
+from hpcagent_bench.cpf import bridge as cpf_bridge
+from hpcagent_bench.cpf import canonical as cpf_canonical
 from hpcagent_bench.cpf.cache import CACHE_ENV as CPF_CACHE_ENV
 from hpcagent_bench.cpf.cache import Target
 from hpcagent_bench.frameworks import Benchmark, Framework
@@ -86,7 +86,6 @@ __all__ = [
     "READABLE_CODEGEN",
     "SINGLE_STREAM",
     "STRICT_FP_FLAG",
-    "strict_fp_args",
     "DaceFramework",
     "DeviceStagingModule",
     "PipelineContext",
@@ -115,6 +114,7 @@ __all__ = [
     "row_major_copy",
     "stage_device_arguments",
     "stage_to_device",
+    "strict_fp_args",
     "timed_compile",
 ]
 
@@ -454,8 +454,8 @@ def pipeline_parallel(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
     from dace.transformation.pass_pipeline import Pipeline
     from dace.transformation.passes.fuse_maps import FuseMaps
     from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
-    from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
     from dace.transformation.passes.parallelization.parallelize_loops import ParallelizeLoops
+    from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
     from dace.transformation.passes.scalar_fission import ScalarFission
     from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
 

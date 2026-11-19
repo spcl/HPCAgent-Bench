@@ -36,7 +36,6 @@ __all__ = [
     "ReplayReport",
     "append",
     "freeze",
-    "thaw",
     "pending",
     "queue_path",
     "read",
@@ -45,6 +44,7 @@ __all__ = [
     "spool",
     "spool_dir",
     "spooled",
+    "thaw",
 ]
 
 #: The queue beside a rank's results DB: ``hpcagent_bench0.db`` -> ``hpcagent_bench0.deferred.jsonl``.

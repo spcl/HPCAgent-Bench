@@ -248,7 +248,7 @@ def slot(kind: str, tag: str) -> int | None:
     resolved = canonical(kind, tag)
     block = KINDS.get(kind)
     if block is not None:
-        return block.slot(resolved) if resolved in block.keys() else None
+        return block.slot(resolved) if resolved in block.keys() else None  # noqa: SIM118 -- Kind.keys() is exact; `in` also resolves aliases
     known = tuple(names(kind))
     return known.index(resolved) if resolved in known else None
 

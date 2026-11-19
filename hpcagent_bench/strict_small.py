@@ -48,8 +48,8 @@ __all__ = [
     "finite_peak",
     "l2_reason",
     "l2_sums",
-    "sign_mismatches",
     "serial_spans",
+    "sign_mismatches",
     "sign_reason",
     "strict_small_reason",
 ]

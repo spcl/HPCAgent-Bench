@@ -255,14 +255,13 @@ from hpcagent_bench.stats.figures.efficacy.reduce import (
 )
 
 __all__ = [
-    "SETUP_DOTS_ROW_HEIGHT_IN",
     "BASELINE_BAND_FRACTION",
     "BASELINE_BAND_TYPE",
     "BASELINE_HEADROOM_FRACTION",
     "CATEGORY_TICK_PT",
     "CHAR_EM",
-    "CONTROL_MARKER",
     "CONCLUSION_COLUMNS",
+    "CONTROL_MARKER",
     "COST_SIG_LABEL",
     "COST_SIG_MARK",
     "DEFAULT_CONFIG",
@@ -296,6 +295,7 @@ __all__ = [
     "SCORE_SIG_LABEL",
     "SCORE_SIG_MARK",
     "SERVED_SPEEDUP_LABEL",
+    "SETUP_DOTS_ROW_HEIGHT_IN",
     "SHORT_NAMES",
     "SHORT_ROW_IN",
     "SHORT_ROW_TOKEN_SUBS",

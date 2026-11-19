@@ -5,8 +5,8 @@ from collections.abc import Callable, Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
-    all_integer_operands,
     Extent,
+    all_integer_operands,
     as_float64,
     broadcast_extents,
     extent_is_one,
@@ -42,11 +42,11 @@ __all__ = [
     "expand_power",
     "expand_round",
     "expand_sin_arr",
-    "round_to_decimals",
     "expand_sqrt_arr",
     "expand_subtract",
     "expand_tanh",
     "expand_where",
+    "round_to_decimals",
     "unary_call_expander",
     "unary_elementwise",
     "unary_expr_expander",

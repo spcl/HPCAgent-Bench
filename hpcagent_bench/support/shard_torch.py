@@ -61,11 +61,11 @@ __all__ = [
     "planted",
     "poison",
     "seed_from",
-    "torch_device",
     "slice_tile",
     "sub_key",
     "tile_index_arrays",
     "tile_ranges",
+    "torch_device",
     "uniform",
     "uniform_range",
 ]

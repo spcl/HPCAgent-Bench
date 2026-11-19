@@ -403,7 +403,11 @@ def write_back_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) -> None:
                     break  # either name rebound: no longer this view of that array
                 if bounds & names_stored_in([stmt]):
                     # A copy would re-read the window's bounds, which no longer say where the view sits.
-                    live = list(itertools.takewhile(lambda s: not rebinds(s, view), stmts[j:]))
+
+                    def unbound(s: ast.stmt, view: str = view) -> bool:
+                        return not rebinds(s, view)
+
+                    live = list(itertools.takewhile(unbound, stmts[j:]))
                     if any(mentions(s, view) for s in live) and any(
                         stores_through(s, view) or stores_through(s, base) for s in live
                     ):

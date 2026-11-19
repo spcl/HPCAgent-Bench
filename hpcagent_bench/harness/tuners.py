@@ -44,11 +44,11 @@ __all__ = [
     "Episode",
     "Limits",
     "Tuner",
-    "scored_reference",
     "episode_seed",
     "optimizer_tuner",
     "registry",
     "resolve",
+    "scored_reference",
     "tuner",
 ]
 

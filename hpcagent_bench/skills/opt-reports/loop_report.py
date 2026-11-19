@@ -17,6 +17,7 @@ relative paths, no timestamps: same stderr, same bytes.
 """
 
 import argparse
+import contextlib
 import dataclasses
 import functools
 import os
@@ -586,10 +587,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if proc.returncode != 0:
             failed.append(f"{source.name} (rc={proc.returncode})")
         parsed.append(parse_report(proc.stderr, family, roots=[str(source.resolve().parent)]))
-        try:
+        # Unreadable (absent, a directory, permissions): the compile failure above says why.
+        with contextlib.suppress(OSError):
             sources[display_path(str(source))] = source.read_text()
-        except OSError:
-            pass  # unreadable (absent, a directory, permissions): the compile failure above says why
         report_paths.append(os.path.relpath(report_path, pathlib.Path.cwd()))
 
     if failed:

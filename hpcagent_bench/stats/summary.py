@@ -15,7 +15,6 @@ import numpy as np
 import numpy.typing as npt
 
 __all__ = [
-    "default_alpha",
     "DEFAULT_CI_METHOD",
     "DEFAULT_CONFIDENCE",
     "DEFAULT_MAD_Z",
@@ -33,6 +32,7 @@ __all__ = [
     "Statistic",
     "Unusable",
     "bootstrap_ci",
+    "default_alpha",
     "drop_outliers",
     "geomean",
     "geomean_ci",

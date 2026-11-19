@@ -138,9 +138,12 @@ class NarrowFloatLiterals(ast.NodeTransformer):
         return node
 
     def visit(self, node: ast.AST) -> ast.AST:
-        if isinstance(node, ast.expr) and not isinstance(node, ast.Compare):
-            if operators.folded_float_constant(node) is not None:
-                return ast.parse(f"np.float32({ast.unparse(node)})", mode="eval").body
+        if (
+            isinstance(node, ast.expr)
+            and not isinstance(node, ast.Compare)
+            and operators.folded_float_constant(node) is not None
+        ):
+            return ast.parse(f"np.float32({ast.unparse(node)})", mode="eval").body
         return super().visit(node)
 
 

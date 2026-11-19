@@ -7,6 +7,7 @@ import contextlib
 import contextvars
 import ctypes
 import enum
+import io
 import multiprocessing
 import multiprocessing.connection
 import multiprocessing.context
@@ -14,7 +15,6 @@ import multiprocessing.forkserver
 import multiprocessing.process
 import multiprocessing.queues
 import multiprocessing.reduction
-import io
 import os
 import pathlib
 import pickle
@@ -64,8 +64,6 @@ __all__ = [
     "ShmArgs",
     "abandoned_by",
     "attach_shm_array",
-    "restore_call",
-    "not_abandoned",
     "child_environment",
     "child_main",
     "die_with_parent",
@@ -76,10 +74,12 @@ __all__ = [
     "forked_failure_reason",
     "is_core_dumping",
     "kill_group",
+    "not_abandoned",
     "poll_queue",
     "process_context",
     "reparented",
     "report_without_a_thread",
+    "restore_call",
     "run_command",
     "run_forked",
     "stop_child",

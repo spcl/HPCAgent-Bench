@@ -51,7 +51,6 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.reductions import DACE_NATIVE_REDUCE_FNS, reduce_call_parts
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.parallelism import load_names
-from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 from hpcagent_bench.translators.numpyto_common.statement_desugar import (
     DesugarArrayIteration,
     Spelled,
@@ -59,6 +58,7 @@ from hpcagent_bench.translators.numpyto_common.statement_desugar import (
     SplitTupleUnpack,
     is_scalar_literal,
 )
+from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 __all__ = [
     "ALLOCATION_CALLS",
@@ -175,7 +175,6 @@ __all__ = [
     "inplace_update_targets",
     "inserts_axis",
     "is_float_expr",
-    "selects_everything",
     "is_literal_one",
     "is_negative_one",
     "is_shape_subscript",
@@ -213,6 +212,7 @@ __all__ = [
     "retired_unused_symbols",
     "returns_removed",
     "scan_size_assigns",
+    "selects_everything",
     "settled_ranks",
     "shape_argument",
     "shape_base_ids",

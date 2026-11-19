@@ -9,7 +9,6 @@ from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import i
 from hpcagent_bench.translators.numpyto_common.statement_desugar import bind, element_read, indexed_loop, pair_names
 
 __all__ = [
-    "match_reshape",
     "FFT_FNS",
     "NP_FUNC_ALIASES",
     "AstypeRewriter",
@@ -20,6 +19,7 @@ __all__ = [
     "ReshapeMethodRewriter",
     "ScalarTimesMatmulRewriter",
     "TransposeRewriter",
+    "match_reshape",
 ]
 
 

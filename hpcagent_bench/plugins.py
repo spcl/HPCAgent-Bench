@@ -538,6 +538,7 @@ def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
     overlays, the harness a packet runs on, its harnesses' runners, flavor optimizers, ``[ci]`` optimizers, the routes
     its ``[overrides.<tool>]`` build from, its ``[gates]`` and, under ``api``, its routes' imports."""
     from hpcagent_agent.tools import registry  # deferred: only the check reads the tools
+
     from hpcagent_bench import prompt_build  # noqa: PLC0415 -- prompt_build loads plugins at its own import
     from hpcagent_bench.harness.routes import ROUTES  # noqa: PLC0415 -- only the check reads the routes
 

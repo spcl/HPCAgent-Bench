@@ -66,17 +66,16 @@ __all__ = [
     "Slot",
     "base_for",
     "classify",
+    "command",
     "held_envs",
     "hold",
-    "command",
-    "truncation",
     "main",
     "missing",
     "naming",
     "reused_limits",
     "setup_rows",
     "sizes_moved",
-    "slots_of",
+    "truncation",
 ]
 
 #: The planted-match kernels: a second, earlier match on every draw since the paper's runs.
@@ -212,7 +211,7 @@ def own_limits(rows: Iterable[Mapping[str, object]]) -> dict[str, dict[str, int 
 
 def capped(limit: int | None) -> int | None:
     """A recorded token limit as a cap: 0 records no cap."""
-    return None if not limit else limit
+    return limit if limit else None
 
 
 def larger_limits(row: Mapping[str, object], own: Mapping[str, int | None]) -> bool:

@@ -28,8 +28,8 @@ __all__ = [
     "DaceStage",
     "ModelEntry",
     "PacketDef",
-    "PacketPhase",
     "PacketDevice",
+    "PacketPhase",
     "Transform",
     "check_vocabulary",
 ]

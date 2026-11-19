@@ -23,16 +23,17 @@ __all__ = [
     "CONTROL_MARKER",
     "CONTROL_SHADE",
     "LOG",
-    "Look",
     "TAB20",
     "TAB20B",
     "TAB20B_ORDER",
     "TAB20_ORDER",
+    "Look",
     "color",
     "colormap_slot",
     "colors",
-    "cycled",
     "control_color",
+    "cycled",
+    "darken",
     "fixed_packet_markers",
     "framework_color",
     "framework_marker",
@@ -40,7 +41,6 @@ __all__ = [
     "hue_order",
     "hues",
     "in_order",
-    "darken",
     "lighten",
     "look",
     "marker",
@@ -233,7 +233,7 @@ def marker(model: str) -> str:
 def framework_marker(name: str) -> Marker:
     """The marker a framework column wears: a standalone optimizer's shape (:func:`marker`) when the column is one,
     else its slot's (:func:`look`), so a column registered at runtime or by a plugin needs no plot-code edit."""
-    if canonical("optimizers", name) in KINDS["optimizers"].keys():
+    if canonical("optimizers", name) in KINDS["optimizers"].keys():  # noqa: SIM118 -- Kind.keys() is exact; `in` also resolves aliases
         return marker(name)
     return look("frameworks", name).marker
 

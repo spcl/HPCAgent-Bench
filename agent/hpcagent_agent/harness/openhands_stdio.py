@@ -47,6 +47,8 @@ class StdioClient:
         from mcp import ClientSession
         from mcp.client.stdio import stdio_client
 
-        async with stdio_client(self.params) as (read, write):
-            async with ClientSession(read, write, read_timeout_seconds=cast("Any", read_timeout_seconds)) as session:
-                yield session
+        async with (
+            stdio_client(self.params) as (read, write),
+            ClientSession(read, write, read_timeout_seconds=cast("Any", read_timeout_seconds)) as session,
+        ):
+            yield session

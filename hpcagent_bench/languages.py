@@ -24,11 +24,11 @@ import pydantic
 import yaml
 
 from hpcagent_bench import config, flags, modules, osinfo, paths, seal
-from hpcagent_bench.openmp import context as omp_context
 from hpcagent_bench.categories import Language
 from hpcagent_bench.config import VectCostModel
 from hpcagent_bench.flags import Mode
 from hpcagent_bench.harness import discover_tools
+from hpcagent_bench.openmp import context as omp_context
 from hpcagent_bench.spec import BenchSpec
 
 __all__ = [
@@ -78,9 +78,9 @@ __all__ = [
     "OFFLOAD_VENDORS",
     "OPENMP_BASELINE_FLAGS",
     "OPENMP_RUNTIME_SONAMES",
-    "PIN_ONLY_FAMILIES",
     "PIC_FLAG",
     "PIC_FLAG_CUDA",
+    "PIN_ONLY_FAMILIES",
     "PROBE_INPUT_LANG",
     "PYTHON_DEVICE_ENV",
     "PYTHON_DEVICE_LANGUAGE",
@@ -863,7 +863,7 @@ def gpu_backend() -> Language:
     """``cuda`` on an NVIDIA host, ``hip`` on an AMD one, as DaCe's ``get_gpu_backend`` decides it: its
     ``compiler.cuda.backend`` setting, else the device tool that answers (``nvidia-smi``, ``rocm-smi``), else the
     toolchain. A ``hipcc`` alone does not make a host AMD: Debian ships one without ROCm."""
-    configured = os.environ.get("DACE_compiler_cuda_backend", "")
+    configured = os.environ.get("DACE_compiler_cuda_backend", "")  # noqa: SIM112 -- DaCe's own spelling of this setting's variable
     if configured in ("cuda", "hip"):
         return Language.parse(configured)
     for tool, backend in (("nvidia-smi", Language.CUDA), ("rocm-smi", Language.HIP)):
@@ -1943,10 +1943,7 @@ def build_kernel_lib_commands(
         langs_present.add(lang)
 
     # A forced compiler wins the link driver too; else the runtime-priority order.
-    if forced is not None:
-        link_block = forced
-    else:
-        link_block = compiler_for_lang(compilers, link_lang_for(langs_present)).block
+    link_block = forced if forced is not None else compiler_for_lang(compilers, link_lang_for(langs_present)).block
     link_subst = subst_map(link_block.cc, objs=" ".join(objs), lib=out_so)
     link_argv = render_argv(link_block.link, link_subst)
     link_argv.append(new_dtags_flag(link_block))

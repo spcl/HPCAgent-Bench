@@ -98,12 +98,15 @@ def ep_on_int4(flags: Flags, env: Mapping[str, str]) -> str:
     """Expert parallelism on the int4 checkpoint needs the Triton MoE runner: the dispatcher keeps global expert ids for
     the aiter runner, while the int4 MoE on ROCm runs ``CompressedTensorsWNA16TritonMoE``, which indexes local ids (an
     illegal memory access at CUDA-graph capture)."""
-    if env.get(MOE_CHECKPOINT_KEY) == INT4_CHECKPOINT and int(flags.get("--ep-size", "1")) > 1:
-        if flags.get("--moe-runner-backend") != "triton":
-            return (
-                f"--ep-size {flags['--ep-size']} on the {INT4_CHECKPOINT} checkpoint needs --moe-runner-backend triton "
-                "(the aiter MoE runner indexes global expert ids; docs/serving/kimi27sglang.md)"
-            )
+    if (
+        env.get(MOE_CHECKPOINT_KEY) == INT4_CHECKPOINT
+        and int(flags.get("--ep-size", "1")) > 1
+        and flags.get("--moe-runner-backend") != "triton"
+    ):
+        return (
+            f"--ep-size {flags['--ep-size']} on the {INT4_CHECKPOINT} checkpoint needs --moe-runner-backend triton "
+            "(the aiter MoE runner indexes global expert ids; docs/serving/kimi27sglang.md)"
+        )
     return ""
 
 

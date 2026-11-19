@@ -107,7 +107,7 @@ def reading_v0(shard: pathlib.Path) -> Iterator[sqlite3.Connection]:
             uri = f"{shard.resolve().as_uri()}?immutable=1"
         with contextlib.closing(sqlite3.connect(uri, uri=True)) as conn:
             conn.row_factory = sqlite3.Row
-            if results_db.schema_version(conn) != 0 or not V0_TABLES <= results_db.table_names(conn):
+            if results_db.schema_version(conn) != 0 or not results_db.table_names(conn) >= V0_TABLES:
                 raise ValueError(f"{shard} is not a pre-release judge shard")
             yield conn
 
