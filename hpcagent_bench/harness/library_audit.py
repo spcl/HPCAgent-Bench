@@ -79,8 +79,13 @@ ANONYMOUS_PREFIXES = ("/memfd:", "/SYSV", "/anon_hugepage", "/[aio]")
 SYSTEM_ROOTS = ("/usr", "/lib", "/lib64", "/lib32", "/libx32", "/bin", "/sbin", "/opt")
 
 #: The variables naming where a framework writes shared objects it compiles and loads at run time (torch's inline
-#: C++ extensions, Inductor's CPU code), and the folder each gets in the child's scratch (:func:`jit_cache_env`).
-JIT_CACHE_ENV = {"TORCH_EXTENSIONS_DIR": "torch_extensions", "TORCHINDUCTOR_CACHE_DIR": "torchinductor"}
+#: C++ extensions, Inductor's CPU code, Triton's launcher and driver modules), and the folder each gets in the
+#: child's scratch (:func:`jit_cache_env`).
+JIT_CACHE_ENV = {
+    "TORCH_EXTENSIONS_DIR": "torch_extensions",
+    "TORCHINDUCTOR_CACHE_DIR": "torchinductor",
+    "TRITON_CACHE_DIR": "triton",
+}
 
 #: The names of the directories on ``sys.path`` that hold installed packages.
 PACKAGE_DIRNAMES = frozenset({"site-packages", "dist-packages"})
