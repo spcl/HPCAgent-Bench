@@ -132,6 +132,16 @@ repos:
         language: system
         require_serial: true
         files: '\.py$'
+      # Lint (ruff check, [tool.ruff.lint] select): pyflakes F, pycodestyle E/W, isort I, sorted __all__ RUF022,
+      # bugbear B, pyupgrade UP, simplify SIM. --fix applies the safe fixes only. The image tree is excluded:
+      # its files are COPY'd into container builds, so a lint rewrite would bust their layer caches.
+      - id: hpcagent_bench-ruff-lint
+        name: ruff check (F, E, W, I, RUF022, B, UP, SIM)
+        entry: ruff check --fix --force-exclude --no-cache
+        language: system
+        require_serial: true
+        files: '\.py$'
+        exclude: '^containers/images/'
       # No prompt material may name a benchmark kernel: a page written while looking at one
       # kernel teaches that kernel's shape, and the score then measures how well the packet was
       # fitted to the corpus rather than how well the agent optimizes -- invisibly, because the

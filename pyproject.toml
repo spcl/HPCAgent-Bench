@@ -366,7 +366,9 @@ extend-exclude = ["*_generated.py", "third_party"]
 force-exclude = true
 
 [tool.ruff.lint]
-select = ["ALL"]
+# ANN is the annotations hook; F/E/W/I/RUF022/B/UP/SIM are the lint hook (unused or unsorted imports, unsorted
+# __all__, pyflakes errors, and the pycodestyle/bugbear/pyupgrade/simplify rules the tree satisfies).
+select = ["ANN", "F", "E", "W", "I", "RUF022", "B", "UP", "SIM"]
 # The benchmark kernels are task text the translators parse and agents read, not package code (as for the
 # type checkers below): a lint rewrite would change what a task says or what a frontend accepts.
 exclude = ["hpcagent_bench/benchmarks/**"]
