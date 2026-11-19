@@ -1747,9 +1747,10 @@ DEVICE_DRIVER_FAMILY: Mapping[str, str] = types.MappingProxyType({"hipcc": "llvm
 
 
 def block_family(block: CompilerBlock) -> str:
-    """The toolchain family of a ``compilers.yaml`` block, or ``""`` (nvcc, the MPI wrappers)."""
+    """The toolchain family of a ``compilers.yaml`` block, a pin-only one included, or ``""`` (nvcc, the MPI
+    wrappers)."""
     spack = block.install.spack
-    for family, name in COMPILER_FAMILIES.items():
+    for family, name in (*COMPILER_FAMILIES.items(), *PIN_ONLY_FAMILIES.items()):
         if name == spack:
             return family
     return DEVICE_DRIVER_FAMILY.get(block.cc, "")

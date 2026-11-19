@@ -169,8 +169,10 @@ CPU_BASELINE_GCC = f"-O3 {ARCH_NATIVE} -fopenmp {FP_RELAX} {FP_ASSOC} {FP_CONTRA
 CPU_BASELINE_GFORTRAN = f"-O3 {ARCH_NATIVE} -fopenmp {FP_RELAX} {FP_ASSOC} {FP_CONTRACT} -fstrict-aliasing -fPIC"
 
 #: Intel icx baseline: the clang one, after ``-fp-model=precise`` (icx defaults to ``fast``, i.e. -ffast-math), with
-#: icx's own ``-fopenmp`` (Intel's libiomp5, the __kmpc_ ABI libomp shares). AMD AOCC takes CPU_BASELINE_CLANG as is.
-CPU_BASELINE_ICX = f"-fp-model=precise {CPU_BASELINE_CLANG.replace(OPENMP_CLANG, '-fopenmp')}"
+#: clang's ``-fopenmp=libomp``: LLVM's libomp, the one runtime of the llvm OpenMP context the intel family runs in.
+#: icx's own ``-fopenmp`` links Intel's libiomp5, a second runtime beside numpy's libgomp and one that aborts beside
+#: libomp (containers/README.md#site-compilers). AMD AOCC takes CPU_BASELINE_CLANG as is.
+CPU_BASELINE_ICX = f"-fp-model=precise {CPU_BASELINE_CLANG}"
 
 #: NVHPC baseline for C / C++ / Fortran (nvc relaxes and reassociates by default; ``-tp``/``-mp`` spellings).
 CPU_BASELINE_NVHPC = f"-O3 -tp=native -mp {FP_CONTRACT_NVHPC} -fPIC"

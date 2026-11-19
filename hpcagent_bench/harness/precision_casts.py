@@ -50,8 +50,9 @@ __all__ = [
 
 #: Every element type a cast reads or writes: the :class:`~hpcagent_bench.precision.Precision` realizations.
 CAST_DTYPES = tuple(np.dtype(numpy_dtype(precision)).name for precision in Precision)
-#: OpenMP context -> the toolchain family whose C compiler builds the host casts in it.
-CONTEXT_FAMILY = {context: family for family, context in omp_context.FAMILY_CONTEXT.items()}
+#: OpenMP context -> the toolchain family whose C compiler builds the host casts in it (a requestable one: a pin-only
+#: family shares its context with one).
+CONTEXT_FAMILY = {omp_context.context_for_family(family): family for family in languages.COMPILER_FAMILIES}
 #: A flat buffer of ``n`` elements: a cast changes no layout.
 FLAT = IndexMap.identity(["n"])
 #: Device launch shape: grid-stride loops, so the grid only bounds the parallelism.

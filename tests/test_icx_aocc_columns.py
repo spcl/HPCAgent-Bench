@@ -66,12 +66,21 @@ def test_aocc_passes_clangs_flags_and_icx_only_adds_the_precise_fp_model() -> No
     for mode in (Mode.SINGLE_CORE, Mode.MULTI_CORE):
         assert languages.resolve_baseline(aocc, mode) == serial
         tokens = languages.resolve_baseline(icx, mode).split()
-        # icx defaults to -fp-model=fast; precise must come before the relax knobs so they win.
-        assert tokens[0] == "-fp-model=precise"
-        assert flags.OPT_LEVEL in tokens and flags.ARCH_NATIVE in tokens and "-fopenmp" in tokens
-        assert "-ffp-contract=fast" in tokens and "-ffast-math" not in tokens
+        # icx defaults to -fp-model=fast; precise must come before the relax knobs so they win. The rest is clang's
+        # line, its -fopenmp=libomp included: icx's own -fopenmp links libiomp5, a second OpenMP runtime.
+        assert tokens == ["-fp-model=precise", *serial.split()]
+        assert flags.OPENMP_CLANG in tokens and "-ffast-math" not in tokens
     assert icx.compile[1:] == clang.compile[1:] and aocc.compile[1:] == clang.compile[1:]
-    assert icx.link[1:] == clang.link[1:] and aocc.link[1:] == clang.link[1:]
+    assert aocc.link[1:] == clang.link[1:]
+
+
+def test_an_icx_library_needs_nothing_of_the_icx_prefix_at_run_time() -> None:
+    """icx writes no RUNPATH to its prefix, so a library linking Intel's libimf dies at dlopen. -static-intel links
+    them in, and an explicit -lm is what icx turns into a DYNAMIC libimf, so the link line has none."""
+    clang = languages.compiler_block("clang")
+    icx = languages.compiler_block("icx")
+    assert "-static-intel" in icx.link and "-lm" not in icx.link
+    assert [t for t in icx.link if t != "-static-intel"] == [t for t in clang.link if t != "-lm"]
 
 
 def test_the_icx_build_runs_icx(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
