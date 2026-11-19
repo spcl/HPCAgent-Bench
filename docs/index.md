@@ -78,6 +78,7 @@ serving/cross-partition
 serving/extending-private-inference
 serving/knobs
 serving/known-issues
+serving/old-cuda-driver
 serving/qwen38
 serving/qwen38-gh200
 serving/glm53
