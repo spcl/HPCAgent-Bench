@@ -254,8 +254,7 @@ def catalog_linkable_names(lang: Language) -> frozenset[str]:
     """The bare ``-l`` names the advertised catalog entries for ``lang`` resolve to."""
     names: set[str] = set()
     for entry in languages.available_libraries(lang):
-        _compile, link = languages.library_build_flags(lang, [entry])
-        names.update(t[2:] for t in link if t.startswith("-l"))
+        names.update(t[2:] for t in languages.library_build_flags(lang, [entry])[1] if t.startswith("-l"))
     return frozenset(names)
 
 
