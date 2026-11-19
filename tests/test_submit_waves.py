@@ -37,7 +37,8 @@ fi
 last=$(cat "${{STUB_MARKERS}}/sbatch.last" 2>/dev/null || echo {FIRST_JOB_ID - 1})
 id=$(( last + 1 ))
 echo "${{id}}" > "${{STUB_MARKERS}}/sbatch.last"
-printf '%s env:REPO=%s PLUGIN_DIRS=%s\\n' "$*" "${{HPCAGENT_BENCH_REPO-unset}}" "${{HPCAGENT_BENCH_USER_PLUGIN_DIRS-unset}}" \
+printf '%s env:CACHE=%s REPO=%s PLUGIN_DIRS=%s\\n' "$*" "${{HPCAGENT_BENCH_REFERENCES_GENERATED_CACHE_DIR-unset}}" \
+    "${{HPCAGENT_BENCH_REPO-unset}}" "${{HPCAGENT_BENCH_USER_PLUGIN_DIRS-unset}}" \
     >> "${{STUB_MARKERS}}/sbatch.calls"
 name="" dependency="-"
 for arg; do case "${{arg}}" in --job-name=*) name="${{arg#*=}}" ;; --dependency=*) dependency="${{arg#*=}}" ;; esac; done
@@ -147,7 +148,17 @@ def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_pa
     edf.mkdir()
     (edf / "hpcagent-bench-judge-mi300-latest.toml").write_text('image = "judge.sqsh"\n')
     knobs = {"KERNELS_FILE": "subset.txt", "LANGUAGES": "c hip", "PREPARE": "1", "EDF_PATH": str(edf)}
-    done = submit(root, "--account", "project", **knobs, DEPEND_ON="77", SUBMIT="1")
+    # the site's generated-source cache, the one every setup job reads (pin_live_data_roots)
+    cache = tmp_path / "generated"
+    done = submit(
+        root,
+        "--account",
+        "project",
+        **knobs,
+        DEPEND_ON="77",
+        SUBMIT="1",
+        HPCAGENT_BENCH_GENERATED_CACHE_HOST=str(cache),
+    )
     assert done.returncode == 0, done.stderr
     calls = (root / "sbatch.calls").read_text().splitlines() if (root / "sbatch.calls").exists() else []
     prepare = [line for line in done.stdout.splitlines() if line.startswith("submitted prepare-")]
@@ -161,7 +172,8 @@ def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_pa
     # the prep jobs' values ride sbatch's environment, never --export (Slurm cancels such a job at its start)
     prep = [line for line in calls if "prepare.sbatch" in line]
     assert len(prep) == 3, calls
-    assert all(line.endswith(" PLUGIN_DIRS=") and "env:REPO=unset" not in line for line in prep), prep
+    assert all(line.endswith(" PLUGIN_DIRS=") and " REPO=unset" not in line for line in prep), prep
+    assert f"env:CACHE={cache} " in prep[0], "the prepare job renders into the cache the setups read"
     assert not [line for line in calls if "--export" in line], calls
 
 
