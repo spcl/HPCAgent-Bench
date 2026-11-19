@@ -23,6 +23,7 @@
 # FUSED_NODES (default the allocation's): the nodes this launcher may use, for a second launcher started as a step
 # (srun --overlap) on nodes the first one's ended runs freed.
 # FUSED_MIN_LEFT_S (default 3600): a queued run is not started with less than this left in the allocation.
+# FUSED_AUTO_FREE (default 1): once nothing is queued, free nodes but the batch host are released to Slurm.
 # Each run logs to <instances dir>/logs/<job>-<name>.{out,err}; this script logs starts and ends.
 
 set -uo pipefail
@@ -35,6 +36,10 @@ LOG_DIR="${FUSED_LOG_DIR:-$(dirname -- "${INSTANCES}")/logs}"
 MIN_LEFT_S="${FUSED_MIN_LEFT_S:-3600}"
 POLL_S="${FUSED_POLL_S:-30}"
 mkdir -p -- "${LOG_DIR}"
+# FUSED_AUTO_FREE (default 1): once no queued run is left, every free node but the batch host goes back to Slurm (the
+# job shrinks), so the nodes of finished runs are not held until the slowest run ends. 0 keeps them.
+AUTO_FREE="${FUSED_AUTO_FREE:-1}"
+BATCH_HOST="${SLURMD_NODENAME:-$(hostname -s)}"
 
 mapfile -t free_nodes < <(scontrol show hostnames "${FUSED_NODES:-${SLURM_JOB_NODELIST:?not inside an allocation}}")
 # Started as a step (srun --overlap), this shell's SLURM_CPUS_ON_NODE is the STEP's (-c1: one CPU), and every run's
@@ -115,7 +120,30 @@ fill() {
     queue=("${waiting[@]}")
 }
 
+# Release every free node but the batch host once nothing is queued: a queued run may still need the nodes until then.
+release_free() {
+    [[ "${AUTO_FREE}" == 1 ]] && ((${#queue[@]} == 0 && ${#free_nodes[@]})) || return 0
+    local node kept_host=""
+    local -a drop=() keep=() current
+    for node in "${free_nodes[@]}"; do
+        if [[ "${node}" == "${BATCH_HOST}" ]]; then kept_host="${node}"; else drop+=("${node}"); fi
+    done
+    ((${#drop[@]})) || return 0
+    mapfile -t current < <(scontrol show hostnames "$(squeue -h -j "${SLURM_JOB_ID}" -o %N)")
+    for node in "${current[@]}"; do
+        [[ " ${drop[*]} " == *" ${node} "* ]] || keep+=("${node}")
+    done
+    if scontrol update JobId="${SLURM_JOB_ID}" NodeList="$(IFS=,; echo "${keep[*]}")" >/dev/null; then
+        echo "$(date -Is) released ${drop[*]}"
+        free_nodes=(${kept_host:+"${kept_host}"})
+    else
+        echo "$(date -Is) could not release ${drop[*]}; keeping every node from here on" >&2
+        AUTO_FREE=0
+    fi
+}
+
 fill
+release_free
 while ((${#name_of[@]})); do
     sleep "${POLL_S}"
     for pid in "${!name_of[@]}"; do
@@ -127,5 +155,6 @@ while ((${#name_of[@]})); do
         unset "name_of[${pid}]" "nodes_of[${pid}]"
     done
     fill
+    release_free
 done
 ((${#queue[@]} == 0)) || echo "$(date -Is) never started (more nodes than the allocation): ${queue[*]}"

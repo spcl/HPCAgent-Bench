@@ -84,6 +84,43 @@ def test_a_fused_job_runs_each_line_on_its_own_nodes_and_hands_freed_nodes_to_th
     assert starts == ["a", "b", "c"]
 
 
+@pytest.mark.parametrize("auto_free", ["1", "0"])
+def test_a_fused_job_releases_the_nodes_of_ended_runs_once_nothing_is_queued(
+    tmp_path: pathlib.Path, auto_free: str
+) -> None:
+    """Three 1-node runs, nothing queued behind them: a short run's node goes back to Slurm when it ends (the job
+    shrinks to the rest), the batch host never does, and FUSED_AUTO_FREE=0 keeps every node."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    updates = tmp_path / "updates.log"
+    (bin_dir / "scontrol").write_text(
+        f'#!/bin/bash\n[[ "$1" == update ]] && {{ echo "$*" >>{updates}; exit 0; }}\nprintf \'n%s\\n\' 1 2 3\n'
+    )
+    (bin_dir / "squeue").write_text('#!/bin/bash\n[[ "$*" == *%N* ]] && echo "n[1-3]" || echo 4102444800\n')
+    for tool in ("scontrol", "squeue"):
+        (bin_dir / tool).chmod(0o755)
+    instances = tmp_path / "instances.txt"
+    instances.write_text(f"host 1 {tmp_path} -- true\nslow 1 {tmp_path} -- sleep 1\nshort 1 {tmp_path} -- true\n")
+    done = bash(
+        f"bash {quote(str(CLUSTER / 'launch_fused.sbatch'))} {quote(str(instances))}",
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "SLURM_JOB_ID": "9",
+            "SLURM_JOB_NODELIST": "n[1-3]",
+            "SLURMD_NODENAME": "n1",
+            "FUSED_POLL_S": "0.1",
+            "FUSED_AUTO_FREE": auto_free,
+        },
+    )
+    assert done.returncode == 0, done.stderr
+    released = updates.read_text().splitlines() if updates.exists() else []
+    if auto_free == "0":
+        assert released == []
+    else:
+        assert released[0] == "update JobId=9 NodeList=n1,n2", released
+        assert all("n1" in line.split("NodeList=")[1] for line in released), "the batch host is never released"
+
+
 def test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps(tmp_path: pathlib.Path) -> None:
     """A launcher run as a one-CPU step (srun --overlap -c1) must not pass that step's CPU count or CPU binding to its
     runs: a role srun without its own --cpu-bind applies the inherited SLURM_CPU_BIND, which pinned every inference
