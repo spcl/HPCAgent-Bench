@@ -37,7 +37,9 @@ Twenty agents are live at once (`AGENTS_PER_NODE: 20`). `--max-running-requests 
 `--cuda-graph-max-bs-decode 24` size the request slots and decode graphs for them plus slack, not for
 48/64 nobody reaches. Twelve agents peaked at 0.92 M pool tokens; a full pool queues requests, it does not crash. The
 first 20-agent runs at a 1.8 M pool broke the rule that the heaviest stage stays under about 480 of
-513 GB (677837 died at 508 GB, 677838 sat at 493 GB), so the pool is 1.5 M.
+513 GB (677837 died at 508 GB, 677838 sat at 493 GB), so the pool is 1.5 M. With it and `NCCL_NET_GDR_LEVEL=LOC`,
+every run since 2026-10-13 served until its job ended, 15 to 24 h
+([known issue 1](known-issues.md#1-glm-53-rccl-ncclinternalerror-on-the-pipeline-send)).
 
 The fraction caps weights plus KV, so `pool(f) = 39.0M * (f - 0.4838)` tokens:
 
