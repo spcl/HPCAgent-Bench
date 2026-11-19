@@ -942,7 +942,7 @@ def copy_one_grade(conn: sqlite3.Connection, grade_id: int, dest: sqlite3.Connec
     of = grade.get("of_grade_id")
     grade["of_grade_id"] = None if of is None else copied[int(of)]
     new = upsert(dest, "grades", *NATURAL_KEYS["grades"], grade)
-    for part, (language, text, _digest) in grade_sources(conn, grade_id).items():
+    for part, (language, text, digest) in grade_sources(conn, grade_id).items():
         store_source(dest, new, part, language, text)
     for entry in conn.execute("SELECT * FROM grade_requests WHERE grade_id = ? ORDER BY position", (grade_id,)):
         upsert(dest, "grade_requests", *NATURAL_KEYS["grade_requests"], {**dict(entry), "grade_id": new})
@@ -980,7 +980,7 @@ def final_row_groups(rows: Sequence[tuple[int, str, int]], on_change: ProtocolCh
     if on_change is ProtocolChange.REPLACE or not ranked[0][1]:
         return [[row[0] for row in ranked]]
     groups: dict[str, list[int]] = {}
-    for row_id, stamp, _ts in ranked:
+    for row_id, stamp, ts in ranked:
         groups.setdefault(stamp or ranked[0][1], []).append(row_id)
     return list(groups.values())
 

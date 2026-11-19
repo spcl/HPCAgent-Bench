@@ -1286,7 +1286,7 @@ def apply_final_regrades(
 
 def graded_text(origin: str) -> str | None:
     """The text a ``graded_attempt`` candidate names (``<results DB>#<sha256>``); None when gone."""
-    db, _sep, digest = origin.rpartition("#")
+    db, sep, digest = origin.rpartition("#")
     try:
         with results_db.reading(db, finished=results_db.finished_db(db)) as conn:
             row = conn.execute("SELECT text FROM sources WHERE hash = ?", (digest,)).fetchone()

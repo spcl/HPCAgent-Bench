@@ -2437,7 +2437,7 @@ def serve(
         f"input_mode={cfg.input_mode.text}, preset={cfg.preset.text})"
     )
 
-    def stop_on_term(_signum: int, _frame: types.FrameType | None) -> None:
+    def stop_on_term(signum: int, frame: types.FrameType | None) -> None:
         raise KeyboardInterrupt
 
     previous = signal.signal(signal.SIGTERM, stop_on_term)

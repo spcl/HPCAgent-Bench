@@ -819,7 +819,7 @@ def counted_run(
         for tid in tids:
             eventset, why = open_counter(lib, tid, codes, multiplex)
             if why is not None:  # one unseen thread makes the SUM wrong
-                for _t, extra in handles[1:]:
+                for t, extra in handles[1:]:
                     lib.PAPI_destroy_eventset(ctypes.byref(extra))
                 del handles[1:]
                 scope.how, scope.fallback = "calling_thread", why
@@ -827,7 +827,7 @@ def counted_run(
             handles.append((tid, eventset))
         scope.threads = tuple(tid for tid, _ in handles)
         buffers.extend(((ctypes.c_longlong * width)(), (ctypes.c_longlong * width)()) for _ in handles)
-        for _tid, eventset in handles:
+        for unused_tid, eventset in handles:
             demand(lib, lib.PAPI_start(eventset), "PAPI_start")
 
     def counted(fn: CKernel, c_args: list[CArgument], settle: Callable[[], None]) -> RepTiming:
@@ -842,18 +842,18 @@ def counted_run(
             setup()
         seen.update(thread_ids())
         # Read-delta per rep: PAPI_start arms once, and two reads isolate one call.
-        for (_tid, eventset), (before, _after) in zip(handles, buffers, strict=False):
+        for (unused_tid, eventset), (before, unused_after) in zip(handles, buffers, strict=False):
             demand(lib, lib.PAPI_read(eventset, before), "PAPI_read")
         t0 = time.perf_counter_ns()
         fn(*c_args)
         settle()  # deferred OpenMP tasks must be counted too
         ns = time.perf_counter_ns() - t0
-        for (_tid, eventset), (_before, after) in zip(handles, buffers, strict=False):
+        for (unused_tid, eventset), (unused_before, after) in zip(handles, buffers, strict=False):
             demand(lib, lib.PAPI_read(eventset, after), "PAPI_read")
         seen.update(thread_ids())
         rows = tuple(
             (tid, tuple(int(after[i] - before[i]) for i in range(width)))
-            for (tid, _es), (before, after) in zip(handles, buffers, strict=False)
+            for (tid, es), (before, after) in zip(handles, buffers, strict=False)
         )
         readings.append((ns, rows))
         return host_rep(ns)
@@ -874,7 +874,7 @@ def counted_run(
     # No thread may have appeared under the counters (its work would be missing from every total).
     appeared = tuple(sorted(seen.union(thread_ids()).difference(scope.threads)))
     # Disarm only, unchecked: the counts are already harvested.
-    for _tid, eventset in handles:
+    for unused_tid, eventset in handles:
         lib.PAPI_stop(eventset, buffers[0][1])
     elapsed_ns, rows = min(readings, key=lambda r: r[0]) if readings else (0, ())
     return CountedRun(
@@ -927,7 +927,7 @@ def counting_worker(
         return missing(metric, "no measured rep was counted")
 
     elapsed_ns = run.elapsed_ns
-    raw = [sum(values[i] for _tid, values in run.per_thread) for i in range(len(terms))]
+    raw = [sum(values[i] for tid, values in run.per_thread) for i in range(len(terms))]
     row: MetricRow = {
         "metric": metric,
         "expression": resolved["expression"],
@@ -1102,7 +1102,7 @@ def per_thread_rows(
         (tid, combine(cycle_terms, values[:width]), combine(instruction_terms, values[width:]))
         for tid, values in per_thread
     ]
-    total = sum(cycles for _tid, cycles, _ins in counts)
+    total = sum(cycles for unused_tid, cycles, ins in counts)
     return [
         {
             "tid": tid,

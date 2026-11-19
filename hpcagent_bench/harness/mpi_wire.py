@@ -247,7 +247,7 @@ def unpack_infile(raw: bytes) -> ParsedInfile:
     """Decode :func:`pack_infile` for the mpi4py driver: every rank's tiles, localised scalars,
     and workspace request (self-describing, no binding needed)."""
     header = np.frombuffer(raw, dtype="<i8", count=8)
-    magic, version, nranks, k_repeats, n_ptr, _n_out, n_scalar, max_ndim = (int(x) for x in header)
+    magic, version, nranks, k_repeats, n_ptr, n_out, n_scalar, max_ndim = (int(x) for x in header)
     if magic != MAGIC or version != VERSION:
         raise ValueError(f"bad MPI infile (magic {magic:#x}, version {version})")
     off = 8 * 8
@@ -255,7 +255,7 @@ def unpack_infile(raw: bytes) -> ParsedInfile:
     scal_codes = [int(x) for x in np.frombuffer(raw, dtype="<i8", count=n_scalar, offset=off)]
     off += 8 * n_scalar
     scalar_values: list[list] = []
-    for _r in range(nranks):
+    for unused_r in range(nranks):
         row = [read_scalar8(raw[off + 8 * s :], scal_codes[s]) for s in range(n_scalar)]
         scalar_values.append(row)
         off += 8 * n_scalar
@@ -325,11 +325,11 @@ def pack_outfile(
     out += i64([MAGIC, VERSION, nranks, k_repeats, len(outputs)])
     out += np.asarray(list(samples), dtype="<f8").tobytes()
     out += np.zeros(2 * k_repeats, dtype="<f8").tobytes()
-    for _name, dtype, _tiles in outputs:
+    for name, dtype, unused_tiles in outputs:
         out += i64([np.dtype(dtype).itemsize, TYPE_CODES[dtype]])
-    for _name, _dtype, tiles in outputs:
+    for name, unused_dtype, tiles in outputs:
         out += i64([t.size for t in tiles])
-    for _name, dtype, tiles in outputs:
+    for name, dtype, tiles in outputs:
         for t in tiles:
             out += np.ascontiguousarray(t, dtype=dtype).tobytes()
     return bytes(out)

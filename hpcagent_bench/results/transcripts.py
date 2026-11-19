@@ -741,11 +741,11 @@ class Extractor:
     records: Callable[[pathlib.Path, Sequence[pathlib.Path]], list[Record]]
 
 
-def no_sources(_worker: pathlib.Path) -> list[pathlib.Path]:
+def no_sources(worker: pathlib.Path) -> list[pathlib.Path]:
     return []
 
 
-def no_records(_worker: pathlib.Path, _files: Sequence[pathlib.Path]) -> list[Record]:
+def no_records(worker: pathlib.Path, files: Sequence[pathlib.Path]) -> list[Record]:
     return []
 
 

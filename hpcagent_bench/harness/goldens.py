@@ -590,7 +590,7 @@ def write(pair: Pair, arrays: Mapping[str, npt.ArrayLike]) -> None:
     object array, a filesystem error) is skipped."""
     with contextlib.suppress(OSError, ValueError):
         stored = as_stored(arrays)
-        for _attempt in range(WRITE_ATTEMPTS):
+        for attempt in range(WRITE_ATTEMPTS):
             if add_to(pair, stored):
                 return
 

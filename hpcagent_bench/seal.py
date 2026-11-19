@@ -144,7 +144,7 @@ def relay(pid: int, signals: int = -1, signalled: int = -1) -> None:
 
     A pid namespace's init cannot kill itself by a signal, so ITS relay passes the signal on as one
     byte on ``signalled`` instead, and the relay outside the namespace reads it off ``signals``."""
-    _pid, status = os.waitpid(pid, 0)
+    unused_pid, status = os.waitpid(pid, 0)
     if os.WIFSIGNALED(status) and signalled >= 0:
         os.write(signalled, bytes([os.WTERMSIG(status)]))
         os._exit(1)
