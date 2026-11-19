@@ -135,11 +135,10 @@ if [[ "${CONTAINER_RUNTIME}" == ce ]]; then
     # shellcheck source=../../helpers/scripts/site_env.sh
     [[ -n "${EDF_PATH:-}" ]] || . "${REPO}/helpers/scripts/site_env.sh"
     if [[ "${CE_EDF}" != *.toml ]]; then
-        _edf_dir="${CE_EDF:-${EDF_PATH:?helpers/scripts/site_env.sh exports it}}"
-        _edf_dir="${_edf_dir%%:*}"
         prepare_edf="${JUDGE_CE_ENV:-${AGENT_CE_ENV:-${AMD_CE_ENV:-}}}"
         [[ -n "${prepare_edf}" ]] || { echo "FATAL: prepare_job.sh: JUDGE_CE_ENV, AGENT_CE_ENV and AMD_CE_ENV are unset; the EDF name carries the hardware" >&2; exit 2; }
-        CE_EDF="${_edf_dir}/${prepare_edf}.toml"
+        # A CE_EDF that names no .toml is the directory list searched instead of EDF_PATH.
+        CE_EDF="$(EDF_PATH="${CE_EDF:-${EDF_PATH:-}}" edf_file "${prepare_edf}")" || exit 2
     fi
     [[ -f "${CE_EDF}" ]] || { echo "FATAL: prepare_job.sh: no EDF at ${CE_EDF}" >&2; exit 2; }
     # A registered judge EDF mounts the checkout install_edfs.sh ran from as the package (/opt/hpcagent-bench); every

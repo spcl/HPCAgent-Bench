@@ -322,6 +322,30 @@ role_binds() {
     esac
 }
 
+# edf_file <name> -- the path of <name>.toml in the first EDF_PATH directory (helpers/scripts/site_env.sh) holding one;
+# fails, naming the search path, when none does.
+edf_file() {
+    local dir
+    local -a dirs
+    IFS=: read -r -a dirs <<<"${EDF_PATH:?helpers/scripts/site_env.sh exports it}"
+    for dir in "${dirs[@]}"; do
+        [[ ! -f "${dir}/$1.toml" ]] || { printf '%s\n' "${dir}/$1.toml"; return 0; }
+    done
+    echo "EDF '$1.toml' not found in ${EDF_PATH}" >&2
+    return 2
+}
+
+# export_image_sha <edf> -- exports HPCAGENT_BENCH_IMAGE_SHA, the digest registry.sh pull / build.sh write beside the
+# squashfs <edf> names (<sqsh>.sha256), which keys the judge store (disk_cache.image_key) and the ML track's torch
+# caches. An image without one changes nothing: the caches then fall back to a torch + GPU runtime key.
+export_image_sha() {
+    local sqsh
+    sqsh="$(sed -n 's/^image *= *"\(.*\)"/\1/p' "$1" | head -1)"
+    [[ -f "${sqsh}.sha256" ]] || return 0
+    HPCAGENT_BENCH_IMAGE_SHA="$(cut -d' ' -f1 "${sqsh}.sha256")"
+    export HPCAGENT_BENCH_IMAGE_SHA
+}
+
 derived_edf() {
     # derived_edf <registered EDF name> <role tag> -- leaves in EDF_FILE a per-run COPY of that EDF
     # which also mounts the shared folder. An EDF is a static registered file, so a run-specific
@@ -348,24 +372,13 @@ derived_edf() {
     # The CE hardening is unconditional: the exec runtimes (docker, podman, apptainer) start their agent rootfs
     # read-only only when isolation.agent_rootfs says so (container_wrap, agent_rootfs_mode), their default stays
     # writable.
-    local name="$1" role="${2:-role}" dir src="" tmp hooks_off=0 read_only=0
+    local name="$1" role="${2:-role}" src tmp hooks_off=0 read_only=0
     if [[ "${role}" == agent-node || ( "${role}" == vllm-node && ( "${INFERENCE_NODES:-1}" -eq 1 || "${INFERENCE_MODE:-pp}" == replicas ) ) ]]; then
         hooks_off=1
     fi
     [[ "${role}" == agent* ]] && read_only=1
-    local -a edf_dirs
     EDF_FILE="${RUN_DIR}/edf/${name}.${role}.toml"
-    IFS=: read -r -a edf_dirs <<<"${EDF_PATH:?helpers/scripts/site_env.sh exports it}"
-    for dir in "${edf_dirs[@]}"; do
-        if [[ -f "${dir}/${name}.toml" ]]; then
-            src="${dir}/${name}.toml"
-            break
-        fi
-    done
-    if [[ -z "${src}" ]]; then
-        echo "EDF '${name}.toml' not found in ${EDF_PATH}" >&2
-        exit 2
-    fi
+    src="$(edf_file "${name}")" || exit 2
     mkdir -p "${RUN_DIR}/edf"
     tmp="${EDF_FILE}.$$.tmp"
     # The agent tools are the checkout's, bound at launch -- no image carries them -- so they stay in

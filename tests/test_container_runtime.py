@@ -421,6 +421,33 @@ def test_the_default_runtime_is_the_container_engine() -> None:
     assert done.stdout.strip() == "ce"
 
 
+def test_an_edf_resolves_in_the_first_search_directory_holding_it_with_its_image_digest(tmp_path: pathlib.Path) -> None:
+    """edf_file searches every EDF_PATH directory in order, not only the first, and a miss names the path;
+    export_image_sha reads the digest beside the squashfs the EDF names."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    for directory in (first, second):
+        directory.mkdir()
+    (tmp_path / "judge.sqsh.sha256").write_text("f00d  judge.sqsh\n")
+    (second / "judge.toml").write_text(f'image = "{tmp_path / "judge.sqsh"}"\n')
+    (first / "other.toml").write_text('image = "/nowhere.sqsh"\n')
+    script = (
+        f". {shlex.quote(str(SEAM))}\n"
+        'edf=$(edf_file judge) && export_image_sha "${edf}" && echo "${edf} ${HPCAGENT_BENCH_IMAGE_SHA}"\n'
+        'export_image_sha "$(edf_file other)" && echo "${HPCAGENT_BENCH_IMAGE_SHA}"\n'
+        "edf_file missing"
+    )
+    done = subprocess.run(
+        ["bash", "-c", script],
+        env={"PATH": "/usr/bin:/bin", "EDF_PATH": f"{first}:{second}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 2
+    assert done.stdout.splitlines() == [f"{second / 'judge.toml'} f00d", "f00d"], "an image without a digest sets none"
+    assert f"EDF 'missing.toml' not found in {first}:{second}" in done.stderr
+
+
 # isolation.agent_rootfs (the agent rootfs hardening; the default must leave every launch argv alone).
 
 
