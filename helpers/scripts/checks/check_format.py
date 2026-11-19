@@ -59,7 +59,8 @@ SKIP_PREFIXES = ("hpcagent_bench/benchmarks/",)
 SKIP_NAME_MARKERS = ("_generated.",)
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+def repo_run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    """``cmd`` run in the repository root, its output captured; never raises on a nonzero exit."""
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
 
 
@@ -71,12 +72,12 @@ def require_ruff_verdict(done: subprocess.CompletedProcess[str]) -> None:
 
 
 def git_lines(args: list[str]) -> list[str]:
-    out = _run(["git", *args])
+    out = repo_run(["git", *args])
     return [ln for ln in out.stdout.splitlines() if ln.strip()] if out.returncode == 0 else []
 
 
 def ref_exists(ref: str) -> bool:
-    return _run(["git", "rev-parse", "--verify", "--quiet", ref]).returncode == 0
+    return repo_run(["git", "rev-parse", "--verify", "--quiet", ref]).returncode == 0
 
 
 def changed_files(base: str) -> set[str]:
@@ -119,17 +120,17 @@ def classify(rel: str) -> str | None:
 # of "True"s is accurate in both modes (check: how many fail; fix: how many were
 # reformatted).
 def needs_format_cpp(path: str, fix: bool) -> bool:
-    needs = _run(["clang-format", "--dry-run", "-Werror", path]).returncode != 0
+    needs = repo_run(["clang-format", "--dry-run", "-Werror", path]).returncode != 0
     if fix and needs:
-        _run(["clang-format", "-i", path])
+        repo_run(["clang-format", "-i", path])
     return needs
 
 
 def needs_format_fortran(path: str, fix: bool) -> bool:
     cfg = str(REPO_ROOT / ".fprettify.rc")
-    needs = bool(_run(["fprettify", "--config", cfg, "--diff", path]).stdout.strip())
+    needs = bool(repo_run(["fprettify", "--config", cfg, "--diff", path]).stdout.strip())
     if fix and needs:
-        _run(["fprettify", "--config", cfg, path])
+        repo_run(["fprettify", "--config", cfg, path])
     return needs
 
 
@@ -151,7 +152,7 @@ def ruff_offenders(rels: list[str], fix: bool) -> list[str]:
     if not rels:
         return []
     check = ["ruff", "format", "--check", "--output-format", "json", "--line-length", str(PY_LINE_LENGTH), *rels]
-    out = _run(check)
+    out = repo_run(check)
     require_ruff_verdict(out)
     # json, not the prose. ruff's concise/full output changed shape between releases -- 0.16.5 emits
     # "unformatted: File would be reformatted" with the path on a following "--> path:line:col"
@@ -168,10 +169,10 @@ def ruff_offenders(rels: list[str], fix: bool) -> list[str]:
         offenders = sorted(
             rel
             for rel in rels
-            if _run(["ruff", "format", "--check", "--line-length", str(PY_LINE_LENGTH), rel]).returncode != 0
+            if repo_run(["ruff", "format", "--check", "--line-length", str(PY_LINE_LENGTH), rel]).returncode != 0
         )
     if fix and offenders:
-        _run(["ruff", "format", "--line-length", str(PY_LINE_LENGTH), *offenders])
+        repo_run(["ruff", "format", "--line-length", str(PY_LINE_LENGTH), *offenders])
     return offenders
 
 
@@ -184,8 +185,8 @@ def pyupgrade_offenders(rels: list[str], fix: bool) -> list[str]:
         return []
     cmd = ["ruff", "check", "--select", "UP", "--target-version", PY_TARGET, "--output-format", "json"]
     if fix:
-        _run([*cmd, "--fix", *rels])
-    out = _run([*cmd, *rels])
+        repo_run([*cmd, "--fix", *rels])
+    out = repo_run([*cmd, *rels])
     require_ruff_verdict(out)
     return sorted({os.path.relpath(entry["filename"], REPO_ROOT) for entry in json.loads(out.stdout or "[]")})
 
