@@ -103,6 +103,8 @@ class PendingErrors:
     """The pending errors of ``runtimes`` (the loaded ones by default) around a submission's calls; ``notes`` holds
     each distinct non-sticky one :meth:`check` cleared."""
 
+    __slots__ = ("notes", "runtimes")
+
     def __init__(self, runtimes: Sequence[Runtime] | None = None) -> None:
         self.runtimes = list(loaded_runtimes() if runtimes is None else runtimes)
         self.notes: dict[str, None] = {}
