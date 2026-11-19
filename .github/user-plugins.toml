@@ -5,10 +5,10 @@
 
 [plugins.nestforge]
 repository = "https://github.com/spcl/NestForge.git"
-commit = "4a845f37b349fa284ac26b2f46a18a538be0109f"
+commit = "01b63bc3d2155ce6311a848cb8f523f887a03fec"
 folder = "plugin/nestforge"
 
 [plugins.alloy]
 repository = "https://github.com/ThrudPrimrose/alloy.git"
-commit = "3345eee960293df25b1c83a6c74c985e610b1b9b"
+commit = "27b0e59322ee71199d02ccb026762c9768145f1c"
 folder = "alloy/hb_plugin"
