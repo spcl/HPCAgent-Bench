@@ -154,7 +154,7 @@ for numerical tolerance against a reference, not only for throughput.
   `RCCL_NET_HDP_FLUSH=1`, `NCCL_NET_GDR_READ=0`, `NCCL_PROTO=Simple`, `OFI_NCCL_MR_CACHE_DISABLE=1`,
   `FI_MR_CACHE_MONITOR` set to `userfaultfd`, `memhooks` or `kdreg2`, `FI_HMEM_ROCR_USE_DMABUF=0` or `1`,
   `NCCL_DMABUF_ENABLE=0`, `OFI_NCCL_PROTOCOL=RDMA`, `FI_CXI_RX_MATCH_MODE=hardware` and `HSA_XNACK=1`. Run on
-  11-19 (job 754804, nid002730 + nid002736, 20 iterations each, judge EDF): 15 of the 17 runs are correct, zero wrong
+  11-19 (job 754804, two nodes, 20 iterations each, judge EDF): 15 of the 17 runs are correct, zero wrong
   elements, among them plain PHB with every channel `via NET/.../GDRDMA`, PHB with address churn, and LOC. The two
   others give no verdict: `FI_MR_CACHE_MONITOR=memhooks` was killed before printing one, and
   `OFI_NCCL_PROTOCOL=RDMA` fails the first `all_reduce` with `ncclSystemError`; neither is a setting we use. The
