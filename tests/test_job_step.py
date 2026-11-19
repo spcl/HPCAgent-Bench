@@ -254,6 +254,27 @@ def test_a_failed_baseline_begin_or_finish_does_not_stop_the_next_column(tmp_pat
     ]
 
 
+def test_a_job_scripts_path_flags_are_made_absolute_in_either_spelling(tmp_path: pathlib.Path) -> None:
+    """job_step_paths: the value of a named path flag, as ``--flag value`` or ``--flag=value``, becomes absolute (a
+    container step starts in the image's workdir); every other word passes unchanged."""
+    script = (
+        f". {CLUSTER / 'job_step.sh'}\n"
+        "job_step_paths --kernels-file --opt -- --kernels-file k.txt --opt=o.yaml --preset S --tag=llr40\n"
+        'printf "%s\\n" "${JOB_STEP_ARGS[@]}"'
+    )
+    done = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == [
+        "--kernels-file",
+        str(tmp_path / "k.txt"),
+        "--opt",
+        str(tmp_path / "o.yaml"),
+        "--preset",
+        "S",
+        "--tag=llr40",
+    ]
+
+
 def test_a_baseline_column_step_is_a_job_step_launch_with_absolute_paths(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
