@@ -113,13 +113,35 @@ def test_pack_writes_one_folder_per_ended_episode_without_its_secrets_and_indexe
     assert members(directory, "worker.tar.zst") == WORKER_TAR
     assert members(directory, "workspace.tar.zst") == WORKSPACE
     manifest = json.loads((directory / "episode.json").read_text())
-    assert (manifest["schema"], manifest["worker"], manifest["folders"]) == (2, WORKER, [FOLDER])
+    assert (manifest["schema"], manifest["worker"], manifest["folders"]) == (3, WORKER, [FOLDER])
     assert manifest["record"] == {"cause": "limit"} and manifest["attempts"] == [{"attempt": 1, "cause": "limit"}]
+    assert manifest["omitted"] == {}
     (line,) = artifacts.index(run).values()
-    assert (line["path"], line["setup"], line["schema"]) == (EPISODE_DIR, "exp-kimi-c", 2)
+    assert (line["path"], line["setup"], line["schema"]) == (EPISODE_DIR, "exp-kimi-c", 3)
     assert line["bytes"] == sum(path.stat().st_size for path in directory.iterdir())
     assert line["members"]["logs.tar.zst"] == hashlib.sha256((directory / "logs.tar.zst").read_bytes()).hexdigest()
     assert set(line["members"]) == {path.name for path in directory.iterdir()}
+    assert artifacts.verify_run(run) == []
+
+
+def test_the_workspace_archive_keeps_text_and_libraries_and_lists_binary_data_it_omits(tmp_path: pathlib.Path) -> None:
+    """An agent's binary dumps (a 4.7 GB ``work/rap1q.bin`` in one SciComp episode) filled the workspace archives. They
+    go in no tar: ``episode.json`` lists each with its size and sha256. A library is kept, since a regrade links it."""
+    run = run_dir(tmp_path)
+    dump = b"\0\1\2" * 4000
+    library = b"\x7fELF\2\1\1" + b"\0" * 64
+    (run / FOLDER / "work").mkdir(parents=True)
+    (run / FOLDER / "work" / "dump.bin").write_bytes(dump)
+    (run / FOLDER / "lib" / "libk.so").write_bytes(library)
+    with tarfile.open(run / run_layout.WORKSPACES_ARCHIVE, "a") as tar:
+        info = tarfile.TarInfo(f"{FOLDER}/profile/counters.db")
+        info.size = len(dump)
+        tar.addfile(info, io.BytesIO(dump))
+    (directory,) = artifacts.pack_run(run)
+    assert members(directory, "workspace.tar.zst") == WORKSPACE | {f"{FOLDER}/lib/libk.so"}
+    manifest = json.loads((directory / "episode.json").read_text())
+    print_of = {"bytes": len(dump), "sha256": hashlib.sha256(dump).hexdigest()}
+    assert manifest["omitted"] == {f"{FOLDER}/profile/counters.db": print_of, f"{FOLDER}/work/dump.bin": print_of}
     assert artifacts.verify_run(run) == []
 
 
@@ -354,3 +376,4 @@ if __name__ == "__main__":
     test_the_cli_verb_packs_verifies_and_restores(scratch())
     test_an_episode_whose_folder_is_named_for_its_problem_id_is_found_by_its_record(scratch())
     test_a_sealed_run_directory_is_packed_and_sealed_again(scratch())
+    test_the_workspace_archive_keeps_text_and_libraries_and_lists_binary_data_it_omits(scratch())

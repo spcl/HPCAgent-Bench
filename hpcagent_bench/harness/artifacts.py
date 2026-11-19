@@ -79,7 +79,8 @@ __all__ = [
 ZSTD_ARGS = ("-q", "-10")
 #: What ``--remove-loose`` leaves in a packed episode's worker directory: what ``owed`` and a re-merge read in place.
 LOOSE_KEEP = frozenset({run_layout.TOKENS_NAME, ATTEMPTS_NAME, CANCELLED_MARKER})
-SCHEMA = 2
+#: 3: binary data in the workspace (:func:`binary_data`) is listed under ``omitted`` in ``episode.json``, not archived.
+SCHEMA = 3
 EPISODE_JSON = "episode.json"
 LOGS = "logs.tar.zst"
 WORKER = "worker.tar.zst"
@@ -89,6 +90,11 @@ TARS = (LOGS, WORKER, WORKSPACE)
 PACK_SCRIPT = "pack.sbatch"
 #: What the job's ``vllm/`` holds that nothing reads: the NCCL debug dumps (15 MB per rank).
 NCCL_LOGS = "nccl.*.log"
+
+#: Leading bytes of a workspace file read to tell text from binary data.
+SNIFF_BYTES = 8192
+#: The leading bytes of an ELF object: a library the agent built or submitted, which a regrade links.
+ELF_MAGIC = b"\x7fELF"
 
 #: A file of an episode: on disk, or a header of the job's workspaces.tar.
 type Source = pathlib.Path | tarfile.TarInfo
@@ -259,12 +265,36 @@ def source_prints(sources: Iterable[tuple[str, Source]], workspaces: tarfile.Tar
     return found
 
 
+def binary_data(head: bytes) -> bool:
+    """Whether a workspace file starting with ``head`` is binary data no archive keeps (the agent's dumps, profiles
+    and inputs: a NUL byte in its first :data:`SNIFF_BYTES`). An ELF object is kept: a regrade links the library."""
+    return b"\0" in head and not head.startswith(ELF_MAGIC)
+
+
+def head_of(source: Source, workspaces: tarfile.TarFile | None) -> bytes:
+    """The first :data:`SNIFF_BYTES` of the regular file ``source``, on disk or in ``workspaces``."""
+    if isinstance(source, tarfile.TarInfo):
+        assert workspaces is not None
+        data = workspaces.extractfile(source)
+        return data.read(SNIFF_BYTES) if data is not None else b""
+    with source.open("rb") as data:
+        return data.read(SNIFF_BYTES)
+
+
+def regular(source: Source) -> bool:
+    """Whether ``source`` is a regular file (not a folder or a link)."""
+    if isinstance(source, tarfile.TarInfo):
+        return source.isreg()
+    return source.is_file() and not source.is_symlink()
+
+
 def plan(
     run_dir: pathlib.Path, episode: Episode, members: Sequence[tarfile.TarInfo]
-) -> dict[str, list[tuple[str, Source]]]:
-    """What goes in each of :data:`TARS`: the episode's loose files and its workspaces.tar members, no secret. The
-    tar of logs holds the transcript files its extract is read from, the tar of the worker directory the rest of it,
-    the tar of the workspace every shared folder."""
+) -> tuple[dict[str, list[tuple[str, Source]]], list[tuple[str, Source]]]:
+    """What goes in each of :data:`TARS`, and the workspace's binary data that goes in none (:func:`binary_data`):
+    the episode's loose files and its workspaces.tar members, no secret. The tar of logs holds the transcript files
+    its extract is read from, the tar of the worker directory the rest of it, the tar of the workspace every shared
+    folder's text and libraries."""
     loose: list[tuple[str, Source]] = [
         (str(entry.relative_to(run_dir)), entry) for entry in loose_entries(run_dir, episode)
     ]
@@ -278,10 +308,18 @@ def plan(
         str((run_dir / episode.worker / source).relative_to(run_dir)) for source in transcript_sources(run_dir, episode)
     }
     grouped: dict[str, list[tuple[str, Source]]] = {name: [] for name in TARS}
-    for name, source in [*loose, *archived]:
-        tar = LOGS if name in logs else WORKER if name.startswith(f"{episode.worker}/") else WORKSPACE
-        grouped[tar].append((name, source))
-    return {name: entries for name, entries in grouped.items() if entries}
+    omitted: list[tuple[str, Source]] = []
+    with contextlib.ExitStack() as stack:
+        workspaces = (
+            stack.enter_context(tarfile.open(run_dir / run_layout.WORKSPACES_ARCHIVE)) if archived else None
+        )
+        for name, source in [*loose, *archived]:
+            tar = LOGS if name in logs else WORKER if name.startswith(f"{episode.worker}/") else WORKSPACE
+            if tar == WORKSPACE and regular(source) and binary_data(head_of(source, workspaces)):
+                omitted.append((name, source))
+            else:
+                grouped[tar].append((name, source))
+    return {name: entries for name, entries in grouped.items() if entries}, omitted
 
 
 def transcript_sources(run_dir: pathlib.Path, episode: Episode) -> list[pathlib.Path]:
@@ -323,7 +361,11 @@ def write_tar(target: pathlib.Path, entries: Sequence[tuple[str, Source]], run_d
 
 
 def manifest_of(
-    run_dir: pathlib.Path, episode: Episode, directory: pathlib.Path, tars: dict[str, list[tuple[str, Source]]]
+    run_dir: pathlib.Path,
+    episode: Episode,
+    directory: pathlib.Path,
+    tars: dict[str, list[tuple[str, Source]]],
+    omitted: Sequence[tuple[str, Source]] = (),
 ) -> dict[str, Any]:
     worker = run_dir / episode.worker
     try:
@@ -340,12 +382,25 @@ def manifest_of(
         "record": record,
         "attempts": attempt_ledger(worker),
         "files": {name: len(entries) for name, entries in tars.items()},
+        "omitted": omitted_prints(run_dir, omitted),
         "members": {
             file.name: {"sha256": file_sha(file), "bytes": file.stat().st_size}
             for file in sorted(directory.iterdir())
             if file.name != EPISODE_JSON
         },
     }
+
+
+def omitted_prints(run_dir: pathlib.Path, omitted: Sequence[tuple[str, Source]]) -> dict[str, dict[str, Any]]:
+    """Size and sha256 of each workspace file no archive keeps, so the manifest says what the episode left."""
+    with contextlib.ExitStack() as stack:
+        workspaces = (
+            stack.enter_context(tarfile.open(run_dir / run_layout.WORKSPACES_ARCHIVE))
+            if any(isinstance(source, tarfile.TarInfo) for _, source in omitted)
+            else None
+        )
+        prints = source_prints(omitted, workspaces)
+    return {name: {"bytes": size, "sha256": digest} for name, (size, digest) in sorted(prints.items())}
 
 
 def packed(
@@ -358,7 +413,7 @@ def packed(
 ) -> pathlib.Path:
     """:func:`pack_episode` once the run is known finished and writable."""
     directory = run_dir / episode.directory
-    tars = plan(run_dir, episode, members)
+    tars, omitted = plan(run_dir, episode, members)
     # Two steps, each resumable: a pack cut off after the rename indexes the folder it left on the next run.
     if not (directory / EPISODE_JSON).is_file():
         partial = directory.with_name(f".{directory.name}.partial")
@@ -369,7 +424,7 @@ def packed(
         extract = extract_of(run_dir, episode)
         if extract is not None:
             (partial / transcripts.EXTRACT_NAME).write_bytes(extract)
-        manifest = manifest_of(run_dir, episode, partial, tars)
+        manifest = manifest_of(run_dir, episode, partial, tars, omitted)
         (partial / EPISODE_JSON).write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n", encoding="utf-8")
         proven(run_dir, episode, partial, tars, totals=False)
         partial.rename(directory)
