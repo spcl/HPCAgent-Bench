@@ -224,7 +224,9 @@ def run_submit_setup_job_probe(
     bash_stub(
         tmp_path / "bin",
         "sbatch",
-        f'n=$(ls "{calls}" | wc -l); printf "%s\\n" "$@" > "{calls}/$n"\nprintf "99900$n\\n"\n',
+        f'n=$(ls "{calls}" | wc -l); printf "%s\\n" "$@" > "{calls}/$n"\n'
+        f'mkdir -p "{tmp_path}/sbatch-envs"; printf "REPO=%s PYTHON=%s\\n" "$HPCAGENT_BENCH_REPO" '
+        f'"${{HPCAGENT_BENCH_PYTHON-unset}}" > "{tmp_path}/sbatch-envs/$n"\nprintf "99900$n\\n"\n',
     )
     probe = tmp_path / "probe.sh"
     probe.write_text(
@@ -296,6 +298,9 @@ def test_an_agent_job_chains_only_the_pack_of_its_episodes_after_it(tmp_path: pa
     ]
     assert {f"--dependency=afterany:{job}", "--nice=1000", "--account=project"} <= set(argv)
     assert not [option for option in argv if option.startswith("--gpus")], "a pack job is a CPU job"
+    # its values ride sbatch's environment: Slurm cancels a job submitted with --export at its start
+    assert not [option for option in argv if option.startswith("--export")], argv
+    assert (tmp_path / "sbatch-envs" / "1").read_text() == f"REPO={tmp_path} PYTHON={sys.executable}\n"
 
 
 def test_pack_after_0_chains_nothing_after_the_agent_job(tmp_path: pathlib.Path) -> None:

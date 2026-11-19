@@ -446,6 +446,8 @@ submit_setup_job() {
 # Its walltime is PACK_TIME (2 h: a job's episodes pack in minutes; short, it backfills on an exclusive node).
 # The run directory is the job's RUN_ROOT (<env>; unset, the checkout's results/cluster) / <job id>, as
 # run_cluster.sh names it; only <options>' account and partition carry over (a CPU job: pack.sbatch asks for no GPU).
+# It runs the submitting checkout (HPCAGENT_BENCH_REPO) on the host interpreter, both riding sbatch's environment,
+# never --export: Slurm cancels a job submitted with one at its start.
 submit_pack_job() {
     local env="$1" job="$2" root option pack_jid
     shift 2
@@ -453,12 +455,12 @@ submit_pack_job() {
     root=$(sed -n 's/^RUN_ROOT=//p' "${env}" | tail -1)
     if [[ -n "${root}" ]]; then root=$(eval "printf '%s' \"${root}\"") || return 2; else root="${SUBMIT_REPO_DIR}/results/cluster"; fi
     local -a args=(--parsable --dependency="afterany:${job}" --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}"
-        --time="${PACK_TIME:-02:00:00}" --job-name="runs-pack-${job}" --output="${HPCAGENT_BENCH_SCRATCH}/logs/runs-pack-%j.out"
-        --export="ALL,HPCAGENT_BENCH_REPO=${SUBMIT_REPO_DIR},HPCAGENT_BENCH_PYTHON=${HPCAGENT_BENCH_HOST_PYTHON}")
+        --time="${PACK_TIME:-02:00:00}" --job-name="runs-pack-${job}" --output="${HPCAGENT_BENCH_SCRATCH}/logs/runs-pack-%j.out")
     for option in "$@"; do
         [[ "${option}" != --account=* && "${option}" != --partition=* ]] || args+=("${option}")
     done
-    pack_jid=$(sbatch_retry "${args[@]}" "${CLUSTER_DIR}/pack.sbatch" --remove-loose "${root}/${job}") || return 2
+    pack_jid=$(HPCAGENT_BENCH_PYTHON="${HPCAGENT_BENCH_HOST_PYTHON}" \
+        sbatch_retry "${args[@]}" "${CLUSTER_DIR}/pack.sbatch" --remove-loose "${root}/${job}") || return 2
     echo "packs ${job} after it ends -> ${pack_jid%%;*}"
 }
 
