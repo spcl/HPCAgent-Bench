@@ -67,8 +67,6 @@ NEXT_PHASE = "next_phase"
 REGISTER_LOCK = threading.Lock()
 #: Who runs a phase: the agent with the phase's tools, or the plugin's default heuristic.
 Mode = Literal["agent", "default"]
-#: A block id of either prompt (``@@section`` ids of ``agent/prompt.md``, section keys of the task prompt).
-BlockId = Annotated[str, pydantic.Field(pattern=r"^[a-z][a-z0-9_]*$")]
 #: A prompt text a plugin ships: a plain Markdown file under its folder, never a template.
 TextPath = Annotated[str, pydantic.Field(pattern=r"^[^/][\w./-]*\.md$")]
 

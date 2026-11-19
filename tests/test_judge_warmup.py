@@ -208,7 +208,7 @@ def test_no_tag_no_warm_up_and_an_unreadable_one_never_stops_the_judge(tmp_path:
         raise AssertionError(f"no warm-up may take a slot (asked at priority {priority})")
 
     assert judge_warmup.start_from_config(never, lambda slot: None, 1, 0, Preset.S, "float64") is None
-    with config.overridden(judge_warmup.PROBLEMS_KEY, str(tmp_path / "missing.jsonl")):
+    with config.overridden("service.warm_problems", str(tmp_path / "missing.jsonl")):
         assert judge_warmup.start_from_config(never, lambda slot: None, 1, 0, Preset.S, "float64") is None
 
 
@@ -217,7 +217,7 @@ def test_the_judges_split_the_tag_by_rank(tmp_path: pathlib.Path, monkeypatch: p
     monkeypatch.setattr(Warmer, "start", lambda self, workers: started.append(list(self.cells)) or [])
     problems = problems_file(tmp_path, [ML_KERNEL])
     everything = judge_warmup.tag_cells(problems, "c")
-    with config.overridden(judge_warmup.PROBLEMS_KEY, str(problems)), config.overridden(judge_warmup.SHARDS_KEY, 2):
+    with config.overridden("service.warm_problems", str(problems)), config.overridden("service.warm_shards", 2):
         for rank in (0, 1):
             judge_warmup.start_from_config(
                 lambda priority: DeviceSlot("cpu", 0), lambda slot: None, 1, rank, Preset.S, "float64"

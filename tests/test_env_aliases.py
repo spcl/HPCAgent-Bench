@@ -1,7 +1,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The deprecated-name alias layer (agent/hpcagent_agent/env_aliases.py): one-time warning, precedence, and
-the config keys the old names still feed (hpcagent_bench/config.py LEGACY_ENV)."""
+the config keys the old names still feed (hpcagent_bench/config.py ENV_KEYS)."""
 
 import pathlib
 
@@ -110,29 +110,5 @@ def test_ncores_reads_the_current_name_over_the_deprecated_one(monkeypatch: pyte
 
 
 def test_every_deprecated_name_maps_a_live_config_key() -> None:
-    """The config layer's table is the alias table folded to dotted keys: nothing stale, nothing missing."""
-    assert config.LEGACY_ENV == {old: config.ENV_KEYS[current] for old, current in env_aliases.DEPRECATED.items()}
-    assert set(config.LEGACY_ENV) == set(env_aliases.DEPRECATED)
-
-
-def test_a_legacy_value_warns_once_and_reaches_its_key(
-    monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
-) -> None:
-    """``config.legacy_value`` is the reader-side last layer: the old value, one warning."""
-    monkeypatch.setenv("AGENT_EFFORT", "high")
-    assert config.legacy_value("agent.effort") == "high"
-    assert config.legacy_value("agent.effort") == "high"
-    assert deprecation_warnings(recwarn) == 1
-
-
-def test_the_config_key_beats_the_deprecated_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An override of the key wins over a legacy value in the environment; the alias still reads for a reader
-    that found no key value."""
-    monkeypatch.setenv("HPCAGENT_BENCH_NCORES", "64")
-    with config.overridden("limits.cores", 8):
-        assert config.get("limits.cores") == 8
-    assert config.legacy_value("limits.cores") == "64"
-
-
-def test_a_key_without_an_alias_has_no_legacy_value() -> None:
-    assert config.legacy_value("measurement.repeat") is None
+    """Every alias names the env variable of a configuration key: nothing stale."""
+    assert set(env_aliases.DEPRECATED.values()) <= set(config.ENV_KEYS)

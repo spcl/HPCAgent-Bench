@@ -21,7 +21,6 @@ from typing import Annotated, Any, ClassVar, Union, cast, get_args, get_origin
 
 import yaml
 from annotated_types import Ge, Gt, Le, Lt
-from hpcagent_agent import env_aliases
 from hpcagent_agent.coded import Coded
 from hpcagent_agent.network_policy import AgentNetwork, Unsealed
 from pydantic import (
@@ -47,7 +46,6 @@ from hpcagent_bench.translators.numpyto_c.style import CodeStyle
 __all__ = [
     "ENV_PREFIX",
     "GRADING_PROFILES",
-    "LEGACY_ENV",
     "NON_CONFIG_ENV",
     "SCOPED_ENVIRONMENT",
     "AgentRootfs",
@@ -81,7 +79,6 @@ __all__ = [
     "env_value",
     "environment",
     "get",
-    "legacy_value",
     "overridden",
     "override_snapshot",
     "parse_env",
@@ -1020,12 +1017,6 @@ def env_name(dotted: str) -> str:
 #: Env name -> dotted key, for every leaf.
 ENV_KEYS: dict[str, str] = {env_name(dotted): dotted for dotted in FIELDS}
 
-#: Deprecated env name -> dotted key, for every alias of the env cleanup (F10 alpha): the short names the tree
-#: read before the knob moved behind a configuration key. One release long; then they are refused.
-LEGACY_ENV: dict[str, str] = {
-    old: ENV_KEYS[current] for old, current in env_aliases.DEPRECATED.items() if current in ENV_KEYS
-}
-
 #: ``HPCAGENT_BENCH_*`` names under a section prefix that are not configuration keys (read by their owners).
 NON_CONFIG_ENV = frozenset(
     {
@@ -1294,17 +1285,6 @@ def env_value(name: str) -> str | None:
     if scoped is not None and name in scoped:
         return scoped[name]
     return os.environ.get(name)
-
-
-def legacy_value(dotted: str) -> str | None:
-    """The value a deprecated alias of key ``dotted`` still carries (its one-time
-    :class:`DeprecationWarning` fires here); None when no alias of ``dotted`` is set. A reader resolves the key
-    itself first, and uses this as the last layer before its own default."""
-    for old, key in LEGACY_ENV.items():
-        if key == dotted and (text := env_value(old)) is not None:
-            env_aliases.warn_once(old, env_name(dotted))
-            return text
-    return None
 
 
 def environment() -> dict[str, str]:
