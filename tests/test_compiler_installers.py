@@ -110,16 +110,28 @@ def test_aocc_without_a_checksum_is_refused_before_any_download(tmp_path: pathli
 
 def fake_nvhpc_tarball(tmp_path: pathlib.Path) -> pathlib.Path:
     """A stand-in for NVIDIA's tarball: an ``install`` that copies ``install_components`` into NVHPC_INSTALL_DIR, with
-    a ``compilers/bin/nvc`` and a bundled ``cuda`` tree beside it."""
+    a ``compilers/bin/nvc``, a ``makelocalrc`` that writes the localrc, the OpenMP runtime and the BLAS/LAPACK pair
+    (empty shared libraries) in ``compilers/lib``, and a bundled ``cuda`` tree beside it."""
     tree = tmp_path / "src" / "nvhpc_2026_2611_Linux_x86_64_cuda_13.4"
     release = tree / "install_components" / "Linux_x86_64" / "26.11"
     (release / "compilers" / "bin").mkdir(parents=True)
+    (release / "compilers" / "lib").mkdir(parents=True)
     (release / "cuda" / "bin").mkdir(parents=True)
     (release / "compilers" / "bin" / "nvc").write_text("#!/bin/sh\necho nvc 26.11-0\n")
+    (release / "compilers" / "bin" / "makelocalrc").write_text('#!/bin/sh\ntouch "$(dirname "$0")/localrc"\n')
     (release / "cuda" / "bin" / "nvcc").write_text("#!/bin/sh\n")
     (tree / "install").write_text('#!/bin/sh\ncp -r "$(dirname "$0")/install_components/." "$NVHPC_INSTALL_DIR"\n')
-    for path in (tree / "install", release / "compilers" / "bin" / "nvc"):
+    for path in (
+        tree / "install",
+        release / "compilers" / "bin" / "nvc",
+        release / "compilers" / "bin" / "makelocalrc",
+    ):
         path.chmod(0o755)
+    empty = tmp_path / "empty.c"
+    empty.write_text("int nvhpc_stand_in(void) { return 0; }\n")
+    for name in ("libnvomp.so", "libblas.so", "liblapack.so"):
+        lib = release / "compilers" / "lib" / name
+        subprocess.run(["gcc", "-shared", "-fPIC", str(empty), "-o", str(lib), f"-Wl,-soname,{name}"], check=True)
     tarball = tmp_path / f"{tree.name}.tar.gz"
     with tarfile.open(tarball, "w:gz") as archive:
         archive.add(tree, arcname=tree.name)
@@ -144,6 +156,17 @@ def test_the_nvhpc_tarball_unpacks_only_under_its_checksum_and_leaves_cuda_out(t
     root = prefix / "Linux_x86_64" / "26.11" / "compilers"
     assert f"export HPCAGENT_BENCH_NVHPC_ROOT={root}" in good.stdout
     assert not (prefix / "Linux_x86_64" / "26.11" / "cuda").exists()
+    # The nvhpc OpenMP context in the install: one runtime by both names, numpy's BLAS soname on NVHPC's BLAS.
+    context = root / "omp-context"
+    assert (context / "lib" / "libgomp.so.1").resolve() == (root / "lib" / "libnvomp.so").resolve()
+    shim = subprocess.run(
+        ["readelf", "-d", str(context / "lib" / "libopenblas.so.0")], capture_output=True, text=True, check=True
+    )
+    assert "[libblas.so]" in shim.stdout and "[liblapack.so]" in shim.stdout
+    assert f"prefix={context}/view" in (context / "view" / "lib" / "pkgconfig" / "openblas.pc").read_text()
+    again = run("nvhpc_context.sh", [str(root)], tmp_path)
+    assert again.returncode == 0, again.stderr
+    assert (context / "lib" / "libopenblas.so.0").is_file() and not (root / "omp-context.new").exists()
 
 
 def test_only_the_nvhpc_installer_accepts_an_md5(tmp_path: pathlib.Path) -> None:

@@ -5,8 +5,10 @@
 # image (containers/README.md#site-compilers):
 #   1. Only the compilers SITE_COMPILERS names (`icx`, `nvhpc`; default none: each is a multi-GB download, so it is
 #      installed only on request): lib/install-<name>.sh into ${HPCAGENT_BENCH_SITE_COMPILERS:-$SCRATCH/site-compilers}/<name>,
-#      skipped when its driver is already there; time and file count (`find | wc -l`) of each prefix. Steps 2-5 check
-#      the compilers present there, installed now or before; with none, the job stops here.
+#      skipped when its driver is already there; time and file count (`find | wc -l`) of each prefix. NVHPC's OpenMP
+#      context is (re)written into its install either way (lib/nvhpc_context.sh, idempotent), so an install that
+#      predates it gets it. Steps 2-5 check the compilers present there, installed now or before; with none, the job
+#      stops here.
 #   2. The judge EDF as install_edfs.sh renders it (build_common.sh ce_render_edf: the roots and the prefix mounts),
 #      into a temporary file; ~/.edf is left as it is.
 #   3. The cc, cc_llvm, cc_icx and cc_nvhpc columns over gemm and scaled_add (baseline.sbatch, a private results DB),
@@ -80,6 +82,10 @@ install_one icx
 install_one nvhpc
 ((${#present[@]})) || { echo "no site compiler present: nothing to check"; exit "${status}"; }
 has() { [[ " ${present[*]} " == *" $1 "* ]]; }
+if has nvhpc; then
+    nvc=$(compgen -G "${site}/nvhpc/${driver[nvhpc]}" | head -1)
+    in_image bash "${lib}/nvhpc_context.sh" "$(dirname "$(dirname "${nvc}")")" || status=1
+fi
 
 echo "=== 2. the judge EDF with the site compilers ==="
 # shellcheck source=build_common.sh

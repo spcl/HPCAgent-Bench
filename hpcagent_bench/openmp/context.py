@@ -13,7 +13,8 @@ per family under :func:`context_root` (default ``/opt/omp``), each a directory `
            libomp, and the same libraries rebuilt with clang. ``libgomp.so.1`` is a link to libomp INSIDE this
            directory only: numba's OpenMP pool and any other GOMP-ABI code resolve to libomp there, and
            nowhere else.
-``nvhpc``  (nvc, nvc++, nvfortran ``-mp``; CUDA image only)  libnvomp and NVHPC's own BLAS/LAPACK.
+``nvhpc``  (nvc, nvc++, nvfortran ``-mp``)  libnvomp and NVHPC's own BLAS/LAPACK: on the CUDA image under
+           the root; for a site NVHPC (the AMD judge) inside its install (:data:`SITE_CONTEXT`).
 
 ``lib/`` of a context holds everything a process of that family must load first; ``view/`` is the
 prefix its OpenMP-linking catalog libraries are built into (pkg-config, headers, libraries).
@@ -109,6 +110,11 @@ NUMBA_LAYER: Mapping[str, str] = {GNU: "omp", LLVM: "omp", NVHPC: "workqueue"}
 #: Config key naming the directory that holds the context directories.
 ROOT_KEY = "runtime.omp_context_root"
 
+#: A context a site compiler's install carries for an image built without it: context -> (the variable naming the
+#: driver's root, :data:`hpcagent_bench.languages.COMPILER_ROOT_ENV`; the directory below it). NVHPC's is written by
+#: ``containers/images/lib/nvhpc_context.sh``.
+SITE_CONTEXT: Mapping[str, tuple[str, str]] = {NVHPC: ("HPCAGENT_BENCH_NVHPC_ROOT", "omp-context")}
+
 #: Config key naming the catalog file (:data:`CATALOG_FILE` in the context root when empty).
 CATALOG_KEY = "runtime.omp_catalog"
 
@@ -185,13 +191,21 @@ def context_root() -> pathlib.Path:
 
 
 def context_dir(context: str) -> pathlib.Path | None:
-    """``<root>/<context>`` when this host has it, else ``None`` (no such context here). ``""`` is the
-    default context, the image's own environment."""
+    """``<root>/<context>`` when this host has it, else the site install's (:func:`site_context_dir`), else
+    ``None`` (no such context here). ``""`` is the default context, the image's own environment."""
     context = context or DEFAULT_CONTEXT
     if context not in CONTEXTS:
         raise KeyError(f"unknown OpenMP context {context!r}; expected one of {CONTEXTS}")
     path = context_root() / context
-    return path if path.is_dir() else None
+    return path if path.is_dir() else site_context_dir(context)
+
+
+def site_context_dir(context: str) -> pathlib.Path | None:
+    """The ``context`` a site compiler's install carries (:data:`SITE_CONTEXT`), or ``None``."""
+    variable, below = SITE_CONTEXT.get(context, ("", ""))
+    root = os.environ.get(variable, "") if variable else ""
+    path = pathlib.Path(root, below) if root else None
+    return path if path is not None and path.is_dir() else None
 
 
 def context_view(context: str) -> pathlib.Path | None:
@@ -244,7 +258,9 @@ def context_env(context: str, base: Mapping[str, str] | None = None) -> dict[str
     lib = root / "lib"
     context = context or DEFAULT_CONTEXT
     # A child of a plugin's context inherits that context's directory, whose libraries would come first.
+    sites = [site_context_dir(other) for other in CONTEXTS if other != context]
     others = {str(context_root() / other / "lib") for other in CONTEXTS if other != context}
+    others |= {str(site / "lib") for site in sites if site is not None}
     inherited = [item for item in env.get("LD_LIBRARY_PATH", "").split(os.pathsep) if item not in others]
     return {
         "LD_LIBRARY_PATH": prepend_path([str(lib)] if lib.is_dir() else [], os.pathsep.join(inherited)),

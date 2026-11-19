@@ -9,7 +9,8 @@
 # md5sum.txt), so md5 is accepted here and nowhere else; the default tarballs' are pinned below. Run it where the
 # column runs (inside the judge image): the installer records the gcc it finds in nvc's localrc. CPU_ONLY=1 (the
 # default) leaves the bundled CUDA, math and comm libraries, profilers and examples out of the unpack: a CPU column
-# needs only the compilers, and the rest is most of the files.
+# needs only the compilers, and the rest is most of the files. Last, lib/nvhpc_context.sh writes the nvhpc OpenMP
+# context into the install.
 #
 #   install-nvhpc.sh PREFIX [TARBALL]          VERSION=<yy.m> (default 26.11), CHECKSUM=<md5|sha256|...>:<hex>, CPU_ONLY=0|1
 set -euo pipefail
@@ -71,5 +72,7 @@ else
 fi
 [[ -x ${root}/bin/nvc && -f ${root}/bin/localrc ]] || { echo "no nvc or localrc under ${root}/bin" >&2; exit 1; }
 "${root}/bin/nvc" --version | grep -m 1 nvc
+# The nvhpc OpenMP context an nvc -mp grade runs in, inside the install (nvhpc_context.sh).
+bash "$(dirname -- "${BASH_SOURCE[0]}")/nvhpc_context.sh" "${root}"
 echo "# Export this before running the cc_nvhpc column (nvc stays off PATH; its libraries are on its own rpath):"
 echo "export HPCAGENT_BENCH_NVHPC_ROOT=${root}"

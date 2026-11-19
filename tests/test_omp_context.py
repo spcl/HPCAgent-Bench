@@ -103,6 +103,29 @@ def test_the_intel_pin_runs_beside_libomp_not_the_images_libgomp() -> None:
     assert grading.reference_omp_context(Language.C, "icx") == "llvm"
 
 
+def test_a_site_nvhpcs_own_context_serves_an_image_without_one(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The AMD image has no /opt/omp/nvhpc: an nvhpc child runs in the one lib/nvhpc_context.sh wrote into the install
+    the driver resolves from, with its lib/ first and no other context's; the image's own context wins over it."""
+    image = tmp_path / "omp"
+    (image / "gnu" / "lib").mkdir(parents=True)
+    config.set_override(omp_context.ROOT_KEY, str(image))
+    variable, below = omp_context.SITE_CONTEXT[omp_context.NVHPC]
+    assert variable == languages.COMPILER_ROOT_ENV["nvc"][0], "the context sits under the root nvc resolves from"
+    root = tmp_path / "nvhpc" / "compilers"
+    monkeypatch.setenv(variable, str(root))
+    assert omp_context.context_dir(omp_context.NVHPC) is None, "an install without the context is no context"
+    (root / below / "lib").mkdir(parents=True)
+    assert omp_context.context_dir(omp_context.NVHPC) == root / below
+    nvhpc = omp_context.context_env(omp_context.NVHPC, {"LD_LIBRARY_PATH": f"{image}/gnu/lib:/usr/lib"})
+    assert nvhpc["LD_LIBRARY_PATH"] == f"{root / below / 'lib'}:/usr/lib"
+    gnu = omp_context.context_env(omp_context.GNU, {"LD_LIBRARY_PATH": f"{root / below / 'lib'}:/usr/lib"})
+    assert gnu["LD_LIBRARY_PATH"] == f"{image / 'gnu' / 'lib'}:/usr/lib"
+    (image / "nvhpc").mkdir()
+    assert omp_context.context_dir(omp_context.NVHPC) == image / "nvhpc"
+
+
 @pytest.mark.parametrize(
     ("model", "vendor", "expected"),
     [
