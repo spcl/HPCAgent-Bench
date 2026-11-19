@@ -85,6 +85,7 @@ cd -- "${CHECKOUT}/experiments"
 . "${CLUSTER_DIR}/pin_env_kv.sh"
 . "${CLUSTER_DIR}/record_identity.sh"
 . "${CLUSTER_DIR}/submit_common.sh"
+. "${CLUSTER_DIR}/container_runtime.sh"
 parse_job_flags "$@" || exit 2
 
 BASE=${BASE:-experiment}
@@ -351,11 +352,28 @@ setup_renders() {
     [[ "${packet}" != *cpf* ]] || printf 'cpf-%s\n' "${device}"
 }
 
+# prep_job_shape -- what the prepare and golden jobs share, resolved once: PREP_OPTIONS, the job's sbatch options
+# (submit_options) with the system's helper-job layout, one step per task (prepare.sbatch's run_job_shards), not the
+# experiment job's; and PREP_EDF, the judge EDF the first staged setup names (edf_file).
+prep_job_shape() {
+    local judge tasks cpus
+    [[ -z "${PREP_EDF:-}" ]] || return 0
+    judge=$(sed -n 's/^JUDGE_CE_ENV=//p' "${WAVE_ENVS[0]}" | tail -n 1)
+    [[ -n "${judge}" ]] || { echo "submit.sh: ${WAVE_ENVS[0]} names no JUDGE_CE_ENV" >&2; return 2; }
+    submit_options || return 2
+    tasks=$(job_options --print ntasks_per_node) || return 2
+    cpus=$(job_options --print cpus_per_task) || return 2
+    PREP_OPTIONS=("${SUBMIT_OPTIONS[@]}" ${tasks:+"--ntasks-per-node=${tasks}"} ${cpus:+"--cpus-per-task=${cpus}"})
+    # shellcheck source=../../helpers/scripts/site_env.sh
+    [[ -n "${EDF_PATH:-}" ]] || . "${OPT}/helpers/scripts/site_env.sh"
+    PREP_EDF=$(edf_file "${judge}") || return 2
+}
+
 # submit_prepare <renders...> -- one prepare job over the tag rendering <renders> (plus RENDERS) into the caches the
 # setups' judges read, in the judge image the first staged setup names; sets PREPARE_JOB_ID (on a dry run its name).
 submit_prepare() {
-    local renders judge cache jid resolved edf tasks cpus
-    local -a options args
+    local renders judge cache jid
+    local -a args
     # shellcheck disable=SC2086  # RENDERS is a word list
     renders=$(printf '%s\n' "$@" ${RENDERS:-} | awk 'NF && !seen[$0]++' | paste -sd,)
     judge=$(sed -n 's/^JUDGE_CE_ENV=//p' "${WAVE_ENVS[0]}" | tail -n 1)
@@ -366,18 +384,7 @@ submit_prepare() {
         PREPARE_JOB_ID="prepare-${EXPERIMENT}"
         return 0
     fi
-    [[ -n "${judge}" ]] || { echo "submit_prepare: ${WAVE_ENVS[0]} names no JUDGE_CE_ENV" >&2; return 2; }
-    resolved=$(job_options) || return 2
-    mapfile -t options <<<"${resolved}"
-    [[ " ${options[*]} " != *" --account=root "* ]] \
-        || { echo "submit_prepare: account root is not a project account: pass --account or set SBATCH_ACCOUNT" >&2; return 2; }
-    # One step per task (prepare.sbatch's run_job_shards): the system's helper-job layout, not the experiment job's.
-    tasks=$(job_options --print ntasks_per_node) cpus=$(job_options --print cpus_per_task) || return 2
-    options+=(${tasks:+"--ntasks-per-node=${tasks}"} ${cpus:+"--cpus-per-task=${cpus}"})
-    # shellcheck source=../../helpers/scripts/site_env.sh
-    [[ -n "${EDF_PATH:-}" ]] || . "${OPT}/helpers/scripts/site_env.sh"
-    edf="${EDF_PATH%%:*}/${judge}.toml"
-    [[ -f "${edf}" ]] || { echo "submit_prepare: no EDF at ${edf}" >&2; return 2; }
+    prep_job_shape || return 2
     PREPARE_JOB_ID=$(queued_job "prepare-${EXPERIMENT}" "renders=${renders};commit=$(prep_commit)")
     if [[ -n "${PREPARE_JOB_ID}" ]]; then
         echo "queued prepare-${EXPERIMENT} -> ${PREPARE_JOB_ID}: renders ${renders} (reused)"
@@ -387,11 +394,11 @@ submit_prepare() {
     # the job's values ride sbatch's environment (its default --export=ALL), never --export: Slurm cancels such a job
     # prepare resumes from its caches: a shorter job is useful, so it is trimmed to end before the next reservation
     fit_walltime "${PREPARE_TIME:-06:00:00}" "${PREPARE_MIN_TIME:-01:00:00}" "${BEGIN}" || return 2
-    jid=$(HPCAGENT_BENCH_REPO="${OPT}" JUDGE_EDF="${edf}" HPCAGENT_BENCH_REFERENCES_GENERATED_CACHE_DIR="${cache}" HPCAGENT_BENCH_USER_PLUGIN_DIRS= \
+    jid=$(HPCAGENT_BENCH_REPO="${OPT}" JUDGE_EDF="${PREP_EDF}" HPCAGENT_BENCH_REFERENCES_GENERATED_CACHE_DIR="${cache}" HPCAGENT_BENCH_USER_PLUGIN_DIRS= \
         sbatch_retry --parsable --no-requeue --nodes=1 --job-name="prepare-${EXPERIMENT}" --comment="renders=${renders};commit=$(prep_commit)" \
         --time="${FIT_WALLTIME}" ${FIT_BEGIN:+--begin="${FIT_BEGIN}"} \
         --output="${HPCAGENT_BENCH_SCRATCH}/logs/prepare-%j.out" --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" \
-        "${options[@]}" \
+        "${PREP_OPTIONS[@]}" \
         "${CLUSTER_DIR}/prepare.sbatch" "${args[@]}" --renders "${renders}") || return 2
     PREPARE_JOB_ID="${jid%%;*}"
     echo "submitted prepare-${EXPERIMENT} -> ${jid}: renders ${renders}"
@@ -414,8 +421,8 @@ queued_job() {
 # on the same code reuses them). Runs after <after-job> succeeds (the render job; "" = none): a failure cancels it, or
 # a next submit would wait on a job pending forever (queued_job). Appends to GOLDEN_JOB_IDS (on a dry run its name).
 submit_goldens() {
-    local after="$1" lang judge jid edf tasks cpus resolved graded device
-    local -a options args
+    local after="$1" lang jid graded device
+    local -a args
     shift
     if [[ -n "${KERNELS_FILE}" ]]; then args=(--kernels-file "${KERNELS_FILE}"); else args=(--tag "${TAG}"); fi
     for lang in "$@"; do
@@ -437,20 +444,13 @@ submit_goldens() {
             triton-device) graded=python device=1 ;;
             *) graded=${lang} device= ;;
         esac
-        judge=$(sed -n 's/^JUDGE_CE_ENV=//p' "${WAVE_ENVS[0]}" | tail -n 1)
-        resolved=$(job_options) || return 2
-        mapfile -t options <<<"${resolved}"
-        tasks=$(job_options --print ntasks_per_node) cpus=$(job_options --print cpus_per_task) || return 2
-        options+=(${tasks:+"--ntasks-per-node=${tasks}"} ${cpus:+"--cpus-per-task=${cpus}"})
-        # shellcheck source=../../helpers/scripts/site_env.sh
-        [[ -n "${EDF_PATH:-}" ]] || . "${OPT}/helpers/scripts/site_env.sh"
-        edf="${EDF_PATH%%:*}/${judge}.toml"
+        prep_job_shape || return 2
         fit_walltime "${GOLDENS_TIME:-06:00:00}" "${GOLDENS_MIN_TIME:-01:00:00}" "${BEGIN}" || return 2
-        jid=$(HPCAGENT_BENCH_REPO="${OPT}" JUDGE_EDF="${edf}" HPCAGENT_BENCH_USER_PLUGIN_DIRS= HPCAGENT_BENCH_PYTHON_DEVICE="${device}" \
+        jid=$(HPCAGENT_BENCH_REPO="${OPT}" JUDGE_EDF="${PREP_EDF}" HPCAGENT_BENCH_USER_PLUGIN_DIRS= HPCAGENT_BENCH_PYTHON_DEVICE="${device}" \
             sbatch_retry --parsable --no-requeue --nodes="${GOLDEN_NODES:-2}" --job-name="goldens-${EXPERIMENT}-${lang}" --comment="goldens;commit=$(prep_commit)" \
             --time="${FIT_WALLTIME}" ${FIT_BEGIN:+--begin="${FIT_BEGIN}"} \
             --output="${HPCAGENT_BENCH_SCRATCH}/logs/goldens-%j.out" --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" \
-            ${after:+--dependency="afterok:${after}"} ${after:+--kill-on-invalid-dep=yes} "${options[@]}" \
+            ${after:+--dependency="afterok:${after}"} ${after:+--kill-on-invalid-dep=yes} "${PREP_OPTIONS[@]}" \
             "${CLUSTER_DIR}/prepare.sbatch" "${args[@]}" --language "${graded}" --steps grade) || return 2
         GOLDEN_JOB_IDS+=("${jid%%;*}")
         echo "submitted goldens-${EXPERIMENT}-${lang} -> ${jid}"

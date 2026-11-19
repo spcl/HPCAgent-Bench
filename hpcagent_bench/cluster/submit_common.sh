@@ -60,6 +60,16 @@ job_options() {
     "${HPCAGENT_BENCH_HOST_PYTHON:?source helpers/scripts/host_python.sh}" -m hpcagent_bench job options "${JOB_FLAGS[@]}" "$@"
 }
 
+# submit_options -- sets SUBMIT_OPTIONS to the job's resolved sbatch options (job_options); refuses account root, which is
+# no project account.
+submit_options() {
+    local resolved
+    resolved=$(job_options) || return 2
+    mapfile -t SUBMIT_OPTIONS <<<"${resolved}"
+    [[ " ${SUBMIT_OPTIONS[*]} " != *" --account=root "* ]] \
+        || { echo "${FUNCNAME[1]}: account root is not a project account: pass --account or set SBATCH_ACCOUNT" >&2; return 2; }
+}
+
 # parse_job_flags "$@" -- the job flags of a submitter: --system, --account, --partition, --gpus-per-node, --hardware,
 # --mem (the job's node memory), --time (the job's time limit, else computed from the tag) and --nice, and the
 # resource limits --agent-memory-gb, --agent-cpus, --container-memory, --container-cpus, each as `--flag value` or
@@ -383,8 +393,7 @@ pin_live_data_roots() {
 # setup (refuse_if_queue_references).
 # --no-requeue: a NODE_FAIL requeue reruns the job in the SAME run directory, stacking two runs' rows.
 submit_setup_job() {
-    local env="$1" setup="$2" walltime="$3" dependency="${4:-}" begin="${5:-}" detail="${6:-}" nodes snapshot jid resolved
-    local -a options
+    local env="$1" setup="$2" walltime="$3" dependency="${4:-}" begin="${5:-}" detail="${6:-}" nodes snapshot jid
     SUBMITTED_JOB_ID=""
     nodes=$(setup_nodes "${env}") || return 2
     # A relaunch never raises a limit: refused, dry run too, against every launch of the setup under its run root and
@@ -396,10 +405,7 @@ submit_setup_job() {
         SUBMITTED_JOB_ID="${setup}"
         return 0
     fi
-    resolved=$(job_options) || return 2
-    mapfile -t options <<<"${resolved}"
-    [[ " ${options[*]} " != *" --account=root "* ]] \
-        || { echo "submit_setup_job: account root is not a project account: pass --account or set SBATCH_ACCOUNT" >&2; return 2; }
+    submit_options || return 2
     # A job never ends in a reservation of others, and an experiment's time is never shortened (its episodes need their
     # whole wall clock): one that does not fit before the next reservation begins after it.
     fit_walltime "${walltime}" "${walltime}" "${begin}" || return 2
@@ -412,7 +418,7 @@ submit_setup_job() {
     mkdir -p -- "${logs}"
     local -a args=(--parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${setup}"
         --output="${logs}/services-%j.out" --error="${logs}/services-%j.err"
-        --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" "${options[@]}")
+        --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" "${SUBMIT_OPTIONS[@]}")
     [[ -z "${dependency}" ]] || args+=(--dependency="${dependency}")
     [[ "${dependency}" != *afterok:* ]] || args+=(--kill-on-invalid-dep=yes)
     [[ -z "${begin}" ]] || args+=(--begin="${begin}")
@@ -430,7 +436,7 @@ submit_setup_job() {
     # --parsable prints <id> or <id>;<cluster>; a dependency names the id alone.
     SUBMITTED_JOB_ID="${jid%%;*}"
     echo "submitted ${setup} -> ${jid} (${nodes} nodes${detail}) env ${snapshot}"
-    submit_pack_job "${snapshot}" "${SUBMITTED_JOB_ID}" "${options[@]}" || return 2
+    submit_pack_job "${snapshot}" "${SUBMITTED_JOB_ID}" "${SUBMIT_OPTIONS[@]}" || return 2
 }
 
 # submit_pack_job <env> <job id> <sbatch options...> -- PACK_AFTER=1 (the default) submits pack.sbatch after <job>
