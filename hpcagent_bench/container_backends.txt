@@ -136,7 +136,8 @@ podman.harbor_env=podman
 apptainer.family=sif
 apptainer.kind=exec
 apptainer.programs=apptainer singularity
-apptainer.verb=run
+# --no-eval: the OCI runscript otherwise re-splits the arguments through `eval`, so a quoted `bash -c` script breaks.
+apptainer.verb=run --no-eval
 apptainer.bind=--bind
 apptainer.workdir=--pwd
 apptainer.inherits_env=1

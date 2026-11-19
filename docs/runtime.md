@@ -87,7 +87,7 @@ every in-container helper step through one function, `container_wrap <role> <ce-
 | `CONTAINER_RUNTIME` | the step is | image |
 |---|---|---|
 | `ce` (default) | `srun --environment=<EDF>`, the EDF rewritten per role with that role's mounts | `*_CE_ENV` names a registered EDF |
-| `apptainer` | `apptainer run [GPU flags] --bind <mount> ... <image>` (`exec` skips the launch hook) | `INFERENCE_IMAGE`, `BENCH_IMAGE`: a `.sif` |
+| `apptainer` | `apptainer run --no-eval [GPU flags] --bind <mount> ... <image>` (`exec` skips the launch hook) | `INFERENCE_IMAGE`, `BENCH_IMAGE`: a `.sif` |
 | `podman`, `docker` | `<runtime> run --rm --network host --env NAME ... [GPU flags] --volume <mount> <image>`; podman adds `--security-opt unmask=ALL` for the seal, docker `--security-opt seccomp=unconfined --security-opt systempaths=unconfined` (its default seccomp profile refuses the seal's namespaces, so a docker step filters no syscalls: the seal is the isolation) | an image reference |
 
 The agent's root filesystem (the preinstalled libraries) is the one hardening a site opts into:
