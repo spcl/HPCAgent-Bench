@@ -12,7 +12,9 @@
     "cpp",
     "cuda",
     "fortran",
-    "hip"
+    "hip",
+    "llvm-ir",
+    "mlir"
   ],
   "tracks": [
     "loop_level_reasoning",

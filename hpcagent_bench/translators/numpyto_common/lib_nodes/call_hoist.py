@@ -688,11 +688,13 @@ class CallHoister(ast.NodeTransformer):
         if op in {"argmax", "argmin", "argsort"}:
             self.local_dtypes[temp] = "int64"
         if op in {"cumsum", "cumprod"} and node.args and isinstance(node.args[0], ast.Name):
-            # numpy accumulates a bool or integer operand in the platform integer, a float in its own dtype.
+            # numpy accumulates a bool or integer operand in the platform integer. A float scan runs in the
+            # accumulator dtype (float32 for a half or fp8 operand), so the store into the narrow output rounds once
+            # instead of every step stalling in a narrow temp.
             src_dt = self.local_dtypes.get(node.args[0].id)
             if src_dt is not None:
                 widened = src_dt in {"bool", "bool_"} or dtypes.is_integer(src_dt)
-                self.local_dtypes[temp] = "int64" if widened else src_dt
+                self.local_dtypes[temp] = "int64" if widened else dtypes.accumulator_dtype(src_dt)
         if self.infer_complex(node) or op in FFT_TRANSFORMS:
             self.local_dtypes[temp] = "complex128"
         if op in SHAPE_PRESERVING_OPS and node.args and temp not in self.local_dtypes:

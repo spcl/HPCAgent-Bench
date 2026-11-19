@@ -114,6 +114,7 @@ def test_a_plugin_packet_takes_the_next_slot_and_names_its_overlay(
         skills=("probeplugin-page",),
         tools=("probe_echo",),
         prompt_overlays=("probeplugin:prompt/overlay.yaml",),
+        route="probeplugin",
     )
 
 
