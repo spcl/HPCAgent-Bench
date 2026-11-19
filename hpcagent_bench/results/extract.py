@@ -799,7 +799,9 @@ def graded_rows(
     source behind each (``graded_attempt`` candidates)."""
     observations: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
-    ordinals: collections.Counter[tuple[RowKind, str, str]] = collections.Counter()
+    # Numbered per job and episode: a label repeats across jobs, and a DB holding several must number each job's
+    # submissions as that job's own DB does.
+    ordinals: collections.Counter[tuple[RowKind, object, str, str]] = collections.Counter()
     for grade in conn.execute(GRADE_ROWS):
         if not setup_admitted(grade["setup"], *setup_selection) or before_the_c_fix(grade, c_fix_ms):
             continue
@@ -810,8 +812,9 @@ def graded_rows(
             and (grade["credited_speedup"] != 0 or grade["reason"] != "")
         ):
             record = RowKind.SUBMISSION if grade["credited_speedup"] != 0 or awaits_final(grade) else RowKind.ATTEMPT
-            ordinals[(record, grade["label"], grade["kernel"])] += 1
-            rows.append(verdict_row(db, grade, ordinals[(record, grade["label"], grade["kernel"])]))
+            ordinal = (record, grade["episode_job"], grade["label"], grade["kernel"])
+            ordinals[ordinal] += 1
+            rows.append(verdict_row(db, grade, ordinals[ordinal]))
         observations.extend(rows)
         if grade["source_hash"] is not None:
             sources.extend(source_entry(db, grade, row) for row in rows)

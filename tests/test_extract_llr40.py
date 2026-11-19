@@ -60,3 +60,22 @@ def test_a_grade_without_timed_cells_still_extracts_with_its_recorded_speedup(tm
     (row,) = submission_rows(db_path)
 
     assert (row["speedup"], row["timing_suspect"], row["packet"]) == (2.0, 0, "")
+
+
+def test_a_submissions_attempt_index_counts_within_its_own_job(tmp_path: pathlib.Path) -> None:
+    """Two jobs of one setup reuse an episode label; a DB holding both numbers each job's submissions from 1, as
+    that job's own DB does, so the same submission read from both is one observation (``distinct``)."""
+    label, merged = "setup-c.n0.p0.w0", tmp_path / "merged.db"
+    for job, ts_ms in ((100, 10), (200, 20)):
+        own = tmp_path / f"{job}.db"
+        for db_path in (own, merged):
+            with contextlib.closing(results_db.open_db(db_path)) as conn:
+                results_db.ensure_setup(conn, results_db.Setup("setup-c", "c", "cpu"))
+                run = results_db.ensure_episode(conn, "setup-c", label, job)
+                credited = {"build_ok": 1, "correct": 1, "speedup": 2.0, "credited_speedup": 2.0}
+                results_db.add_grade(conn, run, "k", "submit", ts_ms=ts_ms, values=GRADE_STAMP | credited)
+                conn.commit()
+    indexes = {(row["job"], row["attempt_index"]) for row in submission_rows(merged)}
+    assert indexes == {("100", 1), ("200", 1)}
+    rows = [*submission_rows(merged), *submission_rows(tmp_path / "200.db")]
+    assert len(extract_llr40.distinct(rows)) == 2
