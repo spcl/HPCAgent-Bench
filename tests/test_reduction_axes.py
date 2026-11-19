@@ -218,7 +218,7 @@ def test_a_declared_chain_wins_over_the_probe(monkeypatch: pytest.MonkeyPatch) -
 
 def test_a_stale_fingerprint_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     entry = {"fingerprint": "old", "roles": {"y": {"A": [1.0, 2.0]}}, "kappa": {"y": 1.0}}
-    monkeypatch.setattr(reduction_axes, "_TABLE", {"k": entry})
+    monkeypatch.setattr(reduction_axes, "shipped_table", lambda: {"k": entry})
     assert reduction_axes.table_entry("k", lambda _name: "new") is None
     assert reduction_axes.table_entry("k", lambda _name: "old") == entry
     assert reduction_axes.table_entry("absent", lambda _name: "old") is None

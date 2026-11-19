@@ -23,6 +23,7 @@ contribute. Terms below the perturbation's resolution (``2**-6`` relative, on fp
 the answer by less than one rounding of it. An axis of extent 1 at S is unmeasured and contributes (its graded extent
 may be larger). The probe can only shorten ``l`` (``grading`` takes ``min(symbolic, probed)``), never lengthen it."""
 
+import functools
 import json
 import math
 import pathlib
@@ -44,6 +45,7 @@ __all__ = [
     "probe_axis_roles",
     "probe_cancellation",
     "probed_length",
+    "shipped_table",
     "table_entry",
 ]
 
@@ -249,17 +251,17 @@ def load_table(path: pathlib.Path = REDUCTION_AXES_PATH) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-_TABLE: dict[str, Any] | None = None
+@functools.lru_cache(maxsize=1, typed=True)
+def shipped_table() -> dict[str, Any]:
+    """:func:`load_table` of the shipped path, read once per process."""
+    return load_table()
 
 
 def table_entry(short_name: str, fingerprint: Callable[[str], str]) -> dict[str, Any] | None:
     """The table entry for ``short_name`` (``roles`` and ``kappa``), or ``None`` when the table has none or its
     fingerprint is stale (the reference, initializer, manifest args or S rung changed since it was measured): the
     symbolic rule then stands."""
-    global _TABLE
-    if _TABLE is None:
-        _TABLE = load_table()
-    entry = _TABLE.get(short_name)
+    entry = shipped_table().get(short_name)
     if not entry:
         return None
     try:
