@@ -101,8 +101,10 @@ __all__ = [
     "job_setup",
     "latest_classes",
     "latest_records",
+    "launch_env",
     "launch_files",
     "launch_history",
+    "launch_order",
     "launch_problems",
     "main",
     "owed",
@@ -460,8 +462,10 @@ def designed_runs(
 def setup_launches(run_root: pathlib.Path, setup: str) -> list[pathlib.Path]:
     """The job directories under ``run_root`` that launched ``setup``, oldest first: every job whose launch env names
     it, whether or not it recorded anything (a job that died before its first grade still spent an attempt)."""
-    launched = sorted(run_root.glob(f"{LAUNCH_DIR}/*/.env"), key=lambda path: path.parent.name.zfill(20))
-    return [run_root / path.parent.name for path in launched if read_env(path).get("SETUP") == setup]
+    launched = [run_root / path.parent.name for path in run_root.glob(f"{LAUNCH_DIR}/*/.env")]
+    return sorted(
+        (job_dir for job_dir in launched if read_env(launch_env(job_dir)).get("SETUP") == setup), key=launch_order
+    )
 
 
 def identity_launches(jobs: Sequence[Job]) -> list[pathlib.Path]:
@@ -469,7 +473,7 @@ def identity_launches(jobs: Sequence[Job]) -> list[pathlib.Path]:
     under their run roots (:func:`setup_launches`)."""
     roots = {job.path.parent for job in jobs}
     launches = {path for root in roots for path in setup_launches(root, jobs[0].setup)} if jobs else set()
-    return sorted(launches | {job.path for job in jobs}, key=lambda path: path.name.zfill(20))
+    return sorted(launches | {job.path for job in jobs}, key=launch_order)
 
 
 def owed(jobs: Sequence[Job], runs: Sequence[Run], regrades: Sequence[pathlib.Path] = ()) -> dict[Run, OwedClass]:
@@ -535,7 +539,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
     for name in sorted(n for n in by_identity if selected(n, args.setups)):
-        jobs = sorted(by_identity[name], key=lambda job: int(job.job))
+        jobs = sorted(by_identity[name], key=lambda job: launch_order(job.path))
         if only is OwedClass.EXTEND:
             extended = sorted(extendable((job.path for job in jobs), args.time_limit_s))
             print(f"{name} extend {len(extended)} to {args.time_limit_s} s newest {jobs[-1].path}")
@@ -570,9 +574,26 @@ def read_env(path: pathlib.Path) -> dict[str, str]:
     return values
 
 
+def launch_env(job_dir: pathlib.Path) -> pathlib.Path:
+    """The env ``job_dir`` launched with, as run_cluster.sh staged it at the job's start (it may be gone)."""
+    return job_dir.parent / LAUNCH_DIR / job_dir.name / ".env"
+
+
+def launch_order(job_dir: pathlib.Path) -> tuple[float, str]:
+    """Sort key of job directories, oldest launch first: when the job staged its launch env (its mtime; the file is
+    written once, as the job starts), then its run id. The run id alone orders nothing: an umbrella instance's is
+    ``<allocation><k>`` (launch_fused.sbatch), far above a plain job that started after it. A job without a launch
+    env (from before launches were staged) sorts before every one with, by run id."""
+    try:
+        started = launch_env(job_dir).stat().st_mtime
+    except FileNotFoundError:
+        started = 0.0
+    return started, job_dir.name.zfill(20)
+
+
 def launch_problems(job_dir: pathlib.Path) -> pathlib.Path | None:
     """The problems file ``job_dir`` launched with, None when its launch env or the file is gone."""
-    env = job_dir.parent / LAUNCH_DIR / job_dir.name / ".env"
+    env = launch_env(job_dir)
     if not env.is_file():
         return None
     problems = env.parent / pathlib.PurePath(read_env(env).get("PROBLEMS_FILE", "")).name
@@ -582,7 +603,7 @@ def launch_problems(job_dir: pathlib.Path) -> pathlib.Path | None:
 def crash_attempts(job_dir: pathlib.Path) -> int:
     """The attempts infrastructure may end an episode of the setup of ``job_dir`` on (``AGENT_CRASH_ATTEMPTS`` of its
     launch env; the driver's default when it has none)."""
-    env = job_dir.parent / LAUNCH_DIR / job_dir.name / ".env"
+    env = launch_env(job_dir)
     value = read_env(env).get("AGENT_CRASH_ATTEMPTS", "") if env.is_file() else ""
     return int(value) if value.isdigit() else AGENT_CRASH_ATTEMPTS
 
@@ -591,9 +612,7 @@ def launch_files(job_dir: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     """The job env ``job_dir`` launched with and its problems file."""
     problems = launch_problems(job_dir)
     if problems is None:
-        raise SystemExit(
-            f"{job_dir}: no launch env or problems file under {job_dir.parent / LAUNCH_DIR / job_dir.name}"
-        )
+        raise SystemExit(f"{job_dir}: no launch env or problems file under {launch_env(job_dir).parent}")
     return problems.parent / ".env", problems
 
 
