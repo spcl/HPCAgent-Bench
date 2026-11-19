@@ -24,7 +24,7 @@ import numba as nb
 import numpy as np
 import scipy.fft
 
-_MAXTER = 20  # cegterg.f90: INTEGER, PARAMETER :: maxter = 20
+_MAXTER = 40  # QE cegterg.f90 fixes 20; 40 lets every drawn root converge (slowest draws: 24)
 
 
 @nb.njit(parallel=True, cache=True)
