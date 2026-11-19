@@ -38,6 +38,12 @@ ulimit -c 0
 SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-${SLURM_SUBMIT_DIR:?submit from the checkout root or set REPO}}"
 IMAGE="${1:?usage: build_and_verify.sbatch <image directory under containers/images>}"
+# Fail in seconds, not hours in: the checkout root (a submit from containers/images makes REPO wrong) and uv
+# (a build keys the image by uv export; a non-login batch shell may not have it on PATH).
+[[ -f "${REPO}/containers/images/images.env" ]] \
+    || { echo "FATAL: ${REPO} is not the checkout root: submit from it or set REPO" >&2; exit 2; }
+[[ "${VERIFY_ONLY:-0}" == 1 ]] || command -v uv >/dev/null \
+    || { echo "FATAL: uv is not on PATH in the batch job: export PATH before sbatch" >&2; exit 2; }
 # No flavor asked for: the portable image, pulled only when the published tag's build inputs equal this
 # checkout's (CE_PULL=1; CE_PULL=only would pull a stale image for a branch that changes the Dockerfile), and only
 # when that fails the native flavor for this machine (an image whose names carry no flavor, the serving

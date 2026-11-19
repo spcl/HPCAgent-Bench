@@ -223,7 +223,11 @@ def script_header(script: pathlib.Path) -> dict[str, str]:
     for field in FIELDS:
         parser.add_argument(FIELDS[field][0], *([SHORT[field]] if field in SHORT else []), dest=field)
     known = parser.parse_known_args(words)[0]
-    return {field: value for field, value in vars(known).items() if value is not None}
+    header = {field: value for field, value in vars(known).items() if value is not None}
+    if "--exclusive" in words and "cpus_per_task" not in header:
+        # An exclusive job owns its node's cores: a system's core count would narrow it to a slice.
+        header["cpus_per_task"] = ""
+    return header
 
 
 def image_partition(script: pathlib.Path, script_args: Sequence[str], environ: Mapping[str, str]) -> str:
@@ -387,7 +391,7 @@ def main(argv: Sequence[str]) -> int:
     if not args.system and (partition := image_partition(args.script, args.script_args, environ)):
         pinned["partition"] = partition
     resolved = resolve(args.system, vars(args), environ, pinned=pinned)
-    options = {field: value for field, value in resolved.values.items() if header.get(field) != value}
+    options = {field: value for field, value in resolved.values.items() if value and header.get(field) != value}
     exports = {
         EXTRAS[extra][1]: value for extra, value in resolved.extras.items() if extra in RESOURCE_EXTRAS and value
     }
