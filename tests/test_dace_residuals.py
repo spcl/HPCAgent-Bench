@@ -305,7 +305,7 @@ def test_parallel_gpu_offloads_every_map() -> None:
 
     sdfg = _kernels().fusion_pair.to_sdfg(simplify=False)
     pipe = pipeline_named("parallel_gpu")
-    with dace_emit._pipeline_config(pipe.config), dace_emit._backend_config("hip"):
+    with dace_emit.pipeline_config(pipe.config), dace_emit.backend_config("hip"):
         pipe.transform(sdfg, PipelineContext(device=dace.dtypes.DeviceType.GPU))
     schedules = [
         node.map.schedule
@@ -323,7 +323,7 @@ def test_maximal_fusion_reaches_a_fixed_point(monkeypatch: pytest.MonkeyPatch) -
     pytest.importorskip("dace")
     from dace.transformation.passes.fuse_maps import FuseMaps
 
-    from hpcagent_bench.frameworks.dace_framework import PipelineContext, _fusion_round, pipeline_parallel
+    from hpcagent_bench.frameworks.dace_framework import PipelineContext, fusion_round, pipeline_parallel
 
     fuse_calls: list[int] = []
     _spy_pass(monkeypatch, FuseMaps, fuse_calls)
@@ -331,7 +331,7 @@ def test_maximal_fusion_reaches_a_fixed_point(monkeypatch: pytest.MonkeyPatch) -
     pipeline_parallel(sdfg, PipelineContext(device=_device_cpu(), maximal=True))
     assert 1 <= len(fuse_calls) <= MAXIMAL_FUSION_CAP
     before = sdfg.hash_sdfg()
-    _fusion_round(sdfg)
+    fusion_round(sdfg)
     assert sdfg.hash_sdfg() == before, "a second pass must leave the hash unchanged (the fixed point)"
 
 

@@ -181,7 +181,7 @@ def load_backend_so(wrapper_file: str, short: str, framework: str) -> ctypes.CDL
     return cdll
 
 
-def _ctype_for(dtype: "DTypeLike") -> type:
+def pointee_ctype(dtype: "DTypeLike") -> type:
     """ctypes type to POINT AT for an array of ``dtype`` (a complex array uses its real component's type);
     by-value complex stays refused."""
     import numpy as np
@@ -206,7 +206,7 @@ def ctype_arg(a: Any, fcty: type, int_ctype: type) -> type:  # noqa: ANN401
     import numpy as np
 
     if isinstance(a, np.ndarray) or is_device_array(a):
-        return ctypes.POINTER(_ctype_for(a.dtype))
+        return ctypes.POINTER(pointee_ctype(a.dtype))
     if isinstance(a, (int, np.integer)):
         return int_ctype
     if isinstance(a, (float, np.floating)):
@@ -219,10 +219,10 @@ def to_ctypes(arg: Any, fcty: type, int_ctype: type) -> object:  # noqa: ANN401
     import numpy as np
 
     if isinstance(arg, np.ndarray):
-        return arg.ctypes.data_as(ctypes.POINTER(_ctype_for(arg.dtype)))
+        return arg.ctypes.data_as(ctypes.POINTER(pointee_ctype(arg.dtype)))
     # A cupy array (ppcg_hip's device-resident copy_func): the .so gets its DEVICE pointer (abi_contract.md Sec. 10).
     if is_device_array(arg):
-        return ctypes.cast(arg.data.ptr, ctypes.POINTER(_ctype_for(arg.dtype)))
+        return ctypes.cast(arg.data.ptr, ctypes.POINTER(pointee_ctype(arg.dtype)))
     if isinstance(arg, (int, np.integer)):
         return int_ctype(int(arg))
     if isinstance(arg, (float, np.floating)):
@@ -284,11 +284,11 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str, kernel: str) -> N
         "rebase": index_rebase(kernel, framework),
     }
 
-    from hpcagent_bench.dtypes import ctype_for as _registry_ctype
+    from hpcagent_bench.dtypes import ctype_for
 
-    _int_ctype = _registry_ctype("int")  # canonical symbol type (int64)
+    int_ctype = ctype_for("int")  # canonical symbol type (int64)
 
-    def _ensure_loaded() -> None:
+    def ensure_loaded() -> None:
         if state["loaded"]:
             return
         so = load_backend_so(wrapper_file, short, framework)
@@ -302,7 +302,7 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str, kernel: str) -> N
         state["loaded"] = True
 
     def call(*args: Any) -> None:  # noqa: ANN401
-        _ensure_loaded()
+        ensure_loaded()
         is_double = binds_double(args)
         fptype = "fp64" if is_double else "fp32"
         fcty = ctypes.c_double if is_double else ctypes.c_float
@@ -310,11 +310,11 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str, kernel: str) -> N
         if sym is None:
             raise RuntimeError(f"{short} ({framework}): no symbol for {fptype}")
         if fptype not in state["bound"]:
-            argtypes = [ctype_arg(a, fcty, _int_ctype) for a in args]
+            argtypes = [ctype_arg(a, fcty, int_ctype) for a in args]
             sym.argtypes = argtypes
             sym.restype = None
             state["bound"].add(fptype)
-        c_args = [to_ctypes(a, fcty, _int_ctype) for a in args]
+        c_args = [to_ctypes(a, fcty, int_ctype) for a in args]
         # In place, then undone: outputs are read back from these very arrays (an index buffer included).
         deltas = state["rebase"]
         for arg, delta in zip(args, deltas):

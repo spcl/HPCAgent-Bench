@@ -277,7 +277,7 @@ def test_a_callee_that_declares_no_workspace_pair_is_still_callable(tmp_path: pa
 
     ``harness/agent.py:emit_reference_source`` emits the NumpyToX reference WITHOUT the reserved
     pair -- the emitters derive their own signature from the KIR and never add it -- and the same
-    definition is called two ways: ``frameworks/native_framework._abi_args`` builds its call from
+    definition is called two ways: ``frameworks/native_framework.abi_args`` builds its call from
     ``binding.args`` and passes no pair at all, while ``call_native`` always passes it. One
     definition serves both only because the two extra arguments land AFTER every argument the
     callee declared, where SysV ignores them.

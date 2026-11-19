@@ -117,7 +117,7 @@ class PlutoFramework(NativeFramework):
         self, bench: Benchmark, impl: KernelImpl, resolved: dict[str, ArgValue], bdata: BenchData
     ) -> tuple[Sequence[ArgValue], dict[str, ArgValue]]:
         """Arguments in POLYCC's order (symbols, then arrays, then scalars: VLA extents must come first), read from
-        ``<base>_fpNN_pluto_binding.json``; every VALUE comes from :meth:`NativeFramework._abi_args`.
+        ``<base>_fpNN_pluto_binding.json``; every VALUE comes from :meth:`NativeFramework.abi_args`.
 
         A positional ctypes call cannot detect a permutation, so a missing binding declines."""
         order = self.pluto_arg_names(bench)
@@ -129,7 +129,7 @@ class PlutoFramework(NativeFramework):
                 "symbols/arrays/scalars and a positional call cannot detect the "
                 "difference, so there is no safe default to fall back to",
             )
-        declared = {a.name: a for a in self._abi_args(bench)}
+        declared = {a.name: a for a in self.abi_args(bench)}
         out: list[ArgValue] = []
         for name in order:
             if name in resolved:
@@ -151,7 +151,7 @@ class PlutoFramework(NativeFramework):
     def pluto_arg_names(self, bench: Benchmark) -> list[str] | None:
         """polycc's argument ORDER from any ``<base>_fpNN_pluto_binding.json`` (precision-independent); ``None``
         when none was emitted."""
-        paths = sorted(self._cpp_backend(bench).glob(f"{self.native_base(bench)}_fp*_pluto_binding.json"))
+        paths = sorted(self.cpp_backend_dir(bench).glob(f"{self.native_base(bench)}_fp*_pluto_binding.json"))
         for path in paths:
             args = read_binding(path).args
             if args:

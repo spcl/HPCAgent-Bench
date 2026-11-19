@@ -72,7 +72,7 @@ def write_scop(cpp_backend: pathlib.Path, base: str = "mm", fptype: str = "fp64"
 class ManifestFreeBench(Benchmark):
     """A ``Benchmark`` that skips the manifest load.
 
-    ``call_args`` reads ``bname`` and nothing else -- the paths come through ``_cpp_backend`` and
+    ``call_args`` reads ``bname`` and nothing else -- the paths come through ``cpp_backend_dir`` and
     ``native_base``, which these tests point at a tmp dir. Loading a real corpus entry would tie an
     argument-ordering test to a kernel whose manifest says nothing about argument ordering.
     """
@@ -90,7 +90,7 @@ def no_impl(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401
 
 
 def fake_arg(name: str, kind: str) -> Any:  # noqa: ANN401
-    """A stand-in for one ``_abi_args`` descriptor: ``call_args`` reads only ``name`` and ``kind``."""
+    """A stand-in for one ``abi_args`` descriptor: ``call_args`` reads only ``name`` and ``kind``."""
     return types.SimpleNamespace(name=name, kind=kind, shape=(), dtype="float64")
 
 
@@ -226,7 +226,7 @@ def test_call_args_declines_when_the_binding_is_absent(tmp_path: pathlib.Path, m
     """A positional ctypes call cannot detect a permuted argument list -- it runs and returns numbers.
     With no binding there is no safe default, so the only correct answer is to decline."""
     framework = PlutoFramework.__new__(PlutoFramework)
-    monkeypatch.setattr(PlutoFramework, "_cpp_backend", lambda self, bench: tmp_path)
+    monkeypatch.setattr(PlutoFramework, "cpp_backend_dir", lambda self, bench: tmp_path)
     monkeypatch.setattr(PlutoFramework, "native_base", lambda self, bench: "mm")
     with pytest.raises(NotSupportedByFramework):
         framework.call_args(ManifestFreeBench(), no_impl, {}, {})
@@ -543,9 +543,9 @@ def test_call_args_marshals_in_polyccs_order_not_the_canonical_abis(
     # Canonical C ABI order: sorted pointers, then sorted scalars. Deliberately NOT polycc's.
     canonical = [fake_arg("A", "ptr"), fake_arg("B", "ptr"), fake_arg("C", "ptr"), fake_arg("N", "scalar")]
     assert [a.name for a in canonical] != ["N", "A", "B", "C"], "the orders must differ, or this proves nothing"
-    monkeypatch.setattr(PlutoFramework, "_cpp_backend", lambda self, bench: tmp_path)
+    monkeypatch.setattr(PlutoFramework, "cpp_backend_dir", lambda self, bench: tmp_path)
     monkeypatch.setattr(PlutoFramework, "native_base", lambda self, bench: "mm")
-    monkeypatch.setattr(PlutoFramework, "_abi_args", lambda self, bench: canonical)
+    monkeypatch.setattr(PlutoFramework, "abi_args", lambda self, bench: canonical)
     framework = PlutoFramework.__new__(PlutoFramework)
 
     resolved = {"A": "a", "B": "b", "C": "c"}
@@ -562,9 +562,9 @@ def test_call_args_still_allocates_declared_outputs_after_reordering(
     RETURNS a buffer has no init-provided value, and the C signature still declares the pointer."""
     pluto_binding(tmp_path / "mm_fp64_pluto_binding.json", ("N", "int"), ("C", "ptr_double"))
     declared = [fake_arg("C", "ptr"), fake_arg("N", "scalar")]
-    monkeypatch.setattr(PlutoFramework, "_cpp_backend", lambda self, bench: tmp_path)
+    monkeypatch.setattr(PlutoFramework, "cpp_backend_dir", lambda self, bench: tmp_path)
     monkeypatch.setattr(PlutoFramework, "native_base", lambda self, bench: "mm")
-    monkeypatch.setattr(PlutoFramework, "_abi_args", lambda self, bench: declared)
+    monkeypatch.setattr(PlutoFramework, "abi_args", lambda self, bench: declared)
     monkeypatch.setattr(PlutoFramework, "alloc_output", staticmethod(lambda arg, bdata: f"allocated:{arg.name}"))
     framework = PlutoFramework.__new__(PlutoFramework)
 

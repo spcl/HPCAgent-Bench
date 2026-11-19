@@ -52,7 +52,7 @@ class DaceEmitUnavailable(ImportError):
     """Dace is not importable in this interpreter: ``dace emit`` skips (exit 2) instead of failing."""
 
 
-class _CodeObject(Protocol):
+class CodeObjectLike(Protocol):
     """The one slice of a dace ``CodeObject`` the writer reads: a name, its code, and the language, which is the
     file extension dace itself uses for the file (``cpp``, ``h``, ``cu``)."""
 
@@ -76,7 +76,7 @@ def default_pipeline_for(target: str) -> str:
     return "parallel_cpu" if target == "cpu" else "parallel_gpu"
 
 
-def write_code_objects(objects: Iterable[_CodeObject], out_dir: str | os.PathLike[str]) -> list[pathlib.Path]:
+def write_code_objects(objects: Iterable[CodeObjectLike], out_dir: str | os.PathLike[str]) -> list[pathlib.Path]:
     """Write each code object as ``<name>.<language>`` under ``out_dir`` (created); a repeated (name, language)
     pair gets ``-2``, ``-3``, ... appended to its stem, so dace's frame and device units never overwrite each
     other. :returns: the written paths, in input order."""
@@ -95,7 +95,7 @@ def write_code_objects(objects: Iterable[_CodeObject], out_dir: str | os.PathLik
 
 
 @contextlib.contextmanager
-def _pipeline_config(config: Iterable[tuple[tuple[str, ...], str | bool]]) -> Iterator[None]:
+def pipeline_config(config: Iterable[tuple[tuple[str, ...], str | bool]]) -> Iterator[None]:
     """The pipeline's code-generator configuration, applied for the duration and restored afterwards (an
     inspection command must not leak process-global config). A key the ``DACE_*`` environment names keeps that
     value, exactly as :func:`hpcagent_bench.frameworks.dace_framework.apply_pipeline_config` reads it; a key this
@@ -166,7 +166,7 @@ def emit_program_sources(
         )
     sdfg = copy.deepcopy(sdfg)
     sdfg.name = name or f"{sdfg.name}_{pipe.name}"  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
-    with _pipeline_config(pipe.config), _backend_config(target):
+    with pipeline_config(pipe.config), backend_config(target):
         try:
             pipe.transform(sdfg, ctx)
             if gpu:
@@ -248,7 +248,7 @@ def device_units(spec: "BenchSpec", sdfg: "SDFG", target: str) -> list[Unit]:
 
 
 @contextlib.contextmanager
-def _backend_config(target: str) -> Iterator[None]:
+def backend_config(target: str) -> Iterator[None]:
     """``compiler.cuda.backend`` pointed at the emit target for the duration (dace autodetects otherwise, and an
     autodetect on a GPU-less host refuses to run at all)."""
     import dace
