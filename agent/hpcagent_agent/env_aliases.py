@@ -16,7 +16,7 @@ import os
 import warnings
 from collections.abc import Mapping
 
-__all__ = ["DEPRECATED", "WARNED", "current_name", "resolve", "value", "warn_once"]
+__all__ = ["DEPRECATED", "WARNED", "resolve", "value", "warn_once"]
 
 #: Deprecated name -> the current ``HPCAGENT_BENCH_*`` name of the configuration key it used to set.
 DEPRECATED: dict[str, str] = {
@@ -44,11 +44,6 @@ def warn_once(old: str, current: str) -> None:
             DeprecationWarning,
             stacklevel=3,
         )
-
-
-def current_name(old: str) -> str | None:
-    """The current ``HPCAGENT_BENCH_*`` name ``old`` maps to; None when ``old`` is not deprecated."""
-    return DEPRECATED.get(old)
 
 
 def value(old: str, environ: Mapping[str, str] = os.environ) -> str | None:

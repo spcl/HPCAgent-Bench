@@ -52,7 +52,7 @@ LAUNCHER_DEFAULTS = {
 #: The rungs each model's server accepts, lowest first, whether that server is a local SGLang/vLLM
 #: job or a hosted provider API. Qwen's chat template raises on anything outside low/medium/xhigh --
 #: it has no `high` -- and GPT-OSS's stops at high; Kimi and GLM have no ladder at all. The launcher
-#: resolves AGENT_EFFORT from these, so a .env that also spelled a rung would be a second source of
+#: resolves HPCAGENT_BENCH_AGENT_EFFORT from these, so a .env that also spelled a rung would be a second source of
 #: truth for the one thing a ladder exists to decide.
 LADDERS = {
     "qwen38": "low medium xhigh",
@@ -145,17 +145,17 @@ def test_a_base_env_declares_the_ladder_its_server_accepts_and_no_rung(path: str
     """The .env states what the SERVER accepts; the launcher states which rung of it to take. A .env
     that also spelled the rung is how oss120b and qwen38 came to be compared at rungs nobody had
     written down together. A model with no ladder declares an empty one rather than omitting the key,
-    because a MISSING AGENT_EFFORT still defaults to xhigh in agent_driver.py."""
+    because a MISSING HPCAGENT_BENCH_AGENT_EFFORT still defaults to xhigh in agent_driver.py."""
     values = env_values(path)
-    assert "AGENT_EFFORT" not in values, f"{path} spells a rung the launcher resolves"
-    assert values.get("EFFORT_LADDER") == LADDERS[path.removeprefix("experiment:")]
+    assert "HPCAGENT_BENCH_AGENT_EFFORT" not in values, f"{path} spells a rung the launcher resolves"
+    assert values.get("HPCAGENT_BENCH_AGENT_EFFORT_LADDER") == LADDERS[path.removeprefix("experiment:")]
 
 
 @pytest.mark.parametrize("path", BASE_ENVS)
 def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at(path: str) -> None:
     """The ladders are only right if the rung they resolve to is the one the experiment meant to run."""
     model = path.removeprefix("experiment:")
-    assert effort.resolve(env_values(path)["EFFORT_LADDER"]) == RESOLVED[model]
+    assert effort.resolve(env_values(path)["HPCAGENT_BENCH_AGENT_EFFORT_LADDER"]) == RESOLVED[model]
 
 
 def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:
