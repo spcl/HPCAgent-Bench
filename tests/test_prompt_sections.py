@@ -333,11 +333,16 @@ def test_the_correctness_section_states_the_strict_gate_as_configured() -> None:
 
 
 def run_case(test: Callable[..., None], *args: object) -> None:
-    """Call ``test`` with the fixtures it names, a fresh MonkeyPatch and temp directory, then the parameters."""
-    with pytest.MonkeyPatch.context() as monkeypatch, tempfile.TemporaryDirectory() as directory:
-        fixtures = {"monkeypatch": monkeypatch, "tmp_path": pathlib.Path(directory)}
-        names = list(inspect.signature(test).parameters)
-        test(*args, **{name: fixtures[name] for name in names[len(args) :]})
+    """Call ``test`` with the fixtures it names, a fresh MonkeyPatch and temp directory, then the parameters; the
+    config overrides are given back afterwards, as the conftest's ``restore_config_overrides`` does under pytest."""
+    snapshot = config.override_snapshot()
+    try:
+        with pytest.MonkeyPatch.context() as monkeypatch, tempfile.TemporaryDirectory() as directory:
+            fixtures = {"monkeypatch": monkeypatch, "tmp_path": pathlib.Path(directory)}
+            names = list(inspect.signature(test).parameters)
+            test(*args, **{name: fixtures[name] for name in names[len(args) :]})
+    finally:
+        config.restore_overrides(snapshot)
 
 
 if __name__ == "__main__":
