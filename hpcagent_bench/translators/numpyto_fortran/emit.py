@@ -3337,8 +3337,32 @@ def emit_fortran_omp(kir: KernelIR, fn_name: str | None = None) -> str:
     return emit_fortran(kir, fn_name, parallel=True)
 
 
+def is_uint64(dtype: str) -> bool:
+    try:
+        return dtypes.canonical(dtype.removesuffix("_")) == "uint64"
+    except KeyError:
+        return False
+
+
+def refuse_uint64(kir: KernelIR) -> None:
+    """Fortran has no unsigned integer. A uint8/16/32 value fits a nonnegative int64 (masked on read,
+    wrapped on store), but a uint64 above 2**63 - 1 fits no signed kind: integer(c_int64_t) keeps its
+    bits and compares, divides and converts it as a negative number. Refuse it instead."""
+    named = [*(a.dtype for a in kir.arrays), *(s.dtype for s in kir.scalars), *kir.local_dtypes.values()]
+    for node in walk_nodes(kir.tree):
+        if isinstance(node, ast.Attribute) and is_numpy_module(node.value):
+            named.append(node.attr)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            named.append(node.value)
+    if any(is_uint64(dt) for dt in named if dt):
+        raise NotImplementedError(f"Fortran has no unsigned integer type for uint64 in {kir.kernel_name}")
+    for helper in kir.helpers:
+        refuse_uint64(helper)
+
+
 def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = False) -> str:
     """Emit a self-contained Fortran subroutine with timing wrapper."""
+    refuse_uint64(kir)
     name = fn_name or f"{kir.kernel_name}_d_auto"
     TupleTargetSplitter().visit(kir.tree)
     # ABI parameter order (what the binding JSON, and every caller, uses). param_order() sorts
