@@ -4,7 +4,7 @@ import ast
 import copy
 from typing import cast
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, statement_lists, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     DesugarError,
@@ -265,19 +265,6 @@ def element_at(expr: ast.expr, j: ast.Name, ranks: dict[str, int]) -> ast.expr |
 
     found = element(expr)
     return found[0] if found is not None and found[1] else None
-
-
-def statement_lists(node: ast.AST) -> list[list[ast.stmt]]:
-    """Every non-empty statement list in ``node``: bodies, else branches and finally blocks."""
-    lists: list[list[ast.stmt]] = []
-    for holder in walk_nodes(node):
-        if isinstance(holder, (ast.FunctionDef, ast.For, ast.While, ast.If, ast.With, ast.Try, ast.ExceptHandler)):
-            lists.append(holder.body)
-        if isinstance(holder, (ast.For, ast.While, ast.If, ast.Try)):
-            lists.append(holder.orelse)
-        if isinstance(holder, ast.Try):
-            lists.append(holder.finalbody)
-    return [stmts for stmts in lists if stmts]
 
 
 class RepeatCountsInline(RankedRewritePass):

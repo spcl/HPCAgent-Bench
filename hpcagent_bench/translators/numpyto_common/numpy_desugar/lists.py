@@ -5,7 +5,7 @@ import copy
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, statement_lists, walk_nodes
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -26,7 +26,6 @@ __all__ = [
     "offset_add",
     "plan_list_build",
     "range_growth",
-    "statement_blocks",
 ]
 
 
@@ -360,18 +359,6 @@ def list_build_statements(
     return ast.parse("\n".join(lines)).body
 
 
-def statement_blocks(node: ast.AST) -> list[list[ast.stmt]]:
-    """Every statement list under ``node``, so a list built inside a loop or a branch folds too."""
-    blocks: list[list[ast.stmt]] = []
-    for sub in walk_nodes(node):
-        blocks.extend(
-            value
-            for _field, value in ast.iter_fields(sub)
-            if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value)
-        )
-    return blocks
-
-
 def fold_list_accumulators(
     fn: ast.FunctionDef, vectors: frozenset[str] = frozenset(), complex_names: frozenset[str] = frozenset()
 ) -> None:
@@ -384,7 +371,7 @@ def fold_list_accumulators(
     ``complex_names`` makes the build complex.
     """
     taken = OrderedSet(sub.id for sub in walk_nodes(fn) if isinstance(sub, ast.Name))
-    for block in statement_blocks(fn):
+    for block in statement_lists(fn):  # a list built inside a loop or a branch folds too
         start = 0
         while start < len(block):
             stmt = block[start]

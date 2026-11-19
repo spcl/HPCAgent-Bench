@@ -16,6 +16,7 @@ __all__ = [
     "InlineDefinitions",
     "RenameNames",
     "SubstituteLoads",
+    "statement_lists",
     "callee_attribute",
     "const_float",
     "const_int",
@@ -234,6 +235,12 @@ def set_field(node: ast.AST, field: str, value: object) -> None:
     if field not in node._fields:
         raise KeyError(f"{type(node).__name__} has no field {field!r}")
     setattr(node, field, value)
+
+
+def statement_lists(root: ast.AST) -> list[list[ast.stmt]]:
+    """Every non-empty statement list anywhere under ``root``: bodies, else branches and finally blocks, in
+    :func:`walk_nodes` order."""
+    return [block for node in walk_nodes(root) for block in nested_blocks(node) if block]
 
 
 def map_blocks(

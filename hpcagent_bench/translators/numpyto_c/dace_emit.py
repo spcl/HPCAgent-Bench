@@ -21,10 +21,10 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     expr_of,
     literal_loads,
     name_,
-    nested_blocks,
     numpy_attribute,
     numpy_call,
     set_field,
+    statement_lists,
     store_,
     walk_nodes,
 )
@@ -223,8 +223,6 @@ __all__ = [
     "spell_aranges_with_named_lengths",
     "splice_before_rebind",
     "split_top_level",
-    "statement_blocks",
-    "statement_lists",
     "statements_touching",
     "stored_through",
     "substituted_extent",
@@ -1165,12 +1163,6 @@ def fresh_binding_index(block: Sequence[ast.stmt], at: int, name: str) -> int | 
     return None
 
 
-def statement_blocks(root: ast.AST) -> Iterable[list[ast.stmt]]:
-    """Every statement list under ``root``: bodies, else branches and finally blocks."""
-    for node in walk_nodes(root):
-        yield from (block for block in nested_blocks(node) if block)
-
-
 class MaterializeWrittenReshape(ast.NodeTransformer):
     """Copy a non-C-order reshape that is later written through, when its source is private to it.
 
@@ -1186,7 +1178,7 @@ class MaterializeWrittenReshape(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
-        for block in statement_blocks(node):
+        for block in statement_lists(node):
             for at, stmt in enumerate(block):
                 self.materialize(node, block, at, stmt)
         return node
@@ -2046,11 +2038,6 @@ def reshape_view_binding(node: ast.stmt) -> str | None:
 def view_binding(node: ast.stmt, symbols: frozenset[str] = frozenset()) -> str | None:
     """Any spelling that leaves dace holding a View: a kept-dimension slice, a bare alias or a reshape."""
     return view_slice_binding(node) or bare_alias_binding(node, symbols) or reshape_view_binding(node)
-
-
-def statement_lists(root: ast.AST) -> list[list[ast.stmt]]:
-    """Every statement list in the subtree -- the blocks a name's live range can be confined to."""
-    return [block for parent in walk_nodes(root) for block in nested_blocks(parent) if block]
 
 
 #: numpy calls that build a FRESH buffer, so the name they bind is a new array rather than a rebind
