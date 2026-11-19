@@ -34,7 +34,7 @@ def test_two_setups_fuse_into_one_job_that_splits_back_into_each_setups_own_env(
     assert fuse_setups.fuse(out, [a, b], experiments) == 3
     job = (out / "job.env").read_text().splitlines()
     assert {*SHARED, "PACKET=x"} <= set(job)
-    assert not any(line.startswith(("LANGUAGE=", "SETUP=")) for line in job)
+    assert [line for line in job if line.startswith(("LANGUAGE=", "SETUP="))] == ["SETUP=joint-llr40-qwen-c"]
     rows = [json.loads(line) for line in (out / "problems.jsonl").read_text().splitlines()]
     assert [(row["id"], row["kernel"], row["env_file"], row["setup"]) for row in rows] == [
         (1, "k1", "llr40-qwen-c", "llr40-qwen-c"),
@@ -75,11 +75,30 @@ def test_a_shared_line_naming_a_key_that_differs_goes_into_each_overlay(tmp_path
     assert all("TAG=${LANGUAGE}-run" in spec["env"] for spec in overlays.values())
 
 
+def test_the_fused_job_takes_its_own_setup_name_and_each_overlay_keeps_its_setups(tmp_path: pathlib.Path) -> None:
+    """prepare_job.sh reads the job's SETUP before any overlay: the job carries its own name, and the name of one
+    of its setups is refused (a worker's episode ids would read as the job's)."""
+    experiments = tmp_path / "experiments"
+    a = rendered(experiments, "s-a", ["LANGUAGE=c"], ["k1"])
+    b = rendered(experiments, "s-b", ["LANGUAGE=hip"], ["k2"])
+    out = tmp_path / "fused"
+    fuse_setups.fuse(out, [a, b], experiments, name="joint-ab")
+    assert (out / "job.env").read_text().splitlines()[0] == "SETUP=joint-ab"
+    overlays = json.loads((out / "setups.json").read_text())["setups"]
+    assert {name: [line for line in spec["env"] if line.startswith("SETUP=")] for name, spec in overlays.items()} == {
+        "s-a": ["SETUP=s-a"],
+        "s-b": ["SETUP=s-b"],
+    }
+    with pytest.raises(SystemExit, match="distinct from its setups"):
+        fuse_setups.fuse(tmp_path / "again", [a, b], experiments, name="s-a")
+
+
 if __name__ == "__main__":
     for case in (
         test_two_setups_fuse_into_one_job_that_splits_back_into_each_setups_own_env,
         test_setups_that_differ_in_a_job_level_key_are_refused,
         test_a_shared_line_naming_a_key_that_differs_goes_into_each_overlay,
+        test_the_fused_job_takes_its_own_setup_name_and_each_overlay_keeps_its_setups,
     ):
         with tempfile.TemporaryDirectory() as scratch:
             case(pathlib.Path(scratch))
