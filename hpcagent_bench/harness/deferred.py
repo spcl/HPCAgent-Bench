@@ -25,7 +25,7 @@ from http import HTTPStatus
 import httpx
 
 from hpcagent_bench import fused
-from hpcagent_bench.cache_files import append_line
+from hpcagent_bench.cache_files import append_line, replacing
 
 __all__ = [
     "DONE_SUFFIX",
@@ -145,13 +145,10 @@ def spool(queue: pathlib.Path, library: pathlib.Path) -> pathlib.Path:
     target = spool_dir(queue) / f"{hashlib.sha256(data).hexdigest()}.so"
     if target.is_file():
         return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    scratch = target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    with scratch.open("wb") as handle:
+    with replacing(target) as scratch, scratch.open("wb") as handle:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
-    scratch.replace(target)
     return target
 
 
