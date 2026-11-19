@@ -22,6 +22,7 @@ containers
 :maxdepth: 1
 
 scoring
+grading-known-issues
 data_collection
 design/first-class-1117
 measurement_statistics
