@@ -73,7 +73,8 @@ freeze_code_tree() {
 
 # gc_code_trees <checkout> -- removes every tree under code_tree_root that no PENDING or RUNNING job of this user runs
 # (squeue's command: the tree's services.sbatch) and that is past its grace period, under its lock (a freeze in
-# progress keeps it). When squeue cannot answer nothing is removed: nothing says which trees are in use.
+# progress keeps it). The grace period is read under the lock: a submission that reused the tree while this one waited
+# for it has refreshed it. When squeue cannot answer nothing is removed: nothing says which trees are in use.
 gc_code_trees() {
     local checkout="$1" root lines tree sha
     root="$(code_tree_root)"
@@ -84,9 +85,9 @@ gc_code_trees() {
     for tree in "${root}"/*/; do
         tree="${tree%/}" sha="${tree##*/}"
         [[ "${sha}" =~ ^[0-9a-f]{40}$ && "${lines}" != *"${tree}/"* ]] || continue
-        [[ -z "$(find "${tree}/${CODE_TREE_MARKER}" -mmin "-${CODE_TREE_GRACE_MINUTES}" 2>/dev/null)" ]] || continue
         (
             flock -n 9 || exit 0
+            [[ -z "$(find "${tree}/${CODE_TREE_MARKER}" -mmin "-${CODE_TREE_GRACE_MINUTES}" 2>/dev/null)" ]] || exit 0
             echo "removing the frozen tree ${tree}: no queued job runs it" >&2
             git -C "${checkout}" worktree remove --force "${tree}" >/dev/null 2>&1 || rm -rf -- "${tree}"
         ) 9>"${root}/${sha}.lock"

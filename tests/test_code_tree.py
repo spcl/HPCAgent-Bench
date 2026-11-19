@@ -6,6 +6,7 @@ this interpreter), a stub squeue."""
 
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -134,6 +135,22 @@ def test_gc_removes_only_trees_no_queued_job_runs(tmp_path: pathlib.Path, named:
     assert done.returncode == 0, done.stderr
     assert tree.exists() is kept
     assert (tree.name in git(live, "worktree", "list")) is kept
+
+
+def test_gc_keeps_a_tree_a_submission_reused_while_gc_waited_for_its_lock(tmp_path: pathlib.Path) -> None:
+    """freeze_code_tree refreshes a reused tree's grace period under the tree's lock, and the submission then runs it;
+    a gc that read the old grace period before taking the lock must not remove it."""
+    live = checkout(tmp_path)
+    tree = pathlib.Path(run(tmp_path, f"freeze_code_tree {live} HEAD").stdout.strip())
+    marker = tree / ".frozen"
+    subprocess.run(["touch", "-d", "2 hours ago", str(marker)], check=True)
+    # The reuse, between gc's squeue read and its lock: the lock call itself refreshes the tree first.
+    flock = shutil.which("flock")
+    assert flock is not None
+    bash_stub(tmp_path / "bin", "flock", f'touch {marker}\nexec {flock} "$@"')
+    done = run(tmp_path, f"gc_code_trees {live}", QUEUED_COMMANDS="/other/job.sh")
+    assert done.returncode == 0, done.stderr
+    assert tree.exists()
 
 
 def test_gc_removes_nothing_when_the_queue_cannot_be_read(tmp_path: pathlib.Path) -> None:
