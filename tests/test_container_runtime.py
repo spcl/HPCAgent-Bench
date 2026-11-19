@@ -135,7 +135,7 @@ def test_apptainer_binds_the_shared_folder_and_the_roles_mounts(tmp_path: pathli
     done = wrap(tmp_path, "apptainer", "judge-node", gpu_flags="--rocm", PATH=only_installed(tmp_path, ("apptainer",)))
     assert done.returncode == 0, done.stderr
     assert done.srun == []
-    assert done.wrap[:3] == ["apptainer", "run", "--rocm"]
+    assert done.wrap[:4] == ["apptainer", "run", "--no-eval", "--rocm"]
     bind = [done.wrap[i + 1] for i, word in enumerate(done.wrap) if word == "--bind"]
     assert bind[0] == f"{tmp_path}/run/shared:/shared"
     assert f"{tmp_path}/repo:{tmp_path}/repo" in bind
