@@ -271,9 +271,12 @@ without hanging, so the race does not fire every time.
 **Not the grade change.** The pre-change driver (5eaed6507) calls the submission the same way. The pending-error
 rule of issue 6 adds a `hipGetLastError` and a scan of `/proc/self/maps` before the first call. The handshake's own
 `MPI_Allgather` lines the ranks up again before any open, so time spent before the call does not change who frees
-first. `debug/deadlock/job.sbatch` (not yet run) checks this. It runs the bare probe five times, then with one rank's
-first `hipIpcOpenMemHandle` delayed by 2 s (`delay_ipc_open.c`, expected to hang). It also runs the pre-change and
-the current driver on the same P=4 plan, with and without the delay.
+first. `debug/deadlock/job.sbatch` checks this (run 11-19, job 754804). It runs the bare probe five times, then with
+one rank's first `hipIpcOpenMemHandle` delayed by 2 s (`delay_ipc_open.c`). It also runs the pre-change and the
+current driver on the same P=4 plan, with and without the delay. Result: the five bare probes and both drivers without
+the delay finish, every verdict correct. With the delay, the delayed rank's open fails (`rc=17`), that rank alone picks
+RCCL, and the launch hangs until its timeout, whether rank 0 or rank 2 is delayed and under the pre-change driver as
+under the current one. The same regrade's grade 96 at rank counts 1 and 8 across two nodes finishes.
 
 **Verdict.** A legitimate failure of the submission: whether it deadlocks depends on how its own ranks happen to
 interleave. The grade cannot record it as wrong. A launch that times out is a hole (`MlLaunch.timed_out`), not a
