@@ -95,4 +95,3 @@ def test_an_ml_final_grade_without_a_recorded_denominator_is_credited_by_its_tor
         }
     )
     assert population.credited(frame).tolist() == [True, False, False]
-

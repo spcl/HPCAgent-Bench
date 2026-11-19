@@ -102,7 +102,9 @@ def of_grade(stamp: object, raced: Iterable[object] = (), winner: object = "") -
     policy, sep, listed = str(stamp or "").strip().partition(":")
     if policy == SINGLE_STAMP and not listed:
         # A bare single stamp (an ML grade's) names no kind: the one reference it raced, or its winner, is it.
-        timed = {kind for entry in raced if entry for kind in str(entry).split("+")} | ({str(winner)} if winner else set())
+        timed = {kind for entry in raced if entry for kind in str(entry).split("+")} | (
+            {str(winner)} if winner else set()
+        )
         return of_kinds(timed) if len(timed) == 1 else None
     if not sep or not listed:
         return None
