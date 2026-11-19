@@ -622,7 +622,7 @@ def validate_constraints(constraints: tuple[str, ...], parameters_view: PresetTa
 
 #: Identifier tokenizer for ``init.shapes`` expressions (the same regex as the translator's, so ``N`` never
 #: matches inside ``NITER``).
-_SHAPE_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+SHAPE_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -672,7 +672,7 @@ def validate_shape_identifiers(
     known = set(param_syms) | set(input_args) | set(array_args) | set(init_spec.scalars)
     module_names: frozenset[str] | None = None
     for array_name, shape_expr in init_spec.shapes.items():
-        for ident in _SHAPE_IDENT_RE.findall(str(shape_expr)):
+        for ident in SHAPE_IDENT_RE.findall(str(shape_expr)):
             if ident in known:
                 continue
             if module_names is None:
@@ -711,7 +711,7 @@ def shape_dims(shape_expr: str) -> tuple[str, ...]:
 
 def shape_identifiers(shape_expr: str) -> frozenset[str]:
     """Every distinct identifier ``shape_expr`` references (the one shape-identifier tokenizer)."""
-    return frozenset(_SHAPE_IDENT_RE.findall(str(shape_expr)))
+    return frozenset(SHAPE_IDENT_RE.findall(str(shape_expr)))
 
 
 def innermost_dim_expr(shape_expr: str) -> str | None:
@@ -747,7 +747,7 @@ def validate_packed_shapes(
         inner_expr = innermost_dim_expr(shape_expr)
         if inner_expr is None:
             continue
-        idents = _SHAPE_IDENT_RE.findall(inner_expr)
+        idents = SHAPE_IDENT_RE.findall(inner_expr)
         for preset, values in sorted(parameters_view.items()):
             namespace: dict[str, FuzzValue] = {**consts, **init_spec.scalars, **values}
             # A discrete {set: [...]} size is checked at EVERY element it can take.

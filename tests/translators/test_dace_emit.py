@@ -109,7 +109,7 @@ def emitted_renames(src: str) -> dict:
 
 def emit_(short: str) -> tuple[KernelIR, str]:
     # Drive off the co-located YAML; emit_bridge synthesizes the transient JSON the emitter reads.
-    # Through the inline fallback, exactly like autogen._emit_dace: the emitter renders a kept
+    # Through the inline fallback, exactly like autogen.emit_dace_sibling: the emitter renders a kept
     # helper as its own @dc.program, but the fallback exists for
     # the forms it cannot express, and the PARSE has to sit inside the retry either way.
     def render() -> tuple[KernelIR, str]:

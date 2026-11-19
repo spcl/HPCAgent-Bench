@@ -72,6 +72,7 @@ __all__ = [
     "fork_a_single_threaded_child",
     "grading_band",
     "is_perfect_cube",
+    "library_flags",
     "mismatch_detail",
     "native_build_command",
     "needs_fftw",
@@ -124,7 +125,7 @@ INVOKE_TIMEOUT_S = int(os.environ.get("HPCAGENT_BENCH_INVOKE_TIMEOUT_S", "120"))
 
 from collections.abc import Callable, Sequence
 
-from hpcagent_bench import dtypes as _dtypes  # noqa: E402
+from hpcagent_bench import dtypes  # noqa: E402
 
 # The polycc invocation the TIMED pluto column builds from, imported so this gate validates the same binary.
 from hpcagent_bench import flags, languages, modules, paths
@@ -148,38 +149,36 @@ from hpcagent_bench.translators.numpyto_common.naming import fptype_tag  # noqa:
 from hpcagent_bench.units import BYTES_PER_GIB  # noqa: E402
 
 #: by-value scalar ``kind`` -> ctypes type, from the shared dtype registry (matches the emitted signature).
-_CT = {r.scalar_kind: r.ctype for r in _dtypes.REGISTRY.values() if r.ctype is not None}
+CTYPE_OF_KIND = {r.scalar_kind: r.ctype for r in dtypes.REGISTRY.values() if r.ctype is not None}
 
-#: ctypes float types (everything else in ``_CT`` takes an ``int()`` cast).
+#: ctypes float types (everything else in ``CTYPE_OF_KIND`` takes an ``int()`` cast).
 CT_FLOAT = (ctypes.c_double, ctypes.c_float, ctypes.c_longdouble)
 
 
 def np_dtype_for_kind(kind: str, np_float: type) -> type:
     """numpy storage dtype for a binding ``kind``, resolved through the shared dtype registry."""
     try:
-        return np.dtype(_dtypes.numpy_for_kind(kind)).type
+        return np.dtype(dtypes.numpy_for_kind(kind)).type
     except KeyError:
         return np_float
 
 
-# -std= comes from compilers.yaml: the oracle accepts exactly the standard the harness builds with.
-_blas = {lang.text: languages.library_build_flags(lang, ["blas"]) for lang in (Language.C, Language.CPP)}
+def library_flags(library: str, langs: Sequence[Language]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """``library``'s compile and link tokens per language text, as every production build resolves them (pkg-config);
+    split because the link tokens must follow the source (:func:`native_build_command`). -std= comes from
+    compilers.yaml: the oracle accepts exactly the standard the harness builds with."""
+    groups = {lang.text: languages.library_build_flags(lang, [library]) for lang in langs}
+    return (
+        {lang: list(found[0]) for lang, found in groups.items()},
+        {lang: list(found[1]) for lang, found in groups.items()},
+    )
 
-#: BLAS tokens per native C-family backend (the emit lowers dense GEMM to ``cblas_dgemm``), resolved through
-#: pkg-config; split compile/link because the link tokens must follow the source (:func:`native_build_command`).
-_BLAS_CFLAGS, _BLAS_LDFLAGS = (
-    {lang: list(groups[0]) for lang, groups in _blas.items()},
-    {lang: [t for group in groups[1:] for t in group] for lang, groups in _blas.items()},
-)
 
-#: FFTW tokens, as every production build links them (the emit lowers 1-D np.fft to an FFTW call).
-_fftw = {
-    lang.text: languages.library_build_flags(lang, ["fftw"]) for lang in (Language.C, Language.CPP, Language.FORTRAN)
-}
-_FFTW_CFLAGS, _FFTW_LDFLAGS = (
-    {lang: list(groups[0]) for lang, groups in _fftw.items()},
-    {lang: [t for group in groups[1:] for t in group] for lang, groups in _fftw.items()},
-)
+#: BLAS tokens per native C-family backend (the emit lowers dense GEMM to ``cblas_dgemm``).
+BLAS_CFLAGS, BLAS_LDFLAGS = library_flags("blas", (Language.C, Language.CPP))
+
+#: FFTW tokens (the emit lowers 1-D np.fft to an FFTW call).
+FFTW_CFLAGS, FFTW_LDFLAGS = library_flags("fftw", (Language.C, Language.CPP, Language.FORTRAN))
 
 #: The call every FFT lowering renders, looked for in the EMITTED SOURCE.
 FFT_CALL = "_plan_dft_1d("
@@ -196,26 +195,26 @@ def needs_fftw(src: pathlib.Path) -> bool:
 def fftw_missing(backend: str) -> bool:
     """Can this host NOT link the emitted FFTW call for ``backend``? Then the build would succeed and ctypes fail to
     load it, a host gap misread as a numerical failure."""
-    return not _FFTW_LDFLAGS.get(backend)
+    return not FFTW_LDFLAGS.get(backend)
 
 
 #: Library group per backend, appended AFTER the source by :func:`native_build_command`.
 LINK = {
-    "c": _BLAS_LDFLAGS["c"] + _FFTW_LDFLAGS["c"],
-    "cpp": _BLAS_LDFLAGS["cpp"] + _FFTW_LDFLAGS["cpp"],
-    "fortran": list(_FFTW_LDFLAGS["fortran"]),
+    "c": BLAS_LDFLAGS["c"] + FFTW_LDFLAGS["c"],
+    "cpp": BLAS_LDFLAGS["cpp"] + FFTW_LDFLAGS["cpp"],
+    "fortran": list(FFTW_LDFLAGS["fortran"]),
 }
 
 COMPILE = {
-    "c": ["gcc", "-O2", languages.std_flag(Language.C), "-shared", "-fPIC", *_BLAS_CFLAGS["c"], *_FFTW_CFLAGS["c"]],
+    "c": ["gcc", "-O2", languages.std_flag(Language.C), "-shared", "-fPIC", *BLAS_CFLAGS["c"], *FFTW_CFLAGS["c"]],
     "cpp": [
         "g++",
         "-O2",
         languages.std_flag(Language.CPP),
         "-shared",
         "-fPIC",
-        *_BLAS_CFLAGS["cpp"],
-        *_FFTW_CFLAGS["cpp"],
+        *BLAS_CFLAGS["cpp"],
+        *FFTW_CFLAGS["cpp"],
     ],
     "fortran": [
         "gfortran",
@@ -225,7 +224,7 @@ COMPILE = {
         languages.std_flag(Language.FORTRAN),
         "-shared",
         "-fPIC",
-        *_FFTW_CFLAGS["fortran"],
+        *FFTW_CFLAGS["fortran"],
     ],
 }
 BACKENDS = tuple(COMPILE)
@@ -336,8 +335,8 @@ def grading_band(spec: BenchSpec, precision: str) -> tuple[float, float]:
     rtol, atol = PRECISIONS[precision][3:5]
     for dt in (spec.init.dtypes if spec.init is not None else {}).values():
         # By STORAGE: a declared dtype is not always a numpy one (int4 lives in an int8 byte).
-        npdt = np.dtype(_dtypes.storage_dtype(dt))
-        if _dtypes.is_storage_only(npdt.name):
+        npdt = np.dtype(dtypes.storage_dtype(dt))
+        if dtypes.is_storage_only(npdt.name):
             band = tolerance_band(precision_from_datatype(npdt.name)).as_tuple()
         elif npdt in BAND_BY_DTYPE:
             band = BAND_BY_DTYPE[npdt]
@@ -1240,11 +1239,11 @@ def invoke(
     keep: list[np.ndarray] = []
     for arg in binding["args"]:
         nm, kind = arg["name"], arg["kind"]
-        if kind in _CT:
+        if kind in CTYPE_OF_KIND:
             val = call.get(nm, syms.get(nm))
             if val is None:
                 return f"FAIL:unresolved:{nm}"
-            ct = _CT[kind]
+            ct = CTYPE_OF_KIND[kind]
             cv = ct(float(val) if ct in CT_FLOAT else int(val))
             # Scalars pass BY VALUE for every backend (Fortran's bind(C)/value dummy).
             cargs.append(cv)

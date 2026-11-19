@@ -125,15 +125,15 @@ class Mode(Coded):
 
 # -ffast-math is OFF (it changes what a kernel computes); only the FP-relax knobs are kept, reassociation is a separate
 # licence. -fopenmp is ON (cpu_env pins one thread outside MULTI_CORE); clang pins LLVM's own runtime.
-_FP_RELAX = "-fno-math-errno -fno-trapping-math -fno-signed-zeros"
+FP_RELAX = "-fno-math-errno -fno-trapping-math -fno-signed-zeros"
 
 #: Reassociation licence (reorders reductions, nothing else of -ffast-math), pinned because compilers differ by
 #: default. OFF by default (``flags.fp_associative``): it moves every baseline, so set it for a whole experiment.
 #: Read once at import.
-_FP_ASSOC = "-fassociative-math" if config.current().flags.fp_associative else ""
+FP_ASSOC = "-fassociative-math" if config.current().flags.fp_associative else ""
 
 #: FP contraction pinned to ``fast`` so compiler columns agree on fma fusion (IEEE sanctions it; not -ffast-math).
-_FP_CONTRACT = "-ffp-contract=fast"
+FP_CONTRACT = "-ffp-contract=fast"
 
 #: nvc's spelling of the same (its default at ``-O2`` and above); checked at image build.
 FP_CONTRACT_NVHPC = "-Mfma"
@@ -141,7 +141,7 @@ FP_CONTRACT_NVHPC = "-Mfma"
 # OS/arch-aware pieces: ``-mcpu=native`` on Apple-Silicon macOS, the libomp pin Linux-only, libmvec glibc-only.
 ARCH_NATIVE = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_arm()) else "-march=native"
 #: clang links LLVM's OWN OpenMP runtime (what Polly's parallel backend calls).
-_OPENMP_CLANG = "-fopenmp=libomp" if osinfo.IS_LINUX else "-fopenmp"
+OPENMP_CLANG = "-fopenmp=libomp" if osinfo.IS_LINUX else "-fopenmp"
 
 #: The libmvec decl header handed to GCC (the file carries the rationale).
 VECMATH_H: pathlib.Path = paths.ROOT / "hpcagent_bench" / "envs" / "vecmath.h"
@@ -151,28 +151,26 @@ PAPI_RANGES_H: pathlib.Path = paths.ROOT / "hpcagent_bench" / "envs" / "papi_ran
 
 # glibc's vector libm per compiler family: both baselines carry it or neither, so cc-vs-llvm compares compilers.
 # clang's flag is confined to the host pass (offload rejects it); GCC gets an equivalent decl header via -include.
-_VECLIB_CLANG = " -Xarch_host -fveclib=libmvec" if osinfo.IS_LINUX else ""
-_VECLIB_GCC = f" -include {shlex.quote(str(VECMATH_H))}" if osinfo.IS_LINUX else ""
+VECLIB_CLANG = " -Xarch_host -fveclib=libmvec" if osinfo.IS_LINUX else ""
+VECLIB_GCC = f" -include {shlex.quote(str(VECMATH_H))}" if osinfo.IS_LINUX else ""
 
 #: The optimization level every CPU baseline compiles at (named for diagnostic tools to reuse).
 OPT_LEVEL = "-O3"
 
 #: Clang baseline: -O3, native arch, OpenMP, vector libm, no fast-math.
 CPU_BASELINE_CLANG = (
-    f"-O3 {ARCH_NATIVE} {_OPENMP_CLANG} {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fstrict-aliasing -fPIC{_VECLIB_CLANG}"
+    f"-O3 {ARCH_NATIVE} {OPENMP_CLANG} {FP_RELAX} {FP_ASSOC} {FP_CONTRACT} -fstrict-aliasing -fPIC{VECLIB_CLANG}"
 )
 
 #: GCC baseline for C / C++ (libmvec through the decl header: gcc has no -fveclib).
-CPU_BASELINE_GCC = (
-    f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fstrict-aliasing -fPIC{_VECLIB_GCC}"
-)
+CPU_BASELINE_GCC = f"-O3 {ARCH_NATIVE} -fopenmp {FP_RELAX} {FP_ASSOC} {FP_CONTRACT} -fstrict-aliasing -fPIC{VECLIB_GCC}"
 
 #: GCC baseline for Fortran: without the C decl header (gfortran reaches libmvec through the distro driver spec).
-CPU_BASELINE_GFORTRAN = f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fstrict-aliasing -fPIC"
+CPU_BASELINE_GFORTRAN = f"-O3 {ARCH_NATIVE} -fopenmp {FP_RELAX} {FP_ASSOC} {FP_CONTRACT} -fstrict-aliasing -fPIC"
 
 #: Intel icx baseline: the clang one, after ``-fp-model=precise`` (icx defaults to ``fast``, i.e. -ffast-math), with
 #: icx's own ``-fopenmp`` (Intel's libiomp5, the __kmpc_ ABI libomp shares). AMD AOCC takes CPU_BASELINE_CLANG as is.
-CPU_BASELINE_ICX = f"-fp-model=precise {CPU_BASELINE_CLANG.replace(_OPENMP_CLANG, '-fopenmp')}"
+CPU_BASELINE_ICX = f"-fp-model=precise {CPU_BASELINE_CLANG.replace(OPENMP_CLANG, '-fopenmp')}"
 
 #: NVHPC baseline for C / C++ / Fortran (nvc relaxes and reassociates by default; ``-tp``/``-mp`` spellings).
 CPU_BASELINE_NVHPC = f"-O3 -tp=native -mp {FP_CONTRACT_NVHPC} -fPIC"
@@ -192,8 +190,8 @@ ASAN_SHARED_RUNTIME: tuple[str, ...] = ("-shared-libsan",)
 
 
 #: flang's reassociation licence needs ``-fno-signed-zeros`` beside it (LLVM vectorizes a reduction only with both).
-FP_ASSOC_FLANG = f"{_FP_ASSOC} -fno-signed-zeros" if _FP_ASSOC else ""
-FLANG_BASELINE = f"-O3 {ARCH_NATIVE} -fopenmp {FP_ASSOC_FLANG} {_FP_CONTRACT} -fPIC"
+FP_ASSOC_FLANG = f"{FP_ASSOC} -fno-signed-zeros" if FP_ASSOC else ""
+FLANG_BASELINE = f"-O3 {ARCH_NATIVE} -fopenmp {FP_ASSOC_FLANG} {FP_CONTRACT} -fPIC"
 
 #: flang's route to glibc's vector libm, probe-gated at use (an older flang rejects it).
 VECLIB_FLANG = "-fveclib=libmvec" if osinfo.IS_LINUX else ""
@@ -218,7 +216,7 @@ LINK_MIMALLOC = "-lmimalloc"
 #: nothing, so :func:`polly_capability` checks the object and a VACUOUS column is declined. Polly's own
 #: profitability model stays on: ``-polly-parallel-force`` and ``-polly-process-unprofitable`` parallelized loops
 #: too small to pay for a fork (llr40 geomean 1.38x vs 1.45x over clang -O3, worst kernel 0.004x vs 0.24x).
-POLLY_PAR = f"-mllvm -polly -mllvm -polly-parallel {_OPENMP_CLANG}"
+POLLY_PAR = f"-mllvm -polly -mllvm -polly-parallel {OPENMP_CLANG}"
 
 #: GCC autopar + Graphite: ``{n}`` bakes the thread count in at BUILD time. ``graphite-allow-codegen-errors`` is
 #: never set (it forces INCORRECT codegen).
@@ -235,7 +233,7 @@ DO_CONCURRENT_NVFORTRAN = "-stdpar=multicore"
 PLUTO_PAR = "-fopenmp"
 
 #: The Pluto column's clang baseline: :data:`CPU_BASELINE_CLANG` with only the OpenMP spelling swapped.
-CPU_BASELINE_CLANG_PLUTO = CPU_BASELINE_CLANG.replace(_OPENMP_CLANG, PLUTO_PAR)
+CPU_BASELINE_CLANG_PLUTO = CPU_BASELINE_CLANG.replace(OPENMP_CLANG, PLUTO_PAR)
 
 #: NVHPC pure-source CPU auto-parallelization (analogue of GCC ``-ftree-parallelize-loops``).
 NVHPC_CONCUR = "-Mconcur"
@@ -261,7 +259,7 @@ class AutoparProbe(NamedTuple):
 
 #: Three self-contained SCoPs (elementwise, stencil, matmul reduction), because backends decline different shapes;
 #: outlining any of them is the verdict. Always C (``restrict``).
-_AUTOPAR_PROBE_SOURCE = """\
+AUTOPAR_PROBE_SOURCE = """\
 void axpy(double *restrict a, const double *restrict b, int n) {
   for (int i = 0; i < n; i++) a[i] = b[i] * 2.0;
 }
@@ -283,7 +281,7 @@ void mm(double *restrict C, const double *restrict A, const double *restrict B, 
 """
 
 #: A loop the source ALREADY marks parallel, for a source-to-source column (does the compiler honour the pragma?).
-_OPENMP_PROBE_SOURCE = """\
+OPENMP_PROBE_SOURCE = """\
 #include <omp.h>
 void ax(double *restrict y, const double *restrict x, double a, int n) {
 #pragma omp parallel for
@@ -348,7 +346,7 @@ def probe_autopar(
     compiler: str,
     flags: str,
     outline_pattern: str,
-    source: str = _AUTOPAR_PROBE_SOURCE,
+    source: str = AUTOPAR_PROBE_SOURCE,
     runtime_pattern: str = OMP_RUNTIME_CALL_PATTERN,
     suffix: str = ".c",
 ) -> AutoparProbe:
@@ -411,7 +409,7 @@ def pluto_capability() -> AutoparProbe:
     """The measured :class:`AutoparProbe` for clang at the Pluto column's real flags: does it turn polycc's pragma
     into a runtime call?"""
     composed = f"{CPU_BASELINE_CLANG_PLUTO} {PLUTO_PAR}"
-    return probe_autopar("clang", composed, NO_OUTLINE_PATTERN, _OPENMP_PROBE_SOURCE)
+    return probe_autopar("clang", composed, NO_OUTLINE_PATTERN, OPENMP_PROBE_SOURCE)
 
 
 # Optimization-report flags (to stderr): only ever on a SEPARATE report build, never the timed one.
@@ -432,10 +430,10 @@ CLANG_VECT_UNLIMITED = "-mllvm -force-target-instruction-cost=1 -mllvm -slp-thre
 # GPU baselines; the arch suffix is appended per host.
 
 #: NVCC baseline: the relax set on the host pass only, device pass at IEEE defaults; no fast-math on the GPU either.
-CUDA_BASELINE = f"-O3 -Xcompiler='-O3 -march=native {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC'"
+CUDA_BASELINE = f"-O3 -Xcompiler='-O3 -march=native {FP_RELAX} {FP_ASSOC} {FP_CONTRACT} -fPIC'"
 
 #: HIP baseline: hipcc takes the relax flags natively; ``-fopenmp`` for the host entry TU's pragmas.
-HIP_BASELINE = f"-O3 -march=native -fopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC"
+HIP_BASELINE = f"-O3 -march=native -fopenmp {FP_RELAX} {FP_ASSOC} {FP_CONTRACT} -fPIC"
 
 # Directive-offload flag sets, ``{arch}`` filled from the PROBED arch; LLVM offloads OpenMP, NVHPC OpenACC.
 

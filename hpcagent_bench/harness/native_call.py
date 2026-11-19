@@ -844,14 +844,14 @@ def slot_threads(cpus: set[int], requested: int | None = None) -> int:
     return max(1, min(requested, len(cpus)))
 
 
-def _ptr_cdecl(dtype: "str | np.dtype[np.generic]") -> str:
+def pointer_cdecl(dtype: "str | np.dtype[np.generic]") -> str:
     """The cffi pointer type for a numpy dtype; a half pointer is declared over its bits (cffi has no ``_Float16``)."""
     name = np.dtype(dtype).name
     return "uint16_t *" if name == "float16" else f"{c_type(name)} *"
 
 
 #: cffi pointer type of the reserved scratch buffer (Sec. 11).
-WORKSPACE_PTYPE = _ptr_cdecl(WORKSPACE_DTYPE)
+WORKSPACE_PTYPE = pointer_cdecl(WORKSPACE_DTYPE)
 
 
 def host_stand_ins(data: KernelData, xp: types.ModuleType) -> KernelData:
@@ -1516,7 +1516,9 @@ class CallMarshal:
         for a in binding.args:
             if a.kind == "ptr":
                 cdecl = (
-                    f"{structs[a.name].struct} *" if a.name in structs else _ptr_cdecl(np.asarray(data[a.name]).dtype)
+                    f"{structs[a.name].struct} *"
+                    if a.name in structs
+                    else pointer_cdecl(np.asarray(data[a.name]).dtype)
                 )
                 ptr_cdecl[a.name] = cdecl
                 rebase[a.name] = base if a.is_index else 0

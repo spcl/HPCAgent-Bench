@@ -247,9 +247,9 @@ for k in kernels:
         language = reference_language(spelled)
         # A hit costs a stat and a read; only a miss pays the emit. Nothing here forces a rebuild.
         before = agent.generated_cache_root()
-        # The memo is _reference_source's; emit_reference_source is not lru_cached, and calling
+        # The memo is cached_reference_source's; emit_reference_source is not lru_cached, and calling
         # .cache_clear() on it raised AttributeError for EVERY kernel, so this step filled nothing.
-        agent._reference_source.cache_clear()
+        agent.clear_reference_cache()
         key = None
         root = agent.generated_cache_root()
         if root is not None:

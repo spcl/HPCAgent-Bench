@@ -77,7 +77,7 @@ def serial_spans(spans: Sequence[slice], work: Callable[[slice], Any]) -> list[A
 STRICT_CHUNK = 1 << 22
 
 
-def _dtype_eps(dtype: np.dtype) -> float:
+def dtype_eps(dtype: np.dtype) -> float:
     """Machine epsilon of a floating dtype; ``numpy.finfo`` first, the registered extension formats
     (bfloat16, fp8) through ``ml_dtypes`` exactly as :func:`hpcagent_bench.precision.dtype_eps` does."""
     try:
@@ -284,7 +284,7 @@ def strict_small_reason(
     reason = l2_reason(sums, rtol=rtol, l2_factor=l2_factor, inherited=inherited, unit=unit)
     if reason is not None or sign_margin is None or sums.scale == 0.0:
         return reason
-    threshold = sign_margin * (float(growth) if growth is not None else _dtype_eps(r.dtype)) * sums.scale
+    threshold = sign_margin * (float(growth) if growth is not None else dtype_eps(r.dtype)) * sums.scale
     signs = SignMismatches(0, -1)
     complex_inputs = bool(np.iscomplexobj(rf))
     parts = over(
