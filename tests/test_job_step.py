@@ -33,6 +33,7 @@ def run_job(
     ending: str = "exit 0",
     lscpu: str = LSCPU,
     scontrol: str = "echo nodeA; echo nodeB",
+    srun_help: str = "--oom-kill-step",
     **extra_env: str,
 ) -> subprocess.CompletedProcess[str]:
     """``script args`` with 4 tasks of 2 cores on 2 nodes under stubs: ``srun`` logs its options to ``srun.log`` and
@@ -44,6 +45,7 @@ def run_job(
     bash_stub(
         stubs,
         "srun",
+        f'[[ "$1" == --help ]] && {{ echo "{srun_help}"; exit 0; }}\n'
         f'opts=(); while [[ "$1" == --* ]]; do opts+=("$1"); shift; done\necho "${{opts[*]}}" >>{tmp_path}/srun.log\n'
         'exec "$@"',
     )
@@ -103,6 +105,15 @@ def test_grade_under_runs_every_shard_as_its_own_step_where_its_task_would_run(t
         f"--out-dir {tmp_path / 'out'}"
         for shard in range(4)
     ]
+
+
+def test_an_srun_without_oom_kill_step_launches_every_shard_without_it(tmp_path: pathlib.Path) -> None:
+    """Slurm before 24.05 (ault's 20.11) rejects --oom-kill-step and would fail every step."""
+    done = run_job(tmp_path, "grade-under.sbatch", str(tmp_path / "w.jsonl"), str(tmp_path / "out"), srun_help="")
+    assert done.returncode == 0, done.stderr
+    steps = (tmp_path / "srun.log").read_text().splitlines()
+    assert len(steps) == 4
+    assert not any("--oom-kill-step" in step for step in steps)
 
 
 def test_a_shard_step_rederives_its_thread_limit_and_its_cores(tmp_path: pathlib.Path) -> None:
