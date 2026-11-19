@@ -29,6 +29,7 @@ __all__ = [
     "is_value_arg",
     "offset_draw",
     "pool_seeds",
+    "pool_size",
     "rep_total",
     "timed_seeds",
     "variant_for",
@@ -104,23 +105,30 @@ def rep_total(warmup: int, repeat: int) -> int:
     return int(warmup) + max(1, int(repeat))
 
 
-#: Seeds in a cell's timed pool: one per call of one side of the credited protocol's measurement, so no input
-#: repeats within one measurement child (equal to ``perturbation.POOL_SIZE``).
+#: Seeds in a cell's timed pool under the credited protocol: one per call of one side of its measurement (equal to
+#: ``perturbation.POOL_SIZE``). Every recorded mw4x5 grade drew these; a longer measurement draws more
+#: (:func:`pool_size`).
 POOL_SIZE: int = rep_total(
     protocols.WARMUP, protocols.named(str(config.default_value(protocols.CREDITED_KEY))).repeat or 0
 )
 
 
-def pool_seeds(base_seed: int, kernel: str, preset: Preset, datatype: str) -> list[int]:
-    """The cell's fixed pool of timed-input seeds, from the route's ``base_seed`` alone (so expected outputs are
-    computed once per route); never ``base_seed`` itself."""
+def pool_size(total_reps: int) -> int:
+    """Seeds in the pool of a measurement of ``total_reps`` calls: one per call, so no input repeats within it, and
+    never fewer than :data:`POOL_SIZE`, so a measurement no longer than the credited one keeps its inputs."""
+    return max(POOL_SIZE, int(total_reps))
+
+
+def pool_seeds(base_seed: int, kernel: str, preset: Preset, datatype: str, size: int = POOL_SIZE) -> list[int]:
+    """The cell's fixed pool of ``size`` timed-input seeds (:func:`pool_size`), from the route's ``base_seed`` alone
+    (so expected outputs are computed once per route and size); never ``base_seed`` itself."""
     base = int(base_seed)
     tag = int.from_bytes(
         hashlib.blake2b(f"{kernel}|{preset.text}|{datatype}".encode(), digest_size=4).digest(), "little"
     )
-    rng = np.random.default_rng((base & 0xFFFFFFFF, tag, POOL_SIZE, 0xC4EC))
+    rng = np.random.default_rng((base & 0xFFFFFFFF, tag, int(size), 0xC4EC))
     pool: list[int] = []
-    while len(pool) < POOL_SIZE:
+    while len(pool) < size:
         drawn = int(rng.integers(1, 2**31 - 1))
         if drawn != base and drawn not in pool:
             pool.append(drawn)
@@ -146,9 +154,11 @@ def variant_for(
     i: int,
     scenarios: tuple[str, ...] | None = None,
     xp: ModuleType = np,
+    pool: int = POOL_SIZE,
 ) -> KernelData:
-    """``base_data`` with every value array regenerated at ``seeds[i]`` (sparse arrays keep their pattern);
-    ``seeds[i] == seeds[-1]`` returns ``base_data``. Module-level so a ``functools.partial`` of it pickles."""
+    """``base_data`` with every value array regenerated at ``seeds[i]`` (sparse arrays keep their pattern), drawn as
+    a call of a measurement whose pool holds ``pool`` seeds; ``seeds[i] == seeds[-1]`` returns ``base_data``.
+    Module-level so a ``functools.partial`` of it pickles."""
     base_seed = seeds[-1]
     seed = seeds[i]
     if seed == base_seed:
@@ -166,6 +176,7 @@ def variant_for(
         hidden_variant=hidden_variant,
         scenarios=scenarios,
         xp=xp,
+        pool=pool,
     )
     out = dict(base_data)
     for name, perturb in classification.items():
@@ -193,6 +204,7 @@ class InputRecipe:
     params_override: dict | None = None
     classification: Mapping[str, bool] | None = None
     rep_seeds: tuple[int, ...] = ()
+    pool: int = POOL_SIZE
 
     def build(self, xp: ModuleType) -> tuple[KernelData, Callable[[int], KernelData] | None]:
         """The base inputs on ``xp``, and the per-call inputs when the timed inputs vary (else ``None``)."""
@@ -221,6 +233,7 @@ class InputRecipe:
             self.params_override,
             None,
             xp=xp,
+            pool=self.pool,
         )
         return base, per_call
 
