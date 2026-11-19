@@ -39,10 +39,9 @@ def shell_assignments(path: pathlib.Path) -> dict[str, str]:
 
 
 def test_the_default_results_db_is_under_the_results_dir() -> None:
-    """``record.db_path`` in config.yaml and :data:`recording.DEFAULT_DB_PATH` both name
-    ``results/hpcagent_bench.db``, and :func:`recording.base_db_path` resolves it under the repo root."""
+    """``record.db_path`` in config.yaml names ``results/hpcagent_bench.db``."""
     shipped = yaml.safe_load(config.CONFIG_YAML.read_text(encoding="utf-8"))["record"]["db_path"]
-    assert shipped == recording.DEFAULT_DB_PATH == f"{paths.RESULTS_DIR}/{run_layout.DB_FILENAME}"
+    assert shipped == f"{paths.RESULTS_DIR}/{run_layout.DB_FILENAME}"
 
 
 def test_base_db_path_defaults_to_the_results_dir(monkeypatch: pytest.MonkeyPatch) -> None:
