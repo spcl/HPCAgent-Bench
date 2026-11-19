@@ -9,7 +9,6 @@ import contextlib
 import dataclasses
 import enum
 import functools
-import json
 import os
 import pathlib
 import sqlite3
