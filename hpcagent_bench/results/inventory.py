@@ -16,13 +16,13 @@ import csv
 import json
 import pathlib
 import re
-import sqlite3
 import statistics
 import subprocess
 from collections.abc import Iterable, Sequence
 from typing import NamedTuple
 
 from hpcagent_bench import run_layout
+from hpcagent_bench.harness import results_db
 from hpcagent_bench.results import data_guard
 
 __all__ = ["COLUMNS", "NODEHOUR_COLUMNS", "SACCT_FIELDS", "JobRow", "NodeHours", "inventory", "main", "nodehours"]
@@ -95,9 +95,8 @@ def hardware_of(job: JobRow) -> str:
 
 
 def read_job(job: JobRow) -> list[Row]:
-    """One :data:`COLUMNS` row per setup of ``job``'s results DB (opened read-only)."""
-    with sqlite3.connect(f"file:{job.path}?mode=ro", uri=True) as db:
-        db.row_factory = sqlite3.Row
+    """One :data:`COLUMNS` row per setup of ``job``'s results DB (opened read-only, an older file as it is)."""
+    with results_db.reading(job.path, finished=results_db.finished_db(job.path)) as db:
         setups = db.execute("SELECT * FROM setups ORDER BY setup").fetchall()
         rows: list[Row] = []
         for setup in setups:
