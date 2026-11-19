@@ -564,3 +564,18 @@ def test_prepare_in_its_own_step_takes_its_shards_kernels(monkeypatch: pytest.Mo
     monkeypatch.delenv("SLURM_LOCALID", raising=False)
     assert jobs.main(["--shard", "3", "--shards", "4", "prepare", "--tag", "llr40"]) == 0
     assert seen == [["--tag", "llr40", "--rank", "3", "--ranks", "4"]]
+
+
+def test_a_task_on_an_nvidia_node_narrows_the_variable_cuda_reads(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CUDA runtime reads CUDA_VISIBLE_DEVICES, never ROCR_VISIBLE_DEVICES: on an NVIDIA node the task's GPUs (from
+    the list Slurm set) are narrowed there too, so no child of the task reaches another task's GPUs."""
+    nvidia = tmp_path / "nvidia"
+    (nvidia / "0000:01:00.0").mkdir(parents=True)
+    monkeypatch.setattr(jobs, "NVIDIA_GPUS_DIR", nvidia)
+    monkeypatch.setattr(jobs, "task_slots", lambda: 2)
+    monkeypatch.setattr(jobs, "node_has_gpus", lambda: True)
+    environ = {"SLURM_LOCALID": "1", "CUDA_VISIBLE_DEVICES": "0,1,2,3"}
+    jobs.bind_task(environ, tmp_path)
+    assert (environ["CUDA_VISIBLE_DEVICES"], environ["ROCR_VISIBLE_DEVICES"]) == ("2,3", "2,3")

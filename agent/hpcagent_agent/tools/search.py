@@ -30,6 +30,8 @@ DESCRIPTION = (
 
 
 class SearchInput(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")  # a misspelled argument is an error, not dropped
+
     query: str = pydantic.Field(min_length=1, description="Question or search query.")
     context: str | None = pydantic.Field(None, description="Optional task context to guide the search.")
     limit: int | None = pydantic.Field(None, ge=1, le=20, description="Optional requested number of results.")

@@ -94,9 +94,11 @@ def definition(
     tools: tuple[str, ...] | None = None,
     phases: tuple[PacketPhase, ...] = (),
     workflow: str = "",
+    route: str = "",
 ) -> PacketDef:
     """The packet ``key``'s table declares; ``pages`` are the pages its source ships (the default ``skills``), and
-    ``tools``, ``phases`` and ``workflow`` what a plugin's phases derive (``tools`` None: the table's own)."""
+    ``tools``, ``phases`` and ``workflow`` what a plugin's phases derive (``tools`` None: the table's own); ``route``
+    the judge route of a plugin packet's tools."""
     skills = table.skills or ((key,) if key in pages else ())
     return PacketDef(
         name=table.name,
@@ -112,6 +114,7 @@ def definition(
         short=table.short,
         phases=phases,
         workflow=workflow,
+        route=route,
         harness=table.harness,
     )
 

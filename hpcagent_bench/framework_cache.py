@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Per-kernel ``<kernel_dir>/.cache/`` for framework-autogen artifacts (sibling sources and the parsed DaCe base
 SDFG). Every load is fingerprint-guarded by a per-artifact ``.fp`` sidecar (a mismatch is a MISS); writes are
-atomic. DaCe is imported lazily."""
+atomic. The sidecar also holds the sha256 of the payload it was written with, so two writers interleaving their
+payload and sidecar replacements leave a MISS, never one writer's payload under the other's fingerprint. DaCe is
+imported lazily."""
 
 import functools
 import os
@@ -17,6 +19,7 @@ from hpcagent_bench.translators.numpyto_common.emit_io import is_generated
 __all__ = [
     "bench_tree_fingerprint",
     "credit_production",
+    "fresh",
     "dace_tree_fingerprint",
     "kernel_cache_dir",
     "load_generated",
@@ -26,6 +29,7 @@ __all__ = [
     "sdfg_cache_path",
     "seconds_path",
     "sidecar_path",
+    "sidecar_text",
     "source_fingerprint",
     "stored_fingerprint",
 ]
@@ -131,12 +135,28 @@ def credit_production(artifact: pathlib.Path, name: phase_clock.Phase) -> None:
         pass
 
 
+def sidecar_text(fingerprint: str, payload: bytes) -> bytes:
+    """What a sidecar holds: the fingerprint and the sha256 of the payload written under it."""
+    return f"{fingerprint} {sha256_hex(payload)}".encode()
+
+
 def stored_fingerprint(artifact: pathlib.Path) -> str | None:
     """The fingerprint recorded for ``artifact``, or ``None`` when no readable sidecar exists."""
     try:
-        return sidecar_path(artifact).read_text().strip()
+        fields = sidecar_path(artifact).read_text().split()
     except OSError:
         return None
+    return fields[0] if fields else None
+
+
+def fresh(artifact: pathlib.Path, fingerprint: str, payload: bytes) -> bool:
+    """Whether ``payload`` (``artifact``'s bytes as read) is the one the sidecar recorded under ``fingerprint``. A
+    sidecar without the payload's hash (an older cache) is stale."""
+    try:
+        recorded = sidecar_path(artifact).read_text().split()
+    except OSError:
+        return False
+    return recorded == [fingerprint, sha256_hex(payload)]
 
 
 # Generated framework SIBLING sources (dace/cupy/numba)
@@ -144,11 +164,14 @@ def stored_fingerprint(artifact: pathlib.Path) -> str | None:
 
 def load_generated(cache_dir: pathlib.Path, canonical: pathlib.Path, fingerprint: str) -> bool:
     """``True`` (a HIT, restoring ``canonical`` if missing or different) when a cached copy matches ``fingerprint``,
-    else ``False``; only the sidecar decides freshness."""
+    else ``False``; the sidecar decides freshness (:func:`fresh`)."""
     cached = cache_dir / canonical.name
-    if not cached.exists() or stored_fingerprint(cached) != fingerprint:
+    try:
+        payload = cached.read_bytes()
+    except OSError:
         return False
-    payload = cached.read_bytes()
+    if not fresh(cached, fingerprint, payload):
+        return False
     if not canonical.exists() or canonical.read_bytes() != payload:
         write_atomic(canonical, payload)
     credit_production(cached, phase_clock.Phase.CODEGEN)
@@ -160,9 +183,10 @@ def save_generated(cache_dir: pathlib.Path, canonical: pathlib.Path, fingerprint
     if not canonical.exists():
         return
     cached = cache_dir / canonical.name
-    write_atomic(cached, canonical.read_bytes())
+    payload = canonical.read_bytes()
+    write_atomic(cached, payload)
     write_atomic(seconds_path(cached), f"{seconds:.6f}".encode())
-    write_atomic(sidecar_path(cached), fingerprint.encode())
+    write_atomic(sidecar_path(cached), sidecar_text(fingerprint, payload))
 
 
 # DaCe base SDFG (compressed .sdfgz, one file per device)
@@ -177,13 +201,23 @@ def load_sdfg(cache_dir: pathlib.Path, module_name: str, device_tag: str, finger
     """The cached base SDFG for ``(module_name, device_tag)`` if fresh for ``fingerprint``, else ``None`` (also on
     any load failure: a bad entry degrades to a rebuild)."""
     path = sdfg_cache_path(cache_dir, module_name, device_tag)
-    if not path.exists() or stored_fingerprint(path) != fingerprint:
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        return None
+    if not fresh(path, fingerprint, payload):
         return None
     try:
         import dace
 
         sdfg = dace.SDFG.from_file(str(path))
     except Exception:  # noqa: BLE001 -- a corrupt/incompatible cache entry must fall back to a rebuild
+        return None
+    # Another writer may have replaced the file between the check and the parse: then what was parsed is unchecked.
+    try:
+        if path.read_bytes() != payload:
+            return None
+    except OSError:
         return None
     credit_production(path, phase_clock.Phase.TRANSFORM)
     return sdfg
@@ -198,7 +232,9 @@ def save_sdfg(
     try:
         with replacing(path) as tmp:
             sdfg.save(str(tmp), compress=True)
+            # Hashed before the rename: after it another writer's file may already sit at ``path``.
+            payload = tmp.read_bytes()
         write_atomic(seconds_path(path), f"{seconds:.6f}".encode())
-        write_atomic(sidecar_path(path), fingerprint.encode())
+        write_atomic(sidecar_path(path), sidecar_text(fingerprint, payload))
     except Exception:  # noqa: BLE001 -- never let a cache write fail a run
         path.unlink(missing_ok=True)

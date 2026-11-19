@@ -9,6 +9,7 @@ from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import i
 from hpcagent_bench.translators.numpyto_common.statement_desugar import bind, element_read, indexed_loop, pair_names
 
 __all__ = [
+    "match_reshape",
     "FFT_FNS",
     "NP_FUNC_ALIASES",
     "AstypeRewriter",
@@ -19,8 +20,6 @@ __all__ = [
     "ReshapeMethodRewriter",
     "ScalarTimesMatmulRewriter",
     "TransposeRewriter",
-    "match_fft",
-    "match_reshape",
 ]
 
 
@@ -153,17 +152,6 @@ class ReshapeMethodRewriter(ast.NodeTransformer):
 
 
 FFT_FNS = {"fftn": (False, True), "ifftn": (True, True), "fft": (False, False), "ifft": (True, False)}
-
-
-def match_fft(node: ast.expr) -> tuple[str, ast.expr, list[ast.keyword]] | None:
-    """If ``node`` is ``np.fft.{fftn,ifftn,fft,ifft}(arg, ...)``, return
-    ``(fn_name, arg, keywords)``; else ``None``."""
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in FFT_FNS):
-        return None
-    f = node.func
-    if isinstance(f.value, ast.Attribute) and f.value.attr == "fft" and is_numpy_module(f.value.value) and node.args:
-        return f.attr, node.args[0], node.keywords
-    return None
 
 
 #: numpy free-function aliases that are exact synonyms of a name the

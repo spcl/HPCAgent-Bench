@@ -880,6 +880,9 @@ def logical_locals_(kir: KernelIR) -> set[str]:
     bool_sources = {a.name for a in kir.arrays if a.dtype in ("bool", "bool_")}
     # A DECLARED array carries the dtype of its own descriptor; a copy must never retype it.
     declared = {a.name for a in kir.arrays if a.dtype not in ("bool", "bool_")}
+    # Nor a local the lowering typed: ``np.cumsum(mask)`` counts in int64, and its first element is a
+    # plain copy of the mask, which made the running count LOGICAL and saturate at 1.
+    declared |= {nm for nm, dt in kir.local_dtypes.items() if dt not in ("bool", "bool_")}
     changed = True
     while changed:
         changed = False
@@ -2492,6 +2495,9 @@ class FortranBodyEmitter(BaseEmitter):
             if per_axis is not None:
                 return per_axis
         if args_e and attr in ONE_OPERAND_CALLS:
+            if attr in WHOLE_ARRAY_REDUCTIONS and (len(node.args) > 1 or node.keywords):
+                # The whole-array form reads the operand alone; dropping axis/where/dtype/out changes the result.
+                raise NotImplementedError(f"np.{attr} with an axis or keyword the per-axis lowering did not take")
             return ONE_OPERAND_CALLS[attr].format(args_e[0])
         if len(args_e) >= 2 and attr in TWO_OPERAND_CALLS:
             return TWO_OPERAND_CALLS[attr].format(args_e[0], args_e[1])

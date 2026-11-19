@@ -181,10 +181,13 @@ __all__ = [
 def c_type_(dtype: str) -> str:
     # dtype -> C type mapping lives in numpyto_common.dtypes (canonical int is int64_t);
     # a fixed, module-level static table, so the mapping is pure -- cached per emitted kernel.
+    if not dtype:
+        return "double"  # no dtype recorded: the float default
     try:
         return dtypes.c_type(dtype)
     except KeyError:
-        return "double"
+        # A typo or an unregistered dtype declared as double would compile and compute the wrong width.
+        raise NotImplementedError(f"no C type for dtype {dtype!r}") from None
 
 
 #: bare-name calls whose RESULT is an integer whatever the argument's dtype (see is_int_cast).
@@ -2798,7 +2801,11 @@ C_HEADER = (
     "/* Python ``%`` returns sign of divisor; C returns sign of dividend. Same\n"
     " * type-dispatch as int_floor: integer operands use the exact integer form,\n"
     " * floating operands numpy's npy_remainder (see python_fmod). */\n"
-    "static inline NPB_HD int64_t __npb_mod_i(int64_t a, int64_t b) { return (a % b + b) % b; }\n"
+    "/* Not (a % b + b) % b, which overflows once |b| > INT64_MAX / 2. */\n"
+    "static inline NPB_HD int64_t __npb_mod_i(int64_t a, int64_t b) {\n"
+    "    int64_t r = a % b;\n"
+    "    return (r != 0 && ((r < 0) != (b < 0))) ? r + b : r;\n"
+    "}\n"
     "/* Floating-point ``%``: numpy's floored modulo takes the sign of the\n"
     " * divisor, which integer ``python_mod`` cannot express on doubles.\n"
     " * Mirrors numpy ``npy_remainder`` (fmod + sign-of-divisor fixup). */\n"
@@ -2976,7 +2983,8 @@ CPP_ARITH = (
     "template <class A, class B>\n"
     "constexpr NPB_HD auto python_mod(A a, B b) {\n"
     "    if constexpr (std::is_integral_v<A> && std::is_integral_v<B>) {\n"
-    "        return (a % b + b) % b;\n"
+    "        const auto r = a % b;\n"
+    "        return (r != 0 && ((r < 0) != (b < 0))) ? r + b : r;\n"
     "    } else {\n"
     "        double m = std::fmod(static_cast<double>(a), static_cast<double>(b));\n"
     "        if (m != 0.0 && ((b < 0.0) != (m < 0.0))) m += static_cast<double>(b);\n"

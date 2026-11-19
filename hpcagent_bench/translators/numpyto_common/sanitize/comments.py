@@ -1,25 +1,11 @@
 """Comment stripping across the benchmark languages (python / c / cpp /
 fortran / cuda / hip).
 
-Backed by **tree-sitter** when its runtime + prebuilt grammars are importable
-(uniform, grammar-faithful comment removal); otherwise a robust **stdlib
-fallback**:
-
-* python  -- ``tokenize`` (drops ``COMMENT`` tokens; never touches string
-  literals because the tokenizer classifies them separately).
-* c / cpp / cuda / hip -- a careful character scanner that respects string and
-  char literals (and escapes / raw-ish forms) so ``//`` or ``/* */`` inside a
-  string is left alone.
-* fortran -- ``!`` line comments, honouring quoted strings.
-
-Availability is detected with :func:`importlib.util.find_spec` (no bare
-try-import-on-string dispatch).
+Backed by **tree-sitter** (``tree-sitter-language-pack``, a core dependency): uniform, grammar-faithful comment
+removal that never touches string or char literals.
 """
 
-import importlib.util
-import io
 import re
-import tokenize
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,18 +15,12 @@ __all__ = [
     "ATTRIBUTION_RE",
     "COMMENT_STARTS",
     "TS_GRAMMAR",
-    "block_comment_end",
     "carries_attribution",
     "leading_license_block",
-    "line_end",
     "normalize_lang",
-    "strip_c_family",
     "strip_comments",
     "strip_dispatch",
-    "strip_python_line_scan",
-    "strip_python_tokenize",
     "strip_with_tree_sitter",
-    "tree_sitter_available",
     "ts_get_parser",
 ]
 
@@ -49,16 +29,6 @@ def normalize_lang(lang: str) -> str:
     key = lang.strip().lower()
     aliases = {"py": "python", "c++": "cpp", "f90": "fortran", "f": "fortran"}
     return aliases.get(key, key)
-
-
-def tree_sitter_available() -> bool:
-    """True iff the maintained ``tree-sitter-language-pack`` grammar bundle is
-    importable (it vendors the tree-sitter runtime). Detected via ``find_spec``
-    (no import side effects). tree-sitter is an OPTIONAL enhancement -- when
-    absent, every entry point below falls back to the stdlib scanners, so it is
-    deliberately not a hard dependency (the dead ``tree-sitter-languages`` had
-    no wheels past Python 3.11)."""
-    return importlib.util.find_spec("tree_sitter_language_pack") is not None
 
 
 def ts_get_parser(grammar: str) -> "tree_sitter.Parser":
@@ -105,111 +75,6 @@ def strip_with_tree_sitter(src: str, lang: str) -> str:
             if out[i] != ord("\n"):
                 out[i] = ord(" ")
     return out.decode("utf-8")
-
-
-def strip_python_tokenize(src: str) -> str:
-    """Drop ``#`` comments with the tokenizer, editing the original text in
-    place so all other layout / tokens are preserved byte-for-byte (string
-    literals are a different token kind, so they are never disturbed)."""
-    try:
-        tokens = list(tokenize.generate_tokens(io.StringIO(src).readline))
-    except (tokenize.TokenError, IndentationError):
-        # Malformed input: fall back to the line scanner.
-        return strip_python_line_scan(src)
-
-    lines = src.splitlines(keepends=True)
-    # Collect comment spans per (1-based) line; a COMMENT token never spans
-    # multiple lines, so start row == end row.
-    for tok in tokens:
-        if tok.type != tokenize.COMMENT:
-            continue
-        (srow, scol), ecol = tok.start, tok.end[1]
-        if 1 <= srow <= len(lines):
-            line = lines[srow - 1]
-            lines[srow - 1] = line[:scol] + line[ecol:]
-
-    out = "".join(lines)
-    return "\n".join(seg.rstrip() for seg in out.split("\n"))
-
-
-def strip_python_line_scan(src: str) -> str:
-    """Last-resort python stripper: remove ``#`` outside of string literals,
-    line by line. Used only if tokenize raises on malformed input."""
-    return strip_c_family(src, hashes=True, slashes=False, fortran_bang=False)
-
-
-def line_end(src: str, i: int) -> int:
-    """Index of the newline ending the line ``i`` is on (``len(src)`` on the last line)."""
-    n = len(src)
-    while i < n and src[i] != "\n":
-        i += 1
-    return i
-
-
-def block_comment_end(src: str, i: int, newlines: list[str] | None = None) -> int:
-    """Index just past the ``*/`` closing the ``/*`` comment at ``i``; each newline inside the comment
-    is appended to ``newlines`` when given."""
-    n = len(src)
-    i += 2
-    while i < n and not (src[i] == "*" and i + 1 < n and src[i + 1] == "/"):
-        if newlines is not None and src[i] == "\n":
-            newlines.append("\n")
-        i += 1
-    return i + 2
-
-
-def strip_c_family(src: str, *, slashes: bool = True, hashes: bool = False, fortran_bang: bool = False) -> str:
-    """Character scanner that strips comments while respecting string and char
-    literals.
-
-    * ``slashes``      -> handle ``//`` line and ``/* ... */`` block comments.
-    * ``hashes``       -> handle ``#`` line comments (python fallback only).
-    * ``fortran_bang`` -> handle ``!`` line comments.
-    """
-    out: list[str] = []
-    i = 0
-    n = len(src)
-    in_string = False
-    string_quote = ""
-    while i < n:
-        ch = src[i]
-        nxt = src[i + 1] if i + 1 < n else ""
-
-        if in_string:
-            out.append(ch)
-            if ch == "\\" and i + 1 < n:
-                # Escaped char: copy the next char verbatim.
-                out.append(nxt)
-                i += 2
-                continue
-            if ch == string_quote:
-                in_string = False
-            i += 1
-            continue
-
-        # Not currently inside a string.
-        if ch in ("'", '"', "`"):
-            in_string = True
-            string_quote = ch
-            out.append(ch)
-            i += 1
-            continue
-
-        if (slashes and ch == "/" and nxt == "/") or (hashes and ch == "#") or (fortran_bang and ch == "!"):
-            # Line comment: skip to end of line (keep the newline).
-            i = line_end(src, i)
-            continue
-
-        if slashes and ch == "/" and nxt == "*":
-            # Block comment: skip past the closing */, preserving embedded newlines.
-            i = block_comment_end(src, i, out)
-            continue
-
-        out.append(ch)
-        i += 1
-
-    text = "".join(out)
-    return "\n".join(line.rstrip() for line in text.split("\n"))
 
 
 # License / attribution notices we must preserve verbatim: CC-BY and friends
@@ -272,22 +137,14 @@ def leading_license_block(src: str, norm: str) -> str:
 
 
 def strip_dispatch(src: str, norm: str) -> str:
-    """Language dispatch: tree-sitter when importable, else a stdlib fallback."""
-    if tree_sitter_available():
-        return strip_with_tree_sitter(src, norm)
-    if norm == "python":
-        return strip_python_tokenize(src)
-    if norm == "fortran":
-        return strip_c_family(src, slashes=False, hashes=False, fortran_bang=True)
-    # c / cpp / cuda / hip
-    return strip_c_family(src, slashes=True, hashes=False, fortran_bang=False)
+    """Language dispatch: tree-sitter's grammar for ``norm`` (a core dependency)."""
+    return strip_with_tree_sitter(src, norm)
 
 
 def strip_comments(src: str, lang: str) -> str:
     """Return ``src`` with all comments removed for ``lang``.
 
-    Uses tree-sitter when importable, else a stdlib fallback per language. String /
-    char literals are never disturbed. A leading license / attribution NOTICE (the first
+    Uses tree-sitter's grammar for the language; string / char literals are never disturbed. A leading license / attribution NOTICE (the first
     top-of-file comment block, per :func:`leading_license_block`) is preserved verbatim
     so a ported microapp keeps its CC-BY / copyright line; everything else -- including
     any description comments below the notice -- is stripped.

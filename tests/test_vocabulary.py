@@ -125,7 +125,6 @@ PINNED_FRAMEWORKS = (
     "tvm_cpu",
     "dace_cpu_parallel",
     "dace_gpu_parallel",
-    "polygeist_cpu",
     "polygeist_gpu",
     "numba_fastmath",
     "cc_icx",

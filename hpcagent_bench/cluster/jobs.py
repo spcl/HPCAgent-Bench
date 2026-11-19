@@ -51,7 +51,9 @@ __all__ = [
     "export_slots",
     "launch_problems",
     "main",
+    "narrow_devices",
     "node_has_gpus",
+    "node_is_nvidia",
     "rank_from_environ",
     "relaunch_under_openmp_env",
     "run_baseline",
@@ -164,6 +166,19 @@ def node_has_gpus() -> bool:
     return osinfo.driver_gpu_count(NVIDIA_GPUS_DIR, KFD_NODES_DIR) > 0
 
 
+def node_is_nvidia() -> bool:
+    """Whether the NVIDIA driver lists a GPU on this node (procfs, no runtime loaded)."""
+    return NVIDIA_GPUS_DIR.is_dir() and any(NVIDIA_GPUS_DIR.iterdir())
+
+
+def narrow_devices(environ: MutableMapping[str, str], devices: str) -> None:
+    """Give the task ``devices``: ROCR_VISIBLE_DEVICES, and on an NVIDIA node CUDA_VISIBLE_DEVICES, which the CUDA
+    runtime reads instead (``run_cluster.sh`` narrow_judge_devices)."""
+    environ["ROCR_VISIBLE_DEVICES"] = devices
+    if node_is_nvidia():
+        environ["CUDA_VISIBLE_DEVICES"] = devices
+
+
 def export_slots(environ: MutableMapping[str, str], slots: int) -> None:
     """Give the judge config ``slots`` grading slots: GPU slots on a node with GPUs, CPU slots on one without (0
     leaves the CPU slot count to the config's one-per-NUMA-domain default)."""
@@ -188,9 +203,9 @@ def bind_task(environ: MutableMapping[str, str], repo: pathlib.Path) -> None:
         own = range(int(local) * slots, (int(local) + 1) * slots)
         inherited = [device.strip() for device in osinfo.inherited_visible(environ).split(",") if device.strip()]
         if len(inherited) >= own.stop:
-            environ["ROCR_VISIBLE_DEVICES"] = ",".join(inherited[index] for index in own)
+            narrow_devices(environ, ",".join(inherited[index] for index in own))
         elif not inherited:
-            environ["ROCR_VISIBLE_DEVICES"] = ",".join(str(index) for index in own)
+            narrow_devices(environ, ",".join(str(index) for index in own))
     export_slots(environ, slots if slots > 1 else 0)
     # job_step.sh names the width before the interpreter loads a runtime; a launch that did not has them loaded at
     # their default (every logical CPU), which the graded child narrows, and its own children read this.

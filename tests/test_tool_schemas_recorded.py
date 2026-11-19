@@ -25,6 +25,8 @@ RECORDED_CPF: dict[str, Any] = {
         },
     },
     "required": [],
+    # An argument the schema does not name is refused, never dropped (a misspelling would vanish silently).
+    "additionalProperties": False,
 }
 #: ``search.INPUT_SCHEMA`` as 123060f79 wrote it by hand, with the bounds 04bcac402 added.
 RECORDED_SEARCH: dict[str, Any] = {
@@ -40,6 +42,7 @@ RECORDED_SEARCH: dict[str, Any] = {
         },
     },
     "required": ["query"],
+    "additionalProperties": False,
 }
 
 

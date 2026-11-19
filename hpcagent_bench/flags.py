@@ -69,7 +69,6 @@ __all__ = [
     "PLUTO_PAR",
     "POLLY_OUTLINE_PATTERN",
     "POLLY_PAR",
-    "POLYGEIST_PAR",
     "ROCMINFO_GFX_NAME",
     "ROCMINFO_TIMEOUT",
     "SIBLINGS",
@@ -237,9 +236,6 @@ PLUTO_PAR = "-fopenmp"
 
 #: The Pluto column's clang baseline: :data:`CPU_BASELINE_CLANG` with only the OpenMP spelling swapped.
 CPU_BASELINE_CLANG_PLUTO = CPU_BASELINE_CLANG.replace(_OPENMP_CLANG, PLUTO_PAR)
-
-#: The Polygeist CPU column's OpenMP: its LLVM IR already calls ``__kmpc_*``, so only the link needs it.
-POLYGEIST_PAR = _OPENMP_CLANG
 
 #: NVHPC pure-source CPU auto-parallelization (analogue of GCC ``-ftree-parallelize-loops``).
 NVHPC_CONCUR = "-Mconcur"

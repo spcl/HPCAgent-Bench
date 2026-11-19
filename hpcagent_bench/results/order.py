@@ -116,7 +116,7 @@ def span_key_label(rm: RowMeta, order: str) -> tuple[tuple, str]:
     return (rm.track, rm.group), base
 
 
-def _spans(ordered: Sequence[RowMeta], order: str) -> list[GroupSpan]:
+def group_spans(ordered: Sequence[RowMeta], order: str) -> list[GroupSpan]:
     """Coalesce consecutive rows with the same span key into :class:`GroupSpan`s."""
     spans: list[GroupSpan] = []
     i, n = 0, len(ordered)
@@ -142,7 +142,7 @@ def order_rows(rows: Sequence[RowMeta], order: str = BY_DWARF) -> tuple[list[str
     ordered: list[RowMeta] = []
     for track, bucket in buckets.items():
         ordered += sorted(bucket, key=lambda r: sort_key(r, order)) if track in SORTED_SECTIONS else bucket
-    return [rm.short_name for rm in ordered], _spans(ordered, order)
+    return [rm.short_name for rm in ordered], group_spans(ordered, order)
 
 
 @functools.lru_cache(maxsize=1, typed=True)

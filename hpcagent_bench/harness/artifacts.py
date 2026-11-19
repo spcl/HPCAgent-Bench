@@ -45,7 +45,7 @@ from hpcagent_agent.driver.promote_unsubmitted import AGENT_FOLDERS_LOG
 from hpcagent_agent.driver.token_cost import ATTEMPTS_NAME, attempt_ledger
 
 from hpcagent_bench import paths, run_layout
-from hpcagent_bench.harness import episodes
+from hpcagent_bench.harness import episodes, sandbox
 from hpcagent_bench.harness.recording import setup_of
 from hpcagent_bench.problem_file import read_lines
 from hpcagent_bench.results import collect, data_guard, transcripts
@@ -118,11 +118,8 @@ def episodes_of(run_dir: pathlib.Path) -> list[Episode]:
     """Every episode ``agent-folders.jsonl`` names whose worker directory exists, in the log's order."""
     log = run_dir / AGENT_FOLDERS_LOG
     folders: dict[str, list[pathlib.PurePosixPath]] = {}
-    for line in log.read_text(encoding="utf-8").splitlines() if log.is_file() else ():
-        entry = json.loads(line)
-        folders.setdefault(entry["episode_id"], []).append(
-            pathlib.PurePosixPath(run_layout.SHARED_DIRNAME, entry["folder"])
-        )
+    for line in sandbox.folder_lines(log) if log.is_file() else ():
+        folders.setdefault(line.episode_id, []).append(pathlib.PurePosixPath(run_layout.SHARED_DIRNAME, line.folder))
     workers = collect.worker_dirs(run_dir, folders)
     found: list[Episode] = []
     for label, shared in folders.items():
@@ -152,10 +149,14 @@ def refuse_running(run_dir: pathlib.Path) -> None:
 
 
 def index(run_dir: pathlib.Path) -> dict[str, dict[str, Any]]:
-    """``episodes/index.jsonl`` by label, a later line winning."""
+    """``episodes/index.jsonl`` by label, a later line winning; a torn line (a pack killed mid-append) is skipped."""
     path = run_dir / run_layout.EPISODES_DIRNAME / run_layout.EPISODES_INDEX
-    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
-    return {entry["label"]: entry for entry in map(json.loads, lines)}
+    entries: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if path.is_file() else ():
+        with contextlib.suppress(ValueError):
+            entry = json.loads(line)
+            entries[entry["label"]] = entry
+    return entries
 
 
 def kept(name: str) -> bool:
@@ -358,7 +359,8 @@ def packed(
     """:func:`pack_episode` once the run is known finished and writable."""
     directory = run_dir / episode.directory
     tars = plan(run_dir, episode, members)
-    if index(run_dir).get(episode.label) is None or not (directory / EPISODE_JSON).is_file():
+    # Two steps, each resumable: a pack cut off after the rename indexes the folder it left on the next run.
+    if not (directory / EPISODE_JSON).is_file():
         partial = directory.with_name(f".{directory.name}.partial")
         shutil.rmtree(partial, ignore_errors=True)
         partial.mkdir(parents=True)
@@ -371,6 +373,10 @@ def packed(
         (partial / EPISODE_JSON).write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n", encoding="utf-8")
         proven(run_dir, episode, partial, tars, totals=False)
         partial.rename(directory)
+    elif index(run_dir).get(episode.label) is None:
+        proven(run_dir, episode, directory, tars, totals=False)
+    if index(run_dir).get(episode.label) is None:
+        manifest = json.loads((directory / EPISODE_JSON).read_text(encoding="utf-8"))
         entry = {
             "label": episode.label,
             "setup": setup_of(episode.label),
@@ -380,12 +386,21 @@ def packed(
             "bytes": sum(file.stat().st_size for file in directory.iterdir()),
             "members": {name: file_sha(directory / name) for name in (*manifest["members"], EPISODE_JSON)},
         }
-        with (run_dir / run_layout.EPISODES_DIRNAME / run_layout.EPISODES_INDEX).open("a", encoding="utf-8") as out:
-            out.write(json.dumps(entry, sort_keys=True) + "\n")
+        append_line(
+            run_dir / run_layout.EPISODES_DIRNAME / run_layout.EPISODES_INDEX, json.dumps(entry, sort_keys=True)
+        )
     if remove_loose:
         proven(run_dir, episode, directory, tars, totals=True)
         remove_worker_files(run_dir / episode.worker)
     return directory
+
+
+def append_line(path: pathlib.Path, text: str) -> None:
+    """Append ``text`` as one line of ``path``, on a line of its own after a torn last line."""
+    with path.open("a+b") as out:
+        size = out.seek(0, os.SEEK_END)
+        torn = size > 0 and out.seek(size - 1) >= 0 and out.read(1) != b"\n"
+        out.write(("\n" if torn else "").encode() + text.encode("utf-8") + b"\n")
 
 
 def proven(

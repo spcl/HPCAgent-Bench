@@ -61,6 +61,7 @@ def test_the_schema_is_the_one_0_2_1_froze_plus_the_lazy_tables_and_added_column
         assert {name for name, _sql in schema_objects(old) - current} == altered
 
 
+@pytest.mark.smoke
 def test_a_0_2_1_file_opens_merges_and_extracts(tmp_path: pathlib.Path) -> None:
     source = tmp_path / "v021.db"
     shutil.copy(V021_DB, source)
@@ -128,8 +129,8 @@ def table_columns(conn: sqlite3.Connection) -> dict[str, list[tuple]]:
     }
 
 
-@pytest.mark.parametrize("version", [22, 23, 24])
-def test_a_version_22_to_24_file_upgrades_to_the_columns_of_a_new_file(tmp_path: pathlib.Path, version: int) -> None:
+@pytest.mark.parametrize("version", sorted(results_db.ADDITIVE_UPGRADES))
+def test_every_upgradable_version_upgrades_to_the_columns_of_a_new_file(tmp_path: pathlib.Path, version: int) -> None:
     """Opening an older file for writing applies :data:`results_db.ADDED`: its ``grades`` and ``episodes`` then have
     the columns of a file created now, in the same order and declaration, and its rows read the new ones as not
     recorded."""

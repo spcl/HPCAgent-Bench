@@ -38,6 +38,7 @@ def test_the_full_set_is_one_thread_per_physical_core_of_our_affinity() -> None:
     assert len(cpus) == flags.physical_cores(affinity)
 
 
+@pytest.mark.usefixtures("restored_environ")
 def test_a_judge_refuses_to_start_on_slots_sharing_cores(monkeypatch: pytest.MonkeyPatch) -> None:
     """Four slots on a two-core binding all get both cores, so concurrent grades would time each other."""
     monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {0, 1})

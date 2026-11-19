@@ -288,8 +288,7 @@ _NO_STD_BY_DESIGN = {
     # test enforces does not apply to them.
     "flang",
     "nvfortran",
-    # The Polygeist columns compile LLVM IR (and a generated C shim); clang refuses -std= on IR input.
-    "clang-polygeist",
+    # The Polygeist column compiles LLVM IR (and a generated C shim); clang refuses -std= on IR input.
     "clang-polygeist-gpu",
 }
 

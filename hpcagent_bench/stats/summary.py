@@ -399,12 +399,20 @@ def sign_flip_interval(differences: Samples, flips: FloatArray, alpha: float | N
     x: FloatArray = np.asarray(differences, dtype=np.float64)
     centre = float(np.mean(x))
     span = float(np.ptp(x))
+    # flips @ (x - d) == flips @ x - d * row sums: one matmul, then O(draws) per bisection step.
+    sums: FloatArray = flips @ x
+    weights: FloatArray = flips.sum(axis=1)
+
+    def pvalue(shift: float) -> float:
+        observed = abs(centre - shift)
+        flipped = np.abs(sums - shift * weights) / x.size
+        return float(np.mean(flipped >= observed - 1e-12 * max(observed, 1.0)))
 
     def edge(outer: float) -> float:
         inner = centre
         for _ in range(60):
             middle = (inner + outer) / 2.0
-            if sign_flip_pvalue(x - middle, flips) >= alpha:
+            if pvalue(middle) >= alpha:
                 inner = middle
             else:
                 outer = middle

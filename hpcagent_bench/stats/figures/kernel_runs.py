@@ -367,7 +367,8 @@ def draw_rates(
     ax: matplotlib.axes.Axes, series: Sequence[pk.Series], x_of: dict[str, int], type_: plotstyle.TypeScale
 ) -> None:
     """Each model's solved share of the graded runs per column with its ``solved/graded`` beside it,
-    under the mark above :data:`COUNT_BELOW`; a cell whose runs are all owed draws nothing."""
+    under the mark above :data:`COUNT_BELOW`; a cell whose runs are all owed draws nothing. The owed runs stay
+    out of the label: their "?" marks show them, and a ``+N?`` suffix ran into the kernel names below."""
     for one, offset in zip(series, pk.dodge_offsets(len(series), DODGE_SPAN), strict=True):
         for cell in one.cells:
             graded = [run for run in cell.runs if run.state != population.RunState.OWED]
@@ -378,7 +379,7 @@ def draw_rates(
             plotstyle.point_mark(ax, x, rate, one.color, "o", True, size=RATE_MARK_PT**2)
             below = rate > COUNT_BELOW
             ax.annotate(
-                pk.run_count_label(cell.runs), xy=(x, rate), xytext=(0, -3 if below else 3),
+                f"{solved}/{len(graded)}", xy=(x, rate), xytext=(0, -3 if below else 3),
                 textcoords="offset points", ha="center", va="top" if below else "bottom", rotation=90,
                 fontsize=type_.legend_pt, color=plotstyle.INK, annotation_clip=False,
             )  # fmt: skip

@@ -38,7 +38,7 @@ def generated_numba(kernel: str, out: pathlib.Path) -> pathlib.Path:
 
 
 #: Kernels whose loop the paper's numba baseline ran as a prange, measured ~24x (~4x for vpvts / vtvtv) slower
-#: without it (rebuttal-v1/claims/ppcg_vs_agents.out, section B).
+#: without it.
 PAPER_PRANGE = (
     "tsvc_2_s2275",
     "tsvc_2_s231",

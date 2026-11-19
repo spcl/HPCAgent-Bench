@@ -334,6 +334,16 @@ def test_workspace_candidate_reads_the_folder_of_the_episodes_last_attempt(
     assert promoter.workspace_dir(run, "setup.n0.p9.w9") is None
 
 
+def test_a_torn_last_line_in_the_folder_record_does_not_hide_the_episodes_folder(
+    promoter: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """A job killed mid-append leaves half a JSON line; the episodes recorded before it keep their folders."""
+    run = workspace_run(tmp_path, "kernel.f90", "subroutine k\nend subroutine\n")
+    with (run / promoter.AGENT_FOLDERS_LOG).open("a", encoding="utf-8") as record:
+        record.write('{"episode_id": "setup.n0.p8')
+    assert promoter.workspace_dir(run, "setup.n0.p7.w7") == run / "shared" / WORKSPACE_FOLDER
+
+
 @pytest.mark.parametrize(("extension", "language"), [(".hip", "hip"), (".cu", "cuda")])
 def test_workspace_candidate_pairs_the_device_unit(
     promoter: ModuleType, tmp_path: pathlib.Path, extension: str, language: str
