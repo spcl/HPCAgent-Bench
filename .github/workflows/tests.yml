@@ -63,10 +63,12 @@ on:
         type: string
         default: amd or rocm or judge_image or ppcg
 
-# Keyed by branch: a push to a release branch and its PR to main share one group, so only the newest run survives.
+# Keyed by branch. A pull request keeps only its newest run. A push never cancels the run in progress: on a branch
+# pushed every few minutes (main) every run would be cancelled before it ends. GitHub keeps one run going and the
+# newest push pending per group, so each run that starts completes, on the latest commit at its start.
 concurrency:
   group: ${{github.workflow}}-${{github.head_ref || github.ref_name}}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   unit:
