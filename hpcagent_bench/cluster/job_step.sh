@@ -7,11 +7,11 @@
 # job_step_judge_edf <path>     the judge EDF (JUDGE_EDF) with this checkout mounted, written to <path> and removed
 #                               when the batch shell exits; every later step runs in it (JOB_STEP_EDF).
 # job_step <srun-args> -- <argv>
-#                               one srun step running `python -m hpcagent_bench <argv>` in every task. A dead task
-#                               takes no other down (--kill-on-bad-exit=0) and an OOM kills only its victim
-#                               (--oom-kill-step=0), whatever the site's slurm.conf says; memory is bound to the
-#                               cores' NUMA domain. In the task, the main thread's stack goes to its hard limit and
-#                               OMP_THREAD_LIMIT is re-derived from the task's own cores: the batch shell's value
+#                               one srun step running `python -m hpcagent_bench <argv>` in every task. A dead task takes
+#                               no other down (--kill-on-bad-exit=0) and an OOM kills only its victim (--oom-kill-step=0
+#                               where srun has it, Slurm 24.05+), whatever the site's slurm.conf says; memory is bound
+#                               to the cores' NUMA domain. In the task, the main thread's stack goes to its hard limit
+#                               and OMP_THREAD_LIMIT is re-derived from the task's own cores: the batch shell's value
 #                               (env.sh's, the whole node) would loosen every graded child's RLIMIT_DATA cap by the
 #                               stacks of threads the task does not own (native_call.thread_stack_reserve).
 #                               The interpreter is the image's in the judge EDF, else JOB_STEP_PYTHON
@@ -68,7 +68,9 @@ job_step_judge_edf() {
 }
 
 job_step() {
-    local -a srun_args=(--kill-on-bad-exit=0 --oom-kill-step=0 --mem-bind=local)
+    local -a srun_args=(--kill-on-bad-exit=0 --mem-bind=local)
+    # Slurm before 24.05 (ault's 20.11) rejects the option; there an OOM kills the step as slurm.conf says.
+    [[ "$(srun --help 2>/dev/null)" == *--oom-kill-step* ]] && srun_args+=(--oom-kill-step=0)
     while (($#)) && [[ "$1" != -- ]]; do srun_args+=("$1"); shift; done
     shift
     local -a env_args=(-u OMP_THREAD_LIMIT)
