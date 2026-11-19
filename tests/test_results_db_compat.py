@@ -136,6 +136,24 @@ def test_every_upgradable_version_upgrades_to_the_columns_of_a_new_file(tmp_path
         assert [tuple(row) for row in switches] == [("", None, None, None)]
 
 
+@pytest.mark.parametrize("version", sorted(results_db.ADDITIVE_UPGRADES))
+def test_an_older_file_reads_as_its_upgrade_stores_it(tmp_path: pathlib.Path, version: int) -> None:
+    """Read as it is, an older file's ``grades`` and ``episodes`` rows are the ones an in-place upgrade (or a merge)
+    stores: a column it lacks reads at its declared default (``void_effective_tokens`` 0, not NULL), so a digest of a
+    shard and of a merge of it agree."""
+    path, upgraded = tmp_path / "results.db", tmp_path / "upgraded.db"
+    results_seed.score(path, "setup.n0.p1.w1", "gemm", 1, 4.0, source="int x;")
+    results_seed.as_version(path, version)
+    shutil.copy(path, upgraded)
+    with contextlib.closing(results_db.open_db(upgraded)):
+        pass
+    for table in ("grades", "episodes"):
+        with results_db.reading(path, finished=True) as old, results_db.reading(upgraded, finished=True) as new:
+            assert [tuple(row) for row in old.execute(f"SELECT * FROM {table}")] == [
+                tuple(row) for row in new.execute(f"SELECT * FROM {table}")
+            ]
+
+
 if __name__ == "__main__":
     import tempfile
 
