@@ -727,8 +727,9 @@ def uncopied(out: pathlib.Path, *, threads: int = 8) -> list[str]:
     """What removing the roots of ``out`` would lose, checked against the roots as they are now: a file collect takes
     that the copy lacks or holds other bytes of, a transcript extract the copy lacks or that differs from the one the
     root gives now (a transcript that went on growing), an episode of a harness without an extractor in a copy of
-    extracts, a grade or graded unit of a results DB its copy lacks, a file a grade needs (:func:`graded`) that the
-    copy does not hold with its sha256."""
+    extracts, a row of a results DB its copy lacks or holds other values of (:func:`results_db.held_rows`: an
+    episode's ingest or a canon row after the copy is as much a loss as a grade), a copy of one that no longer
+    opens, a file a grade needs (:func:`graded`) that the copy does not hold with its sha256."""
     listed = listed_roots(out)
     full = full_copy(out)
     homes = [(data_guard.real(root.path), dest) for root, dest in listed]
@@ -751,10 +752,20 @@ def uncopied(out: pathlib.Path, *, threads: int = 8) -> list[str]:
             if not is_db(rel):
                 continue
             try:
-                lost = results_db.held_units(src) - results_db.held_units(kept)
+                held = results_db.held_rows(src)
             except (results_db.SchemaVersionError, sqlite3.DatabaseError):
-                lost = set()  # a pre-release shard: its graded sources are its needs below
-            problems += [f"{src}: graded unit {unit} not in the copy" for unit in sorted(lost)]
+                held = {}  # a pre-release shard: its graded sources are its needs below
+            if held:
+                try:
+                    copied = results_db.held_rows(kept)
+                except (results_db.SchemaVersionError, sqlite3.DatabaseError) as exc:
+                    problems.append(f"{kept}: copy unreadable ({exc})")
+                    continue
+                problems += [
+                    f"{src}: {len(lost)} {table} row(s) not in the copy"
+                    for table, rows in held.items()
+                    if (lost := rows - copied.get(table, set()))
+                ]
             try:
                 needs = graded(src, finished=results_db.finished_db(src)).needs
             except (results_db.SchemaVersionError, sqlite3.DatabaseError):

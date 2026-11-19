@@ -490,6 +490,42 @@ def test_archive_removes_nothing_when_a_root_holds_a_grade_the_copy_lacks(
     assert tree_digest(sources) == before
 
 
+@pytest.mark.parametrize(
+    ("table", "change"),
+    [
+        ("episodes", "UPDATE episodes SET result = 'submitted'"),
+        (
+            "canon",
+            'INSERT INTO canon (run, "column", kernel, preset, datatype, median_ms, validated, status) '
+            "VALUES ('sweep', 'numpy', 'gemm', 'S', 'float64', 2.0, 1, 'ok')",
+        ),
+    ],
+)
+def test_a_results_db_row_written_after_the_copy_keeps_its_root(
+    sources: pathlib.Path, tmp_path: pathlib.Path, table: str, change: str
+) -> None:
+    """Rows a results DB gained after the copy that are no grade (an episode's ingest after a re-merge, a baseline
+    sweep's canon row) are only in the root: removing it would lose them."""
+    graded_run(sources / "runs")
+    out = tmp_path / "data"
+    collect.copy(roots(sources), out)
+    shard = sources / "runs/camp-1/901/judge/rank-0/hpcagent_bench0.db"
+    with contextlib.closing(results_db.open_db(shard)) as conn:
+        conn.execute(change)
+        conn.commit()
+    assert f"{shard}: 1 {table} row(s) not in the copy" in collect.uncopied(out)
+
+
+def test_an_unreadable_copy_of_a_results_db_keeps_its_root(sources: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """A copy of a results DB that no longer opens holds none of its rows: never read as nothing lost."""
+    graded_run(sources / "runs")
+    out = tmp_path / "data"
+    collect.copy(roots(sources), out)
+    copied_db(out).chmod(0o644)
+    copied_db(out).write_bytes(b"not a database" * 512)
+    assert any(problem.startswith(f"{copied_db(out)}: copy unreadable") for problem in collect.uncopied(out))
+
+
 def test_archive_never_removes_a_protected_root_itself(
     sources: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
