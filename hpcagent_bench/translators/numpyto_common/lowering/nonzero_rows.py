@@ -25,7 +25,8 @@ from collections.abc import Iterator
 
 import numpy as np
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench import modules
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, set_field, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.lib_nodes.registry import ELEMENTWISE_SHAPE_OPS
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank, rank_table
@@ -190,7 +191,7 @@ class RowRewriter:
             return call, None
         name = numpy_call_attr(node) or ""
         # a numpy ufunc is elementwise by definition (np.abs, np.exp, ...)
-        if name not in ELEMENTWISE_SHAPE_OPS and not isinstance(vars(np).get(name), np.ufunc):
+        if name not in ELEMENTWISE_SHAPE_OPS and not isinstance(modules.members(np).get(name), np.ufunc):
             raise RowRefusal(f"{ast.unparse(node)}: not an elementwise call over the selected rows")
         return call, self.elementwise(node, list(zip(node.args, ranks, strict=True)))
 
@@ -227,10 +228,11 @@ class NonzeroRowsToGuardedLoop:
 
     def run(self) -> None:
         for node in list(ast.walk(self.tree)):
-            for field in ("body", "orelse"):
-                block = vars(node).get(field)
+            for field, block in ast.iter_fields(node):
+                if field not in ("body", "orelse"):
+                    continue
                 if isinstance(block, list) and block and all(isinstance(s, ast.stmt) for s in block):
-                    vars(node)[field] = self.block(block)
+                    set_field(node, field, self.block(block))
 
     def block(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
         for at, stmt in enumerate(stmts):
