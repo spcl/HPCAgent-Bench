@@ -39,7 +39,7 @@ def ifftn(x: torch.Tensor, dim: tuple[int, ...]) -> torch.Tensor:
     return torch.from_dlpack(cupy.fft.ifftn(dev(x), axes=dim))
 
 
-MAXTER = 20
+MAXTER = 40  # QE cegterg.f90 fixes 20; 40 lets every drawn root converge (slowest draws: 24)
 BLOCK = 1024
 
 

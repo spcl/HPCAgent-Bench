@@ -632,7 +632,8 @@ extern "C" int cegterg_run(int npw_k, int npwx, int nvec, int nvecx, int npol, i
       e[i] = ew[std::size_t(i)];
   }
 
-  for (int kter = 1; kter <= 20; ++kter) {
+  // QE cegterg.f90 fixes 20; 40 lets every drawn root converge (slowest draws: 24)
+  for (int kter = 1; kter <= 40; ++kter) {
     dav_iter = kter;
     int np_ = 0;
     for (int n = 0; n < nvec; ++n)
@@ -700,10 +701,10 @@ extern "C" int cegterg_run(int npw_k, int npwx, int nvec, int nvecx, int npol, i
     }
     notcnv = nc;
 
-    if (notcnv == 0 || nbase + notcnv > nvecx || dav_iter == 20) {
+    if (notcnv == 0 || nbase + notcnv > nvecx || dav_iter == 40) {
       // evc[:, :nvec] = psi[:, :nbase] vc[:nbase, :nvec]
       gemm('N', 'N', kdim, nvec, nbase, cd(1, 0), psi, 0, 0, vc, 0, 0, cd(0, 0), evc, 0, 0);
-      if (notcnv == 0 || dav_iter == 20)
+      if (notcnv == 0 || dav_iter == 40)
         break;
       psi.copy_cols(0, evc, 0, nvec); // restart / refresh basis
       if (uspp) {
