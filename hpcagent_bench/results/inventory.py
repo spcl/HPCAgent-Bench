@@ -8,24 +8,39 @@
 A run root is ``<root>/<job>/results.db`` per numeric job directory. Every database is opened read-only; the output
 directory may not lie in a run root (:func:`hpcagent_bench.results.data_guard.check_output`). A setup's model, language,
 packet and harness come from its ``setups`` row, never from its name; the hardware from the job's ``inference.json``
-(its serving image) else the root's name.
+(its serving image) else the root's name. Node-hours come from sacct, and for a run sacct does not answer (an
+umbrella instance, whose run id is no Slurm job id) from its own nodes' monitor samples (:func:`own_spans`).
 """
 
 import collections
 import csv
+import datetime
 import json
 import pathlib
 import re
 import statistics
 import subprocess
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from typing import NamedTuple
 
 from hpcagent_bench import run_layout
+from hpcagent_bench.cluster import monitor_report
 from hpcagent_bench.harness import results_db
 from hpcagent_bench.results import data_guard
 
-__all__ = ["COLUMNS", "NODEHOUR_COLUMNS", "SACCT_FIELDS", "JobRow", "NodeHours", "inventory", "main", "nodehours"]
+__all__ = [
+    "COLUMNS",
+    "ENDED",
+    "NODEHOUR_COLUMNS",
+    "SACCT_FIELDS",
+    "UNMERGED",
+    "JobRow",
+    "NodeHours",
+    "inventory",
+    "main",
+    "nodehours",
+    "own_spans",
+]
 
 #: One row per setup of a job, in this order.
 COLUMNS = (
@@ -50,8 +65,12 @@ COLUMNS = (
 )
 NODEHOUR_COLUMNS = ("job", "name", "state", "nodes", "elapsed_h", "node_hours", "model", "kernels")
 SACCT_FIELDS = "JobID,JobName,State,ElapsedRaw,NNodes"
+#: The state of a run sacct does not know (:func:`own_spans`) whose end-of-job merge completed, and of one whose did not.
+ENDED, UNMERGED = "ENDED", "UNMERGED"
 #: Jobs whose node-hours are summarised: the ones that ran to their end or to their time limit.
-COUNTED_STATES = ("COMPLETED", "TIMEOUT")
+COUNTED_STATES = ("COMPLETED", "TIMEOUT", ENDED)
+#: Where a run's nodes sample themselves (cluster/node_monitor.sh): ``<role>-<host>.csv``, a ``ts`` column first.
+MONITOR_DIR = "monitor"
 #: A job of this many kernels or more is a full-corpus (40-kernel) job, apart from the smokes and smaller studies.
 FULL_KERNELS = 40
 SACCT_BATCH = 200
@@ -199,12 +218,43 @@ def parse_sacct(text: str) -> list[NodeHours]:
     ]
 
 
+def sampled_span(csv_path: pathlib.Path) -> tuple[datetime.datetime, datetime.datetime] | None:
+    """The first and last sample time of one node's monitor CSV, None without a sample."""
+    stamps = [line.partition(",")[0] for line in csv_path.read_text(encoding="utf-8").splitlines()[1:] if line]
+    try:
+        return (datetime.datetime.fromisoformat(stamps[0]), datetime.datetime.fromisoformat(stamps[-1]))
+    except (IndexError, ValueError):
+        return None
+
+
+def own_spans(jobs: Iterable[JobRow], known: Collection[str]) -> list[NodeHours]:
+    """A row for each job of ``jobs`` that sacct did not answer for (not in ``known``) and whose nodes sampled
+    themselves: an umbrella instance, whose run id ``<allocation><k>`` (launch_fused.sbatch) is no Slurm job, or a
+    job sacct no longer holds. Its nodes are the hosts its monitor CSVs name, its elapsed the span from the first
+    sample to the last (the minutes before the monitors start are not in it), its state :data:`ENDED` when its
+    merge completed, else :data:`UNMERGED`."""
+    rows = []
+    for job in jobs:
+        if job.job in known:
+            continue
+        hosts, spans = set(), []
+        for csv_path in sorted((job.path.parent / MONITOR_DIR).glob("*.csv")):
+            if (span := sampled_span(csv_path)) is not None:
+                hosts.add(monitor_report.parse_role_host(csv_path)[1])
+                spans.append(span)
+        if spans:
+            elapsed = max(end for _, end in spans) - min(start for start, _ in spans)
+            state = ENDED if results_db.finished_db(job.path) else UNMERGED
+            rows.append(NodeHours(job.job, "", state, len(hosts), int(elapsed.total_seconds())))
+    return rows
+
+
 def nodehours(
     runs: Sequence[NodeHours], by_job: dict[str, Row]
 ) -> tuple[list[Row], dict[str, dict[str, tuple[int, float]]]]:
-    """A row per job (node-hours = nodes x elapsed hours; its model and kernel count from its results DB) and, for the
-    jobs that completed or timed out, the count and median node-hours per model, over all jobs and over the
-    full-corpus ones (:data:`FULL_KERNELS` kernels)."""
+    """A row per job (node-hours = nodes x elapsed hours; its model, kernel count and, for a run sacct does not know,
+    its name from its results DB) and, for the jobs that completed or timed out (:data:`COUNTED_STATES`), the count
+    and median node-hours per model, over all jobs and over the full-corpus ones (:data:`FULL_KERNELS` kernels)."""
     rows: list[Row] = []
     groups: dict[str, dict[str, list[float]]] = {
         "all": collections.defaultdict(list),
@@ -217,7 +267,7 @@ def nodehours(
         rows.append(
             {
                 "job": run.job,
-                "name": run.name,
+                "name": run.name or str(known.get("setup", "")),
                 "state": run.state,
                 "nodes": run.nodes,
                 "elapsed_h": round(run.elapsed_s / 3600, 2),
@@ -252,7 +302,8 @@ def main(command: str, runs: Sequence[pathlib.Path], out: pathlib.Path, sacct: p
         by_job.setdefault(str(row["job"]), row)
     jobs = sorted(by_job)
     text = sacct.read_text(encoding="utf-8") if sacct else sacct_text(jobs)
-    table, medians = nodehours(parse_sacct(text), by_job)
+    answered = parse_sacct(text)
+    table, medians = nodehours([*answered, *own_spans(job_dbs(runs), {run.job for run in answered})], by_job)
     write_csv(out / "nodehours.csv", NODEHOUR_COLUMNS, table)
     for kind, per in medians.items():
         print(kind, {model: figures for model, figures in per.items()})
