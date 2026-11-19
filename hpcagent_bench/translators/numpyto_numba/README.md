@@ -1,11 +1,13 @@
 # NumpyToNumba
 
 Python (numpy) -> Python (numba) emitter. A dense kernel keeps its body; every top-level `def`
-gains `@nb.njit(parallel=True, cache=True)` (`fastmath=True` with `--fastmath`), except the serial
-helpers the parfor fixes add and the functions that run inside a prange, which gain `@nb.njit(cache=True)`.
+gains `@nb.njit(parallel=True, cache=True)` (`fastmath=True` with `EmitRequest(fastmath=True)`), except the
+serial helpers the parfor fixes add and the functions that run inside a prange, which gain `@nb.njit(cache=True)`.
 
-```bash
-numpyto --target numba --kernel k_numpy.py --bench-info k.json --out DIR   # writes DIR/k_numba.py
+```python
+from hpcagent_bench.translators.numpyto_common.targets import EmitRequest, emit
+
+emit("numba", EmitRequest(kernel=k_numpy_py, out=out_dir, bench_info=k_json))  # writes out_dir/k_numba.py
 ```
 
 | module | does |
