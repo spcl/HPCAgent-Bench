@@ -42,6 +42,9 @@ mapfile -t free_nodes < <(scontrol show hostnames "${FUSED_NODES:-${SLURM_JOB_NO
 if [[ -n "${SLURM_STEP_ID:-}" ]]; then
     read -r job_cpus job_nodes < <(squeue -h -j "${SLURM_JOB_ID}" -o '%C %D')
     export SLURM_CPUS_ON_NODE=$((job_cpus / job_nodes))
+    # The step's CPU binding (its one CPU and that CPU's SMT sibling) is in SLURM_CPU_BIND*, and every role srun
+    # without its own --cpu-bind applies it: inference servers and agents would run on 2 of the node's cores.
+    unset SLURM_CPU_BIND SLURM_CPU_BIND_LIST SLURM_CPU_BIND_TYPE SLURM_CPU_BIND_VERBOSE
 fi
 mapfile -t queue < <(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "${INSTANCES}")
 declare -A name_of nodes_of

@@ -75,6 +75,37 @@ def test_a_fused_job_runs_each_line_on_its_own_nodes_and_hands_freed_nodes_to_th
     assert starts == ["a", "b", "c"]
 
 
+def test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps(tmp_path: pathlib.Path) -> None:
+    """A launcher run as a one-CPU step (srun --overlap -c1) must not pass that step's CPU count or CPU binding to its
+    runs: a role srun without its own --cpu-bind applies the inherited SLURM_CPU_BIND, which pinned every inference
+    server and agent of a fused run to 2 of the node's 192 cores."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "scontrol").write_text("#!/bin/bash\nprintf 'n%s\\n' 1 2\n")
+    (bin_dir / "squeue").write_text('#!/bin/bash\n[[ "$*" == *%C* ]] && echo "384 2" || echo 4102444800\n')
+    for tool in ("scontrol", "squeue"):
+        (bin_dir / tool).chmod(0o755)
+    show = tmp_path / "show.sh"
+    show.write_text('echo "cpus=$SLURM_CPUS_ON_NODE bind=${SLURM_CPU_BIND-unset} list=${SLURM_CPU_BIND_LIST-unset}"\n')
+    instances = tmp_path / "instances.txt"
+    instances.write_text(f"a 2 {tmp_path} -- bash {show}\n")
+    done = bash(
+        f"bash {quote(str(CLUSTER / 'launch_fused.sbatch'))} {quote(str(instances))}",
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "SLURM_JOB_ID": "9",
+            "SLURM_JOB_NODELIST": "n[1-2]",
+            "SLURM_STEP_ID": "7",
+            "SLURM_CPUS_ON_NODE": "2",
+            "SLURM_CPU_BIND": "quiet,mask_cpu:1000000000000000000000001",
+            "SLURM_CPU_BIND_LIST": "1000000000000000000000001",
+            "FUSED_POLL_S": "0.1",
+        },
+    )
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "logs" / "9-a.out").read_text() == "cpus=192 bind=unset list=unset\n"
+
+
 @pytest.mark.parametrize(("left_s", "stopped"), [(600, True), (7200, False)])
 def test_the_job_stops_its_agents_a_reserve_before_its_end(left_s: int, stopped: bool) -> None:
     """The time limit kills every step KillWait after its TERM, before the records, grading and merge; the job's own

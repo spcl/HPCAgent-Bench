@@ -14,6 +14,8 @@ per-model pages and [`knobs.md`](knobs.md) carry the configuration that avoids t
 | 6 | RCCL silently falls back to TCP | several times slower, correct | check the `Using network` log line |
 | 7 | SGLang split groups hang on the RCCL/ROCm build | init hang | avoided: no serving setup enables them (SGLang has no environment switch for them) |
 | 8 | APU out-of-memory kills without a traceback | log stops, exit by signal | fraction rules in [`knobs.md`](knobs.md#the-mi300a-memory-model) |
+| 9 | gpt-oss-120b vLLM EngineCore segfaults about 20 min into agent load | `!!!!!!! Segfault encountered !!!!!!!`, then `EngineDeadError` and HTTP 500 on every request; the run ends with no grades | probably issue 10: every failing run was launched from a one-CPU step |
+| 10 | A fused launcher started as a one-CPU step passed its CPU binding to every run | inference servers and agents of the run pinned to 2 of 192 cores; vLLM `No available shared memory broadcast block found in 60 seconds` | fixed: `launch_fused.sbatch` unsets `SLURM_CPU_BIND*` |
 
 ## 1. GLM-5.3: RCCL `ncclInternalError` on the pipeline send
 
@@ -127,6 +129,37 @@ for numerical tolerance against a reference, not only for throughput.
   so it is not set.
 - **APU memory.** GPUs and host share one pool, `--mem-fraction-static` is node-wide, and an out-of-memory death
   is the host OOM killer: the log stops with no traceback.
+
+## 9. gpt-oss-120b EngineCore segfault
+
+**Symptom.** About 20 minutes after a gpt-oss-120b vLLM server starts serving agents, the server log prints
+`!!!!!!! Segfault encountered !!!!!!!` with no usable frame (`File "<unknown>", line 0`). The EngineCore then raises
+`RuntimeError: cancelled` from `shm_broadcast.acquire_read`, the API server answers every request with HTTP 500
+(`EngineDeadError`), and the run shuts down. Its judge reports `judge_tail FAIL rank-0: no grades`.
+
+**Frequency.** Three of seven gpt-oss-120b runs on 11-18/19 (`mlscale-oss-r8`, `mlscale-oss-r9`, `gitsc13-oss`), all
+between 20 and 30 minutes after start. The other four ran for hours. Their setup environments differ only in the
+problems file and the recorded commit, and the Triton kernels compiled during inference were the same in good and
+bad runs, so neither the environment nor the late JIT explains it.
+
+**Cause, probably.** All three failing runs, and none of the four good ones, were started by a fused launcher running
+as a one-CPU step (issue 10), so their vLLM server ran its four TP workers on two cores. The 60-second
+`shm_broadcast` stalls before the segfault fit a starved worker.
+
+**Workaround.** Relaunch the run with a new run id and exclude the dead run from merges. The server does not restart
+by itself.
+
+## 10. CPU binding inherited from a one-CPU launcher step
+
+**Symptom.** In a run started by `launch_fused.sbatch` from a step (`srun --overlap -c1`), `taskset -cp` of the
+inference server and of the agents shows `0,96`: two hardware threads of one core. A run started from the batch
+script shows `0-191`. Judges and grade-under ranks are not affected, since they pass their own `--cpu-bind`.
+
+**Cause.** Slurm exports the launcher step's binding as `SLURM_CPU_BIND=quiet,mask_cpu:...` (with `_LIST`, `_TYPE`
+and `_VERBOSE`), and every srun that does not name its own `--cpu-bind` applies it to its tasks.
+
+**Fix.** A launcher started as a step unsets `SLURM_CPU_BIND*` before starting its runs, next to its existing
+`SLURM_CPUS_ON_NODE` correction. Test: `tests/test_cluster_launch_scripts.py::test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps`.
 
 ## Model behaviour that is not infrastructure
 
