@@ -60,10 +60,16 @@ fi
 tar -xzf "${tarball}" -C "${work}" "${skip[@]}"
 mkdir -p "${PREFIX}"
 # The tarball's installer, unattended: a single-system install into PREFIX.
-NVHPC_SILENT=true NVHPC_INSTALL_DIR="${PREFIX}" NVHPC_INSTALL_TYPE=single "${work}/${name}/install"
-
 root=${PREFIX}/Linux_${arch}/${VERSION}/compilers
-[[ -x ${root}/bin/nvc ]] || { echo "no nvc under ${root}/bin" >&2; exit 1; }
+if [[ ${CPU_ONLY:-1} == 1 ]]; then
+    # Without the bundled cuda/ the installer's last step, makelocalrc, stops at "cuda directory not found" and
+    # writes no localrc (nvc refuses to run without one). Pinning the CUDA version skips that lookup.
+    NVHPC_SILENT=true NVHPC_INSTALL_DIR="${PREFIX}" NVHPC_INSTALL_TYPE=single "${work}/${name}/install" || true
+    "${root}/bin/makelocalrc" -x "${root}/bin" -cuda "${CUDA:-13.4}" -gcc gcc -gpp g++ -g77 gfortran
+else
+    NVHPC_SILENT=true NVHPC_INSTALL_DIR="${PREFIX}" NVHPC_INSTALL_TYPE=single "${work}/${name}/install"
+fi
+[[ -x ${root}/bin/nvc && -f ${root}/bin/localrc ]] || { echo "no nvc or localrc under ${root}/bin" >&2; exit 1; }
 "${root}/bin/nvc" --version | grep -m 1 nvc
 echo "# Export this before running the cc_nvhpc column (nvc stays off PATH; its libraries are on its own rpath):"
 echo "export HPCAGENT_BENCH_NVHPC_ROOT=${root}"
