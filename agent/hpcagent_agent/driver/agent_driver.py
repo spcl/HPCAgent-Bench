@@ -140,6 +140,7 @@ __all__ = [
     "RESUME_DIRNAME",
     "Restored",
     "RESULT_TAIL_BYTES",
+    "SEAL_KILL_WITH_PARENT",
     "SEAL_UNSHARE",
     "SEAL_UNSHARE_NET",
     "SETUPS_DIR_ENV",
@@ -2142,7 +2143,10 @@ def pin(process: subprocess.Popen[bytes], cpus: list[int], memory_bytes: int, lo
 
 #: The stage-1 wrapper: user + mount + PID namespace, its init killed with its parent, so killing the spawned
 #: process tears the whole worker down. ``unshare`` blocks SIGTERM, so :func:`terminate` ends in SIGKILL.
-SEAL_UNSHARE = ("unshare", "-r", "-m", "-p", "-f", "--mount-proc", "--propagation", "private", "--kill-child")
+SEAL_UNSHARE = ("unshare", "-r", "-m", "-p", "-f", "--mount-proc", "--propagation", "private")
+#: The namespace's init dies with ``unshare``: PR_SET_PDEATHSIG, what ``--kill-child`` did before util-linux 2.39 made
+#: it a pidfd, which a kernel before 5.3 (RHEL 8's 4.18) does not have.
+SEAL_KILL_WITH_PARENT = ("setpriv", "--pdeathsig", "KILL")
 #: Added under an isolating network policy: a network namespace holding a loopback device and nothing else.
 SEAL_UNSHARE_NET = "--net"
 
@@ -2226,6 +2230,7 @@ def seal_argv(
     return [
         *SEAL_UNSHARE,
         *([] if relayed is None else [SEAL_UNSHARE_NET]),
+        *SEAL_KILL_WITH_PARENT,
         sys.executable,
         "-m",
         "hpcagent_agent.driver.seal_worker",
