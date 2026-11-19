@@ -25,6 +25,7 @@ from http import HTTPStatus
 import httpx
 
 from hpcagent_bench import fused
+from hpcagent_bench.cache_files import append_line
 
 __all__ = [
     "DONE_SUFFIX",
@@ -34,7 +35,6 @@ __all__ = [
     "DeferredSubmit",
     "ReplayReport",
     "append",
-    "append_line",
     "freeze",
     "thaw",
     "pending",
@@ -85,18 +85,6 @@ def queue_path() -> pathlib.Path:
 
     db = pathlib.Path(recording.db_path())
     return db.with_name(db.stem + QUEUE_SUFFIX)
-
-
-def append_line(path: pathlib.Path, line: str) -> None:
-    """Append ``line`` and a newline to ``path``, flushed to disk; a torn last line (a process killed mid-write) is
-    ended first, so the new line stays readable. The caller serializes writers."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+b") as handle:
-        size = handle.seek(0, os.SEEK_END)
-        torn = size > 0 and os.pread(handle.fileno(), 1, size - 1) != b"\n"
-        handle.write((b"\n" if torn else b"") + line.encode("utf-8") + b"\n")
-        handle.flush()
-        os.fsync(handle.fileno())
 
 
 def append(path: pathlib.Path, entry: DeferredSubmit) -> None:
