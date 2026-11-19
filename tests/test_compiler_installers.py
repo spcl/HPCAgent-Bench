@@ -57,8 +57,11 @@ def digest(path: pathlib.Path, algo: str = "sha256") -> str:
 def test_the_icx_installer_runs_only_under_the_checksum_it_was_given(tmp_path: pathlib.Path) -> None:
     installer = fake_icx_installer(tmp_path)
     prefix = tmp_path / "icx"
-    unnamed = run("install-icx.sh", [str(prefix), str(installer)], tmp_path)
+    unnamed = run("install-icx.sh", [str(prefix), str(installer)], tmp_path, VERSION="1.0")
     assert unnamed.returncode == 2 and "CHECKSUM" in unnamed.stderr
+    pinned = run("install-icx.sh", [str(prefix), str(installer)], tmp_path)
+    assert pinned.returncode == 1, "the default version's pinned digest must refuse a stand-in"
+    assert "sha384" in pinned.stderr
     wrong = run("install-icx.sh", [str(prefix), str(installer)], tmp_path, CHECKSUM="sha384:" + "0" * 96)
     assert wrong.returncode == 1, wrong.stderr
     assert not prefix.exists(), "a download that fails its checksum must never run"
@@ -66,6 +69,12 @@ def test_the_icx_installer_runs_only_under_the_checksum_it_was_given(tmp_path: p
     assert good.returncode == 0, good.stderr
     assert "icx 1.0" in good.stdout
     assert f"export HPCAGENT_BENCH_ICX_ROOT={prefix}/compiler/1.0" in good.stdout
+
+
+def test_an_icx_version_without_a_pinned_installer_needs_its_url(tmp_path: pathlib.Path) -> None:
+    refused = run("install-icx.sh", [str(tmp_path / "icx")], tmp_path, VERSION="1.0")
+    assert refused.returncode == 2 and "none pinned" in refused.stderr
+    assert not (tmp_path / "icx").exists()
 
 
 @pytest.mark.parametrize("given", ["", "md5:abc"])
@@ -123,8 +132,10 @@ def test_the_nvhpc_tarball_unpacks_only_under_its_checksum_and_leaves_cuda_out(t
         pytest.skip("the stand-in tarball is the x86_64 one")
     tarball = fake_nvhpc_tarball(tmp_path)
     prefix = tmp_path / "nvhpc"
-    unnamed = run("install-nvhpc.sh", [str(prefix), str(tarball)], tmp_path)
+    unnamed = run("install-nvhpc.sh", [str(prefix), str(tarball)], tmp_path, CUDA="multi")
     assert unnamed.returncode == 2 and "md5sum.txt" in unnamed.stderr
+    pinned = run("install-nvhpc.sh", [str(prefix), str(tarball)], tmp_path)
+    assert pinned.returncode == 1, "26.11's pinned md5 must refuse a stand-in"
     wrong = run("install-nvhpc.sh", [str(prefix), str(tarball)], tmp_path, CHECKSUM="md5:" + "0" * 32)
     assert wrong.returncode == 1, wrong.stderr
     assert not prefix.exists(), "a download that fails its checksum must never be unpacked"

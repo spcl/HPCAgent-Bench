@@ -372,25 +372,34 @@ and `cc_nvhpc` columns. Run the installs inside a Slurm job: each download is se
 
 | column | script | what it runs | digest | prints |
 |---|---|---|---|---|
-| `cc_icx` | `lib/install-icx.sh PREFIX INSTALLER` | Intel's standalone DPC++/C++ offline installer (`--silent --eula accept --install-dir PREFIX`) | `sha384`, listed by Intel next to each installer | `HPCAGENT_BENCH_ICX_ROOT` |
+| `cc_icx` | `lib/install-icx.sh PREFIX [INSTALLER]` | Intel's standalone DPC++/C++ offline installer (`--silent --eula accept --install-dir PREFIX`); 2026.2.0's URL is pinned | `sha384`, listed by Intel next to each installer; 2026.2.0's is pinned | `HPCAGENT_BENCH_ICX_ROOT` |
 | `cc_aocc` | `lib/install-aocc.sh PREFIX [TARBALL]` | unpacks AMD's AOCC tarball (AOCC 6 or later: the column needs LLVM 19 for `-std=c23`) | AMD publishes none; 6.0.0's is pinned in the script | `HPCAGENT_BENCH_AOCC_ROOT` |
-| `cc_nvhpc` | `lib/install-nvhpc.sh PREFIX [TARBALL]` | NVIDIA's HPC SDK tarball installer (`NVHPC_SILENT`, single install); `CPU_ONLY=1` (default) leaves CUDA, the math and comm libraries, profilers and examples out | `md5` only, from NVIDIA's `md5sum.txt` (the one script that accepts md5) | `HPCAGENT_BENCH_NVHPC_ROOT` |
+| `cc_nvhpc` | `lib/install-nvhpc.sh PREFIX [TARBALL]` | NVIDIA's HPC SDK tarball installer (`NVHPC_SILENT`, single install); `CPU_ONLY=1` (default) leaves CUDA, the math and comm libraries, profilers and examples out | `md5` only, from NVIDIA's `md5sum.txt` (the one script that accepts md5); 26.11's is pinned | `HPCAGENT_BENCH_NVHPC_ROOT` |
 
 Each refuses a download whose digest is not `CHECKSUM=<algo>:<hex>` (`lib/verify_checksum.sh`). Each root names the
 directory holding the driver's `bin/`; `languages.COMPILER_ROOT_ENV` takes the driver from there before `PATH`, so
 the vendor's `clang` or `nvc` never shadows another, and a set root without its driver resolves nothing. Without a
-root or a driver on `PATH` the column reports `tool_missing`.
+root or a driver on `PATH` the column reports `tool_missing`. Install NVHPC inside the judge image: its installer
+writes the gcc it finds into nvc's `localrc`.
 
-The AMD judge picks them up from `${HPCAGENT_BENCH_SITE_COMPILERS:-$SCRATCH/site-compilers}`:
+The AMD judge picks icx and NVHPC up from `${HPCAGENT_BENCH_SITE_COMPILERS:-$SCRATCH/site-compilers}`.
+[`site_compilers.sbatch`](images/site_compilers.sbatch) installs both there inside the judge image, renders the judge
+EDF with them into a temporary file, and checks them: the `cc`, `cc_llvm`, `cc_icx` and `cc_nvhpc` columns over
+`gemm` and `scaled_add`, the OpenMP runtimes a process maps after loading a kernel each built, and the CPF form of
+`tsvc_2_s171` graded under each `build.compiler.c` family. Then register the EDFs:
 
 ```bash
-sbatch ... --wrap 'containers/images/lib/install-icx.sh $SCRATCH/site-compilers/icx <installer> && \
-    containers/images/lib/install-nvhpc.sh $SCRATCH/site-compilers/nvhpc'   # CHECKSUM=... for each
+sbatch -A <account> containers/images/site_compilers.sbatch   # from the checkout root, on the mi300 partition
 containers/images/install_edfs.sh
 ```
 
 `install_edfs.sh` fills `HPCAGENT_BENCH_ICX_ROOT` and `HPCAGENT_BENCH_NVHPC_ROOT` into the judge EDFs and mounts each
 prefix, only for the compilers installed there (the `# <site_*_root>` lines of `judge-agent-amd/judge.edf.toml.in`).
+
+A setup grades C submissions (a CPF form among them) with one of them by pinning `build.compiler.c`: `nvhpc` (a
+family a submission may request too) or `intel`, a pin-only family (`languages.PIN_ONLY_FAMILIES`) that the task
+text does not list and a submission's `compiler` may not name. The reference the speedup divides by builds with the
+same compiler.
 
 ## OpenMP contexts
 

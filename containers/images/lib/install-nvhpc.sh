@@ -6,9 +6,10 @@
 # judge), from NVIDIA's tarball into a user PREFIX without root. TARBALL is nvhpc_<year>_<ver>_Linux_<arch>_cuda_<x>.tar.gz
 # as a local path or a URL; the default is NVIDIA's link for VERSION on this machine's arch. Several GB. It unpacks
 # only when its digest is CHECKSUM: NVIDIA publishes md5 alone (https://developer.download.nvidia.com/hpc-sdk/<ver>/
-# md5sum.txt), so md5 is accepted here and nowhere else. CPU_ONLY=1 (the default) leaves the bundled CUDA, math and
-# comm libraries, profilers and examples out of the unpack: a CPU column needs only the compilers, and the rest is most
-# of the files.
+# md5sum.txt), so md5 is accepted here and nowhere else; the default tarballs' are pinned below. Run it where the
+# column runs (inside the judge image): the installer records the gcc it finds in nvc's localrc. CPU_ONLY=1 (the
+# default) leaves the bundled CUDA, math and comm libraries, profilers and examples out of the unpack: a CPU column
+# needs only the compilers, and the rest is most of the files.
 #
 #   install-nvhpc.sh PREFIX [TARBALL]          VERSION=<yy.m> (default 26.11), CHECKSUM=<md5|sha256|...>:<hex>, CPU_ONLY=0|1
 set -euo pipefail
@@ -27,7 +28,14 @@ year=20${VERSION%%.*}
 compact=${VERSION/./}
 name=nvhpc_${year}_${compact}_Linux_${arch}_cuda_${CUDA:-13.4}
 TARBALL=${2:-https://developer.download.nvidia.com/hpc-sdk/${VERSION}/${name}.tar.gz}
-[[ -n "${CHECKSUM:-}" ]] || {
+# From NVIDIA's md5sum.txt of the release.
+case ${name} in
+    nvhpc_2026_2611_Linux_x86_64_cuda_13.4) pinned=md5:e85ea5d785cf0497d82b5a402cb30a98 ;;
+    nvhpc_2026_2611_Linux_aarch64_cuda_13.4) pinned=md5:35f797000dc0e2adc40f909cc43b5688 ;;
+    *) pinned="" ;;
+esac
+CHECKSUM=${CHECKSUM:-${pinned}}
+[[ -n "${CHECKSUM}" ]] || {
     echo "set CHECKSUM=md5:<hex>, NVIDIA's https://developer.download.nvidia.com/hpc-sdk/${VERSION}/md5sum.txt" >&2
     exit 2
 }
