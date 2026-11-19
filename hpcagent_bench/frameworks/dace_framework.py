@@ -18,7 +18,7 @@ import time
 import traceback
 import warnings
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import ModuleType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
