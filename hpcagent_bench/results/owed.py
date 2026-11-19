@@ -404,17 +404,7 @@ def infra_attempts(job_dirs: Iterable[pathlib.Path]) -> dict[Run, int]:
         problems = launch_problems(job_dir)
         for problem in read_lines(problems) if problems else ():
             spent[problem_run(problem)] = (problem.infra_attempts or 0) + 1
-        latest: dict[Run, int] = {}
-        for path in job_dir.glob(episodes.RECORD_GLOB):
-            record = episodes.read_record(path)
-            kernel = kernel_stem(record.kernel or "") if record is not None else ""
-            if record is None or not kernel:
-                continue
-            run = Run(kernel, slot_of(record.episode_id))
-            order = record.final_attempt_start_ms or int(path.stat().st_mtime * 1000)
-            if latest.get(run, order) > order:
-                continue
-            latest[run] = order
+        for run, (start, path, record) in latest_records([job_dir]).items():
             cancelled = (path.parent / CANCELLED_MARKER).exists()
             spent[run] = (record.infra_attempts or 0) + record_attempts(record) - int(cancelled)
     return spent
