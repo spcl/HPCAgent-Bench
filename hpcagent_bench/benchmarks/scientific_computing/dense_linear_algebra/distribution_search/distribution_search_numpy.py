@@ -53,8 +53,6 @@ def forward_residual(c0, c1, c2, z, sum_b, sum_f, b_top):
     return h, solvable, x, y
 
 
-
-
 def distribution_search(forward_target, backward_target, p):
     p_size = p.size
     log_v = float(np.log(p_size))
