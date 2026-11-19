@@ -286,17 +286,35 @@ def read_only_but(writable: Sequence[str], readonly: Sequence[str]) -> None:
 
     One recursive mount_setattr(2), then one call per writable mount: the per-mount remount of
     :func:`remount_read_only` costs a syscall and a statvfs for every mount of the node (hundreds on a login or
-    compute node), on every sealed child. Without the call, that remount."""
+    compute node), on every sealed child. Without the call, that remount. :class:`SealError` when a writable path that
+    was writable before the seal ends read-only."""
+    before = read_only_paths(writable)
     if not mount_setattr("/", read_only=True, recursive=True):
         remount_read_only("/", writable)
-        return
-    marked = [(path, True) for path in writable] + [(path, False) for path in readonly]
-    for mount_point in submounts("/"):
-        # The deepest plan path over the mount decides; at equal depth read-only wins.
-        owners = [(len(path), not kept, kept) for path, kept in marked if seal_worker.under(path, mount_point)]
-        if owners and max(owners)[2]:
-            # A mount locked read-only from outside the namespace stays read-only, as it was before the seal.
-            mount_setattr(mount_point, read_only=False, recursive=False)
+    else:
+        marked = [(path, True) for path in writable] + [(path, False) for path in readonly]
+        for mount_point in submounts("/"):
+            # The deepest plan path over the mount decides; at equal depth read-only wins.
+            owners = [(len(path), not kept, kept) for path, kept in marked if seal_worker.under(path, mount_point)]
+            if owners and max(owners)[2]:
+                # The call fails on a mount a later mount covers (still listed in mountinfo, out of reach), and on
+                # one locked read-only from outside the namespace: the check below judges the paths themselves.
+                mount_setattr(mount_point, read_only=False, recursive=False)
+    stuck = read_only_paths(writable) - before
+    if stuck:
+        raise seal_worker.SealError(
+            f"seal: cannot make {', '.join(sorted(stuck))} writable again after the read-only pass"
+        )
+
+
+def read_only_paths(paths: Sequence[str]) -> set[str]:
+    """The existing ``paths`` that sit on a read-only mount."""
+    found: set[str] = set()
+    for path in paths:
+        with contextlib.suppress(FileNotFoundError, NotADirectoryError):
+            if os.statvfs(path).f_flag & os.ST_RDONLY:
+                found.add(path)
+    return found
 
 
 def build_view(plan: SealPlan) -> None:
