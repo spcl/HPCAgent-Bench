@@ -121,6 +121,19 @@ for numerical tolerance against a reference, not only for throughput.
   Libfabric/<n>` without `/GDRDMA`. The hook sets other values the same way (`NCCL_MIN_NCHANNELS=112`,
   `FI_MR_CACHE_MAX_COUNT`, `FI_CXI_RDZV_*`, `FI_CXI_SAFE_DEVMEM_COPY_THRESHOLD`); any of them we want different
   goes on the server command as well.
+- **GPU-direct RDMA: what could fix it (open, 11-19).** RCCL under HIP always asks for a flush after a GPU-direct
+  receive (`ncclTopoNeedFlush` sets it unconditionally, `src/graph/paths.cc`). It flushes through the plugin's
+  `iflush`, which aws-ofi-nccl 1.20 serves with an RDMA read into a host page unless `OFI_NCCL_GDR_FLUSH_DISABLE=1`.
+  RCCL's own HDP flush (`RCCL_NET_HDP_FLUSH`) is off by default. No CSCS page, aws-ofi-nccl issue or libfabric issue
+  reports this corruption on MI300A with cxi. The nearest reports are a missing GDR flush on RoCE/IB hosts (ROCm
+  rocm-systems PR #14237), a cxi fault avoided with `FI_HMEM_ROCR_USE_DMABUF=0` (libfabric #12775) and MR-cache
+  monitor faults (libfabric #11451). The judge runs its ML grades with GDR on (`NCCL_NET_GDR_LEVEL=PHB` from the
+  hook and the EDF; RCCL logs `GDR 1`, job 754679). `debug/gdr/job.sbatch` under
+  `regrades/mlscale20-1118-p16/` checks RCCL `all_reduce`, `reduce_scatter` and `all_gather` across two nodes at
+  P=8 against host references. It runs PHB and LOC with and without address churn, then PHB with one change each:
+  `RCCL_NET_HDP_FLUSH=1`, `NCCL_NET_GDR_READ=0`, `NCCL_PROTO=Simple`, `OFI_NCCL_MR_CACHE_DISABLE=1`,
+  `FI_MR_CACHE_MONITOR` set to `userfaultfd`, `memhooks` or `kdreg2`, `FI_HMEM_ROCR_USE_DMABUF=0` or `1`,
+  `NCCL_DMABUF_ENABLE=0`, `OFI_NCCL_PROTOCOL=RDMA`, `FI_CXI_RX_MATCH_MODE=hardware` and `HSA_XNACK=1`. Not yet run.
 - **TCP fallback.** Without the plugin RCCL runs over TCP: correct, several times slower, no error.
   `grep -a "Using network" server-0.log` must say `AWS Libfabric`; our EDFs set `NCCL_NET_PLUGIN=ofi` so a
   missing plugin is an error instead.
