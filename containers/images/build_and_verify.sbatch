@@ -23,8 +23,8 @@
 #SBATCH --job-name=build-verify-image
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-# 96 physical cores; SMT siblings add no compute.
-#SBATCH --cpus-per-task=96
+# The whole node: every physical core builds (SMT siblings add no compute); ce_spack_jobs sizes spack by its memory.
+#SBATCH --exclusive
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=12:00:00

@@ -11,6 +11,9 @@
 #   CE_LAYER_CACHE=1  keep podman's layers between jobs in a registry on scratch (ce_layer_registry), so a
 #                     failed build on any node resumes from its last unchanged step; 0 does not.
 #   CE_LAYER_CACHE_GB the registry's size cap (default 300): past it the next build starts it empty.
+#   SPACK_BUILD_JOBS  spack's job budget (default ce_spack_jobs: the node's cores, at most one job per
+#                     CE_GB_PER_BUILD_JOB GB of its memory, default 8: 64 on a 512 GB MI300A or mi200 node, where
+#                     more OOM-killed llvm's and petsc's links; about 108 on an 870 GB GH200 node).
 
 # No core dumps: they land in the CWD on an inode-quota filesystem.
 ulimit -c 0
@@ -346,8 +349,9 @@ ce_build_fingerprint() {
         printf 'target=%s\nbase=%s\n' "${target}" "${BASE_IMAGE_REF:-${BASE_IMAGE:-}}"
         local prev="" arg
         for arg in "$@"; do
-            [[ "${prev}" != --build-arg || "${arg}" == BASE_IMAGE=* || "${arg}" == BASE_IMAGE_REF=* ]] \
-                || printf '%s\n' "${arg}"
+            # SPACK_BUILD_JOBS sizes the build to its node and changes nothing in the image.
+            [[ "${prev}" != --build-arg || "${arg}" == BASE_IMAGE=* || "${arg}" == BASE_IMAGE_REF=* \
+                || "${arg}" == SPACK_BUILD_JOBS=* ]] || printf '%s\n' "${arg}"
             prev="${arg}"
         done | sort
         (( ${#srcs[@]} == 0 )) || git -C "${context}" ls-files -s -- "${srcs[@]}"
@@ -634,6 +638,17 @@ ce_libfabric_commit() {
     [[ -n "${LIBFABRIC_COMMIT}" ]] || { echo "could not resolve ${LIBFABRIC_REF} in ${url}" >&2; return 2; }
     export LIBFABRIC_REF LIBFABRIC_COMMIT
     printf 'libfabric %s @ %s\n' "${LIBFABRIC_REF}" "${LIBFABRIC_COMMIT}"
+}
+
+# ce_spack_jobs: sets SPACK_BUILD_JOBS (unless given) to the build node's cores, capped at one job per
+# CE_GB_PER_BUILD_JOB GB of its memory: llvm's and petsc's link steps need several GB each.
+ce_spack_jobs() {
+    local cores mem_gb
+    cores="$(nproc)"
+    mem_gb=$(( $(awk '/^MemTotal:/ {print $2}' "${CE_MEMINFO:-/proc/meminfo}") / 1024 / 1024 ))
+    : "${SPACK_BUILD_JOBS:=$(( cores < mem_gb / ${CE_GB_PER_BUILD_JOB:-8} ? cores : mem_gb / ${CE_GB_PER_BUILD_JOB:-8} ))}"
+    (( SPACK_BUILD_JOBS >= 1 )) || SPACK_BUILD_JOBS=1
+    printf 'spack build jobs %s (%s cores, %s GB)\n' "${SPACK_BUILD_JOBS}" "${cores}" "${mem_gb}"
 }
 
 # Exports MARCH, the -march of SPACK_TARGET (ce_spack_target): native for a native build.

@@ -20,7 +20,9 @@ ce_image_args() {
     ce_lock_keys --only-group image-cupy-rocm
     ce_libfabric_commit
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
-    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK LIBFABRIC_REF LIBFABRIC_COMMIT ROCM_ARCH ROCM_ARCH_CSV SPACK_TARGET
+    ce_spack_jobs
+    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK LIBFABRIC_REF LIBFABRIC_COMMIT ROCM_ARCH ROCM_ARCH_CSV SPACK_TARGET \
+        SPACK_BUILD_JOBS
 }
 
 # The 30 GB rocm/pytorch base comes from the scratch cache; spack's binary buildcache (gcc 16 and

@@ -321,8 +321,8 @@ RUN set -eux; \
 # joins its continuation lines into ONE line, which would flatten a heredoc body, and BuildKit's
 # native heredoc form is not something every podman on this cluster supports.
 #
-# build_jobs is capped at 64 rather than left at nproc: llvm's and petsc's link steps at
-# 192-way parallelism are what turn a long build into an OOM-killed one. spack's own
+# build_jobs is capped at SPACK_BUILD_JOBS (build_common.sh ce_spack_jobs: the node's cores, one job per 8 GB): llvm's
+# and petsc's link steps at 192-way parallelism are what turn a long build into an OOM-killed one. spack's own
 # default of min(nproc, 16) is the other direction, and costs hours here.
 # The package repo is fetched HERE rather than left to spack. Spack clones a `git:` repo entry
 # in-process, so that clone goes through no retry of any kind, and a rate-limited GitHub kills
@@ -349,6 +349,8 @@ RUN set -eux; \
 # The hpcagent overlay repo (containers/images/lib/spack-overlay) sits ahead of builtin: its openblas keeps
 # runtime dispatch whole (no NO_AVX512 under +dynamic_dispatch). OpenBLAS is pinned to 0.3.30:
 # 0.3.34 segfaults row-major dgemm at M >= 8192, K >= 512 in its Haswell/Zen kernels (blas_gate.sh).
+# spack's global job budget; build.sh passes it (ce_spack_jobs).
+ARG SPACK_BUILD_JOBS=64
 COPY containers/images/lib/spack-overlay /opt/spack-overlay
 RUN set -eux; \
     git init -q "${SPACK_ROOT}"; \
@@ -357,7 +359,7 @@ RUN set -eux; \
     git -C "${SPACK_ROOT}" checkout -q FETCH_HEAD; \
     mkdir -p "${SPACK_ROOT}/etc/spack" /var/spack-stage "${SPACK_USER_CACHE_PATH}"; \
     build_jobs="$(nproc)"; \
-    if [ "${build_jobs}" -gt 64 ]; then build_jobs=64; fi; \
+    if [ "${build_jobs}" -gt "${SPACK_BUILD_JOBS}" ]; then build_jobs="${SPACK_BUILD_JOBS}"; fi; \
     git init -q /opt/spack-packages; \
     git -C /opt/spack-packages remote add origin https://github.com/spack/spack-packages.git; \
     gitretry -C /opt/spack-packages fetch -q --depth 1 origin "${SPACK_PACKAGES_REF}"; \

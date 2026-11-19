@@ -114,9 +114,9 @@ ARG LLVM_VERSION=22.1.8
 # spack and its package repository, pinned to the pair judge-agent-amd builds with.
 ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
 ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
-# spack's global job budget (the new installer shares it across concurrent packages). 64 keeps
-# llvm's and petsc's link steps clear of the OOM killer (judge-agent-amd step 3); build.sh passes
-# SPACK_BUILD_JOBS to raise it on a node with the memory for it.
+# spack's global job budget (the new installer shares it across concurrent packages). build.sh passes the node's
+# (build_common.sh ce_spack_jobs: its cores, one job per 8 GB, which keeps llvm's and petsc's links clear of the OOM
+# killer); 64 is the default of a build without it.
 ARG SPACK_BUILD_JOBS=64
 # NVIDIA HPC SDK, cuTENSOR and Nsight Compute from NVIDIA's repo of the build node's architecture (arm64
 # and sbsa, or amd64 and x86_64). NVHPC 26.9

@@ -26,7 +26,7 @@ ce_image_args() {
     ce_lock_keys
     ce_libfabric_commit
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
-    SPACK_BUILD_JOBS="${SPACK_BUILD_JOBS:-64}"
+    ce_spack_jobs
     ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK SPACK_TARGET MARCH LIBFABRIC_REF LIBFABRIC_COMMIT SPACK_BUILD_JOBS CUDA_ARCHS
 }
 

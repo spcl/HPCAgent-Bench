@@ -306,3 +306,29 @@ def test_the_cache_knob_on_mounts_the_spack_and_pip_caches(repo: pathlib.Path, t
         "-v",
         f"{tmp_path}/uv-cache/gfx90a:/uv-cache:rw",
     ]
+
+
+@pytest.mark.parametrize(
+    ("cores", "mem_gb", "jobs"),
+    [(96, 512, 64), (288, 870, 108), (16, 512, 16)],
+    ids=["mi300a-512gb", "gh200-870gb", "few-cores"],
+)
+def test_spack_builds_with_the_nodes_cores_one_job_per_8_gb(
+    tmp_path: pathlib.Path, repo: pathlib.Path, cores: int, mem_gb: int, jobs: int
+) -> None:
+    """A fixed 64 left two thirds of a 288-core GH200 node idle; the node's cores without a cap OOM-killed llvm's
+    and petsc's links on a 512 GB MI300A node at 96 jobs. The budget is the cores, at most one job per 8 GB."""
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(f"MemTotal:       {mem_gb * 1024 * 1024} kB\n", encoding="utf-8")
+    done = bash(f'nproc() {{ echo {cores}; }}; ce_spack_jobs >/dev/null; echo "${{SPACK_BUILD_JOBS}}"', repo,
+                {"CE_MEMINFO": str(meminfo)})
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == str(jobs)
+
+
+def test_the_spack_job_budget_does_not_move_the_fingerprint(repo: pathlib.Path) -> None:
+    """The budget sizes the build to its node; the image it builds is the same, so a GH200 build and an MI300A build
+    of one checkout pull and resume from each other's layers."""
+    assert fingerprint(repo, "agent", "--build-arg", "SPACK_BUILD_JOBS=64") == fingerprint(
+        repo, "agent", "--build-arg", "SPACK_BUILD_JOBS=108"
+    )

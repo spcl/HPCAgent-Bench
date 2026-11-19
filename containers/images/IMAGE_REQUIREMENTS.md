@@ -146,6 +146,12 @@ in a prefix the Dockerfile controls (a copy in the image would be found first).
 `build.sh` (and so `build_and_verify.sbatch`) sources `build_common.sh`, which sets two defaults,
 each an environment knob:
 
+* **The whole node.** `build_and_verify.sbatch` takes its node exclusively, so every `make -j"$(nproc)"` step uses
+  all its cores (288 on a GH200 node, 96 on MI300A). spack's job budget, `SPACK_BUILD_JOBS`, defaults to the cores,
+  at most one job per `CE_GB_PER_BUILD_JOB` (8) GB of memory (`ce_spack_jobs`): 64 on a 512 GB MI300A or mi200 node,
+  where more jobs OOM-killed llvm's and petsc's links, and about 108 on an 870 GB GH200 node. The budget does not enter
+  the image's fingerprint. A cold `judge-agent-cuda` build can need more than the script's 12 h: pass `--time`.
+
 * **Caches on (`CE_BUILD_CACHE=1`, `CE_LAYER_CACHE=1`).** Every finished step also goes to a layer registry on scratch
   (`${JIT_CACHE_ROOT}/container-layers`), so a failed build resumes from its last good layer on any node; past
   `CE_LAYER_CACHE_GB` (300) the next build starts it empty, and a registry that cannot start costs the resume, not the
