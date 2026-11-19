@@ -13,7 +13,14 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, name_, range_for, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    SubstituteLoads,
+    name_,
+    range_for,
+    reads_any,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import constant_difference
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import binop
 from hpcagent_bench.translators.numpyto_common.parallelism import index_exprs
@@ -22,10 +29,6 @@ __all__ = ["OVERLAP_TEMP_PREFIX", "reads_a_stored_cell", "staged_through_temp", 
 
 #: Prefix of the temps :func:`staged_through_temp` evaluates an overlapping right-hand side into.
 OVERLAP_TEMP_PREFIX = "__sfov"
-
-
-def mentions(expr: ast.expr, names: set[str]) -> bool:
-    return any(isinstance(n, ast.Name) and n.id in names for n in walk_nodes(expr))
 
 
 def index_distance(read: ast.expr, write: ast.expr) -> int | None:
@@ -85,11 +88,11 @@ def read_is_safe(
     moving = {var for var, unused_lo, unused_hi in loops}
     walked: list[tuple[ast.expr, ast.expr]] = []
     for r, w in zip(read_index, write_index, strict=True):
-        if mentions(w, moving):
-            if not mentions(r, moving) and outside_walked_range(r, w, loops):
+        if reads_any(w, moving):
+            if not reads_any(r, moving) and outside_walked_range(r, w, loops):
                 return True  # a fixed row the store never reaches
             walked.append((r, w))
-        elif mentions(r, moving):
+        elif reads_any(r, moving):
             return False
         elif index_distance(r, w) not in (0, None):
             return True  # a different fixed row: no cell in common
@@ -105,7 +108,7 @@ def read_is_safe(
 def outside_walked_range(read: ast.expr, write: ast.expr, loops: Sequence[tuple[str, ast.expr, ast.expr]]) -> bool:
     """True when the fixed index ``read`` lies a constant distance below the store's first index on
     this axis or above its last one. ``write`` must move with exactly one loop variable."""
-    walking = [(var, lo, hi) for var, lo, hi in loops if mentions(write, {var})]
+    walking = [(var, lo, hi) for var, lo, hi in loops if reads_any(write, {var})]
     if len(walking) != 1:
         return False
     var, lo, hi = walking[0]

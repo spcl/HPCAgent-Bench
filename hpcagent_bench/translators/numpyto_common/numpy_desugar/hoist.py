@@ -4,7 +4,7 @@ import ast
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import reads_any, walk_nodes
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -17,7 +17,6 @@ __all__ = [
     "always_live",
     "drops_nothing",
     "has_cue",
-    "reads_any",
     "scope_bound_names",
 ]
 
@@ -97,11 +96,6 @@ def scope_bound_names(node: ast.expr) -> OrderedSet[str]:
         elif isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
             names.add(sub.id)
     return names
-
-
-def reads_any(node: ast.AST, names: OrderedSet[str]) -> bool:
-    """Whether ``node`` reads or writes a name in ``names``."""
-    return any(isinstance(sub, ast.Name) and sub.id in names for sub in walk_nodes(node))
 
 
 class FormRewriter(ast.NodeTransformer):

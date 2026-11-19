@@ -7,7 +7,14 @@ from types import NotImplementedType
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    name_,
+    numpy_attribute,
+    range_for,
+    reads_any,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend import fold_shape_expr, substitute_inlined_scalar_defs
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import MESHGRID_AXIS_KW, expand_meshgrid
@@ -526,9 +533,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         idx_names = bare_index_arrays(lead, name, self.shape_table)
         if not idx_names:
             return []
-        carriers = [
-            k for k, e in enumerate(lead) if any(isinstance(n, ast.Name) and n.id in idx_names for n in walk_nodes(e))
-        ]
+        carriers = [k for k, e in enumerate(lead) if reads_any(e, idx_names)]
         if slice_axes and len(carriers) != 1:
             # Two advanced positions broadcast into ONE result axis block; this loop gives each its
             # own iter, which is a different (wrong) pairing.
@@ -549,7 +554,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 )
         extent = self.shape_table[idx_name0][0]
         it = "__sc0"
-        rhs_carries_index = any(isinstance(n, ast.Name) and n.id in idx_names for n in walk_nodes(value))
+        rhs_carries_index = reads_any(value, idx_names)
         new_lead, plan = self.scatter_plan(lead, name, slice_axes, carriers, idx_names, extent, rhs_carries_index)
         iters = [i for i, unused in plan]
         bounds = [b for unused, b in plan]

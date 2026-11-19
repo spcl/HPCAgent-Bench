@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Callable, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, reads_any, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, span_multiple_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
@@ -366,7 +366,7 @@ class HoistInvariantSelfReads(ast.NodeTransformer):
             if isinstance(dim, ast.Attribute) and dim.attr == "newaxis":
                 return False
             # An index ARRAY makes the read a gather, whose result is not one element.
-            if any(isinstance(n, ast.Name) and n.id in self.array_shapes for n in walk_nodes(dim)):
+            if reads_any(dim, self.array_shapes):
                 return False
         return True
 

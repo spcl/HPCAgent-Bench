@@ -4,7 +4,14 @@ import ast
 import copy
 from typing import cast
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, statement_lists, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    const_int,
+    name_,
+    reads_any,
+    statement_lists,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     DesugarError,
@@ -221,7 +228,7 @@ def may_write(stmt: ast.stmt, names: set[str]) -> bool:
                 return True
         if isinstance(node, ast.Call):
             operands = [node.func, *node.args, *(k.value for k in node.keywords)]
-            if any(isinstance(n, ast.Name) and n.id in names for o in operands for n in walk_nodes(o)):
+            if any(reads_any(o, names) for o in operands):
                 return True
     return False
 

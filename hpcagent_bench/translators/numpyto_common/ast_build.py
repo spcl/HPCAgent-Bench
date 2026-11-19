@@ -4,7 +4,7 @@
 import ast
 import copy
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Container, Iterator, Mapping, Sequence
 from types import EllipsisType
 
 __all__ = [
@@ -31,6 +31,7 @@ __all__ = [
     "numpy_call",
     "line_of",
     "range_for",
+    "reads_any",
     "set_field",
     "store_",
     "walk_nodes",
@@ -51,6 +52,11 @@ def walk_nodes(node: ast.AST) -> Iterator[ast.AST]:
             elif isinstance(value, list):
                 todo.extend(item for item in value if isinstance(item, ast.AST))
         yield node
+
+
+def reads_any(node: ast.AST, names: Container[str]) -> bool:
+    """Whether a Name in ``node``'s subtree (``node`` included), read or written, is one of ``names``."""
+    return any(isinstance(sub, ast.Name) and sub.id in names for sub in walk_nodes(node))
 
 
 def positional_defaults(args: ast.arguments) -> dict[str, ast.expr]:

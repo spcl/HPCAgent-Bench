@@ -11,6 +11,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     expr_of,
     name_,
     range_for,
+    reads_any,
     set_field,
     store_,
     walk_nodes,
@@ -75,7 +76,7 @@ def bcast_tokens(a: list[str], b: list[str]) -> list[str]:
 
 def token_reads(token: str, names: Sequence[str]) -> bool:
     """Whether the extent token ``token`` reads a name of ``names``."""
-    return any(isinstance(n, ast.Name) and n.id in names for n in walk_nodes(ast.parse(token, mode="eval")))
+    return reads_any(ast.parse(token, mode="eval"), names)
 
 
 def slice_extent_token(e: ast.Slice, base: str | None) -> str | None:

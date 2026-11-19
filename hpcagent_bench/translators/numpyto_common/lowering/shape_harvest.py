@@ -4,7 +4,7 @@ import ast
 from collections.abc import Sequence
 from types import NotImplementedType
 
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, reads_any, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.frontend import collect_inlined_scalar_defs, dtype_from_constructor
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import (
@@ -176,11 +176,6 @@ def alias_targets(tree: ast.AST) -> frozenset[str]:
         and isinstance(stmt.targets[0], ast.Name)
         and isinstance(optional_constructor(stmt.value), ast.Name)
     )
-
-
-def reads_any(node: ast.AST, names: frozenset[str]) -> bool:
-    """Whether ``node`` reads one of ``names``."""
-    return any(isinstance(sub, ast.Name) and sub.id in names for sub in walk_nodes(node))
 
 
 def harvest_walk(

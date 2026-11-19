@@ -36,6 +36,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     const_int,
     map_statement_lists,
     name_,
+    reads_any,
     set_field,
     store_,
     walk_nodes,
@@ -173,13 +174,9 @@ class Env:
             self.kinds.pop(name, None)
             self.bound.discard(name)
         # A recorded element reading a rebound name no longer means what it meant.
-        stale = [key for key, elts in self.tuples.items() if reads_any(elts, names)]
+        stale = [key for key, elts in self.tuples.items() if any(reads_any(e, names) for e in elts)]
         for key in stale:
             del self.tuples[key]
-
-
-def reads_any(elements: list[ast.expr], names: OrderedSet | list[str]) -> bool:
-    return any(isinstance(n, ast.Name) and n.id in names for e in elements for n in walk_nodes(e))
 
 
 def is_index_element(node: ast.expr) -> bool:

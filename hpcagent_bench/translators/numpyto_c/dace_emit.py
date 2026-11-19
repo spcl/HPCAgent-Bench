@@ -23,6 +23,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     name_,
     numpy_attribute,
     numpy_call,
+    reads_any,
     set_field,
     statement_lists,
     store_,
@@ -3682,9 +3683,7 @@ def mintable_int_locals(fn_ast: ast.FunctionDef, symbols: set[str], known: set[s
         grown = {
             nm
             for nm in order
-            if nm not in cand
-            and is_symbol_expr(first_rhs[nm], atoms)
-            and any(isinstance(sub, ast.Name) and sub.id in atoms for sub in walk_nodes(first_rhs[nm]))
+            if nm not in cand and is_symbol_expr(first_rhs[nm], atoms) and reads_any(first_rhs[nm], atoms)
         }
         if not grown:
             return cand
@@ -4548,7 +4547,7 @@ def names_logical_sparse(kir: KernelIR) -> bool:
     if not kir.sparse:
         return False
     logical = set(kir.sparse)
-    return any(isinstance(n, ast.Name) and n.id in logical for n in walk_nodes(kir.tree))
+    return reads_any(kir.tree, logical)
 
 
 def called_helpers(body: Sequence[ast.stmt], helpers: list[KernelIR]) -> OrderedSet[str]:
