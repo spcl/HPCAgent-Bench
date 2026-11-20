@@ -996,7 +996,7 @@ class FakeMounts:
 
     def __init__(self, read_only: set[str], clears_that_fail: list[bool]) -> None:
         self.read_only = set(read_only)
-        self.clears_that_fail = clears_that_fail
+        self.clears_that_fail = list(clears_that_fail)  # popped below: never the shared parametrize list
 
     def mount_setattr(self, path: str, *, read_only: bool, recursive: bool) -> bool:
         if recursive:
