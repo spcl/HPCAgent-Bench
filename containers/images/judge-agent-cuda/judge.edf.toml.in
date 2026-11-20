@@ -54,7 +54,8 @@ NCCL_PROTO = "^LL128"
 FI_CXI_DEFAULT_CQ_SIZE = "131072"
 FI_CXI_DEFAULT_TX_SIZE = "16384"
 FI_CXI_DISABLE_HOST_REGISTER = "1"
-LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
+# hwloc preloaded with MPI: MPICH resolves libhwloc.so.15 to this PCI-capable one (mpi_gpu_check.sh 1a).
+LD_PRELOAD = "/usr/local/lib/libmimalloc.so:/usr/lib/${MULTIARCH}/libhwloc.so.15"
 
 [annotations]
 com.hooks.cxi.enabled = "true"

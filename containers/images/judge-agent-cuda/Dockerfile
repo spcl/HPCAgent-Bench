@@ -193,7 +193,7 @@ RUN set -eux; \
       unzip vim nano file bzip2 xz-utils zstd diffutils gzip gawk \
       automake autoconf libtool bison flex texinfo gettext m4 \
       libgmp-dev libmpfr-dev libmpc-dev libyaml-dev libssl-dev zlib1g-dev libcurl4-openssl-dev \
-      libnuma-dev libhwloc-dev libudev-dev libxml2-dev uuid-dev pciutils \
+      libnuma-dev libhwloc-dev libhwloc-plugins libudev-dev libxml2-dev uuid-dev pciutils \
       libfabric1 libfabric-bin libblis-openmp-dev \
       make cmake ninja-build pkg-config; \
     if ! apt-get install -y --no-install-recommends linux-perf; then \
