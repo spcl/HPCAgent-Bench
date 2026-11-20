@@ -79,6 +79,9 @@ from collections.abc import Callable, Sequence
 #: are LLVM plugins, not runtimes.
 RUNTIME_FILE = re.compile(r"(?:libgomp|libomp|libiomp5|libnvomp)(?:-[0-9a-f]+)?\.so(?:\.\d+)*")
 
+#: NVHPC's runtime by basename (``nvc -mp``), which the nvhpc context maps in place of libgomp.
+NVHPC_RUNTIME = re.compile(r"libnvomp(?:-[0-9a-f]+)?\.so(?:\.\d+)*")
+
 MAPS_PATH = "/proc/self/maps"
 
 #: Fields of a maps line: address, permissions, offset, device, inode, pathname.
