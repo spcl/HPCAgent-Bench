@@ -478,6 +478,7 @@ def test_a_column_alias_sweeps_under_the_spelling_its_rows_record(
         kernels="gemm",
         kernels_file=None,
         preset="S",
+        datatype="",
         phase="begin",
         opt=None,
     )
