@@ -44,6 +44,9 @@ IMAGE="${1:?usage: build_and_verify.sbatch <image directory under containers/ima
     || { echo "FATAL: ${REPO} is not the checkout root: submit from it or set REPO" >&2; exit 2; }
 [[ "${VERIFY_ONLY:-0}" == 1 ]] || command -v uv >/dev/null \
     || { echo "FATAL: uv is not on PATH in the batch job: export PATH before sbatch" >&2; exit 2; }
+# The exclusive header names no CPU count, so each verify srun step would get one core and every threading
+# check would fail ("this process may use one CPU"). A step takes the whole node, as the build does.
+[[ -z "${SLURM_CPUS_ON_NODE:-}" ]] || export SRUN_CPUS_PER_TASK="${SRUN_CPUS_PER_TASK:-${SLURM_CPUS_ON_NODE}}"
 # No flavor asked for: the portable image, pulled only when the published tag's build inputs equal this
 # checkout's (CE_PULL=1; CE_PULL=only would pull a stale image for a branch that changes the Dockerfile), and only
 # when that fails the native flavor for this machine (an image whose names carry no flavor, the serving
