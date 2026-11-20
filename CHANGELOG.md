@@ -525,6 +525,12 @@ upgraded in place when opened for writing; v0.5.0 refuses a v1.0a1 file.
   marker under `$RUN_DIR/spent_submissions/` instead of in process memory, so a router restarted inside the job
   still answers a second `/submit` with 409; a spend the judge graded nothing of is released as before.
 
+- **Results schema 36: the `disqualifications` table is gone.** No code ever wrote it, and the extractor, `owed`,
+  `grade-under` and `helpers/scripts/revision_reruns.py` filtered on it while it was always empty, so no number
+  changes. Opening a file of 13 to 35 for writing drops the table in the upgrade's transaction when it is empty, and
+  refuses the file, unchanged, when it holds a row (`results_db.DROPPED`); a read-only open and a merge pass an empty
+  one over, so every existing `results.db` still reads and merges.
+
 ### Carried from the v1.0 development stack
 
 #### Kernel outputs, tolerances and low precision

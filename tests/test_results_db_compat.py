@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A results database written by 0.2.1 is read, merged and extracted by this release, and a file this release writes
 holds the 0.2.1 schema plus the tables created on demand (results_db.LAZY_TABLES), which a 0.2.1 merge refuses as
-foreign, and the columns later versions added (results_db.ADDED)."""
+foreign, and the columns later versions added (results_db.ADDED), less the tables they dropped (results_db.DROPPED)."""
 
 import concurrent.futures
 import contextlib
@@ -52,13 +52,15 @@ def test_a_file_older_than_the_library_column_reads_as_no_library(tmp_path: path
 
 
 def test_the_schema_is_the_one_0_2_1_froze_plus_the_lazy_tables_and_added_columns() -> None:
-    """Every object a 0.2.1 file holds is unchanged here, but for the tables a later version added a column to."""
+    """Every object a 0.2.1 file holds is unchanged here, but for the tables a later version added a column to or
+    dropped."""
     with contextlib.closing(sqlite3.connect(":memory:")) as conn, results_db.reading(V021_DB, finished=True) as old:
         conn.executescript(results_db.SCHEMA_PATH.read_text(encoding="utf-8"))
         current = schema_objects(conn)
-        altered = altered_since(results_db.schema_version(old))
+        version = results_db.schema_version(old)
+        altered, dropped = altered_since(version), set(results_db.retired_tables(version))
         assert {name for name, _sql in current - schema_objects(old)} == set(results_db.LAZY_TABLES) | altered
-        assert {name for name, _sql in schema_objects(old) - current} == altered
+        assert {name for name, _sql in schema_objects(old) - current} == altered | dropped
 
 
 @pytest.mark.smoke
@@ -93,7 +95,8 @@ def test_a_file_written_here_takes_the_rows_of_a_0_2_1_file(tmp_path: pathlib.Pa
 
     with results_db.reading(written) as conn, results_db.reading(V021_DB, finished=True) as old:
         assert results_db.schema_version(conn) == results_db.SCHEMA_VERSION
-        assert results_db.table_names(conn) == results_db.table_names(old) | set(results_db.LAZY_TABLES)
+        retired = set(results_db.retired_tables(results_db.schema_version(old)))
+        assert results_db.table_names(conn) == (results_db.table_names(old) - retired) | set(results_db.LAZY_TABLES)
     assert any(r["column"] == "numba_fastmath" for r in canon_db.read(written))
 
 

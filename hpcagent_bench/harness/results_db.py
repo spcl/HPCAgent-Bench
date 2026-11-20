@@ -29,6 +29,7 @@ __all__ = [
     "BUSY_TIMEOUT_S",
     "CALL_KINDS",
     "DEFAULT_HARNESS",
+    "DROPPED",
     "GRADE_CHILDREN",
     "GRADE_KEY",
     "GRADE_REQUEST_KINDS",
@@ -70,6 +71,7 @@ __all__ = [
     "copy_one_grade",
     "create_schema",
     "default_values",
+    "drop_retired",
     "ensure_episode",
     "ensure_setup",
     "final_row_groups",
@@ -88,10 +90,12 @@ __all__ = [
     "open_ro",
     "reading",
     "rebuilding",
+    "refuse_retired_rows",
     "remove_db",
     "request_rows",
     "requests_from_rows",
     "requests_of_row",
+    "retired_tables",
     "ro_uri",
     "schema_version",
     "source_hash",
@@ -108,7 +112,7 @@ __all__ = [
 SCHEMA_PATH = paths.ROOT / "hpcagent_bench" / "harness" / "schema.sql"
 #: The schema's name, and its ``PRAGMA user_version``.
 SCHEMA_NAME = "hb-results-v1.0"
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 #: The columns each version added, by the version that added them.
 ADDED: dict[int, tuple[str, ...]] = {
     14: tuple(f"ALTER TABLE canon ADD COLUMN {phase}_time REAL" for phase in ("transform", "codegen", "compile")),
@@ -197,6 +201,12 @@ ADDED: dict[int, tuple[str, ...]] = {
             for reading in ("timing_parent_ns", "timing_handshake_ns", "timing_spread_ns", "timing_short")
         ),
     ),
+    36: (),
+}
+#: The tables each version dropped, by the version. No code ever wrote them, so an upgrade drops one only when it is
+#: empty and refuses the file otherwise (:func:`drop_retired`); a read and a merge of an older file pass it over.
+DROPPED: dict[int, tuple[str, ...]] = {
+    36: ("disqualifications",),
 }
 #: The CHECK constraints each version widened, by the version: ``(table, old text, new text)`` of its stored CREATE.
 #: Every stored row satisfies the wider CHECK, so the stored text is rewritten in place (SQLite's documented route
@@ -231,7 +241,6 @@ TABLES = (
     "grade_requests",
     "scaling_grades",
     "scaling_points",
-    "disqualifications",
     "reference_scaling_points",
     "canon",
     "baseline_timings",
@@ -307,6 +316,7 @@ def check_schema(conn: sqlite3.Connection, where: str, upgrade: bool = False) ->
                 for statement in ADDITIVE_UPGRADES[version]:
                     conn.execute(statement)
                 widen_checks(conn, version, where)
+                drop_retired(conn, version, where)
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         return True
     if version or table_names(conn) & set(TABLES):
@@ -337,6 +347,31 @@ def widen_checks(conn: sqlite3.Connection, version: int, where: str) -> None:
         conn.execute(f"PRAGMA schema_version = {cookie + 1}")
     finally:
         conn.execute("PRAGMA writable_schema = OFF")
+
+
+def retired_tables(version: int) -> tuple[str, ...]:
+    """The tables a file of ``version`` may hold that every version after it dropped (:data:`DROPPED`)."""
+    return tuple(table for dropped in range(version + 1, SCHEMA_VERSION + 1) for table in DROPPED.get(dropped, ()))
+
+
+def refuse_retired_rows(conn: sqlite3.Connection, version: int, where: str, schema: str = "main") -> list[str]:
+    """The :func:`retired_tables` ``schema`` of ``conn`` holds; raises :class:`SchemaVersionError` when one holds a
+    row, which the current schema has no place for."""
+    present = [table for table in retired_tables(version) if table in table_names(conn, schema)]
+    for table in present:
+        if conn.execute(f"SELECT 1 FROM {schema}.{table} LIMIT 1").fetchone() is not None:
+            raise SchemaVersionError(
+                f"{where}: user_version {version} file holds rows in {table}, a table user_version {SCHEMA_VERSION} "
+                "dropped; left as it is (move the rows out by hand, then empty the table)"
+            )
+    return present
+
+
+def drop_retired(conn: sqlite3.Connection, version: int, where: str) -> None:
+    """Drop the :func:`retired_tables` of a file of ``version``, inside the caller's transaction, each only when empty
+    (:func:`refuse_retired_rows`)."""
+    for table in refuse_retired_rows(conn, version, where):
+        conn.execute(f"DROP TABLE {table}")
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -705,7 +740,6 @@ NATURAL_KEYS: dict[str, tuple[str, tuple[str, ...]]] = {
     "grade_requests": ("grade_id, position", ("grade_id", "position")),
     "scaling_grades": ("grade_id, mode, input", ("grade_id", "mode", "input")),
     "scaling_points": ("grade_id, mode, input, ranks", ("grade_id", "mode", "input", "ranks")),
-    "disqualifications": ("grade_id", ("grade_id",)),
     "reference_scaling_points": (
         "source, kernel, mode, ranks, repeat, ts_ms",
         ("source", "kernel", "mode", "ranks", "repeat", "ts_ms"),
@@ -824,13 +858,15 @@ def merge_one(conn: sqlite3.Connection, path: pathlib.Path, finished: bool = Fal
         version = int(conn.execute("PRAGMA src.user_version").fetchone()[0])
         copied: dict[str, int] = {}
         ids = IdMap()
+        retired: list[str] = []
         if version == SCHEMA_VERSION or version in ADDITIVE_UPGRADES:
+            retired = refuse_retired_rows(conn, version, str(path), "src")
             copied = {
                 table: merge_rows(conn, table, ids) for table in TABLES if table in names or table not in LAZY_TABLES
             }
         elif version or names & set(TABLES):
             raise SchemaVersionError(f"{path} is not an {SCHEMA_NAME} results database (user_version {version})")
-        if foreign := sorted(name for name in names - set(TABLES) if not name.startswith("sqlite_")):
+        if foreign := sorted(name for name in names - {*TABLES, *retired} if not name.startswith("sqlite_")):
             raise SchemaVersionError(f"{path} holds tables outside {SCHEMA_NAME}: {foreign}")
         conn.commit()
     finally:
@@ -981,7 +1017,6 @@ def copy_one_grade(conn: sqlite3.Connection, grade_id: int, dest: sqlite3.Connec
 
 #: The tables keyed by a grade, children first.
 GRADE_CHILDREN: tuple[str, ...] = (
-    "disqualifications",
     "scaling_points",
     "scaling_grades",
     "grade_cells",
