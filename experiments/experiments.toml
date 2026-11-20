@@ -335,6 +335,12 @@ extends = ["replicas", "sglang"]
 INFERENCE_CE_ENV = 'hpcagent-bench-sglang-mi300-latest'
 VLLM_MODEL = 'Qwen/Qwen3.8-27B'
 HPCAGENT_BENCH_OPTIMIZER = 'Qwen/Qwen3.8-27B'
+# The KV pool one agent's conversation needs (serve_guard.py: the one server holds AGENT_NODES x AGENTS_PER_NODE of them).
+# 40 x 100k = 4.0M: the shipped pool (5.5M, BF16 weights and fp8 KV, docs/serving/qwen38.md) holds it; prompts measured
+# 35-50k under 40 agents and every 40-agent campaign reused 0.95-0.977 of its input from the cache. The worst case,
+# 40 x the 198k compaction trigger, does not fit, so the guard reports instead of cancelling.
+KV_TOKENS_PER_AGENT = 100000
+KV_GUARD = 'warn'
 
 # Hardware mi200: 8x MI250X GCD (gfx90a), EPYC 7A53 (Zen 3, ONE socket in 4 NUMA domains of 16
 # cores). Pinned over a setup's rendered env by apply_hardware (submit_common.sh) when the job's hardware is mi200

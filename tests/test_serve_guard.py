@@ -34,6 +34,11 @@ def test_the_floor_is_the_pipelines_agents_times_the_per_agent_figure_and_a_mode
     assert serve_guard.floor_tokens({"AGENTS_PER_PIPELINE": "20"}) is None
 
 
+def test_a_replicas_server_holds_every_agent_of_the_job() -> None:
+    qwen = {"KV_TOKENS_PER_AGENT": "100000", "AGENT_NODES": "1", "AGENTS_PER_NODE": "40"}
+    assert serve_guard.floor_tokens(qwen) == 40 * 100_000
+
+
 def test_kimi_at_fraction_052_passes_and_at_048_fails() -> None:
     floor = serve_guard.floor_tokens(KIMI)
     assert serve_guard.verdict(1_848_960, floor).ok
@@ -93,6 +98,7 @@ if __name__ == "__main__":
 
     test_the_pool_is_the_smallest_any_pipeline_states()
     test_the_floor_is_the_pipelines_agents_times_the_per_agent_figure_and_a_model_without_one_has_none()
+    test_a_replicas_server_holds_every_agent_of_the_job()
     test_kimi_at_fraction_052_passes_and_at_048_fails()
     test_check_writes_the_verdict_into_the_run_directory(scratch())
     with pytest.MonkeyPatch.context() as patch:

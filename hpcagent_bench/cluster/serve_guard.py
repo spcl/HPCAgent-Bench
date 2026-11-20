@@ -57,9 +57,13 @@ def pool_tokens(lines: Iterable[str]) -> int | None:
 
 
 def floor_tokens(env: Mapping[str, str]) -> int | None:
-    """``AGENTS_PER_PIPELINE`` x ``KV_TOKENS_PER_AGENT``; None when the model sets no per-agent figure."""
+    """The agents one server holds x ``KV_TOKENS_PER_AGENT``; None when the model sets no per-agent figure. A pp
+    pipeline holds ``AGENTS_PER_PIPELINE``; a replicas setup's one server holds every agent of the job."""
     per_agent = int(env.get("KV_TOKENS_PER_AGENT") or 0)
-    return per_agent * int(env.get("AGENTS_PER_PIPELINE") or 1) if per_agent else None
+    agents = int(env.get("AGENTS_PER_PIPELINE") or 0) or int(env.get("AGENT_NODES") or 1) * int(
+        env.get("AGENTS_PER_NODE") or 1
+    )
+    return per_agent * agents if per_agent else None
 
 
 def verdict(pool: int | None, floor: int | None) -> Verdict:
@@ -72,7 +76,7 @@ def verdict(pool: int | None, floor: int | None) -> Verdict:
             False,
             pool,
             floor,
-            f"KV pool {pool} tokens is below the floor {floor} (AGENTS_PER_PIPELINE x KV_TOKENS_PER_AGENT): conversations are evicted and every turn re-prefills; raise --mem-fraction-static",
+            f"KV pool {pool} tokens is below the floor {floor} (agents per server x KV_TOKENS_PER_AGENT): conversations are evicted and every turn re-prefills; raise --mem-fraction-static",
         )
     return Verdict(True, pool, floor, f"KV pool {pool} tokens holds the floor {floor}")
 
