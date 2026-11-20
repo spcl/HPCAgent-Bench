@@ -8,7 +8,6 @@ import subprocess
 
 import pytest
 
-
 from hpcagent_bench import languages
 from hpcagent_bench.categories import Language
 

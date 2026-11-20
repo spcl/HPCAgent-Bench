@@ -9,17 +9,24 @@ from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_LOWERING_FLOAT
-from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
+from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
+    const_axis,
+    const_permutation,
+    kwarg_or_pos,
+    read_axis_keepdims,
+)
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import arange_count
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     INT_PRESERVING_ELEMENTWISE,
     all_integer_operands,
-    broadcast_extents,
+    broadcast_children,
     concat_operands_axis,
     iter_extent_of,
+    reduced_shape,
+    reshape_tokens,
     sum_width_tokens,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import attr_call, reads_complex
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import attr_call, mul_exts, reads_complex
 from hpcagent_bench.translators.numpyto_common.lib_nodes.matmul_hoist import MatmulHoister
 from hpcagent_bench.translators.numpyto_common.lib_nodes.registry import ELEMENTWISE_SHAPE_OPS, NP_CALL_EXPANDERS
 from hpcagent_bench.translators.numpyto_common.lib_nodes.repeat import diff_operand
@@ -56,6 +63,7 @@ __all__ = [
     "reshape_name_shape",
     "reshape_tuple_shape",
     "routed_extent",
+    "scan_shape",
     "values_operand_shape",
 ]
 
@@ -151,8 +159,8 @@ def leading_count_shape(
 
 def named_operand_shape(position: int) -> Callable[..., RuleResult]:
     """A rule for an op whose result has the declared shape of its Name operand at ``position``:
-    ``np.linalg.inv``, ``cholesky``, the ``np.fft`` transforms, ``roll``, ``tril``, ``triu`` (first
-    operand) and ``np.linalg.solve`` (x has b's shape)."""
+    ``np.linalg.inv``, ``cholesky``, the ``np.fft`` transforms, ``roll``, ``tril``, ``triu``, ``sort``,
+    ``argsort`` (first operand) and ``np.linalg.solve`` (x has b's shape)."""
 
     def rule(
         hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
@@ -175,22 +183,13 @@ def reshape_name_shape(
     / prod(other dims) -- lets ``a.ravel() @ a.ravel()`` (lowered to reshape) hoist out of the matmul."""
     if len(args) < 2 or not isinstance(args[0], ast.Name):
         return UNHANDLED
-    src = hoister.shape_table.get(args[0].id)
+    if args[0].id not in hoister.shape_table:
+        return UNHANDLED
     sh = args[1]
     elts = sh.elts if isinstance(sh, (ast.Tuple, ast.List)) else [sh]
-    toks = [ast.unparse(e) for e in elts]
-    if src is None:
-        return UNHANDLED
-    prod_src = "(" + ") * (".join(str(s) for s in src) + ")"
-    if any(str(t).strip() == "-1" for t in toks):
-        others = [t for t in toks if str(t).strip() != "-1"]
-        if others:
-            denom = "(" + ") * (".join(str(t) for t in others) + ")"
-            neg = f"({prod_src}) / ({denom})"
-        else:
-            neg = f"({prod_src})"
-        toks = [neg if str(t).strip() == "-1" else str(t) for t in toks]
-    return tuple(str(t) for t in toks)
+    if len(elts) == 1 and const_int(elts[0]) == -1:  # a ravel: the element count, with nothing to divide by
+        return (ast.unparse(mul_exts(iter_extent_of(args[0], hoister.shape_table) or ())),)
+    return reshape_tokens(elts, args[0], hoister.shape_table)
 
 
 def concatenate_shape(
@@ -215,12 +214,7 @@ def elementwise_shape(
 ) -> RuleResult:
     """Elementwise ops: the broadcast of ALL operand extents, not the first operand's -- the temp for
     ``np.maximum(a(M,), B(N, M))`` is ``(N, M)``, matching the expander's own broadcast iteration."""
-    acc: tuple[ast.expr, ...] | None = None
-    for arg in args:
-        ext = iter_extent_of(arg, hoister.shape_table)
-        if ext is None:
-            continue
-        acc = ext if acc is None else broadcast_extents(acc, ext)
+    acc = broadcast_children(args, hoister.shape_table)
     return UNHANDLED if acc is None else tuple(ast.unparse(e) for e in acc)
 
 
@@ -285,12 +279,8 @@ def permuted_shape(
         return None
     if op != "transpose":
         return tuple(shape)
-    perm_arg = kwarg_or_pos(args, keywords, 1, "axes")
-    if isinstance(perm_arg, (ast.Tuple, ast.List)):
-        perm = [e.value for e in perm_arg.elts if isinstance(e, ast.Constant) and isinstance(e.value, int)]
-        if len(perm) == len(shape):
-            return tuple(shape[p] for p in perm)
-    return tuple(reversed(shape))
+    perm = const_permutation(kwarg_or_pos(args, keywords, 1, "axes"), len(shape))
+    return tuple(shape[p] for p in perm) if perm is not None else tuple(reversed(shape))
 
 
 def reduction_shape(
@@ -308,17 +298,7 @@ def reduction_shape(
     kw_axes, kw_keep = hoister._cur_axis, hoister._cur_keepdims
     if kw_axes is None:
         return None  # scalar -- not array-shape
-    if isinstance(kw_axes, int):
-        kw_axes = [kw_axes]
-    resolved = []
-    for a in kw_axes:
-        na = a + len(src_shape) if a < 0 else a
-        if 0 <= na < len(src_shape):
-            resolved.append(na)
-    axes_set = set(resolved)
-    if kw_keep:
-        return tuple("1" if i in axes_set else s for i, s in enumerate(src_shape))
-    return tuple(s for i, s in enumerate(src_shape) if i not in axes_set)
+    return reduced_shape(src_shape, [kw_axes] if isinstance(kw_axes, int) else kw_axes, kw_keep, "1")
 
 
 def reshape_tuple_shape(
@@ -329,23 +309,7 @@ def reshape_tuple_shape(
     division in C/Fortran)."""
     if len(args) < 2 or not isinstance(args[1], ast.Tuple):
         return UNHANDLED
-    parts = []
-    for e in args[1].elts:
-        if const_int(e) is not None:
-            parts.append(str(const_int(e)))
-        elif isinstance(e, ast.Name):
-            parts.append(e.id)
-        else:
-            parts.append(ast.unparse(e))
-    neg1 = [i for i, p in enumerate(parts) if p.strip() == "-1"]
-    src = args[0]
-    src_shape = hoister.shape_table.get(src.id) if isinstance(src, ast.Name) else None
-    if len(neg1) == 1 and src_shape:
-        total = " * ".join(f"({t})" for t in src_shape)
-        others = [p for j, p in enumerate(parts) if j != neg1[0]]
-        denom = " * ".join(f"({p})" for p in others) if others else "1"
-        parts[neg1[0]] = f"({total}) / ({denom})"
-    return tuple(parts)
+    return reshape_tokens(args[1].elts, args[0], hoister.shape_table)
 
 
 def outer_shape(
@@ -374,6 +338,20 @@ def diagonal_shape(
     return UNHANDLED
 
 
+def scan_shape(
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
+) -> RuleResult:
+    """``np.cumsum`` / ``np.cumprod`` of a known Name keep its shape along an axis (or over a 1-D
+    operand); without an axis an N-D operand flattens, which the scan expander refuses anyway. Unsized,
+    an inline ``np.cumsum(m, axis=0)[rows, cols]`` stayed buried in the subscript and reached the emitter."""
+    if not (args and isinstance(args[0], ast.Name)):
+        return UNHANDLED
+    shape = hoister.shape_table.get(args[0].id)
+    if not shape or (len(shape) > 1 and kwarg_or_pos(args, keywords, 1, "axis") is None):
+        return UNHANDLED
+    return tuple(shape)
+
+
 #: ``(ops, rule)`` in the order :meth:`CallHoister.derive_output_shape` tries them; the first rule
 #: covering the op that does not answer :data:`UNHANDLED` sizes the hoisted temp.
 OUTPUT_SHAPE_RULES: tuple[tuple[frozenset[str] | set[str], Callable[..., RuleResult]], ...] = (
@@ -389,13 +367,14 @@ OUTPUT_SHAPE_RULES: tuple[tuple[frozenset[str] | set[str], Callable[..., RuleRes
     (frozenset({"fft.fftn", "fft.ifftn", "fft.fft", "fft.ifft"}), named_operand_shape(0)),
     (frozenset({"fft.fftfreq"}), leading_count_shape),
     (frozenset({"diag"}), routed_extent),
-    (frozenset({"roll", "linalg.cholesky", "tril", "triu"}), named_operand_shape(0)),
+    (frozenset({"roll", "linalg.cholesky", "tril", "triu", "sort", "argsort"}), named_operand_shape(0)),
     (frozenset({"swapaxes", "expand_dims", "squeeze", "moveaxis"}), routed_extent),
     (frozenset({"reshape"}), reshape_name_shape),
     (frozenset({"concatenate"}), concatenate_shape),
     (ELEMENTWISE_SHAPE_OPS, elementwise_shape),
     (frozenset({"hstack"}), hstack_shape),
     (frozenset({"diff"}), diff_shape),
+    (frozenset({"cumsum", "cumprod"}), scan_shape),
     (frozenset({"transpose", "triu", "flip"}), permuted_shape),
     (
         frozenset({"sum", "max", "min", "mean", "prod", "std", "var", "argmax", "argmin", "linalg.norm"}),
@@ -445,6 +424,8 @@ SPILL_FIRST_OPERAND: frozenset[tuple[str, str]] = frozenset(
             "expand_dims",
             "squeeze",
             "moveaxis",
+            "sort",
+            "argsort",
         )
     }
     | {("np", "fft.fftn"), ("np", "fft.ifftn"), ("np", "fft.fft"), ("np", "fft.ifft")}
@@ -501,7 +482,7 @@ FFT_TRANSFORMS = frozenset({"fft.fftn", "fft.ifftn", "fft.fft", "fft.ifft"})
 #: Shape-preserving ops whose result inherits the source array's dtype: ``Xiv = np.reshape(Xi,
 #: (xn * yn,))`` with ``Xi`` int64 keeps Xiv int64, not the default double.
 SHAPE_PRESERVING_OPS = frozenset(
-    {"reshape", "repeat", "copy", "array", "asarray", "ascontiguousarray", "transpose", "flip"}
+    {"reshape", "repeat", "copy", "array", "asarray", "ascontiguousarray", "transpose", "flip", "sort"}
 )
 
 
@@ -518,6 +499,7 @@ class CallHoister(ast.NodeTransformer):
         "_cur_keepdims",
         "array_temps",
         "blas",
+        "blas_complex",
         "blas_float",
         "counter",
         "dim_aliases",
@@ -538,6 +520,7 @@ class CallHoister(ast.NodeTransformer):
         dim_aliases: dict[str, str] | None = None,
         blas: bool = False,
         blas_float: str = BLAS_LOWERING_FLOAT,
+        blas_complex: bool = False,
     ) -> None:
         self.shape_table = shape_table
         self.scalar_temps = scalar_temps
@@ -547,6 +530,7 @@ class CallHoister(ast.NodeTransformer):
         self.dim_aliases: dict[str, str] = dim_aliases or {}
         self.blas = blas
         self.blas_float = blas_float
+        self.blas_complex = blas_complex
         # Side-effect dtype table (shared with the lowering pipeline)
         # so a ``__cb<n>`` whose RHS contains complex literals or
         # complex-typed Name references is tagged ``complex128``.
@@ -626,6 +610,7 @@ class CallHoister(ast.NodeTransformer):
             dim_aliases=self.dim_aliases,
             blas=self.blas,
             blas_float=self.blas_float,
+            blas_complex=self.blas_complex,
         )
         node.args = [mm.visit(a) for a in node.args]
         self.pre_stmts.extend(mm.pre_stmts)
@@ -696,12 +681,20 @@ class CallHoister(ast.NodeTransformer):
 
     def type_array_temp(self, temp: str, op: str, node: ast.Call) -> None:
         """The element dtype of an array temp, where it is not the double default: ``argmax`` /
-        ``argmin`` produce int64 indices; complex operands (and every ``np.fft`` transform, even of
+        ``argmin`` / ``argsort`` produce int64 indices; complex operands (and every ``np.fft`` transform, even of
         a real input) give complex128; a shape-preserving op inherits its source's dtype; an
         all-integer elementwise ufunc, or an ``np.where`` over integer VALUES (the condition's dtype
         is ignored), stays int64 rather than round-tripping through a double."""
-        if op in {"argmax", "argmin"}:
+        if op in {"argmax", "argmin", "argsort"}:
             self.local_dtypes[temp] = "int64"
+        if op in {"cumsum", "cumprod"} and node.args and isinstance(node.args[0], ast.Name):
+            # numpy accumulates a bool or integer operand in the platform integer. A float scan runs in the
+            # accumulator dtype (float32 for a half or fp8 operand), so the store into the narrow output rounds once
+            # instead of every step stalling in a narrow temp.
+            src_dt = self.local_dtypes.get(node.args[0].id)
+            if src_dt is not None:
+                widened = src_dt in {"bool", "bool_"} or dtypes.is_integer(src_dt)
+                self.local_dtypes[temp] = "int64" if widened else dtypes.accumulator_dtype(src_dt)
         if self.infer_complex(node) or op in FFT_TRANSFORMS:
             self.local_dtypes[temp] = "complex128"
         if op in SHAPE_PRESERVING_OPS and node.args and temp not in self.local_dtypes:

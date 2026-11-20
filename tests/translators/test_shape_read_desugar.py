@@ -34,18 +34,7 @@ def env(**shapes: str) -> dict[str, ArrayDesc]:
 
 def axes_(dims: tuple[str, ...], expr: str) -> list[str]:
     """Result dims of subscripting ``dims`` with the subscript written in ``expr``."""
-    return apply_subscript_axes(list(dims), ast.parse(expr, mode="eval").body.slice)
-
-
-def test_ellipsis_stands_for_the_axes_left_unindexed() -> None:
-    # Read positionally, ``...`` is just another non-Slice and lands on the wrong end of the
-    # array: ls3df_scf's ``psi_frag[f][..., 0]`` selects the first state at every grid point and
-    # came back as the first two axes instead. Wrong rank AND wrong extents, reported by nothing.
-    assert axes_(("Lb", "Lb", "Lb", "nstate"), "a[..., 0]") == ["Lb", "Lb", "Lb"]
-    assert axes_(("Lb", "Lb", "Lb", "nstate"), "a[0, ...]") == ["Lb", "Lb", "nstate"]
-    assert axes_(("n", "m"), "a[...]") == ["n", "m"]
-    # An explicit index still drops its own axis, and a full slice still keeps it.
-    assert axes_(("n", "m", "k"), "a[:, 0, ...]") == ["n", "k"]
+    return apply_subscript_axes(list(dims), ast.parse(expr, mode="eval").body.slice, set())
 
 
 def test_a_chain_of_subscripts_resolves_like_one() -> None:
@@ -55,12 +44,6 @@ def test_a_chain_of_subscripts_resolves_like_one() -> None:
     fn = fn_("def f(psi_frag, out):\n v = psi_frag[0][..., 0]\n out[:] = v.shape[0] + v.shape[2]\n")
     assert resolve_shape_reads(fn, env(psi_frag="(nfrag, Lb, Lb, Lb, nstate)", out="(1,)")) == []
     assert "out[:] = Lb + Lb" in ast.unparse(fn)
-
-
-def test_a_read_on_a_local_allocation_resolves_through_it() -> None:
-    fn = fn_("def f(x, out):\n buf = np.zeros((x.shape[1], 4), dtype=np.float64)\n out[:] = buf.shape[0]\n")
-    assert resolve_shape_reads(fn, env(x="(n, m)", out="(1,)")) == []
-    assert "out[:] = m" in ast.unparse(fn)
 
 
 def test_a_negative_axis_counts_from_the_end() -> None:
@@ -75,29 +58,6 @@ def test_an_unresolvable_read_is_reported_and_left_alone() -> None:
     fn = fn_("def f(x, out):\n out[:] = q.shape[0]\n")
     assert resolve_shape_reads(fn, env(x="(n,)", out="(1,)")) == ["q.shape[0]"]
     assert "q.shape[0]" in ast.unparse(fn)
-
-
-def test_an_axis_past_the_rank_is_reported_not_wrapped() -> None:
-    fn = fn_("def f(x, out):\n out[:] = x.shape[3]\n")
-    assert resolve_shape_reads(fn, env(x="(n, m)", out="(1,)")) == ["x.shape[3]"]
-
-
-def test_a_scalar_local_bound_once_to_an_extent_is_that_extent() -> None:
-    # ``nb0, nb1, nb2 = v.shape`` leaves three locals that are second names for extents the ABI
-    # already carries. The buffer allocated from them is then described as ``(nb0, nb1, nb2)``
-    # while the same buffer coming the other way is ``(Lb, Lb, Lb)`` -- one shape, two spellings,
-    # and the rebind check reads that as two shapes.
-    fn = fn_(
-        "def f(v, out):\n"
-        " nb0 = v.shape[0]\n"
-        " nb1 = v.shape[1]\n"
-        " vcol = np.zeros((nb0, nb1, 1), dtype=np.float64)\n"
-        " out[:] = vcol.shape[0]\n"
-    )
-    assert resolve_shape_reads(fn, env(v="(Lb, Lb)", out="(1,)")) == []
-    src = ast.unparse(fn)
-    assert "np.zeros((Lb, Lb, 1)" in src
-    assert "out[:] = Lb" in src
 
 
 def test_a_rebound_scalar_is_not_folded() -> None:

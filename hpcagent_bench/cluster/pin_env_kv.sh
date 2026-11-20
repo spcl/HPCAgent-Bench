@@ -7,9 +7,12 @@ pin_env_kv() {
     local file="$1" kv="$2" key="${2%%=*}"
     [[ -f "${file}" ]] || { echo "pin_env_kv: no such env file ${file}" >&2; return 2; }
     local tmp
-    tmp="$(mktemp "${file}.pin.XXXXXX")"
-    # the key is literal text, never a pattern
-    awk -v prefix="${key}=" 'index($0, prefix) != 1' "${file}" >"${tmp}"
-    printf '%s\n' "${kv}" >>"${tmp}"
-    mv -- "${tmp}" "${file}"
+    tmp="$(mktemp "${file}.pin.XXXXXX")" || return 2
+    # the key is literal text, never a pattern; a failed read must not replace the file with what was read of it
+    if ! { awk -v prefix="${key}=" 'index($0, prefix) != 1' "${file}" && printf '%s\n' "${kv}"; } >"${tmp}" \
+        || ! mv -- "${tmp}" "${file}"; then
+        rm -f -- "${tmp}"
+        echo "pin_env_kv: could not rewrite ${file}; it is unchanged" >&2
+        return 2
+    fi
 }

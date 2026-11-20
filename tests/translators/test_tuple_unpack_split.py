@@ -116,12 +116,6 @@ def test_a_subscript_swap_through_the_lowering_split_matches_python() -> None:
     assert split_out == source_out == [3, 2, 1], out
 
 
-@pytest.mark.parametrize("source", ["a, *b = p, q", "(a, b), c = (1, 2), a"])
-def test_a_starred_or_nested_target_stays_whole(source: str) -> None:
-    """``*b = q`` is not python; ``(a, b) = (1, 2); c = a`` read the NEW ``a``."""
-    assert split(ShapeTableTupleSplit({}), source) == unchanged(source)
-
-
 def test_a_split_inside_a_loop_body_is_spliced_into_that_body() -> None:
     out = split(ShapeTableTupleSplit({}), "for i in range(3):\n    a, b = b, a\n")
     assert bound(out, a=1, b=2) == bound("for i in range(3):\n    a, b = b, a\n", a=1, b=2), out

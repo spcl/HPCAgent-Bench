@@ -19,6 +19,9 @@ idle, with every property above still holding.
 import ast
 import os
 import pathlib
+import resource
+import subprocess
+import sys
 import types
 from collections.abc import Callable
 from types import ModuleType
@@ -28,14 +31,9 @@ import pytest
 from tests.fresh_module import DRIVER_DIR, fresh
 
 
-def load_example_module(name: str) -> ModuleType:
-    """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    return fresh(name)
-
-
 @pytest.fixture(name="driver")
 def driver_fixture() -> ModuleType:
-    return load_example_module("agent_driver")
+    return fresh("agent_driver")
 
 
 @pytest.fixture(name="node")
@@ -120,13 +118,11 @@ def test_an_unreadable_mask_is_not_fatal(driver: types.ModuleType) -> None:
 def test_pinning_a_process_that_already_exited_is_survivable(driver: types.ModuleType, tmp_path: pathlib.Path) -> None:
     """``pin`` runs on a child that may have died during startup. It logs and returns; an agent
     that cannot be pinned is not an agent that must be abandoned."""
-
-    class Dead:
-        pid = -1
-
+    with subprocess.Popen([sys.executable, "-c", "pass"]) as dead:
+        dead.wait()
     log_path = tmp_path / "claude.log"
     with pathlib.Path(log_path).open("w") as log:
-        driver.pin(Dead(), [0, 1], log)
+        driver.pin(dead, [0, 1], 0, log)
     assert "could not pin" in log_path.read_text()
 
 
@@ -139,7 +135,7 @@ def test_no_cpus_means_no_syscall_and_no_log_noise(driver: types.ModuleType, tmp
 
     log_path = tmp_path / "claude.log"
     with pathlib.Path(log_path).open("w") as log:
-        driver.pin(Dead(), [], log)
+        driver.pin(Dead(), [], 0, log)
     assert log_path.read_text() == ""
 
 
@@ -194,3 +190,68 @@ def test_a_shipped_setup_gets_the_node_divided_by_its_own_agent_count(
     and the full 120 pool. Each agent holds at least the floor of the division -- 4 CPUs, not 2."""
     node(192)
     assert min(len(driver.agent_cpus(i, agents)) for i in range(agents)) == share
+
+
+def test_a_pinned_agent_holds_at_most_its_memory_share(driver: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    """One agent's runaway test program must not exhaust the node every agent shares: ``pin`` caps the private
+    memory of the agent's process (what it forks inherits the limit)."""
+    cap = 512 * 2**20
+    with subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"]) as process:
+        with (tmp_path / "claude.log").open("w") as log:
+            driver.pin(process, [], cap, log)
+        assert resource.prlimit(process.pid, resource.RLIMIT_DATA) == (cap, cap)
+        process.kill()
+
+
+def test_pinning_a_process_with_no_pid_leaves_the_caller_alone(
+    driver: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """The driver tests' fake processes carry pid 0, which ``prlimit`` and ``sched_setaffinity`` read as the
+    CALLER: the test worker capped its own heap at one agent's share and failed every large allocation after."""
+    limits = resource.getrlimit(resource.RLIMIT_DATA)
+    mask = os.sched_getaffinity(0)
+    with (tmp_path / "claude.log").open("w") as log:
+        driver.pin(types.SimpleNamespace(pid=0), sorted(mask)[:1], 512 * 2**20, log)
+    assert resource.getrlimit(resource.RLIMIT_DATA) == limits
+    assert os.sched_getaffinity(0) == mask
+
+
+def test_the_memory_share_divides_the_node_over_its_agents_unless_named(
+    driver: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(driver.AGENT_MEMORY_CAP_ENV, raising=False)
+    ram = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    assert driver.agent_memory_cap(4) == int(ram * driver.AGENT_MEMORY_SHARE) // 4
+    monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "2")
+    assert driver.agent_memory_cap(4) == 2 * 2**30
+    monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "0")
+    assert driver.agent_memory_cap(4) == 0
+
+
+def test_agent_memory_flag_sets_cap(driver: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--agent-memory-gb exports ``AGENT_MEMORY_CAP_GB``, the variable the cap already reads: the named GiB wins
+    over the node's RAM share for any agent count, and 0 switches the cap off."""
+    monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "24")
+    assert driver.agent_memory_cap(4) == 24 * 2**30
+    monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "0")
+    assert driver.agent_memory_cap(4) == 0
+
+
+def test_the_agent_cpus_flag_caps_the_share(
+    driver: types.ModuleType, node: Callable[[int], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--agent-cpus holds each agent to that many CPUs of its round-robin deal -- still disjoint, the remainder
+    left for whoever else shares the node. 0, unset or garbage leaves the deal whole."""
+    node(192)
+    monkeypatch.setenv(driver.AGENT_CPUS_ENV, "2")
+    shares = [driver.agent_cpus(i, 4) for i in range(4)]
+    assert [len(share) for share in shares] == [2, 2, 2, 2]
+    flat = [cpu for share in shares for cpu in share]
+    assert len(flat) == len(set(flat)), "two agents were dealt the same CPU"
+    assert driver.agent_cpus(0, 4) == [0, 4], "the cap takes the front of the deal"
+    monkeypatch.setenv(driver.AGENT_CPUS_ENV, "0")
+    assert len(driver.agent_cpus(0, 4)) == 48
+    monkeypatch.setenv(driver.AGENT_CPUS_ENV, "many")
+    assert len(driver.agent_cpus(0, 4)) == 48
+    monkeypatch.delenv(driver.AGENT_CPUS_ENV)
+    assert len(driver.agent_cpus(0, 4)) == 48

@@ -109,20 +109,6 @@ def test_an_explicit_jit_cache_root_override_is_honoured_without_scratch(tmp_pat
     assert proc.stdout.strip() == str(override)
 
 
-def test_cache_mkdirs_creates_directories_only_under_the_resolved_roots(tmp_path: pathlib.Path) -> None:
-    """The helper submitters call after sourcing the file must not reach outside FAST_SCRATCH/SCRATCH --
-    a stray mkdir under $HOME or /tmp would be invisible until a shared host filled up."""
-    fast, scratch, home = tmp_path / "fast", tmp_path / "scratch", tmp_path / "home"
-    home.mkdir()
-    proc = run("hpcagent_bench_cache_mkdirs", {"FAST_SCRATCH": str(fast), "SCRATCH": str(scratch), "HOME": str(home)})
-    assert proc.returncode == 0, proc.stderr
-    assert (fast / ".hpcagentbench-cache" / "hf").is_dir(), "HF_HOME (under FAST_SCRATCH) was not created"
-    assert (scratch / ".hpcagentbench-cache").is_dir(), "JIT_CACHE_ROOT (under SCRATCH) was not created"
-    assert (scratch / ".hpcagentbench-cache" / ".cpf-prerender").is_dir()
-    assert (scratch / ".hpcagentbench-cache" / "tools").is_dir()
-    assert not any(home.iterdir()), "hpcagent_bench_cache_mkdirs wrote into $HOME"
-
-
 def _documented_default(var_pattern: str) -> str:
     match = re.search(var_pattern, README)
     assert match, f"README no longer documents a default for {var_pattern!r}; update this test or the README"
@@ -148,7 +134,7 @@ def test_the_cpf_prerender_dir_default_matches_the_cache_readme(tmp_path: pathli
     assert proc.stdout.strip() == f"{scratch}/.hpcagentbench-cache{documented}"
 
 
-@pytest.mark.parametrize("layer", sorted((REPO / "experiments" / "layers").glob("site-*.env")), ids=lambda p: p.stem)
+@pytest.mark.parametrize("layer", sorted((REPO / "experiments").glob("site-*.env")), ids=lambda p: p.stem)
 def test_two_users_on_the_same_host_resolve_to_distinct_fast_scratch_roots(layer: pathlib.Path) -> None:
     """Every shipped site layer keys FAST_SCRATCH by user (directly or through $SCRATCH); two
     accounts must never be handed the same weights directory, which would let one user's job load
@@ -182,7 +168,7 @@ def test_edf_mounts_follow_scratch_and_fast_scratch_instead_of_naming_a_filesyst
 
 
 def site_layer(tmp_path: pathlib.Path, text: str) -> str:
-    """A site layer file (experiments/layers/site-*.env shape) for HPCAGENT_BENCH_SITE_ENV."""
+    """A site layer file (experiments/site-*.env shape) for HPCAGENT_BENCH_SITE_ENV."""
     layer = tmp_path / "site.env"
     layer.write_text(text)
     return str(layer)

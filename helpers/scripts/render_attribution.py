@@ -131,7 +131,10 @@ def parse_line(line: str, kernel: str) -> Provenance:
     """Parse one provenance line; ``ValueError`` names the kernel and the problem."""
     try:
         parsed = ProvenanceLine.model_validate(yaml.safe_load(line.removeprefix("# provenance: ")))
-    except pydantic.ValidationError as exc:
+    except (pydantic.ValidationError, yaml.YAMLError) as exc:
+        # A line whose YAML itself is broken (an unclosed brace, a stray tab) raises YAMLError, not
+        # ValidationError; both must become the kernel-named ValueError collect() aggregates, or a
+        # single malformed line crashes the check with a traceback instead of the error report.
         raise ValueError(f"{kernel}: {exc}") from exc
     return Provenance(
         kernel=kernel,

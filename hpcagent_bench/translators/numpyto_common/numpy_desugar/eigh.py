@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, name_ids, store_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import eigh_call_kind, is_eigh_assign_target
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind, dtype_table_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.linalg import cholesky_lines
@@ -19,9 +20,32 @@ __all__ = [
     "eigh_operand_is_real",
     "eigh_stmts",
     "eigh_w_dtype",
+    "kept_eigh_stmts",
+    "library_eigh_call",
     "operand_names",
     "subset_bounds",
 ]
+
+
+def library_eigh_call(node: ast.expr) -> bool:
+    """Whether ``node`` is numpy's own ``linalg.eigh(a[, UPLO])`` / ``linalg.eigvalsh(a[, UPLO])``: the form a backend
+    with an eigensolver library node (dace's ``Eigh``, LAPACK ``syevd``) takes as the call itself."""
+    if not isinstance(node, ast.Call) or len(node.args) != 1:
+        return False
+    if numpy_submodule_attr(node, "linalg") not in ("eigh", "eigvalsh"):
+        return False
+    return all(kw.arg == "UPLO" for kw in node.keywords)
+
+
+def kept_eigh_stmts(node: ast.Assign, temp: str) -> list[ast.stmt]:
+    """A kept :func:`library_eigh_call` with its operand bound to a name first, so the results' extents can be
+    spelled from it (``w`` is ``(temp.shape[0],)``)."""
+    call = node.value
+    if not isinstance(call, ast.Call) or isinstance(call.args[0], ast.Name):
+        return [node]
+    bind = ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=call.args[0])
+    call.args[0] = ast.Name(id=temp, ctx=ast.Load())
+    return [ast.fix_missing_locations(ast.copy_location(bind, node)), node]
 
 
 def eigh_w_dtype(is_real: bool, names: tuple[str, str | None], array_dtypes: dict[str, str]) -> str | None:
@@ -312,7 +336,7 @@ class EighLoopRewriter(ast.NodeTransformer):
     helper's names are known only through ``kind_tables`` (:func:`module_kind_tables`).
     ``dtypes`` is the declared kind table (manifest arrays and preset scalars)."""
 
-    __slots__ = ("_ctr", "alias_names", "array_dtypes", "declared", "dtypes", "kind_tables")
+    __slots__ = ("_ctr", "alias_names", "array_dtypes", "declared", "dtypes", "keep_library", "kind_tables")
 
     def __init__(
         self,
@@ -320,8 +344,11 @@ class EighLoopRewriter(ast.NodeTransformer):
         dtypes: dict[str, str],
         kind_tables: Mapping[str, dict[str, str]] | None = None,
         array_dtypes: dict[str, str] | None = None,
+        keep_library: bool = False,
     ) -> None:
         self.alias_names = alias_names
+        #: Leave a :func:`library_eigh_call` as it is, for a backend that lowers it to its own library node.
+        self.keep_library = keep_library
         self.declared = dtypes
         self.dtypes = dtypes
         #: Per-function kinds (:func:`module_kind_tables`); ``None`` applies ``dtypes`` to every function.
@@ -356,6 +383,9 @@ class EighLoopRewriter(ast.NodeTransformer):
         hit = eigh_call_kind(node.value, self.alias_names)
         if hit is None:
             return node
+        if self.keep_library and library_eigh_call(node.value):
+            self._ctr += 1
+            return kept_eigh_stmts(node, f"__eigh{self._ctr - 1}_a")
         kind, a_node, b_node, kw = hit
         tgt = node.targets[0]
         # ``w, v = eigh(...)`` or eigenvalues-only ``w = eigvalsh(...)``.
@@ -458,7 +488,7 @@ class EighInline(ast.NodeTransformer):
     Runs before :data:`LINALG_HOIST` so the cholesky/inv it emits are lowered for pythran.
     ``dtypes`` is the per-function kind table (:func:`dtype_table_`)."""
 
-    __slots__ = ("_ctr", "alias_names", "array_dtypes", "changed", "dtypes", "ranks")
+    __slots__ = ("_ctr", "alias_names", "array_dtypes", "changed", "dtypes", "keep_library", "ranks")
 
     def __init__(
         self,
@@ -466,8 +496,11 @@ class EighInline(ast.NodeTransformer):
         alias_names: set,
         dtypes: dict[str, str],
         array_dtypes: dict[str, str] | None = None,
+        keep_library: bool = False,
     ) -> None:
         self.ranks = ranks
+        #: Leave a :func:`library_eigh_call` as it is, for a backend that lowers it to its own library node.
+        self.keep_library = keep_library
         self.alias_names = alias_names
         self.dtypes = dtypes
         #: Declared array dtypes, for the eigenvalue width a complex operand cannot spell.
@@ -481,6 +514,9 @@ class EighInline(ast.NodeTransformer):
         hit = eigh_call_kind(node.value, self.alias_names)
         if hit is None:
             return node
+        if self.keep_library and library_eigh_call(node.value):
+            self._ctr += 1
+            return kept_eigh_stmts(node, f"__eighk{self._ctr - 1}_a")
         kind, a_node, b_node, kw = hit
         tgt = node.targets[0]
         evo = kw.get("eigvals_only")

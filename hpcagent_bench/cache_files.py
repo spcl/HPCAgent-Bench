@@ -14,7 +14,7 @@ import pathlib
 import uuid
 from collections.abc import Iterator
 
-__all__ = ["file_sha256", "json_digest", "replacing", "sha256_hex", "write_atomic"]
+__all__ = ["append_line", "file_sha256", "json_digest", "replacing", "sha256_hex", "write_atomic"]
 
 
 def sha256_hex(data: bytes) -> str:
@@ -54,3 +54,15 @@ def write_atomic(path: pathlib.Path, data: bytes, mode: int | None = None) -> No
     """Replace ``path`` with ``data`` (:func:`replacing`)."""
     with replacing(path, mode) as tmp:
         tmp.write_bytes(data)
+
+
+def append_line(path: pathlib.Path, line: str) -> None:
+    """Append ``line`` and a newline to ``path``, flushed to disk; a torn last line (a process killed mid-write) is
+    ended first, so the new line stays readable. The caller serializes writers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        torn = size > 0 and os.pread(handle.fileno(), 1, size - 1) != b"\n"
+        handle.write((b"\n" if torn else b"") + line.encode("utf-8") + b"\n")
+        handle.flush()
+        os.fsync(handle.fileno())

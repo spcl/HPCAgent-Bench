@@ -945,7 +945,14 @@ def fit_canvas(
         fig.set_size_inches(left + (high - low) * pitch_in + right, float(fig.get_size_inches()[1]))
     width = float(fig.get_size_inches()[0])
     fig.subplots_adjust(left=left / width, right=1.0 - right / width)
-    plotstyle.shrink_crowded_ticks(fig, [axes[-1]], type_.annotation_pt, min_text_pt(type_, type_.annotation_pt))
+    floor = min_text_pt(type_, type_.annotation_pt)
+    if plotstyle.crowded_at(fig, [axes[-1]], floor):
+        # A rotated name folded on two lines is two lines wide: too wide for its column even at the floor.
+        # textwrap folds after a hyphen (keeping it) or at a space (dropping it): undo each as it was made.
+        axes[-1].set_xticklabels(
+            [label.get_text().replace("-\n", "-").replace("\n", " ") for label in axes[-1].get_xticklabels()]
+        )
+    plotstyle.shrink_crowded_ticks(fig, [axes[-1]], type_.annotation_pt, floor)
     names = plotstyle.below_protrusion_in(fig, axes[-1])
     above = [plotstyle.above_protrusion_in(fig, ax) for ax in axes]
     top = (plotstyle.TITLE_BAND_IN if title else 0.0) + max(above[0], 0.0) + CHROME_PAD_IN
@@ -963,7 +970,8 @@ def fit_canvas(
     fig.set_size_inches(width, height)
     fig.subplots_adjust(top=1.0 - top / height, bottom=bottom / height, hspace=gap / panel_height_in)
     if title:
-        plotstyle.title(fig, title)
+        # The figure's own type scale: a print-size save refuses a title past it.
+        plotstyle.title(fig, title, type_.title_pt)
 
 
 def run_cells(runs: pd.DataFrame, kernels: Sequence[str]) -> tuple[KernelCell, ...]:

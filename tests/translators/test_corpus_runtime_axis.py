@@ -6,7 +6,6 @@ compiled artifact, called with more than one ``dim``."""
 
 import json
 import pathlib
-import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -59,14 +58,13 @@ def inputs_for(spec: BenchSpec, syms: dict[str, int]) -> dict[str, np.ndarray]:
 
 def build(short: str, tdp: pathlib.Path) -> tuple[dict[str, Any], dict[str, pathlib.Path]]:
     """Emit + compile ONCE per native backend, off the kernel's real manifest."""
+    oo.native()
     base = short.rsplit("/", maxsplit=1)[-1]
     with bench_info_for(short) as (spec_, npy, bi):
         oo.emit_native(npy, bi, tdp, base)
     binding = json.loads((tdp / f"{base}_binding.json").read_text())
     libs: dict[str, pathlib.Path] = {}
     for backend in NATIVE:
-        if backend == "fortran" and not shutil.which("gfortran"):
-            continue
         so = tdp / f"lib{base}_{backend}.so"
         cc = subprocess.run(
             oo.no.native_build_command(backend, tdp / f"{base}{EXT[backend]}", so),

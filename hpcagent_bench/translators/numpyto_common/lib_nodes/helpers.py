@@ -106,6 +106,9 @@ def simplify_sub(hi: ast.expr, lo: ast.expr) -> ast.expr | None:
     when the form doesn't match a known simplifying pattern."""
     if ast_eq(hi, lo):
         return ast.Constant(value=0)
+    if isinstance(lo, ast.BinOp) and isinstance(lo.op, ast.Sub) and ast_eq(lo.left, hi):
+        # ``hi - (hi - K)`` -> K: the count of a negative-start slice ``a[-K:]``, whose start resolves to ``n - K``.
+        return lo.right
     if isinstance(hi, ast.BinOp) and isinstance(hi.op, ast.Add):
         # ``(lo + K) - lo`` -> K, at ANY depth of the ``+`` chain. A convolution tap slice spells
         # its upper bound ``ky + (oh - 1) * stride + 1``, which puts ``lo`` one level down where the
@@ -263,11 +266,14 @@ def is_special_axis(elt: ast.expr) -> bool:
 
 
 def is_scalar_axis(elt: ast.expr) -> bool:
-    """A subscript entry that consumes ONE source axis as a scalar index -- an
-    int Constant or a bare Name (loop iter / symbol), never a Slice, Ellipsis or
-    newaxis."""
+    """A subscript entry that consumes ONE source axis as a scalar index -- an int Constant, a bare Name (loop iter
+    / symbol) or integer ARITHMETIC over those (``hn[2 * l][:]``), never a Slice, Ellipsis or newaxis."""
     if isinstance(elt, ast.Constant):
         return elt.value is not Ellipsis and elt.value is not None
+    if isinstance(elt, ast.BinOp):
+        return is_scalar_axis(elt.left) and is_scalar_axis(elt.right)
+    if isinstance(elt, ast.UnaryOp):
+        return is_scalar_axis(elt.operand)
     return isinstance(elt, ast.Name)
 
 

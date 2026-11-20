@@ -1,0 +1,4 @@
+# How-to section: profile before editing; the hotspots choose what to optimize.
+task:
+  set:
+    optimizations: {vars: {strategy: profile_first}}

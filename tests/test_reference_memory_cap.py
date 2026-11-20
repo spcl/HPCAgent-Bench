@@ -67,6 +67,16 @@ def test_a_reference_takes_its_fraction_of_the_rank_share_not_the_array_budget(
         assert sizing.reference_memory_gb(20.0) == pytest.approx(96.0)
 
 
+def test_a_judge_owning_the_node_caps_a_reference_by_its_slots_cores(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One judge holds all four NUMA slots and grades on them at once: each reference gets its slot's share, never
+    the whole node's (four references at 0.75 of the node would ask for three nodes)."""
+    mi300_rank(monkeypatch)
+    monkeypatch.setattr(sizing.os, "sched_getaffinity", lambda _pid: set(range(NODE_CORES)))
+    with config.overridden("limits.reference_node_fraction", 0.75):
+        assert sizing.reference_memory_gb(20.0, set(range(RANK_CORES))) == pytest.approx(96.0)
+        assert sizing.reference_memory_gb(20.0) == pytest.approx(384.0)
+
+
 def test_the_kernel_budget_is_the_floor_of_a_reference_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     """A kernel whose declared arrays already exceed the rank share keeps its own budget."""
     mi300_rank(monkeypatch)
@@ -91,8 +101,8 @@ def capture_caps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
         caps.append(memory_gb)
         return native_call.IsolatedCall({}, [1000, 1001], 0, [], ({}, {}))
 
-    monkeypatch.setattr(grading, "_call_isolated", fake_call)
-    monkeypatch.setattr(sizing, "rank_memory_share_bytes", lambda: 128 * GIB)
+    monkeypatch.setattr(grading, "call_isolated", fake_call)
+    monkeypatch.setattr(sizing, "rank_memory_share_bytes", lambda _cpus=frozenset(): 128 * GIB)
     return caps
 
 
@@ -105,7 +115,7 @@ def test_the_compiled_references_run_under_the_reference_cap(
         grading, "build_reference_lib", lambda root, *_a, **_k: BuildResult(True, tmp_path / "lib.so", "")
     )
     spec = BenchSpec.load(KERNEL)
-    data = grading._data_seeded(KERNEL, Preset.S, "float64", 1)
+    data = grading.data_seeded(KERNEL, Preset.S, "float64", 1)
     grading.run_compiled_reference(spec, Task(kernel=KERNEL), binding_from_spec(spec), data, [], 2, 60.0, 20.0)
     assert caps == [sizing.reference_memory_gb(20.0)]
     assert caps[0] > 20.0
@@ -114,7 +124,7 @@ def test_the_compiled_references_run_under_the_reference_cap(
 def test_the_numba_reference_runs_under_the_reference_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     caps = capture_caps(monkeypatch)
     spec = BenchSpec.load(KERNEL)
-    data = grading._data_seeded(KERNEL, Preset.S, "float64", 1)
+    data = grading.data_seeded(KERNEL, Preset.S, "float64", 1)
     grading.time_numba_isolated(spec, binding_from_spec(spec), data, 2, 60.0, 20.0)
     assert caps == [sizing.reference_memory_gb(20.0)]
 
@@ -139,7 +149,7 @@ def call_scratch(tmp_path: pathlib.Path, memory_gb: float) -> np.ndarray:
     """The scratch-allocating delivery through the real grading child under ``memory_gb``."""
     kernel = tmp_path / "scratch.py"
     kernel.write_text(SCRATCH_SOURCE.format(n=SCRATCH_BYTES))
-    outs, _samples, _mem, _, _timed = native_call._call_isolated(
+    outs, _samples, _mem, _, _timed = native_call.call_isolated(
         str(kernel),
         BINDING,
         {"x": np.zeros(1, dtype=np.float64)},

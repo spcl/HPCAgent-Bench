@@ -17,14 +17,9 @@ from tests.fresh_module import fresh
 from tests.problem_facts import problem as problem_line
 
 
-def load_example_module(name: str) -> ModuleType:
-    """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    return fresh(name)
-
-
 @pytest.fixture(name="driver")
 def driver_fixture() -> ModuleType:
-    return load_example_module("agent_driver")
+    return fresh("agent_driver")
 
 
 def usage(input_tokens: int = 0, cache_creation: int = 0, cache_read: int = 0, output_tokens: int = 0) -> dict:
@@ -55,17 +50,27 @@ def assistant_line(message_id: str, usage_block: dict, block: str = "text") -> s
 # the prompt states no budget
 
 
-def test_the_prompt_states_neither_budget_although_both_are_enforced(
+def test_the_prompt_states_both_token_limits_and_never_the_clock(
     driver: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The caps are enforced (the env-var contract below) but never told: a model that reads a minute count or
-    a token figure paces itself against it, or mistakes a shell timeout for the deadline."""
+    """Both token limits are told: scicomp40 agents that guessed their budget quit or shipped placeholders. The wall
+    clock stays unstated, and so does its absence -- a model that reads a minute count paces itself against it, and
+    the experiment's wall clock can still end the episode."""
     monkeypatch.setenv("AGENT_TIMEOUT_SECONDS", "36000")
-    monkeypatch.setenv("AGENT_MAX_TOKENS", "10000000")
+    monkeypatch.setenv("AGENT_MAX_TOKENS", "100000000")
+    monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", "5000000")
     problem = problem_line(0, "gemm", "Optimize gemm in c.")
     prompt = driver.render_prompt(problem, pathlib.Path(driver.__file__).resolve().parents[2], "")
-    for told in ("minute", "deadline", "Token budget", "10000000", "9000000", "time limit"):
+    assert driver.budget_text(5_000_000, 100_000_000) in prompt
+    assert "You may generate up to 5,000,000 output tokens: your replies and your reasoning." in prompt
+    assert "You may use up to 100,000,000 tokens in total" in prompt
+    assert "These limits are sized so that a careful optimization fits well within them." in prompt
+    for told in ("minute", "hour", "deadline", "36000", "time limit"):
         assert told not in prompt, told
+
+
+def test_without_token_limits_nothing_is_told(driver: ModuleType) -> None:
+    assert driver.budget_text(0, 0) == ""
 
 
 def test_a_run_without_the_search_tool_is_told_it_has_no_internet(
@@ -104,11 +109,57 @@ def test_budget_tokens_reads_the_env(
 # token accounting
 
 
+def delta_line(message_id: str, output_tokens: int) -> str:
+    """One streamed ``message_delta`` in the CLI's envelope, naming its message as the CLI does."""
+    event = {"type": "message_delta", "usage": {"output_tokens": output_tokens}}
+    return json.dumps({"type": "stream_event", "event": event, "api_message_id": message_id})
+
+
+def test_the_output_fold_counts_generated_tokens_only(driver: types.ModuleType) -> None:
+    """vLLM fills only the streamed ``message_delta`` (cumulative); the assistant usage repeats per block. Input
+    and cache never count."""
+    lines = [
+        delta_line("m1", 40),
+        delta_line("m1", 120),
+        assistant_line("m1", usage(input_tokens=9000, cache_read=50000, output_tokens=0)),
+        assistant_line("m2", usage(input_tokens=9000, output_tokens=30)),
+        assistant_line("m2", usage(input_tokens=9000, output_tokens=30), block="tool_use"),
+    ]
+    assert driver.token_cost.accumulate_output_tokens(lines, {}) == 150
+
+
+def test_the_output_fold_carries_an_open_message_across_polls(driver: types.ModuleType) -> None:
+    """The live watcher folds one batch per poll: a delta whose ``message_start`` came a poll earlier still counts."""
+    start = json.dumps(
+        {"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m7", "role": "assistant"}}}
+    )
+    bare = json.dumps({"type": "stream_event", "event": {"type": "message_delta", "usage": {"output_tokens": 77}}})
+    folded: dict[str, int] = {}
+    driver.token_cost.accumulate_output_tokens([start], folded)
+    assert driver.token_cost.accumulate_output_tokens([bare], folded) == 77
+
+
+def test_a_runner_usage_file_counts_output_and_reasoning(driver: types.ModuleType) -> None:
+    lines = [json.dumps({"input": 5000, "cached_input": 4000, "output": 300, "reasoning": 700})]
+    assert driver.harnesses.accumulate_usage_output_tokens(lines, {}) == 1000
+
+
+def test_an_exceeded_output_budget_is_the_token_budget_end(
+    driver: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", "100")
+    state = {"tokens": 0, "exceeded": False, "submitted": False, "output_tokens": 101, "output_exceeded": True}
+    with (tmp_path / "log").open("w") as log:
+        rc = driver.watched_returncode(0, state, tmp_path / "marker", log, 0, 0)
+    assert rc == driver.RC_TOKEN_BUDGET
+    assert "AGENT_MAX_OUTPUT_TOKENS=100" in (tmp_path / "log").read_text()
+
+
 def test_a_turn_costs_input_plus_cache_plus_output(driver: types.ModuleType) -> None:
     """The metric is everything consumed. Output alone would report 400 of this turn's 70400."""
     seen: dict[str, int] = {}
     block = usage(input_tokens=4000, cache_creation=6000, cache_read=60000, output_tokens=400)
-    assert driver.accumulate_total_tokens([assistant_line("msg_1", block)], seen) == 70400
+    assert driver.token_cost.accumulate_total_tokens([assistant_line("msg_1", block)], seen) == 70400
     assert seen == {"msg_1": 70400}
 
 
@@ -121,20 +172,20 @@ def test_repeated_usage_per_block_is_counted_once(driver: types.ModuleType) -> N
         assistant_line("msg_1", block, "text"),
         assistant_line("msg_1", block, "tool_use"),
     ]
-    assert driver.accumulate_total_tokens(lines, seen) == 70400
+    assert driver.token_cost.accumulate_total_tokens(lines, seen) == 70400
     assert seen == {"msg_1": 70400}
 
 
 def test_turns_accumulate_and_the_last_usage_per_id_wins(driver: types.ModuleType) -> None:
     seen: dict[str, int] = {}
     first = [assistant_line("msg_1", usage(input_tokens=1000, output_tokens=100))]
-    assert driver.accumulate_total_tokens(first, seen) == 1100
+    assert driver.token_cost.accumulate_total_tokens(first, seen) == 1100
     # the second event of msg_1 carries the turn's FINAL, larger count
     later = [
         assistant_line("msg_1", usage(input_tokens=1000, output_tokens=250)),
         assistant_line("msg_2", usage(input_tokens=2000, cache_read=500, output_tokens=300)),
     ]
-    assert driver.accumulate_total_tokens(later, seen) == 1250 + 2800
+    assert driver.token_cost.accumulate_total_tokens(later, seen) == 1250 + 2800
     assert seen == {"msg_1": 1250, "msg_2": 2800}
 
 
@@ -154,7 +205,7 @@ def test_usage_total_treats_missing_and_junk_fields_as_zero(
 ) -> None:
     """A usage block from an older CLI, or one served without caching, still counts what it has;
     a block with no numeric field at all is None -- a line to ignore, not a turn costing zero."""
-    assert driver.usage_total(block) == expected
+    assert driver.token_cost.usage_total(block) == expected
 
 
 def test_non_assistant_and_malformed_lines_are_skipped(driver: types.ModuleType) -> None:
@@ -172,7 +223,7 @@ def test_non_assistant_and_malformed_lines_are_skipped(driver: types.ModuleType)
         assistant_line("msg_1", usage(input_tokens=1000, output_tokens=42)),
         '{"type": "result", "subtype": "success"}',
     ]
-    assert driver.accumulate_total_tokens(lines, seen) == 1042
+    assert driver.token_cost.accumulate_total_tokens(lines, seen) == 1042
     assert seen == {"msg_1": 1042}
 
 

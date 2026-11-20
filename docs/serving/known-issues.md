@@ -6,7 +6,7 @@ per-model pages and [`knobs.md`](knobs.md) carry the configuration that avoids t
 
 | # | Issue | Visible as | Status |
 |---|---|---|---|
-| 1 | RCCL internal error on cross-node sends and all-reduces (GLM-5.3, 4 nodes) | server dies after 1-4 h of agent load (tp=4 pp=4), or at graph capture (tp=8 pp=2) | tp=4 pp=4: the 1-4 h deaths are host OOM on a stage (pool cut to 1.5 M); tp=8 pp=2: CSCS CXI settings |
+| 1 | RCCL internal error on cross-node sends and all-reduces (GLM-5.3, 4 nodes) | server dies after 1-4 h of agent load (tp=4 pp=4), or at graph capture (tp=8 pp=2) | fixed for tp=4 pp=4: a stage OOM-killed mid-send, or #5; the 1.5 M pool and `LOC` serve 15-24 h. tp=8 pp=2 is not used |
 | 2 | A writable CE container freezes on fuse-overlayfs | every agent on the node stalls at once, no error | fixed in hb: the agent container is read-only |
 | 3 | vLLM `ROCM_AITER_FA` garbles Qwen3.8 under agent load | random tokens in reasoning, invented tool names | avoided: Qwen3.8 serves on SGLang |
 | 4 | Self-tuned GEMM kernel tables break Qwen3.8 numerics | agents loop on degenerate reasoning | avoided: stock aiter tables only |
@@ -14,12 +14,15 @@ per-model pages and [`knobs.md`](knobs.md) carry the configuration that avoids t
 | 6 | RCCL silently falls back to TCP | several times slower, correct | check the `Using network` log line |
 | 7 | SGLang split groups hang on the RCCL/ROCm build | init hang | avoided: no serving setup enables them (SGLang has no environment switch for them) |
 | 8 | APU out-of-memory kills without a traceback | log stops, exit by signal | fraction rules in [`knobs.md`](knobs.md#the-mi300a-memory-model) |
+| 9 | gpt-oss-120b vLLM EngineCore segfaults minutes after its first requests | `!!!!!!! Segfault encountered !!!!!!!`, then `EngineDeadError` and HTTP 500 on every request; the run ends with no grades | fixed with issue 10: 4 of 4 runs with the inherited binding crashed, 0 of 6 without it |
+| 10 | A fused launcher started as a one-CPU step passed its CPU binding to every run | inference servers and agents of the run pinned to 2 of 192 cores; vLLM `No available shared memory broadcast block found in 60 seconds` | fixed: `launch_fused.sbatch` unsets `SLURM_CPU_BIND*` |
 
 ## 1. GLM-5.3: RCCL `ncclInternalError` on the pipeline send
 
 **Setup.** `zai-org/GLM-5.3` fp8 on SGLang, `tp=4 pp=4` over four MI300A nodes, RCCL over Slingshot through
 the `aws-ofi-nccl` plugin (`NCCL_NET="AWS Libfabric"`, `FI_PROVIDER=cxi`, `FI_CXI_RX_MATCH_MODE=software`,
-`FI_MR_CACHE_MONITOR=disabled`; GPU-direct RDMA on, see #5). 12 to 48 concurrent agent conversations.
+`FI_MR_CACHE_MONITOR=disabled`; GPU-direct RDMA on until 2026-10-13, see #5). 12 to 48 concurrent agent
+conversations.
 
 **What happens.** After 1 to 4 hours of steady decode, one pipeline stage's scheduler raises during the
 send of a step's tensors to the next stage:
@@ -52,16 +55,35 @@ fail inside RCCL when they cross nodes through the plugin.
 - `tp=4 pp=4` serves: API up after 55 min of weight loading; tool-call, reasoning and long-context recall (9/9)
   checks pass.
 
-**Host memory, not RCCL, ends the long `tp=4 pp=4` runs.** With the CXI settings, runs end in `NODE_FAIL` after
-2 h 49 min to 3 h, with an `oom_kill` in the inference step recorded by Slurm; the surviving stages then fail with
-`gloo ... Connection closed by peer`. In every such run the node monitor shows the heaviest stage at 502-512 of
-513 GB when serving stops. A run that dies at its first cross-node send at 441 GB is the GPU-direct registration
-failure of [#5](#5-8-fabric-and-memory). A peer killed mid-send explains the RCCL internal error. The KV pool is
-capped at 1.5 M tokens with `--max-total-tokens`; 1.8 M is OOM-killed ([glm53.md](glm53.md)).
+**Cause: a stage dies first, or #5.** Slurm's accounting names the trigger in each of the four jobs that logged the
+internal error (2026-10-10/11), and the jobs after them ended the same way:
 
-**Open.** Whether `tp=4 pp=4` with the 1.5 M pool and `NCCL_NET_GDR_LEVEL=LOC` serves for the length of an
-experiment. Questions for CSCS: the netstack artifact `gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0` (26.08.1) with
-RCCL 2.27.7, and known RCCL/libfabric issues with long-lived cross-node traffic on MI300A.
+| Job | KV pool | Slurm record of the inference step | Reading |
+|---|---|---|---|
+| 675850, 675956 | 2.6-2.8 M | `OUT_OF_MEMORY` | a stage OOM-killed; its peer's send fails with the internal error |
+| 675957, 676621 | 2.6-2.8 M | job `NODE_FAIL` | a node lost under load |
+| 676681 | 2.8 M | `OUT_OF_MEMORY` | heaviest stage at 504-508 of 513 GB |
+| 677837 | 1.8 M | job `FAILED` after 3 h 24 min of the step | heaviest stage at 508 of 513 GB |
+| 675958, 677231, 678947 | | ended after 20-24 min | GPU-direct registration failure of [#5](#5-8-fabric-and-memory) (`regattr RC -22`, `cxil_map: write error`) |
+
+The surviving stages of a killed peer fail with `gloo ... Connection closed by peer`. Every one of these runs had
+GPU-direct RDMA on: until 2026-10-13 the netstack hook's `PHB` replaced the layer's value (#5). In the same period
+one run, 677838 (1.8 M), served past 4 h (15 h 27 min).
+
+**Fix (2026-10-13).** Two changes went in together: the KV pool is capped at 1.5 M tokens with
+`--max-total-tokens` ([glm53.md](glm53.md)), and `run_cluster.sh` puts `NCCL_NET_GDR_LEVEL=LOC` on the server
+command. Every `tp=4 pp=4` run since then served until its job ended, with no RCCL error and no OOM kill:
+
+| Job | Inference step | Ended by |
+|---|---|---|
+| 679141 | 14 h 52 min | the experiment finished |
+| 716131, 716132, 716221, 716222 | 23 h 45 min each | the 24 h time limit |
+| 731329 | 22 h 16 min, 205 k decode batches, pool full at peak | the experiment finished |
+
+No run separates the two changes, so serving keeps both. Serving keeps `LOC` whatever #5 finds for the judge,
+because with GPU-direct RDMA on, three GLM-5.3 servers died at their first cross-node sends. Check the NCCL log of
+a run: `set by environment to LOC` and channels `via NET/AWS Libfabric/<n>` without `/GDRDMA` (the 4-node launch
+747685 on 2026-11-18 shows both).
 
 ## 2. A writable container freezes on fuse-overlayfs
 
@@ -119,6 +141,25 @@ for numerical tolerance against a reference, not only for throughput.
   Libfabric/<n>` without `/GDRDMA`. The hook sets other values the same way (`NCCL_MIN_NCHANNELS=112`,
   `FI_MR_CACHE_MAX_COUNT`, `FI_CXI_RDZV_*`, `FI_CXI_SAFE_DEVMEM_COPY_THRESHOLD`); any of them we want different
   goes on the server command as well.
+- **GPU-direct RDMA: what could fix it (open, 11-19).** RCCL under HIP always asks for a flush after a GPU-direct
+  receive (`ncclTopoNeedFlush` sets it unconditionally, `src/graph/paths.cc`). It flushes through the plugin's
+  `iflush`, which aws-ofi-nccl 1.20 serves with an RDMA read into a host page unless `OFI_NCCL_GDR_FLUSH_DISABLE=1`.
+  RCCL's own HDP flush (`RCCL_NET_HDP_FLUSH`) is off by default. No CSCS page, aws-ofi-nccl issue or libfabric issue
+  reports this corruption on MI300A with cxi. The nearest reports are a missing GDR flush on RoCE/IB hosts (ROCm
+  rocm-systems PR #14237), a cxi fault avoided with `FI_HMEM_ROCR_USE_DMABUF=0` (libfabric #12775) and MR-cache
+  monitor faults (libfabric #11451). The judge runs its ML grades with GDR on (`NCCL_NET_GDR_LEVEL=PHB` from the
+  hook and the EDF; RCCL logs `GDR 1`, job 754679). `debug/gdr/job.sbatch` under
+  `regrades/mlscale20-1118-p16/` checks RCCL `all_reduce`, `reduce_scatter` and `all_gather` across two nodes at
+  P=8 against host references. It runs PHB and LOC with and without address churn, then PHB with one change each:
+  `RCCL_NET_HDP_FLUSH=1`, `NCCL_NET_GDR_READ=0`, `NCCL_PROTO=Simple`, `OFI_NCCL_MR_CACHE_DISABLE=1`,
+  `FI_MR_CACHE_MONITOR` set to `userfaultfd`, `memhooks` or `kdreg2`, `FI_HMEM_ROCR_USE_DMABUF=0` or `1`,
+  `NCCL_DMABUF_ENABLE=0`, `OFI_NCCL_PROTOCOL=RDMA`, `FI_CXI_RX_MATCH_MODE=hardware` and `HSA_XNACK=1`. Run on
+  11-19 (job 754804, two nodes, 20 iterations each, judge EDF): 15 of the 17 runs are correct, zero wrong
+  elements, among them plain PHB with every channel `via NET/.../GDRDMA`, PHB with address churn, and LOC. The two
+  others give no verdict: `FI_MR_CACHE_MONITOR=memhooks` was killed before printing one, and
+  `OFI_NCCL_PROTOCOL=RDMA` fails the first `all_reduce` with `ncclSystemError`; neither is a setting we use. The
+  corruption did not reproduce in the judge's configuration, so the judge and agent EDFs keep GDR on; serving keeps
+  `LOC`, which is where it was seen.
 - **TCP fallback.** Without the plugin RCCL runs over TCP: correct, several times slower, no error.
   `grep -a "Using network" server-0.log` must say `AWS Libfabric`; our EDFs set `NCCL_NET_PLUGIN=ofi` so a
   missing plugin is an error instead.
@@ -127,6 +168,49 @@ for numerical tolerance against a reference, not only for throughput.
   so it is not set.
 - **APU memory.** GPUs and host share one pool, `--mem-fraction-static` is node-wide, and an out-of-memory death
   is the host OOM killer: the log stops with no traceback.
+
+## 9. gpt-oss-120b EngineCore segfault
+
+**Symptom.** Within minutes of serving its first requests, a gpt-oss-120b vLLM server prints
+`!!!!!!! Segfault encountered !!!!!!!` with no usable frame (`File "<unknown>", line 0`). The EngineCore then raises
+`RuntimeError: cancelled` from `shm_broadcast.acquire_read`, the API server answers every request with HTTP 500
+(`EngineDeadError`), and the run shuts down. Its judge reports `judge_tail FAIL rank-0: no grades`. The run is
+20 to 30 minutes old by then, most of it the server's boot. In the two runs whose server logs survive, the crash
+came 1 and 8 minutes after the first request, with one request running.
+
+**Cause: the CPU binding of issue 10.** Every gpt-oss-120b run started by a fused launcher running as a one-CPU step
+before the fix crashed this way, and no run started from a batch shell did (umbrella jobs 752845 and 753775,
+2026-11-18/19):
+
+| Runs | Launched from | Segfaults | Run length |
+|---|---|---|---|
+| 75284521, 75284522 (`mlscale-oss-r8`, `-r9`), 75284552, 75284553 (`gitsc13-oss`) | one-CPU step, before the fix | 4 of 4 | 26-32 min |
+| 75284503, 75284504, 75284505, 75284506, 75377503 | the batch shell | 0 of 5 | 39 min to 4 h 19 min |
+| 75284554 | one-CPU step, after the fix | 0 of 1 | 21 min, ended with its job |
+
+The two groups share image and engine arguments. `mlscale-oss-r8` and `-r9` crashed on the node that had served
+75284503 for 1 h 40 min from the batch shell. 75377503 reran the setup env file and checkout of 75284552 and
+75284553 from the batch shell and served for 4 h 19 min. The node monitor shows the cap. Under load the vLLM node
+of an unbound run uses 5.5% of its CPUs, against 2.3% idle; the bound runs stay at 2.9-3.4% idle and 3.3-3.4%
+loaded. 75284554 shows the unbound profile (5.5%). The bound servers also logged four or five 60-second
+`shm_broadcast` stalls while they booted, against one in an unbound run. Which code faults is unknown, since the log
+has no frame.
+
+**Fix.** The fix of issue 10. No run since then has seen the segfault. A step-launched run past 30 minutes has not
+happened yet: 75284554 was cut at 21 minutes when its job ended. On a run, check `grep -c 'Segfault encountered'`
+over the job's logs and the vLLM node's `cpu_pct` in `monitor/vllm-<node>.csv`.
+
+## 10. CPU binding inherited from a one-CPU launcher step
+
+**Symptom.** In a run started by `launch_fused.sbatch` from a step (`srun --overlap -c1`), `taskset -cp` of the
+inference server and of the agents shows `0,96`: two hardware threads of one core. A run started from the batch
+script shows `0-191`. Judges and grade-under ranks are not affected, since they pass their own `--cpu-bind`.
+
+**Cause.** Slurm exports the launcher step's binding as `SLURM_CPU_BIND=quiet,mask_cpu:...` (with `_LIST`, `_TYPE`
+and `_VERBOSE`), and every srun that does not name its own `--cpu-bind` applies it to its tasks.
+
+**Fix.** A launcher started as a step unsets `SLURM_CPU_BIND*` before starting its runs, next to its existing
+`SLURM_CPUS_ON_NODE` correction. Test: `tests/test_cluster_launch_scripts.py::test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps`.
 
 ## Model behaviour that is not infrastructure
 

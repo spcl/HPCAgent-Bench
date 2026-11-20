@@ -8,10 +8,11 @@ Flags, by AST inspection:
    allowed).
 2. Any NAME BOUND in the file that starts with ``_``: assignment targets
    (plain, tuple/list unpacking, augmented, annotated, walrus), for/with/except
-   targets, comprehension variables, function and class names, every parameter
-   kind (positional, positional-only, keyword-only, ``*args``, ``**kwargs``),
-   lambda parameters, ``global``/``nonlocal`` names, and import bindings.
-   Dunders (``__x__``) are allowed. A bare ``_`` is a violation unless
+   targets, match-statement captures (``case _x``, ``case *_rest``,
+   ``case {**_kw}``), comprehension variables, function and class names, every
+   parameter kind (positional, positional-only, keyword-only, ``*args``,
+   ``**kwargs``), lambda parameters, ``global``/``nonlocal`` names, and import
+   bindings. Dunders (``__x__``) are allowed. A bare ``_`` is a violation unless
    ``--allow-bare-underscore`` is passed. Attribute access and other
    read-only uses are never flagged.
 3. Import patterns: a redundant self-alias (``import x as x`` or
@@ -93,6 +94,18 @@ class NameVisitor(ast.NodeVisitor):
         self.flag_binding(node.name, node.lineno, node.col_offset + 1)
         self.generic_visit(node)
 
+    def visit_TypeVar(self, node: ast.TypeVar) -> None:
+        self.flag_binding(node.name, node.lineno, node.col_offset + 1)
+        self.generic_visit(node)
+
+    def visit_ParamSpec(self, node: ast.ParamSpec) -> None:
+        self.flag_binding(node.name, node.lineno, node.col_offset + 1)
+        self.generic_visit(node)
+
+    def visit_TypeVarTuple(self, node: ast.TypeVarTuple) -> None:
+        self.flag_binding(node.name, node.lineno, node.col_offset + 1)
+        self.generic_visit(node)
+
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         if node.name:
             self.flag_binding(node.name, node.lineno, node.col_offset + 1)
@@ -105,6 +118,21 @@ class NameVisitor(ast.NodeVisitor):
     def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
         for name in node.names:
             self.flag_binding(name, node.lineno, node.col_offset + 1)
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:
+        if node.name:
+            self.flag_binding(node.name, node.lineno, node.col_offset + 1)
+        self.generic_visit(node)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:
+        if node.name:
+            self.flag_binding(node.name, node.lineno, node.col_offset + 1)
+        self.generic_visit(node)
+
+    def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+        if node.rest:
+            self.flag_binding(node.rest, node.lineno, node.col_offset + 1)
+        self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -153,6 +181,8 @@ def parse_diff(diff_output: str) -> dict[str, tuple[bool, set[int]]]:
         elif line.startswith("--- "):
             if line.strip() == "--- /dev/null":
                 is_new_file = True
+        elif line.startswith("rename to "):  # a pure rename has no +++ line; its destination is a new name
+            current_path, is_new_file = line.removeprefix("rename to "), True
         elif line.startswith("+++ "):
             current_path = line[4:].strip().removeprefix("b/")
         elif line.startswith("@@"):
@@ -229,6 +259,14 @@ def main(argv: list[str] | None = None) -> int:
             file_violations = check_file(path, args.allow_bare_underscore)
         except SyntaxError as exc:
             print(f"{file_arg}: error: cannot parse: {exc.msg}", file=sys.stderr)
+            exit_code = 1
+            continue
+        except (OSError, ValueError) as exc:
+            # UnicodeDecodeError is a ValueError: a PEP 263 source declaring a non-UTF-8 codec is
+            # valid Python, and read_text(encoding="utf-8") must report it, not crash the hook with
+            # a traceback. A file that cannot be read at all (deleted between is_file and read)
+            # lands here too.
+            print(f"{file_arg}: error: cannot read: {exc}", file=sys.stderr)
             exit_code = 1
             continue
         if args.all:

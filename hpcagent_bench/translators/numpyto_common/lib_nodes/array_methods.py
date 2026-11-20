@@ -4,6 +4,7 @@ import ast
 from collections.abc import Iterable
 
 from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 
 __all__ = ["ARRAY_METHOD_REDUCTIONS", "ARRAY_METHOD_SHAPE_OPS", "ArrayMethodRewriter"]
 
@@ -62,7 +63,7 @@ class ArrayMethodRewriter(ast.NodeTransformer):
         if not (isinstance(func, ast.Attribute) and func.attr in ARRAY_METHOD_REDUCTIONS):
             return node
         recv = func.value
-        if isinstance(recv, ast.Name) and (recv.id in ("np", "numpy") or recv.id in self.sparse_names):
+        if isinstance(recv, ast.Name) and (is_numpy_module(recv) or recv.id in self.sparse_names):
             return node
         if isinstance(recv, ast.Subscript) and isinstance(recv.value, ast.Name) and recv.value.id in self.sparse_names:
             return node

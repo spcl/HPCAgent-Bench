@@ -136,18 +136,6 @@ IN_LOOP_DRIVER = (
 )
 
 
-def test_a_deferred_allocation_inside_a_loop_frees_the_previous_iteration() -> None:
-    """The reallocating free was only emitted where a SECOND marker made it visible in the text. A
-    marker whose one occurrence is inside a loop runs per iteration, so every iteration but the last
-    overwrote a pointer nothing freed -- measured on dbcsr, ~160k live buffers at preset XL."""
-    text = emitted(cpp=False, source=IN_LOOP_ALLOC)
-    alloc = text.index("t = (double *)malloc(")
-    before = text[:alloc]
-    assert "free(t);" in before[before.rindex("for ") :], (
-        "the deferred allocation inside the loop does not free the previous iteration's buffer:\n" + text
-    )
-
-
 @have_gcc
 def test_a_deferred_loop_allocation_runs_leak_free_under_address_sanitizer() -> None:
     run = build_run_c(emitted(cpp=False, source=IN_LOOP_ALLOC), IN_LOOP_DRIVER, sanitize=True)

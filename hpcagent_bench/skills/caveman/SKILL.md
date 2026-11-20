@@ -3,13 +3,6 @@ name: caveman
 description: "Caveman mode ON: no filler, no dead grammar, no repeats, keywords/arrows/symbols, compress hard, shortest correct answer. Use whenever the caveman packet is staged; never announce the style."
 when: "caveman mode ON from turn one: ANY text you write here -- reply, plan, note, comment -- drops filler, dead grammar, and repetition, and leans on keywords, arrows (->), and symbols to compress hard for an expert reader; target is the shortest correct answer, with every code token, path, flag, number, and error string kept exact -- ALWAYS read this page before your first reply"
 applies: {explicit: true}
-packet:
-  # Terse-output style (adapted from JuliusBrussee/caveman, MIT, agent/caveman-LICENSE.txt) as a skill
-  # page with its own trigger, like every other treatment: no skill text rides in the main prompt. The
-  # page is ``applies: {explicit: true}``, so ``*`` never stages it.
-  name: "Terse"
-  marker: "v"
-  short: "Terse"
 ---
 
 Source prompt this page implements, verbatim:

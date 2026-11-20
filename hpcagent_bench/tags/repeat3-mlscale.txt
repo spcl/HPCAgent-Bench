@@ -1,0 +1,4 @@
+# Repeat study (paper tab:repeat-plan): 20 episodes per model at temperature 1 and 0 on three kernels of MLScale.
+dist_softmax
+dist_conv2d_halo
+dist_moe_router

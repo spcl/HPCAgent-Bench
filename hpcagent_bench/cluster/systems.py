@@ -13,7 +13,7 @@ order of precedence:
    under plain ``sbatch`` too;
 3. the job script's leading ``#SBATCH`` line (``job submit`` only): a field the script pins stays as it is. An image
    build or verify job pins its role's ``images.env`` partition the same way, unless ``--system`` names a machine;
-4. its other environment variable (:data:`FIELDS`), which the site layer (``experiments/layers/site.env``) also
+4. its other environment variable (:data:`FIELDS`), which the site layer (``experiments/site.env``) also
    provides, since a layer keeps a value the environment already holds;
 5. the system's entry in ``systems.yaml`` (``$HPCAGENT_BENCH_SYSTEMS_FILE`` adds or replaces entries). The system is
    ``--system``, else ``$HPCAGENT_BENCH_SYSTEM``, else the entry whose ``cluster`` is ``$SLURM_CLUSTER_NAME``, else
@@ -24,10 +24,12 @@ order of precedence:
 Each pair of :data:`PAIRS` says one thing two ways, so it comes whole from the highest source that sets either
 field: an explicit ``--gpus-per-task`` displaces the system's ``--gpus-per-node``, a script's ``--ntasks`` the
 system's ``--ntasks-per-node``. A job names the fields it cannot run without (:data:`JOB_REQUIRED`); a missing one
-is an error that names its flag and its environment variable. Two more values resolve the same way and are not
+is an error that names its flag and its environment variable. Six more values resolve the same way and are not
 ``sbatch`` options (:data:`EXTRAS`): the hardware, which names the GPU generation whose images and serving layers an
-experiment uses, and the partition's longest time limit, which caps a scaled experiment's wall clock. Neither has a
-default.
+experiment uses, the partition's longest time limit, which caps a scaled experiment's wall clock, and four resource
+limits -- one agent's memory and CPUs, a container's memory and CPUs -- that the job itself applies through the
+environment variable each exports (``AGENT_MEMORY_CAP_GB`` is the one the agent runtime already reads). The hardware
+and the time limit have no default; a resource limit unset leaves the runtime's own.
 """
 
 import argparse
@@ -50,8 +52,10 @@ __all__ = [
     "GPU_FIELDS",
     "JOB_FIELDS",
     "JOB_REQUIRED",
+    "LAYOUT_FIELDS",
     "PACKAGED",
     "PAIRS",
+    "RESOURCE_EXTRAS",
     "SHORT",
     "SYSTEMS_ADAPTER",
     "SYSTEMS_FILE",
@@ -83,6 +87,7 @@ FIELDS: dict[str, tuple[str, str]] = {
     "gpus_per_task": ("--gpus-per-task", "HPCAGENT_BENCH_JOB_GPUS_PER_TASK"),
     "time": ("--time", "HPCAGENT_BENCH_JOB_TIME"),
     "nice": ("--nice", "HPCAGENT_BENCH_NICE"),
+    "mem": ("--mem", "HPCAGENT_BENCH_JOB_MEM"),
 }
 #: The short form of a field's option, as a script's ``#SBATCH`` line may spell it.
 SHORT = {"nodes": "-N", "partition": "-p", "account": "-A", "ntasks": "-n", "cpus_per_task": "-c", "time": "-t"}
@@ -91,15 +96,28 @@ TASK_FIELDS = ("ntasks_per_node", "ntasks")
 #: Two fields that say one thing two ways: a pair comes whole from the highest source that sets either.
 PAIRS = (GPU_FIELDS, TASK_FIELDS)
 #: What the experiment job takes from this module. Its node count is the sum of its roles and its time limit is
-#: computed from the tag, so neither is a field here; its tasks and cores are its own (one task per node).
-JOB_FIELDS = ("partition", "account", "gpus_per_node")
+#: computed from the tag, so neither is a field here; its tasks and cores are its own (one task per node). ``mem``
+#: is the node memory the job is granted: a script that pins none (``services.sbatch`` takes the whole node) is
+#: narrowed by the flag, the variable or the system's entry.
+JOB_FIELDS = ("partition", "account", "gpus_per_node", "mem")
 #: Without these the job cannot run: the account bills it, the GPUs are what its roles share.
 JOB_REQUIRED = ("account", "gpus_per_node")
-#: Values a job needs that are no ``sbatch`` option: name -> (flag, environment variable).
+#: A helper job's task layout, printable for a shell submitter that runs one step per task (prepare.sbatch).
+LAYOUT_FIELDS = ("ntasks", "ntasks_per_node", "cpus_per_task")
+#: Values a job needs that are no ``sbatch`` option: name -> (flag, environment variable). A resource limit's variable
+#: is the name the job itself applies it through, so a resolved value reaches the job even when the submitting shell
+#: never set it (``job submit`` sets it in sbatch's environment; the experiment submitter pins it into the setup env).
 EXTRAS: dict[str, tuple[str, str]] = {
     "hardware": ("--hardware", "HPCAGENT_BENCH_HARDWARE"),
     "max_time_hours": ("--max-time-hours", "HPCAGENT_BENCH_MAX_TIME_HOURS"),
+    "agent_memory_gb": ("--agent-memory-gb", "AGENT_MEMORY_CAP_GB"),
+    "agent_cpus": ("--agent-cpus", "HPCAGENT_BENCH_AGENT_CPUS"),
+    "container_memory": ("--container-memory", "HPCAGENT_BENCH_CONTAINER_MEMORY"),
+    "container_cpus": ("--container-cpus", "HPCAGENT_BENCH_CONTAINER_CPUS"),
 }
+#: The :data:`EXTRAS` that are resource limits: the values a JOB applies from its own environment, so ``job submit``
+#: exports exactly these (the hardware and the time limit are submitter-side and never exported).
+RESOURCE_EXTRAS = frozenset({"agent_memory_gb", "agent_cpus", "container_memory", "container_cpus"})
 PACKAGED = pathlib.Path(__file__).with_name("systems.yaml")
 SYSTEMS_FILE = "HPCAGENT_BENCH_SYSTEMS_FILE"
 
@@ -112,6 +130,19 @@ def scalar_text(raw: object) -> object:
 
 #: One ``systems.yaml`` value, as the text it is passed on as.
 Value = Annotated[str, pydantic.BeforeValidator(scalar_text)]
+
+
+class SystemsLoader(yaml.SafeLoader):
+    """``yaml.SafeLoader`` reading numbers as the text they are passed on as. YAML 1.1 has one int pattern, sexagesimal
+    included: with it ``time: 2:00:00`` is the int 7200, which ``sbatch`` reads as minutes."""
+
+
+SystemsLoader.yaml_implicit_resolvers = {
+    first: [
+        (tag, regexp) for tag, regexp in resolvers if tag not in ("tag:yaml.org,2002:int", "tag:yaml.org,2002:float")
+    ]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
 
 
 class SystemEntry(pydantic.BaseModel):
@@ -130,8 +161,13 @@ class SystemEntry(pydantic.BaseModel):
     gpus_per_task: Value | None = None
     time: Value | None = None
     nice: Value | None = None
+    mem: Value | None = None
     hardware: Value | None = None
     max_time_hours: Value | None = None
+    agent_memory_gb: Value | None = None
+    agent_cpus: Value | None = None
+    container_memory: Value | None = None
+    container_cpus: Value | None = None
 
     def given(self) -> dict[str, str]:
         """The values the entry sets, by field name."""
@@ -144,11 +180,11 @@ SYSTEMS_ADAPTER: pydantic.TypeAdapter[dict[str, SystemEntry]] = pydantic.TypeAda
 
 def load_systems(environ: Mapping[str, str]) -> dict[str, SystemEntry]:
     """The packaged systems, then the file named by ``$HPCAGENT_BENCH_SYSTEMS_FILE`` over them."""
-    systems = SYSTEMS_ADAPTER.validate_python(yaml.safe_load(PACKAGED.read_text(encoding="utf-8")) or {})
+    systems = SYSTEMS_ADAPTER.validate_python(yaml.load(PACKAGED.read_text(encoding="utf-8"), SystemsLoader) or {})
     extra = environ.get(SYSTEMS_FILE)
     if extra:
         systems |= SYSTEMS_ADAPTER.validate_python(
-            yaml.safe_load(pathlib.Path(extra).read_text(encoding="utf-8")) or {}
+            yaml.load(pathlib.Path(extra).read_text(encoding="utf-8"), SystemsLoader) or {}
         )
     return systems
 
@@ -187,7 +223,11 @@ def script_header(script: pathlib.Path) -> dict[str, str]:
     for field in FIELDS:
         parser.add_argument(FIELDS[field][0], *([SHORT[field]] if field in SHORT else []), dest=field)
     known = parser.parse_known_args(words)[0]
-    return {field: value for field, value in vars(known).items() if value is not None}
+    header = {field: value for field, value in vars(known).items() if value is not None}
+    if "--exclusive" in words and "cpus_per_task" not in header:
+        # An exclusive job owns its node's cores: a system's core count would narrow it to a slice.
+        header["cpus_per_task"] = ""
+    return header
 
 
 def image_partition(script: pathlib.Path, script_args: Sequence[str], environ: Mapping[str, str]) -> str:
@@ -277,19 +317,53 @@ def resolve(
 
 
 def sbatch_command(
-    script: str, values: Mapping[str, str], script_args: Sequence[str], logs: pathlib.Path | None = None
+    script: str,
+    values: Mapping[str, str],
+    script_args: Sequence[str],
+    logs: pathlib.Path | None = None,
+    hold: bool = False,
 ) -> list[str]:
     """``sbatch`` with every resolved field as an option, its Slurm output under ``logs`` when given (a
     script's own ``%x-%j.out`` lands wherever sbatch ran, the checkout included), then ``script`` and its
-    arguments."""
+    arguments, held (``--hold``) when ``hold``. Never ``--export``: Slurm cancels a job submitted with one at its start;
+    a value the job reads from its environment is set in sbatch's own, which sbatch's default (``ALL``) forwards."""
     output = [f"--output={logs}/%x-%j.out", f"--error={logs}/%x-%j.err"] if logs is not None else []
     return [
         "sbatch",
+        *(["--hold"] if hold else []),
         *(f"{FIELDS[field][0]}={value}" for field, value in values.items()),
         *output,
         script,
         *script_args,
     ]
+
+
+def checkout_problems(root: pathlib.Path) -> list[str]:
+    """What a job from checkout ``root`` must not start with: uncommitted changes to tracked files (every graded row
+    records HEAD, which is then not the code that ran; ``owed.refuse_other_commit`` refuses the same), and a submodule
+    left empty (a new worktree has none, and launch_venv.sh stops the judge on an empty third_party/KernelBench, 30 s
+    into the job). A tree git cannot read (an unpacked release) records no commit and is not refused for it."""
+    problems = []
+    if paths.git_dirty(root):
+        problems.append(
+            f"{root} has uncommitted changes to tracked files: commit them, or submit from a clean checkout"
+        )
+    gitmodules = root / ".gitmodules"
+    lines = gitmodules.read_text(encoding="utf-8").splitlines() if gitmodules.is_file() else []
+    for line in lines:
+        key, _, value = line.partition("=")
+        module = value.strip()
+        if key.strip() == "path" and module and not any((root / module).glob("*")):
+            problems.append(f"{module} is empty: git -C {root} submodule update --init {module}")
+    return problems
+
+
+def refuse_unready(root: str | pathlib.Path) -> int:
+    """2 with each of :func:`checkout_problems` on stderr, else 0: the check both submit paths run before sbatch."""
+    problems = checkout_problems(pathlib.Path(root))
+    for problem in problems:
+        print(f"checkout not ready: {problem}", file=sys.stderr)
+    return 2 if problems else 0
 
 
 def main(argv: Sequence[str]) -> int:
@@ -299,7 +373,11 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--system", help="a system of systems.yaml (default: $HPCAGENT_BENCH_SYSTEM, else by cluster)")
     for field, (option, variable) in FIELDS.items():
         parser.add_argument(option, dest=field, metavar="VALUE", help=f"overrides #SBATCH, ${variable} and the system")
+    for extra, (option, variable) in EXTRAS.items():
+        parser.add_argument(option, dest=extra, metavar="VALUE", help=f"overrides ${variable} and the system")
     parser.add_argument("--dry-run", action="store_true", help="print the sbatch command and submit nothing")
+    # sbatch reads no SBATCH_HOLD (Slurm 25.05): a held submission needs the flag itself.
+    parser.add_argument("--hold", action="store_true", help="submit the job held (default: $HOLD=1, as submit.sh)")
     parser.add_argument(
         "script", type=pathlib.Path, help="the job script, e.g. hpcagent_bench/cluster/grade-under.sbatch"
     )
@@ -313,13 +391,19 @@ def main(argv: Sequence[str]) -> int:
     if not args.system and (partition := image_partition(args.script, args.script_args, environ)):
         pinned["partition"] = partition
     resolved = resolve(args.system, vars(args), environ, pinned=pinned)
-    options = {field: value for field, value in resolved.values.items() if header.get(field) != value}
+    options = {field: value for field, value in resolved.values.items() if value and header.get(field) != value}
+    exports = {
+        EXTRAS[extra][1]: value for extra, value in resolved.extras.items() if extra in RESOURCE_EXTRAS and value
+    }
     logs = paths.scratch_dir() / "logs"
     if not args.dry_run:
         logs.mkdir(parents=True, exist_ok=True)
-    command = sbatch_command(str(args.script), options, args.script_args, logs)
-    print(f"# system {resolved.system or 'none'}: {shlex.join(command)}", file=sys.stderr)
-    return 0 if args.dry_run else subprocess.run(command, check=False).returncode
+    command = sbatch_command(str(args.script), options, args.script_args, logs, args.hold or environ.get("HOLD") == "1")
+    shown = ["env", *(f"{name}={value}" for name, value in exports.items()), *command] if exports else command
+    print(f"# system {resolved.system or 'none'}: {shlex.join(shown)}", file=sys.stderr)
+    if args.dry_run:
+        return 0
+    return refuse_unready(paths.ROOT) or subprocess.run(command, check=False, env=os.environ | exports).returncode
 
 
 def options_main(argv: Sequence[str]) -> int:
@@ -334,7 +418,10 @@ def options_main(argv: Sequence[str]) -> int:
     for extra, (option, variable) in EXTRAS.items():
         parser.add_argument(option, dest=extra, metavar="VALUE", help=f"overrides ${variable} and the system's value")
     parser.add_argument(
-        "--print", choices=(*JOB_FIELDS, *EXTRAS), help="print this value alone (empty when nothing sets it)"
+        "--print",
+        action="append",
+        choices=(*JOB_FIELDS, *LAYOUT_FIELDS, *EXTRAS),
+        help="print this value alone (empty when nothing sets it); repeat it for one value per line, in order",
     )
     parser.add_argument(
         "--require",
@@ -346,11 +433,15 @@ def options_main(argv: Sequence[str]) -> int:
     )
     args = parser.parse_args(list(argv))
     environ = site_environment(os.environ)
-    resolved = resolve(
-        args.system, vars(args), environ, JOB_FIELDS, tuple(args.require) if args.print else JOB_REQUIRED
+    fields = (
+        (*JOB_FIELDS, *LAYOUT_FIELDS)
+        if args.print and any(name in LAYOUT_FIELDS for name in args.print)
+        else JOB_FIELDS
     )
+    resolved = resolve(args.system, vars(args), environ, fields, tuple(args.require) if args.print else JOB_REQUIRED)
     if args.print:
-        print({**resolved.values, **resolved.extras}.get(args.print, ""))
+        known = {**resolved.values, **resolved.extras}
+        print("\n".join(known.get(name, "") for name in args.print))
     else:
         print("\n".join(f"{FIELDS[field][0]}={value}" for field, value in resolved.values.items()))
     return 0

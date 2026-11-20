@@ -1,0 +1,4 @@
+# Drop the how-to-optimize section.
+task:
+  set:
+    optimizations: {enabled: false}

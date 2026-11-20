@@ -9,14 +9,15 @@ silently ignored.
 """
 
 import copy
+import dataclasses
 
 import pytest
 
 from hpcagent_bench import paths
-from hpcagent_bench.emit_bridge import bench_info_document
-from hpcagent_bench.spec import BenchSpec, load_yaml
+from hpcagent_bench.manifest_schema import validate_manifest
+from hpcagent_bench.spec import BenchSpec, KernelSite, load_yaml
 from hpcagent_bench.support.helpers.sparse.abi import FORMATS
-from hpcagent_bench.validate_sparse import SparseConfigError
+from hpcagent_bench.validate_sparse import SparseConfigError, validate_sparse_config
 
 SPMV = paths.BENCHMARKS / "scientific_computing/sparse_linear_algebra/spmv/spmv.yaml"
 
@@ -30,11 +31,18 @@ def load(raw: dict[str, object]) -> BenchSpec:
     return BenchSpec.from_yaml(raw, source=str(SPMV))
 
 
-def load_with(**bench: object) -> BenchSpec:
-    """spmv with ``bench`` replacing what the manifest derives (the argument lists, which a manifest
-    no longer spells), checked by the same :meth:`BenchSpec.from_dict` the manifest goes through."""
-    expanded = bench_info_document(load(spmv_manifest())).benchmark.model_dump(exclude_unset=True)
-    return BenchSpec.from_dict({**expanded, **bench}, source=str(SPMV))
+def load_with_signature(inputs: list[str]) -> BenchSpec:
+    """spmv as if its reference took ``inputs``, checked by the same :meth:`BenchSpec.from_manifest` the manifest
+    goes through."""
+    manifest = validate_manifest(spmv_manifest(), str(SPMV))
+    site = dataclasses.replace(KernelSite.of_manifest(SPMV, manifest), signature=tuple(inputs))
+    return BenchSpec.from_manifest(manifest, site, str(SPMV))
+
+
+def check_array_args(array_args: list[str]) -> None:
+    """spmv's layouts against ``array_args`` in place of the derived ones."""
+    spec = load(spmv_manifest())
+    validate_sparse_config(spec.sparse_layouts, array_args, spec.input_args, spec.output_args, source=str(SPMV))
 
 
 def test_the_unedited_manifest_offers_every_format_with_csr_first() -> None:
@@ -104,14 +112,14 @@ def test_an_unknown_key_in_a_layout_is_refused() -> None:
 
 def test_a_sparse_array_missing_from_array_args_is_refused() -> None:
     with pytest.raises(SparseConfigError, match="not in array_args"):
-        load_with(array_args=["x", "y"])
+        check_array_args(["x", "y"])
 
 
 def test_a_physical_buffer_name_in_array_args_is_refused() -> None:
     """``array_args`` names the logical array: a buffer name there would bind one format's buffer
     for every format a submission may request."""
     with pytest.raises(SparseConfigError, match="physical buffer name"):
-        load_with(array_args=["A", "A_row", "x", "y"])
+        check_array_args(["A", "A_row", "x", "y"])
 
 
 @pytest.mark.parametrize(
@@ -122,7 +130,7 @@ def test_a_reference_taking_other_than_its_csr_buffers_is_refused(inputs: list[s
     from any requested layout); a part of them, or another format's, computes in one layout whatever
     a submission requests."""
     with pytest.raises(SparseConfigError, match="or exactly its csr buffers"):
-        load_with(input_args=inputs)
+        load_with_signature(inputs)
 
 
 @pytest.mark.parametrize("output", ["A", "A_data"])
@@ -137,7 +145,7 @@ def test_a_sparse_output_is_refused(output: str) -> None:
 
 def test_a_reference_taking_exactly_its_csr_buffers_loads() -> None:
     inputs = ["A_data", "A_indices", "A_indptr", "x", "y"]
-    assert load_with(input_args=inputs).input_args == tuple(inputs)
+    assert load_with_signature(inputs).input_args == tuple(inputs)
 
 
 @pytest.mark.parametrize("retired", ["variants", "sparse_layouts", "distributions"])

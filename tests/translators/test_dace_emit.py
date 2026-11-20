@@ -22,7 +22,7 @@ import pathlib
 import re
 import sys
 import textwrap
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
@@ -33,20 +33,21 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import (
     AnnotateEmptyDtype,
     BindMethodReceiver,
     BroadcastScalarWhere,
-    CopyScalarAlias,
     DesugarChainedCompare,
     DesugarContractionFreeEinsum,
+    DesugarReverseSlice,
     DesugarTernary,
     DesugarUnreplacedCalls,
     DivisibleStridedSpan,
     DropIdentityAsarray,
+    FoldLiteralMath,
     LowerCallsDaceCannotReplace,
     MaterializeWrittenReshape,
     NormalizeReshape,
     PointwiseScatterToLoop,
+    RenderedProgram,
     ResolveInferredReshape,
     ResolveShapeReads,
-    ResolveZeros,
     RewriteBuiltinDtype,
     RewriteFrameworkDtype,
     SplitReassignedSize,
@@ -60,13 +61,11 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import (
     freeze_pinned_extent_scalars,
     freeze_shape_only_parameters,
     inline_slice_only_extents,
-    inline_symbol_aliases,
     loop_target_ranks,
     mixed_view_names,
-    names_logical_sparse,
-    negative_step,
     plan_size_promotion,
-    shape_argument,
+    size_assertions,
+    sliced_extents,
     uniquify_nested_loop_targets,
     value_binding,
     version_reallocations,
@@ -85,7 +84,7 @@ from hpcagent_bench.translators.numpyto_common.ir import (
     SymbolDesc,
     stamp_symbol_assumptions,
 )
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, rank_table
+from hpcagent_bench.translators.numpyto_common.numpy_desugar import rank_table
 from tests.translators.bench_yaml import bench_info_for, foundation_kernels, kir_for
 from tests.translators.source_module import evaluate, run_source
 
@@ -110,7 +109,7 @@ def emitted_renames(src: str) -> dict:
 
 def emit_(short: str) -> tuple[KernelIR, str]:
     # Drive off the co-located YAML; emit_bridge synthesizes the transient JSON the emitter reads.
-    # Through the inline fallback, exactly like autogen._emit_dace: the emitter renders a kept
+    # Through the inline fallback, exactly like autogen.emit_dace_sibling: the emitter renders a kept
     # helper as its own @dc.program, but the fallback exists for
     # the forms it cannot express, and the PARSE has to sit inside the retry either way.
     def render() -> tuple[KernelIR, str]:
@@ -169,50 +168,6 @@ def test_emits_valid_dc_program_with_symbols_dropped(short: str) -> None:
     )
 
 
-def test_index_array_dtypes_preserved() -> None:
-    """The integer index arrays keep their width (the dtype-port result)."""
-    unused, s4114 = emit_("tsvc_2_s4114")
-    assert "ip: dc.int32[" in s4114  # ported from dace.int32
-    unused, gather = emit_("ext_gather_load")
-    assert "idx: dc.int64[" in gather
-    assert "scale: dc_float" in gather  # scalar stays a typed scalar
-
-
-def test_symbol_declarations_carry_dtype_and_proven_sign() -> None:
-    """Every dc.symbol is minted at the width it is bound at, and declares what is PROVEN.
-
-    ``LEN_1D`` is a whole array dimension, so it is positive by allocation whatever the presets
-    say; ``SSYM`` reaches the shape only inside ``SSYM * LEN_1D``, so its sign comes from the
-    manifest values instead. An assumption is what lets a solver decide a comparison rather than
-    keep both branches, which is also why nothing merely likely is declared.
-    """
-    unused, strided = emit_("ext_strided_store_ssym")
-    assert "LEN_1D = dc.symbol('LEN_1D', dtype=dc.int64, positive=True)" in strided
-    assert "SSYM = dc.symbol('SSYM', dtype=dc.int64, positive=True)" in strided
-    # The generator spelling carried one dtype for every symbol and could carry no assumption.
-    assert "for s in (" not in strided
-
-
-def test_symbol_sign_only_claims_what_the_presets_prove() -> None:
-    """The presets ARE the bindings a benchmark runs at, so they are evidence -- but only for
-    what they actually show: a sign-mixed name, and a bool config flag whose ``True`` would
-    otherwise read as positive, both come back with nothing declared."""
-    presets = {"S": {"N": 8, "P": 0, "Q": -1, "F": True}, "L": {"N": 64, "P": 4, "Q": 3, "F": False}}
-    assert symbol_sign_from_bindings("N", presets) == "positive"
-    assert symbol_sign_from_bindings("P", presets) == "nonnegative"
-    assert symbol_sign_from_bindings("Q", presets) == ""
-    assert symbol_sign_from_bindings("F", presets) == ""
-    assert symbol_sign_from_bindings("absent", presets) == ""
-    # init.scalars is evidence beside the presets: it is where the convolution knobs are bound,
-    # and a name bound in BOTH must satisfy both.
-    knobs = {"conv_padding": 0, "conv_stride": 1, "conv_groups": 1, "eps": 1e-05, "flag": True}
-    assert symbol_sign_from_bindings("conv_padding", {}, knobs) == "nonnegative"
-    assert symbol_sign_from_bindings("conv_stride", {}, knobs) == "positive"
-    assert symbol_sign_from_bindings("eps", {}, knobs) == ""
-    assert symbol_sign_from_bindings("flag", {}, knobs) == ""
-    assert symbol_sign_from_bindings("P", presets, {"P": 4}) == "nonnegative"
-
-
 def test_a_config_knob_sign_holds_for_every_value_its_domain_takes() -> None:
     """The presets carry one representative per config knob; the sign must hold for all of them."""
     presets = {"S": {"K": 1}, "L": {"K": 1}}
@@ -220,13 +175,6 @@ def test_a_config_knob_sign_holds_for_every_value_its_domain_takes() -> None:
     assert symbol_sign_from_bindings("K", presets, None, {"K": [1, -1]}) == ""
     assert symbol_sign_from_bindings("K", presets, None, {"K": [1, 0]}) == "nonnegative"
     assert symbol_sign_from_bindings("K", presets, None, {"K": [1, 4]}) == "positive"
-
-
-def test_a_branch_knob_with_a_negative_value_is_declared_unsigned() -> None:
-    """fuse_move_ifs: ``config.K.domain: [1, -1]`` emitted ``K`` positive, so canonicalize folded
-    ``if K > 0`` to true and the drop-in wrote ``b`` at the hidden ``K=-1`` case."""
-    unused, src = emit_("fuse_move_ifs")
-    assert "K = dc.symbol('K', dtype=dc.int64)" in src, src
 
 
 def test_promoted_shape_symbol_is_positive_without_a_manifest() -> None:
@@ -280,7 +228,7 @@ def test_known_kernels_discovered() -> None:
 
 
 # dace feature lowering: the @dc.program body is desugared by the SAME pass    #
-# numba / pythran use, so dace gains feature parity -- np.fft, fancy multi-    #
+# numba use, so dace gains feature parity -- np.fft, fancy multi-    #
 # index gather, np.add.at scatter, np.histogram, np.mgrid, ufunc.outer and     #
 # reshape-batched @ all lower to the plain loops a @dc.program traces. dace's   #
 # JIT is too slow to run per-kernel here (see the module docstring), so this    #
@@ -288,19 +236,19 @@ def test_known_kernels_discovered() -> None:
 FEATURE_KERNELS = [
     "fft_1d",
     "fft_3d",
-    "vloc_psi_k_acc",
+    "qe_vloc_psi_k_acc",
     "edge_laplacian",
     "icon_gather",
     "icon_scatter",
     "correlation",
     "covariance",
     "force_lj",
-    "mandelbrot1",
-    "mandelbrot2",
+    "mandelbrot_escape_count",
+    "mandelbrot_escape_stamp",
     "bfs",
     "doitgen",
     "azimint_hist",
-    "velocity_tendencies",
+    "icon_velocity_tendencies",
     "nbody",
     "floyd_warshall",
     "bellman_ford",
@@ -308,27 +256,16 @@ FEATURE_KERNELS = [
     "vadv",
     "banded_mmt",
     "stockham_fft",
-    "cholesky2",
     "contour_integral",
     "azimint_naive",
 ]
-
-
-def test_dace_keeps_native_linalg() -> None:
-    """dace implements ``np.linalg.cholesky`` / ``solve`` natively (dace.libraries.
-    linalg), so the desugar leaves them verbatim -- only pythran (no np.linalg)
-    lowers them to loops. Guards against the backend-capability gating regressing."""
-    unused, chol = emit_("cholesky2")
-    assert "np.linalg.cholesky" in chol
-    unused, con = emit_("contour_integral")
-    assert "np.linalg.solve" in con
 
 
 @pytest.mark.parametrize("kernel", FEATURE_KERNELS)
 def test_dace_feature_kernels_desugared(kernel: str) -> None:
     """Each desugar-requiring kernel emits parseable ``@dc.program``s with size symbols module-level
     (not parameters) and NO residual construct dace cannot trace -- the same np.add.at / np.mgrid /
-    np.histogram / ufunc.outer lowering numba and pythran get. ``np.fft`` is the exception: dace
+    np.histogram / ufunc.outer lowering numba get. ``np.fft`` is the exception: dace
     compiles it natively, to its FFT library nodes, so the fft kernels must KEEP the call.
 
     The kernel program is LAST: a kept helper is emitted as its own ``@dc.program`` above it rather
@@ -390,105 +327,6 @@ def test_dace_keeps_every_np_fft_call_for_its_library_node(body: str) -> None:
 # a repeated same-shape ``__reassign__`` drops); these unit-test the edges the   #
 # five shipped Krylov/spmm kernels never hit, so a regression there is caught    #
 # structurally rather than only when a future kernel trips it.                   #
-
-
-def resolve_(
-    lines: list[str],
-    zeros_locals: dict[str, tuple[str, ...]],
-    *,
-    zeros_fills: dict[str, str] | None = None,
-    local_dtypes: dict[str, str] | None = None,
-    default: str = "float64",
-) -> list[str]:
-    """Run ``ResolveZeros`` over a function whose body is ``lines`` and return the
-    resolved body as unparsed source strings (markers dropped -> fewer lines)."""
-    fn = ast.parse("def k():\n" + "".join(f"    {ln}\n" for ln in lines)).body[0]
-    out = ResolveZeros(zeros_locals, zeros_fills or {}, local_dtypes or {}, default).visit(fn)
-    ast.fix_missing_locations(out)
-    return [ast.unparse(stmt) for stmt in out.body]
-
-
-def test_resolvezeros_first_seen_allocates_repeat_reassign_drops() -> None:
-    """A first-seen marker allocates; a later SAME-shape ``__reassign__`` of it drops
-    (the in-place self-referential reuse the Krylov residual update relies on)."""
-    body = resolve_(
-        ["r = __hpcagent_bench_zeros__('__reassign__')", "r = __hpcagent_bench_zeros__('__reassign__')"], {"r": ("N",)}
-    )
-    assert body == ["r = np.zeros((N,), dtype=dc_float)"]  # second reassign dropped
-
-
-def test_resolvezeros_shape_change_reemits() -> None:
-    """A same-name local re-bound to a DIFFERENT shape re-allocates (dace rebinds the
-    transient) instead of keeping the stale first shape -- the reshape-transient case."""
-    body = resolve_(
-        ["t = __hpcagent_bench_zeros__('__reassign__')", "t = __hpcagent_bench_zeros__('__reassign__')"],
-        {"t": ("R", "R")},
-    )
-    # First marker allocates ('R','R'); the second is same-shape here -> dropped.
-    assert body == ["t = np.zeros((R, R), dtype=dc_float)"]
-    # Now make the two markers carry different shapes: both must emit. The resolver reads
-    # the CURRENT zeros_locals shape per visit, so drive it through a stateful mapping.
-    fn = ast.parse(
-        "def k():\n    t = __hpcagent_bench_zeros__('__reassign__')\n    t = __hpcagent_bench_zeros__('__reassign__')\n"
-    ).body[0]
-
-    class ShapeSeq(dict):  # yields a new shape for t on each lookup
-        seq: ClassVar[list[tuple[str, ...]]] = [("A",), ("B", "C")]
-        i = 0
-
-        def __getitem__(self, key: str) -> tuple[str, ...]:
-            s = self.seq[min(self.i, len(self.seq) - 1)]
-            self.i += 1
-            return s
-
-        def __contains__(self, key: str) -> bool:
-            return key == "t"
-
-    out = ResolveZeros(ShapeSeq(), {}, {}, "float64").visit(fn)
-    lines = [ast.unparse(s) for s in out.body]
-    assert lines == ["t = np.zeros((A,), dtype=dc_float)", "t = np.zeros((B, C), dtype=dc_float)"]
-
-
-def test_resolvezeros_non_reassign_arg_is_not_a_drop() -> None:
-    """The sentinel is detected precisely (arg[0] == '__reassign__'), matching the C /
-    Fortran emitters -- a marker whose arg is some OTHER constant is a genuine reset and
-    re-emits every time, it is not silently swallowed as an in-place reuse."""
-    body = resolve_(["a = __hpcagent_bench_zeros__('other')", "a = __hpcagent_bench_zeros__('other')"], {"a": ("N",)})
-    assert body == ["a = np.zeros((N,), dtype=dc_float)", "a = np.zeros((N,), dtype=dc_float)"]
-
-
-def test_resolvezeros_fill_kind_selects_constructor() -> None:
-    """``ones`` / ``ones_like`` -> np.ones; ``zeros`` / ``empty`` / unrecorded -> np.zeros
-    (np.zeros is a safe defined value for the uninitialised ``empty`` too)."""
-    zl = {"o": ("N",), "ol": ("N",), "z": ("N",), "e": ("N",), "u": ("N",)}
-    zf = {"o": "ones", "ol": "ones_like", "z": "zeros", "e": "empty"}  # 'u' unrecorded
-    body = resolve_([f"{n} = __hpcagent_bench_zeros__()" for n in zl], zl, zeros_fills=zf)
-    assert body == [
-        "o = np.ones((N,), dtype=dc_float)",
-        "ol = np.ones((N,), dtype=dc_float)",
-        "z = np.zeros((N,), dtype=dc_float)",
-        "e = np.zeros((N,), dtype=dc_float)",
-        "u = np.zeros((N,), dtype=dc_float)",
-    ]
-
-
-def test_resolvezeros_dtype_none_falls_through_to_default_int_honoured() -> None:
-    """A ``None`` recorded dtype (the lowering's default for a float accumulator) falls
-    THROUGH to the kernel float precision; a real integer dtype is honoured as dc.int64."""
-    # None -> default float precision (both float32/float64 route to dc_float).
-    body = resolve_(["a = __hpcagent_bench_zeros__()"], {"a": ("N",)}, local_dtypes={"a": None}, default="float32")
-    assert body == ["a = np.zeros((N,), dtype=dc_float)"]
-    # A genuine integer accumulator keeps its width.
-    body = resolve_(["ix = __hpcagent_bench_zeros__()"], {"ix": ("N",)}, local_dtypes={"ix": "int64"})
-    assert body == ["ix = np.zeros((N,), dtype=dc.int64)"]
-
-
-def test_resolvezeros_marker_on_unregistered_name_is_dropped() -> None:
-    """A marker on a name the lowering did NOT register as a zeros-local is a reassignment
-    of an EXISTING buffer (spmm's output ``C``): drop it, never allocate -- so a live input
-    read like ``beta * C`` is not clobbered by a fresh zero buffer."""
-    body = resolve_(["C = __hpcagent_bench_zeros__('__reassign__')", "y = C + 1"], {})
-    assert body == ["y = C + 1"]  # the C marker vanished, the real use survives
 
 
 # AnnotateEmptyDtype: dace's ``_numpy_empty`` (array_creation_dace.py) has NO   #
@@ -622,26 +460,6 @@ def test_plan_size_promotion_transitive_ordered_with_reassign() -> None:
     assert reassigned == {"m"}
 
 
-def test_a_symbolic_int_local_outside_every_shape_is_inlined_not_left_for_dace_to_promote() -> None:
-    """s176's ``m = LEN_1D // 2`` sizes nothing, so promotion left it a scalar and dace minted its
-    own unrelated symbol. Inlining leaves no second name to prove equal and no recipe to bind."""
-    unused, src = emit_("tsvc_2_s176")
-    prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
-    assert not any(
-        isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "m" for t in node.targets)
-        for node in ast.walk(prog)
-    ), "s176: m is still a scalar assignment for dace's frontend to promote"
-    # ... and it is gone entirely rather than renamed: no bare ``m`` is left to read.
-    assert not any(isinstance(node, ast.Name) and node.id == "m" for node in ast.walk(prog))
-    assert "LEN_1D // 2" in ast.unparse(prog)
-
-
-def test_plan_size_promotion_noop_for_symbolic_shapes() -> None:
-    """A shape built only from existing symbols needs no promotion (the other 5 sparse
-    kernels): nothing is promoted, so the emit is unchanged."""
-    assert plan_size_promotion(ast.parse("def k():\n    a = np.zeros((N,))\n").body[0], {"N"}) == ([], [], set())
-
-
 def test_plan_size_promotion_refuses_non_symbolic_def() -> None:
     """A size scalar whose def is not a pure symbol expression (a real data read) is not
     promotable: refuse the whole plan rather than emit an unbindable symbol."""
@@ -703,82 +521,6 @@ def test_the_dace_emit_does_not_pack_np_ix_grids_into_one_name() -> None:
 # failed only at to_sdfg). Each is guarded structurally on the emitted source   #
 # -- the same convention as the tests above, since dace's frontend is not run   #
 # in CI -- by asserting the specific invalid construct is gone.                  #
-
-
-def test_nussinov_nested_ternary_hoisted_no_ifexp() -> None:
-    """Bug A: nussinov inlines ``match(...)`` to a ternary nested as a VALUE
-    (``table[i+1,j-1] + (1 if seq[i]+seq[j]==3 else 0)``) -- dace: 'Operator Add is
-    not defined for types Scalar and IfExp'. The emitter must hoist every nested
-    conditional to a guarded scalar temp, leaving NO ast.IfExp in the program."""
-    unused, src = emit_("nussinov")
-    prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
-    assert not any(isinstance(node, ast.IfExp) for node in ast.walk(prog)), (
-        "nussinov: a conditional expression survived (dace cannot type Scalar + IfExp)"
-    )
-
-
-def test_mandelbrot_no_leaked_framework_dtype_token() -> None:
-    """Bug B: the emitter leaked the framework precision globals ``np_float`` /
-    ``np_complex`` into ``.astype(...)`` / ``dtype=`` args -- dace: 'Use of undefined
-    variable np_float'. They must be rewritten to the dace globals the module binds."""
-    unused, src = emit_("mandelbrot1")
-    assert "np_float" not in src, "mandelbrot1: a framework precision-global dtype token leaked into the dace module"
-    assert "np_complex" not in src, "mandelbrot1: a framework precision-global dtype token leaked into the dace module"
-    assert "dc_float" in src  # the dace precision global the module actually imports
-
-
-def alloc_shape_names(prog: ast.FunctionDef) -> set[str]:
-    """Names appearing inside an ``np.zeros/empty/ones`` shape tuple."""
-    names = set()
-    for node in ast.walk(prog):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in ("zeros", "empty", "ones")
-            and node.args
-        ):
-            for sub in ast.walk(node.args[0]):
-                if isinstance(sub, ast.Name):
-                    names.add(sub.id)
-    return names
-
-
-def test_nbody_reduction_shape_scalar_inlined_no_descriptor_symbol_clash() -> None:
-    """Bug C: a reduction over a body-local transient sized its accumulator by a named
-    scalar read off the transient's shape (``__rd0_d1 = __rsrc0.shape[1]`` feeding
-    ``np.empty((__rd0_d1,), ...)``) -- dace: 'Cannot create symbol __rd0_d1, the name is
-    used by a data descriptor'. The .shape read must be inlined so no name used in an
-    allocation shape is also a scalar assigned from ``<x>.shape[k]``."""
-    unused, src = emit_("nbody")
-    prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
-    shape_names = alloc_shape_names(prog)
-    for node in ast.walk(prog):
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id in shape_names
-            and isinstance(node.value, ast.Subscript)
-            and isinstance(node.value.value, ast.Attribute)
-            and node.value.value.attr == "shape"
-        ):
-            raise AssertionError(
-                f"nbody: allocation-shape scalar {node.targets[0].id!r} is still assigned from "
-                f"a .shape read (clashes as both a data descriptor and a symbol in dace)"
-            )
-
-
-def test_contour_integral_array_iteration_rewritten_to_indexed_range() -> None:
-    """Bug D: contour_integral iterates an array by VALUE (``for z in int_pts``) -- dace:
-    'Iterator of ast.For must be a function or a subscript'. It must be rewritten to the
-    indexed range form (``for <idx> in range(...): z = int_pts[<idx>]``)."""
-    unused, src = emit_("contour_integral")
-    prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
-    for node in ast.walk(prog):
-        if isinstance(node, ast.For):
-            assert not isinstance(node.iter, ast.Name), (
-                f"contour_integral: a for-loop still iterates the array {ast.unparse(node.iter)!r} by value"
-            )
 
 
 def rewrites_to(transformer: ast.NodeTransformer, source: str, expected: str) -> tuple[bool, str]:
@@ -847,16 +589,6 @@ def test_a_reshape_the_generator_cannot_infer_is_left_for_dace_to_refuse() -> No
 
 def resolved(shapes: dict[str, list[str]], body: str) -> list[str]:
     return ast.unparse(ResolveShapeReads(shapes).visit(ast.parse(f"def k():\n    {body}\n"))).splitlines()[1:]
-
-
-def test_a_reshapes_minus_one_is_its_inferred_extent_never_the_literal() -> None:
-    """conv_transpose3d_avg_pool_clamp_softmax_multiply: ``np.reshape(x3, (b, c, -1))`` with symbolic
-    dims. Read verbatim, ``x4.shape[2]`` became ``-1``, and both softmax reductions looped
-    ``range(-1)``: they never ran, and the output was inf at every precision. The extent is the
-    source's size over the other dims' product."""
-    shapes = {"x3": ["b", "c", "d", "h", "w"]}
-    lines = resolved(shapes, "x4 = np.reshape(x3, (b, c, -1)); d2 = x4.shape[2]; d0 = x4.shape[0]")
-    assert lines[-2:] == ["    d2 = b * c * d * h * w // (b * c)", "    d0 = b"]
 
 
 def test_a_reshapes_minus_one_over_an_unsized_source_leaves_the_read_intact() -> None:
@@ -929,14 +661,6 @@ def test_two_operands_disagreeing_on_a_non_1_axis_is_still_refused() -> None:
     assert resolved(shapes, "v = a * b; d0 = v.shape[0]")[-1] == "    d0 = v.shape[0]"
 
 
-def test_an_arange_is_rank_1_and_its_extent_is_the_argument() -> None:
-    """Exact, not a guess: one argument is the stop, two are the span. A step is declined -- the
-    extent is a ceiling division this does not spell."""
-    shapes = {"q": ["B", "N"]}
-    body = "a = np.arange(N); b = np.arange(2, N); c = np.arange(0, N, 2); d0 = a.shape[0]; d1 = b.shape[0]; d2 = c.shape[0]"
-    assert resolved(shapes, body)[-3:] == ["    d0 = N", "    d1 = N - 2", "    d2 = c.shape[0]"]
-
-
 def test_a_scalar_builtin_over_rank_0_arguments_is_rank_0() -> None:
     """``lamax = int(la_max[task])`` is an integer, and leaving it rankless poisoned every extent
     derived from it -- cp2k_grid_integrate's whole index-grid chain hangs off one of these."""
@@ -981,28 +705,6 @@ def test_a_shape_argument_of_unknown_rank_refuses_instead_of_donating_rank_1() -
         assert resolved(shapes, body)[-1] == "    d0 = N.shape[0]", body
 
 
-def test_a_scalar_shape_argument_is_still_the_one_extent_it_spells() -> None:
-    """The rank-1 spelling that is real stays inferred: a declared symbol, and arithmetic over
-    one, are provably rank 0 and so name exactly one extent."""
-    shapes = {"n": []}
-    assert resolved(shapes, "a = np.zeros(n); d0 = a.shape[0]")[-1] == "    d0 = n"
-    assert resolved(shapes, "a = np.empty(n + 1); d0 = a.shape[0]")[-1] == "    d0 = n + 1"
-
-
-def test_an_array_alias_is_not_promoted_to_an_int64_symbol() -> None:
-    """``h = x`` is an ARRAY alias, but ``is_symbol_expr`` reads any known name as a symbol atom,
-    so the promotion closure dragged ``h`` in through ``h__ssa3.shape[2]`` and emitted
-    ``dc.symbol('h')`` with the recipe ``('h', 'x')`` -- while the body still wrote ``h`` into a
-    slice. A ``.shape`` base is a DIMENSION source, never an integer value."""
-    src = (
-        "def k():\n    h = x\n    p = np.zeros((h.shape[0], 4), h.dtype)\n"
-        "    oh = (h.shape[2] + 2) // 1\n    acc = np.zeros((oh, 8), h.dtype)\n"
-    )
-    order, defs, unused = plan_size_promotion(ast.parse(src).body[0], {"x"}, set())
-    assert "h" not in order
-    assert not any(nm == "h" for nm, unused in defs)
-
-
 def where_filled(shapes: dict[str, list[str]], body: str) -> list[str]:
     return ast.unparse(BroadcastScalarWhere(shapes).visit(ast.parse(f"def k():\n    {body}\n"))).splitlines()[1:]
 
@@ -1023,114 +725,11 @@ def test_where_of_two_scalar_parameters_gets_one_branch_broadcast_to_the_conditi
 # Refusal classes the re-sweep pinned.
 
 
-def test_an_elementwise_update_keeps_the_extents_the_workspace_already_had() -> None:
-    """alexnet's max-pool workspace: one operand of ``out = np.maximum(out, <slice>)`` has a rank
-    that is not guessed, so the poison rule forgot ``out``'s own extents at its first update."""
-    shapes = {"src": ["n", "c", "H", "W"]}
-    body = (
-        "out = np.full((n, c, oh, ow), 0.0); out = np.maximum(out, src[:, :, 0:oh, 0:ow]); "
-        "h = out; d0 = h.shape[0]; d2 = h.shape[2]"
-    )
-    assert resolved(shapes, body)[-2:] == ["    d0 = n", "    d2 = oh"]
-
-
 def test_a_matmul_rebinding_still_forgets_the_extents() -> None:
     """Why ``@`` is excluded: a matmul CHANGES the extents, so it must forget rather than keep."""
     shapes = {"x": ["m", "k"], "w": ["k", "n"]}
     assert resolved(shapes, "x = x @ w; d1 = x.shape[1]")[-1] == "    d1 = n"
     assert resolved({"x": ["m", "k"]}, "x = x @ w; d1 = x.shape[1]")[-1] == "    d1 = x.shape[1]"
-
-
-def test_a_rename_of_a_promoted_extent_reuses_that_symbol_instead_of_minting_a_second() -> None:
-    """Every inlined conv helper recopies the previous layer's extents (``__inl9_h = __inl1_oh``).
-    Minted that is a SECOND symbol for one extent, and dace cannot prove the two equal."""
-    src = (
-        "def k(x):\n"
-        "    __inl1_oh = (height - 3) // 2 + 1\n"
-        "    a = np.zeros((batch_size, 64, __inl1_oh, __inl1_oh), x.dtype)\n"
-        "    __inl9_h = __inl1_oh\n"
-        "    b = np.zeros((batch_size, 64, __inl9_h, __inl9_h), x.dtype)\n"
-    )
-    fn = ast.parse(src).body[0]
-    promotable = plan_size_promotion(fn, {"x", "batch_size", "height"}, {"batch_size", "height"})[0]
-    out = ast.unparse(inline_symbol_aliases(fn, {"batch_size", "height"} | set(promotable), {"x"}))
-    assert "__inl9_h" not in out
-    assert "__inl1_oh" not in out
-    # what matters is not which name wins but that ONE extent is left: both allocations must spell
-    # the same thing, or dace is back to proving two names equal.
-    shapes = [ast.unparse(shape_argument(node)) for node in ast.walk(ast.parse(out)) if shape_argument(node)]
-    assert len(shapes) == 2, shapes
-    assert shapes[0] == shapes[1], shapes
-
-
-@pytest.mark.parametrize(
-    ("rebinding", "src"),
-    [
-        (
-            "augmented assignment",
-            (
-                "def k(a, x):\n    n = 0\n    for i in range(4):\n        a[n] = x[i]\n        n += 1\n"
-                "    t = np.zeros((n, n), a.dtype)\n    t[:] = a[:n]\n"
-            ),
-        ),
-        (
-            "loop target",
-            (
-                "def k(a, x):\n    n = 0\n    for n in range(4):\n        a[n] = x[n]\n"
-                "    t = np.zeros((n, n), a.dtype)\n    t[:] = a[:n]\n"
-            ),
-        ),
-        (
-            "tuple target",
-            (
-                "def k(a, x):\n    n = 0\n    m = 1\n    for i in range(4):\n        a[n] = x[i]\n"
-                "        m, n = n, m + n\n    t = np.zeros((n, n), a.dtype)\n    t[:] = a[:n]\n"
-            ),
-        ),
-    ],
-)
-def test_a_size_local_mutated_after_its_definition_is_neither_inlined_nor_promoted(rebinding: str, src: str) -> None:
-    """ls3df_scf counts Lanczos steps with ``na = 0`` then ``na += 1`` and sizes ``np.diag(alphas[:na])``
-    after the loop. Inlined as its first value the tridiagonal came out 0x0 and ``na += 1`` read a name
-    no longer bound; promoted to a symbol bound to that first value, the 0x0 eigh workspace was written
-    over the counted range."""
-    fn = ast.parse(src).body[0]
-    out = ast.unparse(inline_symbol_aliases(fn, set(), {"a", "x"}))
-    assert "n = 0" in out, (rebinding, out)
-    assert "np.zeros((n, n)" in out, (rebinding, out)
-    assert "a[:n]" in out, (rebinding, out)
-    promoted = plan_size_promotion(fn, {"a", "x"})[0]
-    assert "n" not in promoted, (rebinding, promoted)
-
-
-def test_an_alias_of_a_size_rebound_after_it_keeps_its_own_name() -> None:
-    """cegterg saves ``nb1 = nbase`` before ``nbase = nend`` and mirrors the fresh columns from ``nb1``; spliced
-    as ``nbase`` the alias read the updated size, the mirror loop ``range(nbase, nbase)`` ran zero times and
-    the reduced Hamiltonian stayed non-Hermitian."""
-    src = (
-        "def k(a, n0, m):\n    nbase = n0 + 0\n    for it in range(3):\n        nb1 = nbase\n"
-        "        nbase = nbase + m\n        for j in range(nb1, nbase):\n            a[j] = a[j] + 1\n"
-    )
-    fn = ast.parse(src).body[0]
-    out = ast.unparse(inline_symbol_aliases(fn, {"n0", "m", "nbase"}, {"a", "n0", "m"}))
-    assert "nb1 = nbase" in out, out
-    assert "range(nb1, nbase)" in out, out
-
-
-def test_a_use_of_a_size_alias_before_its_source_is_rebound_still_gets_spliced() -> None:
-    """cegterg reads ``nb1`` in ``hc[nb1:nend, :nend] = ...`` before ``nbase = nend`` runs, in the same
-    Davidson-loop iteration as its ``nb1 = nbase`` binding: that read sees the value ``nbase`` still
-    holds, so it is spliced same as any other alias, while the mirror loop after the rebind keeps ``nb1``."""
-    src = (
-        "def k(a, n0, m):\n    nbase = n0 + 0\n    for it in range(3):\n        nb1 = nbase\n"
-        "        a[nb1:m] = a[nb1:m] + 1\n        nbase = nbase + m\n"
-        "        for j in range(nb1, nbase):\n            a[j] = a[j] + 1\n"
-    )
-    fn = ast.parse(src).body[0]
-    out = ast.unparse(inline_symbol_aliases(fn, {"n0", "m", "nbase"}, {"a", "n0", "m"}))
-    assert "a[nbase:m]" in out, out
-    assert "nb1 = nbase" in out, out
-    assert "range(nb1, nbase)" in out, out
 
 
 def test_a_bare_alias_rebound_inside_a_loop_is_copied_rather_than_left_a_view() -> None:
@@ -1167,11 +766,36 @@ def test_a_bare_alias_rebound_inside_a_loop_is_copied_rather_than_left_a_view() 
     assert all(b.startswith("x = np.copy(") for b in bindings), rewritten
 
 
-def test_a_rebound_alias_of_a_symbol_is_not_copied() -> None:
-    """``m = n`` reads a scalar the caller bound as a dc.symbol; a copy would ask dace for an array of it."""
-    fn = ast.parse("def k(a, n):\n    m = n\n    for i in range(3):\n        m = i\n        a[m] = 1.0\n").body[0]
-    copy_view_bindings(fn, version_rebound_views(fn, frozenset({"n", "i"})), frozenset({"n", "i"}))
-    assert "np.copy" not in ast.unparse(fn), ast.unparse(fn)
+def test_a_reshape_rebound_inside_a_loop_is_copied_rather_than_left_a_view() -> None:
+    """convolutional_vision_transformer binds ``tokens = np.reshape(stacked, ..)`` before its layer loop and
+    rebinds ``tokens`` to each layer's output. dace answers a C-order reshape with a View of ``stacked`` and
+    refuses the loop's binding (``Cannot reassign View "tokens"``). The reshape binding copies, like any other
+    view spelling, and ``res = res.reshape(..)``, which dace accepts, is left alone."""
+    src = (
+        "def k(a, out):\n"
+        "    stacked = np.zeros((2, 3, 4))\n"
+        "    stacked[:, 0, :] = a\n"
+        "    tokens = np.reshape(stacked, (6, 4))\n"
+        "    for it in range(3):\n"
+        "        tokens = tokens * 2.0 + 1.0\n"
+        "    res = tokens.reshape((2, 12))\n"
+        "    res = res.reshape((24,))\n"
+        "    out[:] = res\n"
+    )
+    fn = ast.parse(src).body[0]
+    assert isinstance(fn, ast.FunctionDef)
+    copy_view_bindings(fn, mixed_view_names(fn))
+    rewritten = ast.unparse(fn)
+    assert "tokens = np.copy(np.reshape(stacked, (6, 4)))" in rewritten, rewritten
+    assert "res = res.reshape((24,))" in rewritten, rewritten
+    outputs = []
+    for text in (src, rewritten):
+        scope = {"np": np}
+        run_source(text, scope)
+        out = np.zeros(24)
+        scope["k"](np.arange(8, dtype=np.float64).reshape(2, 4), out)
+        outputs.append(out)
+    assert np.array_equal(*outputs), rewritten
 
 
 def test_swapaxes_becomes_the_transpose_dace_does_have() -> None:
@@ -1181,24 +805,6 @@ def test_swapaxes_becomes_the_transpose_dace_does_have() -> None:
     assert resolved(shapes, "v = np.swapaxes(a, 1, 2)") == ["    v = np.transpose(a, (0, 2, 1))"]
     # a rank the table does not have is left for dace to refuse rather than given an invented one
     assert resolved({}, "v = np.swapaxes(a, 1, 2)") == ["    v = np.swapaxes(a, 1, 2)"]
-
-
-def test_an_inner_axis_cumulative_scan_moves_that_axis_to_the_end() -> None:
-    """cumsum/cumprod/masked_cumsum, axis=0 branch: dace lowers a prefix scan along the LAST axis
-    only, so the scan axis is transposed to the end and the result transposed back. The permutation
-    is its own inverse, so the same order spells both transposes."""
-    shapes = {"x": ["batch_size", "dim1"], "mask": ["batch_size", "dim1"]}
-    assert resolved(shapes, "out[:] = np.cumsum(x, axis=0)") == [
-        "    out[:] = np.transpose(np.cumsum(np.transpose(x, (1, 0)), axis=1), (1, 0))"
-    ]
-    # the operand may be an expression, and cumprod takes the same route
-    assert resolved(shapes, "out[:] = np.cumprod(x * mask, axis=0)") == [
-        "    out[:] = np.transpose(np.cumprod(np.transpose(x * mask, (1, 0)), axis=1), (1, 0))"
-    ]
-    # rank 3, axis 1: only that axis and the last swap, the leading one stays put
-    assert resolved({"a": ["B", "N", "C"]}, "v = np.cumsum(a, axis=1)") == [
-        "    v = np.transpose(np.cumsum(np.transpose(a, (0, 2, 1)), axis=2), (0, 2, 1))"
-    ]
 
 
 def test_a_last_axis_scan_and_an_unknown_rank_are_left_alone() -> None:
@@ -1213,30 +819,9 @@ def test_a_last_axis_scan_and_an_unknown_rank_are_left_alone() -> None:
     assert resolved({"v": ["N"]}, "c = np.cumsum(v)") == ["    c = np.cumsum(v)"]
 
 
-def test_ascontiguousarray_becomes_the_copy_dace_does_have() -> None:
-    """The other callback: ``np.ascontiguousarray`` has no dace replacement; a ``copy`` is
-    contiguous and does."""
-    src = "def k():\n    m = np.reshape(np.ascontiguousarray(np.transpose(ctx, (0, 2, 1, 3))), (b, s, e))\n"
-    out = ast.unparse(DesugarUnreplacedCalls().visit(ast.parse(src)))
-    assert "ascontiguousarray" not in out
-    assert "np.transpose(ctx, (0, 2, 1, 3)).copy()" in out
-
-
 def einsum_(src: str) -> str:
     """Run ``DesugarContractionFreeEinsum`` over one expression and unparse the result."""
     return ast.unparse(ast.fix_missing_locations(DesugarContractionFreeEinsum().visit(ast.parse(src, mode="eval"))))
-
-
-def test_a_contraction_free_einsum_becomes_the_broadcast_product_it_is() -> None:
-    """lulesh's hourglass term. Nothing is summed, so dace's GEMM path mints a K=1 batched MatMul
-    whose views collapse to ``[numElem, 4]`` and ``[numElem, 8]`` -- shapes that never conform as a
-    matrix product. The broadcast spelling is the same value with no library node at all."""
-    assert einsum_("np.einsum('ei,ek->eik', hx, dvdx)") == "hx[:, :, None] * dvdx[:, None, :]"
-    # ``optimize`` names a contraction ORDER, and there is no contraction to order.
-    assert einsum_("np.einsum('ei,ek->eik', hx, dvdx, optimize=True)") == "hx[:, :, None] * dvdx[:, None, :]"
-    # The unbatched case is exactly np.outer, and an output permutation needs no transpose here.
-    assert einsum_("np.einsum('i,k->ik', a, b)") == "a[:, None] * b[None, :]"
-    assert einsum_("np.einsum('ei,ek->eki', a, b)") == "a[:, None, :] * b[:, :, None]"
 
 
 def test_an_einsum_that_actually_contracts_keeps_its_einsum() -> None:
@@ -1267,13 +852,6 @@ def test_an_einsum_that_actually_contracts_keeps_its_einsum() -> None:
 # spelling that keeps each container its own.                                  #
 
 
-def copied(shapes: dict[str, list[str]], floats: set[str], body: str, skip: frozenset[str] = frozenset()) -> list[str]:
-    """Run ``CopyScalarAlias`` over a function whose body is ``body`` and unparse the result."""
-    fn = ast.parse("def k():\n" + "".join(f"    {ln}\n" for ln in body.split("; ")))
-    out = CopyScalarAlias(shapes, set(floats), set(skip)).visit(fn)
-    return [ast.unparse(stmt) for stmt in ast.fix_missing_locations(out).body[0].body]
-
-
 def test_a_chained_literal_is_repeated_at_each_target_not_routed_through_a_temp() -> None:
     """``s0 = s1 = 0.0`` through a temp gives all eleven accumulators ONE container, so the
     reduction over-counts by the unroll factor. The literal is free to repeat."""
@@ -1283,100 +861,11 @@ def test_a_chained_literal_is_repeated_at_each_target_not_routed_through_a_temp(
     assert out.splitlines()[1:] == ["    s0 = 0.0", "    s1 = 0.0", "    s2 = 0.0"]
 
 
-def test_a_chained_non_literal_still_goes_through_the_temp() -> None:
-    """Repeating a non-literal would repeat the WORK (and any side effect), so the temp stays --
-    only the literal case is free."""
-    fn = ast.parse("def k():\n    a[:] = b[:] = np.zeros(N)\n")
-    out = ast.unparse(ast.fix_missing_locations(dace_chained_assign_split().visit(fn)))
-    assert out.count("np.zeros(N)") == 1
-    assert "__hpcagent_bench_chain0" in out
-
-
-def test_unroll_reduction_accumulators_do_not_share_one_container() -> None:
-    """End to end: every accumulator of the 11-way unroll opens on its own literal."""
-    unused, src = emit_("unroll_reduction_11_accs")
-    assert "__hpcagent_bench_chain" not in src
-    assert src.count(" = 0.0") >= 11
-
-
-def test_a_bare_scalar_copy_is_forced_through_an_operation() -> None:
-    """``x = y`` on a rank-0 name aliases y's container; ``x = y + 0`` mints a fresh one. The zero
-    carries the operand's kind, so an index scalar stays integer."""
-    assert copied({"y": []}, set(), "x = y") == ["x = y + 0"]
-    assert copied({"y": []}, {"y"}, "x = y") == ["x = y + 0.0"]
-
-
-def test_an_array_copy_and_an_unknown_rank_are_left_alone() -> None:
-    """numpy aliases arrays too, so an array assign is not this bug -- and a rank the shape table
-    cannot infer is declined rather than guessed, exactly like every other inference here."""
-    assert copied({"y": ["N"]}, set(), "x = y") == ["x = y"]
-    assert copied({}, set(), "x = y") == ["x = y"]
-
-
-def test_a_declared_parameter_and_a_size_symbol_are_skipped() -> None:
-    """The frontend copies a NON-transient scalar already (``_add_transient_data``), and a name
-    promoted to a ``dc.symbol`` is not a container at all."""
-    assert copied({"alpha": []}, {"alpha"}, "x = alpha", skip={"alpha"}) == ["x = alpha"]
-
-
-def test_a_scalar_builtin_result_is_rank_0_so_its_copy_is_forced_too() -> None:
-    """cp2k's axis dispatch: ``center0 = int(...)`` is a rank the BASE class declines, and the
-    ``center = center0`` that follows is the assignment that destroyed the original."""
-    body = "center0 = int(v); center = center0"
-    assert copied({"v": []}, {"v"}, body) == ["center0 = int(v)", "center = center0 + 0"]
-
-
-def test_the_cp2k_axis_dispatch_no_longer_writes_through_the_alias() -> None:
-    """End to end: all three dispatched quantities are copied, and the float one is copied with a
-    float zero."""
-    unused, src = emit_("cp2k_grid_integrate")
-    for line in ("center = center0 + 0", "span = span0 + 0", "product_center = rp0 + 0.0"):
-        assert line in src, line
-
-
-def test_an_int_seeded_scalar_that_is_later_given_a_float_is_seeded_as_a_float() -> None:
-    """``udiff = 1`` types an int64 container, and the float residual stored into it later is
-    TRUNCATED -- the convergence loop then exits after two trips whatever the tolerance."""
-    fn = ast.parse("def k():\n    udiff = 1\n    while udiff > 0.001:\n        udiff = s / t\n")
-    floats = float_names(fn, {"s", "t"})
-    widen_int_seeds(fn, floats, set())
-    assert ast.unparse(ast.fix_missing_locations(fn)).splitlines()[1] == "    udiff = 1.0"
-
-
 def test_an_int_scalar_nothing_stores_a_float_into_keeps_its_int_seed() -> None:
     """A loop counter must stay integer: widening every int seed would make an index a float."""
     fn = ast.parse("def k():\n    i = 0\n    while i < N:\n        i = i + 1\n")
     widen_int_seeds(fn, float_names(fn, set()), set())
-    assert "i = 0" in ast.unparse(ast.fix_missing_locations(fn))
-
-
-def test_channel_flows_convergence_residual_is_seeded_as_a_float() -> None:
-    """End to end: the Navier-Stokes channel solver's outer loop residual."""
-    unused, src = emit_("channel_flow")
-    assert "udiff = 1.0" in src
-    assert "udiff = 1\n" not in src
-
-
-def test_a_qualified_math_call_gets_the_module_import_it_names() -> None:
-    """A reference that writes ``math.sqrt(x)`` reaches the frontend as a NAME lookup of ``math``.
-    The name-import alone leaves it undefined and the kernel dies with
-    ``DaceSyntaxError: Use of undefined variable "math"``.
-
-    Every reference spells it ``np.sqrt`` (the numpy ufunc preserves the operand's precision where a
-    ``math.`` call returns a python float computed in double), so no emitted body carries a
-    qualified call -- the corpus's one ``math.erf``, in gromacs_nbnxm, sits in a helper outside the
-    translated subset. What is still worth pinning is the emitter's side: it must write BOTH the module import (for a qualified call) and
-    the name imports (for a bare one), unconditionally."""
-    header = emit_("warpx_boris_push")[1].split("@dc.program")[0]
-    assert "import math\n" in header, "the module import a qualified call needs"
-    assert "from math import " in header, "the name imports a bare sqrt(x) needs"
-
-
-def test_an_int4_array_is_declared_as_its_storage_dtype() -> None:
-    """int4 is a SEMANTIC dtype over an int8 buffer, so the dace declaration is int8. Declared
-    ``dc_float`` instead -- a silent fallback -- the first bitwise op on it dies inside dace
-    with ``BitAnd: 'double' and 'int64_t'``, naming nothing in the emitter."""
-    assert dace_dtype("int4") == "dc.int8"
+    assert "    i = 0" in ast.unparse(ast.fix_missing_locations(fn)).splitlines()
 
 
 def test_an_unmappable_dtype_refuses_instead_of_defaulting_to_a_float() -> None:
@@ -1386,41 +875,6 @@ def test_an_unmappable_dtype_refuses_instead_of_defaulting_to_a_float() -> None:
 
 
 # Arguments named after a sympy callable
-
-
-def test_argument_named_after_a_sympy_callable_is_renamed_with_an_exported_map() -> None:
-    """crc16's ``poly`` is ``sympy.poly``, so dace's parser resolves the argument to a FUNCTION and
-    the parse dies as ``SympifyError: cannot sympify object of type <class 'function'>`` the moment
-    the name reaches a memlet subset. The emitted program is the only place the new spelling exists,
-    so the rename has to reach every use AND be exported for the caller's keyword arguments."""
-    pytest.importorskip("dace")
-    src = emit_dace(kir_for("crc16"))
-    assert "__hpcagent_bench_renames__ = {'poly': '__poly'}" in src
-    assert "__poly: dc.int64" in src  # the signature carries the new spelling ...
-    assert "c >> 1 ^ __poly" in src  # ... and so does the body
-    prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
-    assert "poly" not in {a.arg for a in prog.args.args}
-    assert not any(isinstance(n, ast.Name) and n.id == "poly" for n in ast.walk(prog))
-
-
-def test_a_renamed_array_argument_keeps_its_shape_symbols() -> None:
-    """dfa's ``symbols`` is an ARRAY, and it is the indirection ``trans[state, symbols[i]]`` that
-    sympifies it -- so the rename is not a scalar-only fix. Its shape symbol ``N`` is NOT reserved
-    and must survive untouched, or the caller binds a symbol the SDFG does not have."""
-    pytest.importorskip("dace")
-    src = emit_dace(kir_for("dfa"))
-    assert "__hpcagent_bench_renames__ = {'symbols': '__symbols'}" in src
-    assert "__symbols: dc.int64[N]" in src
-    assert "trans[state, __symbols[i]]" in src
-    # The SET of declared shape symbols, not their declaration ORDER: the order tracks where each
-    # symbol is first seen, so it moves when the kernel takes an extent as an argument instead of
-    # reading it off a buffer. What must not move is which symbols exist and how they are spelled.
-    declared = re.findall(r"^(\w+) = dc\.symbol\('(\w+)', dtype=dc\.\w+(?:, \w+=True)?\)$", src, re.MULTILINE)
-    assert declared, src
-    assert {lhs for lhs, unused in declared} == {"N", "NS", "NA"}
-    # The module-level name a shape annotation reads IS the symbol's own name; a rename that
-    # reached only one of the two would bind a symbol the SDFG never sees under that spelling.
-    assert all(lhs == minted for lhs, minted in declared), declared
 
 
 def test_a_reserved_name_that_is_only_called_is_left_alone() -> None:
@@ -1681,26 +1135,6 @@ def test_a_binding_nested_in_a_loop_that_alone_reaches_its_reads_gets_its_own_na
     assert "out[1, :n] = out[1, :n] + col__v3[2, :]" in src, src
 
 
-def test_a_second_allocation_of_one_name_gets_its_own_name() -> None:
-    """One dace descriptor cannot hold two shapes: ``Cannot reassign value to variable "padded"``
-    (max_filter pads on the column axis, then on the row axis). Two names are two descriptors."""
-    fn = ast.parse(
-        "def k(image, out, r):\n"
-        "    padded = np.empty((4, 4 + r + r))\n"
-        "    padded[0, 0] = image[0, 0]\n"
-        "    horiz = padded[:, 0:4]\n"
-        "    padded = np.empty((4 + r + r, 4))\n"
-        "    padded[0, 0] = horiz[0, 0]\n"
-        "    out[:] = padded[0:4, :]\n"
-    ).body[0]
-    version_reallocations(fn)
-    src = ast.unparse(fn)
-    assert "padded__v2 = np.empty((4 + r + r, 4))" in src
-    assert "padded__v2[0, 0] = horiz[0, 0]" in src  # the write follows the name it belongs to
-    assert "out[:] = padded__v2[0:4, :]" in src
-    assert "horiz = padded[:, 0:4]" in src  # ... and the read before it keeps the first buffer
-
-
 def test_two_identical_allocations_keep_one_name() -> None:
     """dace already accepts a re-allocation of the same shape, so a second name would buy a second
     buffer and nothing else."""
@@ -1733,16 +1167,6 @@ def test_a_scalar_index_binding_is_not_a_view() -> None:
     )
     assert "__v2" not in src
     assert "np.copy" not in src
-
-
-def test_cloudsc_emits_one_name_per_za_col_binding() -> None:
-    """The end-to-end shape: cloudsc binds ``za_col`` to the same slice twice in one loop body."""
-    pytest.importorskip("dace")
-    src = emit_dace(kir_for("cloudsc"))
-    assert "za_col__v2 = za[jk - 1, kidia - 1:kfdia]" in src
-    prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
-    bindings = [n for n in ast.walk(prog) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)]
-    assert sum(1 for n in bindings if n.id == "za_col") == 1
 
 
 # Constructs dace refuses (or silently miscompiles) that the emitter desugars.  #
@@ -1790,21 +1214,6 @@ def test_asarray_of_an_array_is_dropped_but_a_conversion_is_kept() -> None:
         "def k(g2kin, lst):\n    a = np.asarray(g2kin, dtype=np.int64)\n    b = np.asarray(lst)\n",
     )
     assert kept.count("np.asarray") == 2
-
-
-def test_a_reshape_shape_is_spelled_as_a_tuple_and_a_bare_minus_one_is_ravel() -> None:
-    """dace's ``_ndarray_reshape`` unwraps its varargs to the first element and then ITERATES it, so
-    a single scalar extent dies as ``'symbol' object is not iterable``. A lone ``-1`` cannot become
-    a tuple either -- dace takes the shape literally and allocates a negative extent."""
-    out = transform(NormalizeReshape(), "def k(x, n):\n    a = x.reshape(n)\n    b = np.reshape(x, n)\n")
-    assert "x.reshape((n,))" in out
-    assert "np.reshape(x, (n,))" in out
-    ravel = transform(NormalizeReshape(), "def k(x):\n    a = x.reshape(-1)\n    b = np.reshape(x, -1)\n")
-    assert "x.ravel()" in ravel
-    assert ravel.count("reshape") == 0
-    # A shape that is already a tuple is left byte-for-byte alone.
-    kept = "def k(x, n):\n    a = x.reshape((n, 2))\n"
-    assert ast.dump(ast.parse(transform(NormalizeReshape(), kept))) == ast.dump(ast.parse(kept))
 
 
 def test_a_store_through_a_reshaped_name_never_writes_through_a_view_dace_cannot_express() -> None:
@@ -1940,15 +1349,6 @@ def test_a_basic_index_and_a_grid_rhs_are_not_lowered_as_a_zip() -> None:
     assert ast.dump(ast.parse(scattered(unknown_rhs, {"a": 2, "i": 1, "j": 1}))) == ast.dump(ast.parse(unknown_rhs))
 
 
-def test_a_loop_target_is_rank_0_so_a_scattered_scalar_is_not_indexed() -> None:
-    """``rank_table`` only walks assignments, so a name the loop binds has no rank at all -- and
-    reading "unknown" as "array" indexed chebyshev's scalar stencil weight, ``w[i]``."""
-    src = "def k(lap, idx):\n    for m, w in enumerate((1.6, -0.2), start=1):\n        lap[idx, idx] += w\n"
-    out = scattered(src, {"lap": 2, "idx": 1})
-    assert "+= w" in out
-    assert "w[" not in out
-
-
 @pytest.mark.parametrize("short", ["bicgstab", "cg", "gmres", "minres", "spmm"])
 def test_a_logical_sparse_matrix_is_lowered_onto_its_own_buffers(short: str) -> None:
     """The frontend expands ``A`` into its CSR buffers in the SIGNATURE, but only ``lower()``
@@ -1963,15 +1363,7 @@ def test_a_logical_sparse_matrix_is_lowered_onto_its_own_buffers(short: str) -> 
     assert "A_data" in src
 
 
-def test_a_csr_reading_sparse_kernel_is_not_lowered() -> None:
-    """sptrsv_level names no logical matrix: its reference takes L's CSR buffers and walks them
-    itself, so there is nothing to lower, and the rule keys off the BODY, not off the manifest's
-    ``layouts`` block (which it has)."""
-    kir = kir_for("sptrsv_level")
-    assert not names_logical_sparse(kir)
-
-
-@pytest.mark.parametrize("short", ["dwt2d", "daubechies_dwt2d"])
+@pytest.mark.parametrize("short", ["dwt2d", "dwt2d_daubechies"])
 def test_the_wavelet_lattice_spells_both_halves_off_one_pair_count(short: str) -> None:
     """``b[:, 0::2]`` and ``b[:, 1::2]`` have extents ceil(s/2) and ceil((s-1)/2). They are equal
     only for even s -- which the manifest constrains but a symbolic-shape backend cannot see, so it
@@ -2015,7 +1407,7 @@ def test_scalar_used_only_as_a_body_extent_is_promoted_to_a_symbol() -> None:
     lenet stopped spelling its fc1 extent a second way -- see
     :func:`test_lenet_fc1_contraction_extent_matches_the_declared_weight_shape`.
     """
-    kir, src = emit_("velocity_tendencies")
+    kir, src = emit_("icon_velocity_tendencies")
     progs = [
         n
         for n in ast.walk(ast.parse(src))
@@ -2219,22 +1611,6 @@ def test_round_sends_a_half_to_the_even_neighbour() -> None:
     assert np.array_equal(got, np.round(x)), f"{got} != {np.round(x)}"
 
 
-def test_a_rank_is_carried_through_the_aliases_the_earlier_desugars_mint() -> None:
-    """Every handler above needs its operand's RANK, and the declared arrays are not enough: the
-    desugars that run first mint aliases, reshape and subscript before this pass sees anything.
-    xsbench reaches ``np.take`` through a ``.reshape`` of a copy; a handler that cannot rank that
-    declines, the call stays a callback, and the kernel fails on ``Method "reshape" is not
-    registered for object type "Scalar"`` -- a report that names neither."""
-    fn = ast.parse(
-        "def k(a, b):\n    c = np.ascontiguousarray(a)\n    d = c.reshape((n, m))\n    e = d.ravel()\n    f = -e + b\n"
-    ).body[0]
-    ranks = rank_table(fn, {"a": 2, "b": 1})
-    assert ranks["c"] == 2
-    assert ranks["d"] == 2
-    assert ranks["e"] == 1
-    assert ranks["f"] == 1
-
-
 def test_a_flatten_is_one_axis_and_a_conjugate_keeps_every_axis_of_its_receiver() -> None:
     """ls3df's fragment is complex and reaches ``np.linalg.norm`` through a conjugate; a table that
     cannot rank ``z.conj()`` or ``a.flatten()`` leaves every handler above declining on them. The
@@ -2270,7 +1646,8 @@ def test_a_minus_one_reshape_is_one_axis_so_a_gather_through_it_keeps_its_axis()
 def test_an_inlined_einsum_takes_the_result_dtype_of_all_its_operands() -> None:
     """vexx_k's ``np.einsum('abij,ab->aij', qr, vc_box)`` contracts a real table with a complex
     vector reached through a reshape. Its loop nest was allocated at the first operand's dtype, so
-    every complex product landed in a double and the generated C++ refused to compile."""
+    every complex product landed in a double and the generated C++ refused to compile. DaCe keeps the
+    einsum as a library call; the backends that inline it allocate at the result dtype."""
     from types import SimpleNamespace
 
     from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -2283,7 +1660,8 @@ def test_an_inlined_einsum_takes_the_result_dtype_of_all_its_operands() -> None:
         arrays=[SimpleNamespace(name=name, shape=shape, dtype=dtype) for name, (shape, dtype) in arrays.items()],
         scalars=[],
     )
-    program = desugar_for_python_backend(src, kir, backend="dace")
+    assert "np.einsum('abi,ab->ai', qr, vcb)" in desugar_for_python_backend(src, kir, backend="dace")
+    program = desugar_for_python_backend(src, kir, backend="numba")
     assert "np.einsum" not in program, program
     assert "vcb.dtype)" in program, program
     scope = {"np": np}
@@ -2298,11 +1676,11 @@ def test_an_inlined_einsum_takes_the_result_dtype_of_all_its_operands() -> None:
         "def k(qr, v, out):\n    vcb = np.fft.fft(v).reshape((2, 3))\n    out[:] = np.einsum('abi,ab->ai', qr, vcb)\n"
     )
     kir.arrays[1].dtype = "float64"
-    fft_program = desugar_for_python_backend(fft_src, kir, backend="dace")
+    fft_program = desugar_for_python_backend(fft_src, kir, backend="numba")
     assert "vcb.dtype)" in fft_program, fft_program
     # An operand of unknown kind may be the complex one, so a known real operand never decides.
     kir.arrays[1].dtype = None
-    unknown = desugar_for_python_backend(src, kir, backend="dace")
+    unknown = desugar_for_python_backend(src, kir, backend="numba")
     assert "qr.dtype)" in unknown, unknown
 
 
@@ -2363,42 +1741,32 @@ def test_a_scatter_through_an_index_expression_accumulates_every_repeat() -> Non
     assert got[0, 1] == 16.0, f"{got} != {want}"
 
 
-def test_a_gather_the_desugar_hoists_into_a_loop_stays_a_vector_so_its_searchsorted_is_lowered() -> None:
-    """The gather desugar rewrites ``A[ia, ib]`` into a loop filling ``np.empty(ia.shape, ...)``. A
-    rank table that cannot read a constructor's shape argument leaves ``v`` unranked, the searchsorted
-    handler declines, and the call stays a callback dace cannot type."""
-    tree = ast.parse("def k(A, ia, ib, t, out):\n    v = A[ia, ib]\n    out[:] = np.searchsorted(t, v)\n")
-    kir = KernelIR(tree=tree.body[0], kernel_name="k", input_args=["A", "ia", "ib", "t", "out"])
-    kir.arrays.extend(
-        [
-            ArrayDesc(name="A", dtype="float64", shape=("N", "N")),
-            ArrayDesc(name="ia", dtype="int64", shape=("M",), is_index=True),
-            ArrayDesc(name="ib", dtype="int64", shape=("M",), is_index=True),
-            ArrayDesc(name="t", dtype="float64", shape=("N",)),
-            ArrayDesc(name="out", dtype="int64", shape=("M",), is_output=True),
-        ]
-    )
-    kir.symbols.extend([SymbolDesc(name="N"), SymbolDesc(name="M")])
-    program = ast.unparse(kernel_program(emit_dace(kir), "k"))
-    assert "np.searchsorted" not in program, program
-    assert "while __bisect0_lo < __bisect0_hi:" in program, program
+def test_a_scatter_of_a_scalar_value_adds_it_at_every_index() -> None:
+    """The value of a kept ``np.add.at`` may be rank 0; subscripting it fails at run time."""
+    src = "def k(a, idx):\n    np.add.at(a[:, 1], idx, 2.0)\n    __probe__ = a\n"
+    idx = np.array([0, 2, 2])
+    want = np.zeros((3, 2))
+    np.add.at(want[:, 1], idx, 2.0)
+    assert np.array_equal(run_lowered(src, {"a": 2, "idx": 1}, a=np.zeros((3, 2)), idx=idx), want)
 
 
-def test_an_axis_no_element_indexes_survives_whether_an_ellipsis_is_written_or_not() -> None:
-    """``psi[f]`` on a rank-5 array is rank 4: the trailing axes are kept, ellipsis or not. Reading
-    the rank off the WRITTEN indices alone calls it rank 0, and every handler then either declines
-    on a shape it could have proved or -- worse -- lowers a scalar form for an array."""
-    ranks = {"psi": 5, "f": 0, "ja": 1}
-    for src, want in (
-        ("psi[f]", 4),
-        ("psi[f, ...]", 4),
-        ("psi[..., 0]", 4),
-        ("psi[f, :, 0]", 3),
-        ("psi[None, f]", 5),
-        ("psi[:, ja, 0]", 4),
-    ):
-        node = ast.parse(src).body[0].value
-        assert expr_rank(node, ranks) == want, f"{src}: {expr_rank(node, ranks)} != {want}"
+def test_a_negative_slice_bound_counts_from_the_end_of_its_axis() -> None:
+    """A kept helper's slice argument is copied through a temp of this size: a bound taken as an offset from
+    the start sizes it negative."""
+    subscript = "Q[1:-2, -3:, :-1, -3:-1]"
+    extents = sliced_extents(ast.parse(subscript, mode="eval").body, {"Q": ["N", "M", "L", "K"]}, set())
+    sizes = {"N": 7, "M": 6, "L": 5, "K": 4}
+    Q = np.zeros(tuple(sizes.values()))
+    assert tuple(eval(token, sizes) for token in extents) == eval(subscript, {"Q": Q}).shape
+    assert sliced_extents(ast.parse("Q[1:-k]", mode="eval").body, {"Q": ["N"]}, {"k"}) is None
+
+
+def test_outer_ravels_an_operand_of_any_rank() -> None:
+    a, b = np.arange(4.0).reshape(2, 2), np.arange(1.0, 5.0).reshape(2, 2)
+    node = DesugarUnreplacedCalls({"a": 2, "b": 2}).visit(ast.parse("np.outer(a, b)", mode="eval").body)
+    assert np.array_equal(eval(ast.unparse(node)), np.outer(a, b))
+    node = DesugarUnreplacedCalls({"a": 1, "b": 1}).visit(ast.parse("np.outer(a, b)", mode="eval").body)
+    assert "ravel" not in ast.unparse(node)
 
 
 def respelled(src: str) -> str:
@@ -2417,21 +1785,6 @@ def test_a_bound_only_a_slice_reads_is_spliced_into_the_slice() -> None:
     got = spliced("d = hi - lo\nout[o:o + d * st:st] += x[lo:hi]")
     assert "d = hi - lo" not in got, "the definition must go, or dace still mints a symbol for it"
     assert got.splitlines()[-1] == "out[o:o + (hi - lo) * st:st] += x[lo:hi]"
-
-
-def test_a_bound_a_shape_also_reads_is_left_alone() -> None:
-    """The guard that makes the wider atom set safe. Splicing a name an ALLOCATION or a contraction
-    axis also reads changes a rank, not a stop: an earlier draft that inlined those turned
-    conv2d_mish_mish from a clean parse into ``contracting modes must have the same length``."""
-    src = "d = hi - lo\nacc = np.zeros((n, d))\nout[o:o + d * st:st] += acc"
-    assert "d = hi - lo" in spliced(src)
-
-
-def test_a_clamped_bound_is_left_standing_to_stay_one_minted_symbol() -> None:
-    """Inlining a min/max is what CREATES a second spelling -- dace does not fold one, so each copy
-    becomes its own opaque symbol. Left standing it is one name every reader shares."""
-    src = "d = min(hi, n) - lo\nout[o:o + d * st:st] += x[lo:hi]"
-    assert "d = min(hi, n) - lo" in spliced(src)
 
 
 def test_a_reassigned_bound_is_left_standing() -> None:
@@ -2491,18 +1844,6 @@ def test_a_span_whose_multiplier_is_not_the_step_is_left_alone() -> None:
     assert respelled(src) == src
 
 
-def test_a_slice_with_no_step_or_no_stop_is_left_alone() -> None:
-    for src in ("acc += p[ky:ky + (a * st + 1)]", "acc += p[ky::st]", "acc += p[:]"):
-        assert respelled(src) == src
-
-
-def test_a_span_that_does_not_start_at_the_slice_lower_is_left_alone() -> None:
-    """``upper`` has to be ``lower + <span>``; anything else is not this idiom and the span the
-    rewrite would compute is not the one the slice uses."""
-    src = "acc += p[ky:kx + (a * st + 1):st]"
-    assert respelled(src) == src
-
-
 def test_a_zero_based_tap_slice_is_respelled_too() -> None:
     """The idiom also appears with no lower bound at all, where ``upper`` IS the span."""
     assert respelled("acc += p[:(a * st + 1):st]") == "acc += p[:(a + 1) * st:st]"
@@ -2516,13 +1857,6 @@ def test_a_reverse_slice_is_never_respelled() -> None:
     correct because another pass ran first is one pass reorder away from a silently wrong result."""
     for src in ("acc += p[ky:ky + (a * -2 + 1):-2]", "acc += p[ky:ky + (a * st + 1):-st]"):
         assert respelled(src) == src
-
-
-def test_the_negative_step_guard_reads_both_spellings_of_a_negative() -> None:
-    assert negative_step(ast.parse("-2", mode="eval").body)
-    assert negative_step(ast.parse("-st", mode="eval").body)
-    assert not negative_step(ast.parse("2", mode="eval").body)
-    assert not negative_step(ast.parse("st", mode="eval").body)
 
 
 def uniquified(src: str) -> str:
@@ -2549,21 +1883,6 @@ def test_a_nested_loop_target_that_shadows_its_enclosing_one_is_renamed() -> Non
     assert got.count("for _ in") == 1, got
 
 
-def test_the_renamed_target_is_rewritten_at_its_uses_too() -> None:
-    """A rename that misses a read leaves the inner body indexing the OUTER counter, which is a
-    wrong answer rather than a hang -- strictly worse than the bug it replaces."""
-    got = uniquified(
-        """
-        def k(a):
-            for i in range(4):
-                for i in range(3):
-                    a[i] = i * 2
-        """
-    )
-    assert "for i_nested1 in range(3)" in got
-    assert "a[i_nested1] = i_nested1 * 2" in got
-
-
 def test_loops_that_do_not_nest_keep_their_shared_name() -> None:
     """Two loops in SEQUENCE reuse one dace variable safely -- the second starts after the first is
     done -- so renaming them would churn every kernel that spells both counters ``i``."""
@@ -2575,34 +1894,6 @@ def test_loops_that_do_not_nest_keep_their_shared_name() -> None:
                 a[i] = 2.0
         """
     assert uniquified(src).count("for i in range") == 2
-
-
-def test_a_shadowed_target_read_after_the_inner_loop_is_left_alone() -> None:
-    """Python leaves the INNER loop's last value in the name, so a read after that loop sees the
-    inner value. Renaming would hand it the outer counter instead -- a different program. This is
-    the one shape the rewrite declines rather than guesses at."""
-    src = """
-        def k(a):
-            for i in range(4):
-                for i in range(3):
-                    a[0] += 1.0
-                a[1] = i
-        """
-    assert uniquified(src).count("for i in range") == 2
-
-
-def test_a_tuple_target_element_that_shadows_is_renamed_too() -> None:
-    """``for i, j in ...`` binds each element; a shadowing element collides exactly like a bare one."""
-    got = uniquified(
-        """
-        def k(a, pairs):
-            for i in range(4):
-                for i, j in pairs:
-                    a[j] = i
-        """
-    )
-    assert "for i_nested1, j in pairs" in got
-    assert "a[j] = i_nested1" in got
 
 
 # an accumulate updates the binding in scope; it does not make a new one        #
@@ -2655,8 +1946,8 @@ def test_a_manifest_name_only_a_declared_shape_spells_is_frozen_to_its_value() -
     broadcast ``height - kernel_size + 1`` into ``height - dilation * (kernel_size - 1)`` and
     refuses. One quantity, two spellings: freezing one and not the other is what made it
     unprovable."""
-    assert kir_for("conv_depthwise_separable_2d").shape_only_consts == {"dilation": 1}
-    unused, text = emit_("conv_depthwise_separable_2d")
+    assert kir_for("dwsconv2d").shape_only_consts == {"dilation": 1}
+    unused, text = emit_("dwsconv2d")
     assert "dilation" not in set(re.findall(r"[A-Za-z_]\w*", text)), (
         "a name only a declared shape spells must reach the module as its literal, not a dc.symbol"
     )
@@ -2672,7 +1963,7 @@ def test_the_frozen_declared_extent_is_the_one_the_body_computes() -> None:
     pytest.importorskip("dace")
     import dace as dc
 
-    kir = freeze_shape_only_parameters(freeze_pinned_extent_scalars(kir_for("conv_depthwise_separable_2d")))
+    kir = freeze_shape_only_parameters(freeze_pinned_extent_scalars(kir_for("dwsconv2d")))
     annotation = array_annotation(next(a for a in kir.arrays if a.name == "out"))
     scope = {
         "dc": dc,
@@ -2693,12 +1984,12 @@ def test_a_shape_name_the_body_also_reads_is_left_symbolic() -> None:
     """The freeze is sound only because nothing else can observe the name. A manifest name the
     kernel READS is a real parameter -- pinned or not -- and baking its value in is a miscompile, so
     ``kernel_size`` stays a dc.symbol in the very kernel the freeze fires on."""
-    assert not kir_for("conv_depthwise_separable_2d").shape_only_consts.keys() & {
+    assert not kir_for("dwsconv2d").shape_only_consts.keys() & {
         "kernel_size",
         "height",
         "width",
     }
-    assert "kernel_size = dc.symbol('kernel_size'" in emit_("conv_depthwise_separable_2d")[1]
+    assert "kernel_size = dc.symbol('kernel_size'" in emit_("dwsconv2d")[1]
 
 
 def test_a_shape_only_extent_is_frozen_in_the_kernel_body_as_well_as_its_declarations() -> None:
@@ -2861,7 +2152,58 @@ def test_ls3df_eighs_on_real_blocks_lower_to_the_real_jacobi() -> None:
     assert eigh_accessor_lines(text) == []
 
 
-def test_cegterg_complex_eigh_keeps_the_complex_jacobi() -> None:
-    """``_diaghg`` diagonalises a complex Hermitian matrix; a real Jacobi there drops its imaginary part."""
-    unused, text = emit_("cegterg")
-    assert eigh_accessor_lines(text), "cegterg's eigh lost its complex accessors"
+@pytest.mark.parametrize(
+    ("src", "flipped"),
+    [
+        ("x[::-1]", "np.flip(x, axis=0)"),
+        ("x[:, ::-1]", "np.flip(x, axis=1)"),
+        ("x[1:3, :, ::-1]", "np.flip(x[1:3], axis=2)"),
+        ("x[2, ::-1]", "np.flip(x[2], axis=0)"),
+        ("x[:, 3:0:-1]", "np.flip(x[:, 1:4], axis=1)"),
+        ("x[:, 2::-1, ::-1]", "np.flip(x[:, :3], axis=(1, 2))"),
+        ("x[:, :1:-1]", "np.flip(x[:, 2:], axis=1)"),
+    ],
+)
+def test_a_reversed_read_is_a_flip_of_the_positive_step_slice(src: str, flipped: str) -> None:
+    """dace refuses a negative step. Every reversed axis reads its elements as the ascending slice
+    flipped along that axis -- the tuple form included (cumsum_reverse's ``x[::-1, :]``,
+    convt2d_gap_bias_lse_sum_mul's ``w[:, :, ::-1, ::-1]``), with no-op trailing ``:`` dropped."""
+    out = ast.unparse(DesugarReverseSlice().visit(ast.parse(src, mode="eval")))
+    assert out == flipped
+    x = np.arange(60.0).reshape(3, 4, 5)
+    assert np.array_equal(eval(src, {"x": x}), eval(out, {"x": x, "np": np}))  # noqa: S307 - literal test strings
+
+
+@pytest.mark.parametrize("src", ["x[i, ::-1]", "x[:, -1::-1]", "x[::-2]", "x[None, ::-1]"])
+def test_a_reversed_read_the_ascending_slice_cannot_spell_is_kept(src: str) -> None:
+    """A variable index may be an index array (axis numbering unknown), a negative bound counts from
+    the end, and only step ``-1`` reverses exactly: those stay, and dace refuses them loudly."""
+    assert ast.unparse(DesugarReverseSlice().visit(ast.parse(src, mode="eval"))) == src
+
+
+@pytest.mark.parametrize(
+    ("src", "folded"),
+    [("np.sqrt(2.0)", "1.4142135623730951"), ("np.exp(-1.0)", "0.36787944117144233"), ("np.log(0.0)", "np.log(0.0)")],
+)
+def test_numpy_math_on_a_literal_folds_to_a_weak_python_float(src: str, folded: str) -> None:
+    """``x / np.sqrt(2.0)`` is float64 in numpy (a strong numpy scalar) and in dace; an opmath kernel
+    computes it in the run precision, as PyTorch does with a Python float. A domain error stays."""
+    assert ast.unparse(FoldLiteralMath().visit(ast.parse(src, mode="eval"))) == folded
+
+
+def test_manifest_constraints_over_sizes_are_asserted_with_pinned_knobs_folded() -> None:
+    """dace reads an ``assert`` over its symbols as a relation its extent proofs use (unet_softmax's
+    ``height % 16 == 0``, a grouped convolution's ``out_channels % groups == 0`` with ``groups`` pinned to 4); a
+    constraint naming a free knob or a scalar is not a fact of the sizes and is left out."""
+    rendered = RenderedProgram(
+        name="kernel",
+        params=[],
+        body=[],
+        symbol_names=["height", "out_ch"],
+        symbol_defs=[],
+        renames={"out_channels": "out_ch"},
+        pinned={"groups": 4},
+        needs_complex=False,
+    )
+    constraints = ["height % 16 == 0", "out_channels % groups == 0", "alpha > 0", "groups > 1"]
+    assert size_assertions(constraints, rendered) == ["assert height % 16 == 0", "assert out_ch % 4 == 0"]

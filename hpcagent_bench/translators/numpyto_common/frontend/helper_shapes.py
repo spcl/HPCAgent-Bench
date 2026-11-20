@@ -4,13 +4,19 @@ import ast
 import copy
 from collections.abc import Iterator, Mapping, Sequence
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.frontend.callsite import (
     caller_side_shape,
     held_before_table,
     shape_symbols,
     value_names,
 )
-from hpcagent_bench.translators.numpyto_common.frontend.helper_params import DescEntry, DescKey, infer_helper_params
+from hpcagent_bench.translators.numpyto_common.frontend.helper_params import (
+    DescEntry,
+    DescKey,
+    infer_helper_params,
+    rename_shadowing_bindings,
+)
 from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import bind_call_constants, literal_call_arg
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import assigns_to, local_array_def, resolve_array_ref
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc, descs
@@ -31,7 +37,6 @@ __all__ = [
     "plain_local_array",
     "propagate_local_extents",
     "reads_no_array",
-    "rhs_value_names",
     "scalar_value_names",
     "statements_in_order",
     "structure_key",
@@ -104,12 +109,12 @@ def propagate_local_extents(hfn: ast.FunctionDef, table: dict[str, tuple[str, ..
     # assignments. Sizing every statement in every loop body instead put resnet101's emit an order
     # of magnitude slower for extents no derivation reads.
     needed: set[str] = set()
-    for node in ast.walk(hfn):
+    for node in walk_nodes(hfn):
         if isinstance(node, ast.Return) and node.value is not None:
-            needed |= {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+            needed |= {n.id for n in walk_nodes(node.value) if isinstance(n, ast.Name)}
     for stmt, target, nested in reversed(named):
         if nested and target.id in needed:
-            needed |= {n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)}
+            needed |= {n.id for n in walk_nodes(stmt.value) if isinstance(n, ast.Name)}
     for stmt, target, nested in named:
         name = target.id
         if nested and (bindings.get(name, 0) != 1 or name not in needed):
@@ -145,7 +150,7 @@ def scalar_value_names(hfn: ast.FunctionDef, seed: set[str]) -> set[str]:
         if len(values) != len(targets):
             continue
         for name_node, value in zip(names, values, strict=False):
-            if all(n.id in known for n in ast.walk(value) if isinstance(n, ast.Name)):
+            if all(n.id in known for n in walk_nodes(value) if isinstance(n, ast.Name)):
                 known.add(name_node.id)
     return known
 
@@ -160,7 +165,7 @@ def extent_operands_resolved(value: ast.expr, table: dict[str, tuple[str, ...]],
     even in an operand position -- see :func:`scalar_value_names`.
     """
     operands: list[ast.expr] = []
-    for node in ast.walk(value):
+    for node in walk_nodes(value):
         if isinstance(node, ast.BinOp) and not isinstance(node.op, ast.MatMult):
             operands.extend([node.left, node.right])
         elif isinstance(node, ast.Subscript):
@@ -234,7 +239,7 @@ def helper_returns_rank0(
     whose own arguments did not resolve), every return expression's array operands resolved, and
     the extent calculus then reporting no axes at all.
     """
-    returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
+    returns = [n.value for n in walk_nodes(hfn) if isinstance(n, ast.Return) and n.value is not None]
     if not returns:
         return False
     arrays, scalars, symbols = infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
@@ -268,7 +273,7 @@ def helper_return_shape_from_body(
     :func:`iter_extent_of` already resolves a return expression against them. Rank 0 means the
     return really is scalar, so ``None`` keeps the existing path.
     """
-    returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
+    returns = [n.value for n in walk_nodes(hfn) if isinstance(n, ast.Return) and n.value is not None]
     if not returns:
         return None
     arrays, scalars, symbols = infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
@@ -349,7 +354,7 @@ def helper_call_local_arrays(
     if not hdefs:
         return {}
     bindings: dict[str, int] = {}
-    for node in ast.walk(owner_fn):
+    for node in walk_nodes(owner_fn):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
@@ -373,9 +378,9 @@ def helper_call_local_arrays(
         | set(shape_symbols(arr_by.values()))
         | {
             t.id
-            for n in ast.walk(owner_fn)
+            for n in walk_nodes(owner_fn)
             if isinstance(n, ast.For)
-            for t in ast.walk(n.target)
+            for t in walk_nodes(n.target)
             if isinstance(t, ast.Name)
         }
     )
@@ -456,9 +461,14 @@ def helper_call_local(
     if len(call.args) != len(pnames):
         return None
     consts = {pn: a for pn, a in zip(pnames, call.args, strict=False) if literal_call_arg(a)}
+    hfn = copy.deepcopy(hfn)
     if consts:
-        hfn = copy.deepcopy(hfn)
         bind_call_constants(hfn, consts)
+    # The helper's names, renamed off the caller's as build_helper_kirs renames them: the return
+    # extent keeps every caller-held name, so an unrenamed helper local (a pool's ``od = d // k``
+    # beside the caller's ``od``) respelled the pooled extent as the caller's unpooled one.
+    rename_shadowing_bindings(hfn, call.args, owner_fn, known, site_held)
+    pnames = [a.arg for a in hfn.args.args]
     returned = helper_return_shape_from_body(hfn, pnames, call.args, known, sca_by, sym_by, owner_fn)
     if returned is None:
         return None
@@ -500,24 +510,10 @@ def assigns_in_run_order(fn: ast.FunctionDef) -> list[ast.Assign]:
     return out
 
 
-def rhs_value_names(value: ast.expr) -> set[str]:
-    """Every name a statement's RHS reads as a VALUE. A call's own Name callee (``int(...)``) and
-    the numpy module are spellings, not operands, so neither has to be classified."""
-    callees = {id(n.func) for n in ast.walk(value) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-    return {
-        n.id
-        for n in ast.walk(value)
-        if isinstance(n, ast.Name)
-        and isinstance(n.ctx, ast.Load)
-        and id(n) not in callees
-        and n.id not in ("np", "numpy", "math")
-    }
-
-
 def reads_no_array(value: ast.expr, known: dict[str, ArrayDesc]) -> bool:
     """Whether the RHS reads nothing that carries an extent -- so its target is a scalar rather
     than an array this pass merely failed to size (``head_dim = embed_dim // num_heads``)."""
-    return not (rhs_value_names(value) & set(known))
+    return not (value_names(value) & set(known))
 
 
 def plain_local_array(
@@ -535,7 +531,7 @@ def plain_local_array(
     target = site.targets[0]
     if not isinstance(target, ast.Name):
         return None
-    reads = rhs_value_names(value)
+    reads = value_names(value)
     if not reads or not reads <= (set(known) | scalar_names):
         return None
     table = {n: tuple(str(s) for s in a.shape) for n, a in known.items()}
@@ -550,7 +546,7 @@ def plain_local_array(
         return None  # an extent the caller cannot name is not a shape the caller can be told
     # AST order, not set order: the descriptor has to come out the same on every run.
     dtype = next(
-        (known[n.id].dtype for n in ast.walk(value) if isinstance(n, ast.Name) and n.id in known),
+        (known[n.id].dtype for n in walk_nodes(value) if isinstance(n, ast.Name) and n.id in known),
         None,
     )
     if dtype is None:

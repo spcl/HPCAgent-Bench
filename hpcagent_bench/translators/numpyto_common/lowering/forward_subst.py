@@ -4,6 +4,7 @@ import ast
 import copy
 from collections.abc import Iterator, Sequence
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_INTRINSIC_NAMES
 from hpcagent_bench.translators.numpyto_common.lowering.ssa import live_on_loop_reentry, read_in
 from hpcagent_bench.translators.numpyto_common.lowering.tuples import fill_empty_blocks
@@ -30,7 +31,7 @@ class SelfAssignDropper(ast.NodeTransformer):
     ``H, W = image.shape`` into ``H = H; W = W``. They compute nothing, and in the C
     pluto input they WRITE a signature parameter inside ``#pragma scop`` -- pet models
     that as a data-dependent condition and aborts polycc on an isl assert (POLYCC-003
-    in :mod:`hpcagent_bench.pluto_affine`). Every other backend just carries dead text.
+    in :mod:`hpcagent_bench.polyhedral.pluto_affine`). Every other backend just carries dead text.
 
     Two names are never dropped. A kernel ARRAY (``a = a``) is a whole-array write that
     ``detect_output_and_index_arrays`` reads to flip ``is_output``, so deleting it would
@@ -107,7 +108,7 @@ def stmt_exprs_by_depth(stmts: Sequence[ast.stmt], depth: int) -> Iterator[tuple
 
 def fwd_subst_is_pure(expr: ast.expr) -> bool:
     """True when ``expr`` recomputes the same value wherever it is replayed."""
-    for node in ast.walk(expr):
+    for node in walk_nodes(expr):
         if isinstance(node, ast.Call):
             if not (isinstance(node.func, ast.Name) and node.func.id in FWD_SUBST_PURE_CALLS and not node.keywords):
                 return False
@@ -120,12 +121,13 @@ class ForwardSubstituteInvariantScalars(ast.NodeTransformer):
     """Replay a loop-invariant scalar's RHS at its deeper use sites and delete the assign.
 
     pet drops the assign and its deeper consumers then read an uninitialised value: conv_2d's
-    ``w = w_box[di + R, dj + R]`` (POLYCC-001 in :mod:`hpcagent_bench.pluto_affine`). Two things
+    ``w = w_box[di + R, dj + R]`` (POLYCC-001 in :mod:`hpcagent_bench.polyhedral.pluto_affine`). Two things
     fall out -- laundered indirection becomes literal, so the detector declines lavamd
     (POLYCC-006), and the OpenMP column loses a scalar ``--parallel`` never privatises (C-001).
     An AST copy keeps the grouping the assign had, so floating point stays bit-identical.
     ``qualifies`` carries the guards; one name is substituted per round against the CURRENT
-    tree, so a chain (``first_i`` -> ``ai`` -> ``rv[...]``) resolves with no read left dangling.
+    tree, so a chain (``first_i`` -> ``ai`` -> ``rv[...]``) resolves with no read left dangling. One
+    :class:`CandidateSearch` census serves every round (:meth:`CandidateSearch.replayed` keeps it current).
     """
 
     __slots__ = ("array_names", "expr_", "name_", "params", "stmt_", "substituted")
@@ -141,14 +143,19 @@ class ForwardSubstituteInvariantScalars(ast.NodeTransformer):
 
     def run(self, fn: ast.FunctionDef) -> "ForwardSubstituteInvariantScalars":
         """Substitute every qualifying scalar in ``fn``; one assign leaves per round."""
-        for unused in range(sum(1 for n in ast.walk(fn) if isinstance(n, ast.Assign))):
-            found = self.first_candidate(fn)
+        # One census, kept current across rounds: a round only deletes the assign and replays its RHS at the reads.
+        search = CandidateSearch(fn, self.array_names, self.params)
+        for unused in range(sum(1 for n in walk_nodes(fn) if isinstance(n, ast.Assign))):
+            found = search.next_candidate(fn)
             if found is None:
                 break
-            self.stmt_, self.name_, self.expr_ = found
-            self.substituted[self.name_] = ast.unparse(self.expr_)
+            stmt, name, expr = found
+            self.stmt_, self.name_, self.expr_ = stmt, name, expr
+            self.substituted[name] = ast.unparse(expr)
             self.visit(fn)
-            fill_empty_blocks(fn)
+            search.replayed(name, expr)
+            if search.emptied:
+                fill_empty_blocks(fn)
         self.stmt_, self.name_, self.expr_ = None, "", None
         ast.fix_missing_locations(fn)
         return self
@@ -164,19 +171,23 @@ class ForwardSubstituteInvariantScalars(ast.NodeTransformer):
             return copy.deepcopy(self.expr_)
         return node
 
-    def first_candidate(self, fn: ast.FunctionDef) -> tuple[ast.Assign, str, ast.expr] | None:
-        """The first ``(assign, name, rhs-copy)`` in source order that meets every condition."""
-        search = CandidateSearch(fn, self.array_names, self.params)
-        search.scan(fn.body, 0, (), (), frozenset())
-        return search.found
-
 
 class CandidateSearch:
     """One search of a function for the next scalar :class:`ForwardSubstituteInvariantScalars` may
     replay: the store / for-target / written-base census of ``fn``, the deepest depth each name is
     read at, and the first qualifying assign found."""
 
-    __slots__ = ("array_names", "deepest", "for_targets", "found", "params", "store_counts", "written")
+    __slots__ = (
+        "array_names",
+        "deepest",
+        "emptied",
+        "for_targets",
+        "found",
+        "params",
+        "store_counts",
+        "stored_into",
+        "written",
+    )
 
     def __init__(self, fn: ast.FunctionDef, array_names: set[str], params: set[str]) -> None:
         self.array_names = array_names
@@ -184,12 +195,14 @@ class CandidateSearch:
         self.store_counts: dict[str, int] = {}
         self.for_targets: set[str] = set()
         self.written: set[str] = set()
-        for node in ast.walk(fn):
+        #: Bases of a subscript or attribute store (``a[i] = ...``): written, whatever a deleted assign to ``a`` was.
+        self.stored_into: set[str] = set()
+        for node in walk_nodes(fn):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
                 self.store_counts[node.id] = self.store_counts.get(node.id, 0) + 1
                 self.written.add(node.id)
             elif isinstance(node, ast.For):
-                for tgt in ast.walk(node.target):
+                for tgt in walk_nodes(node.target):
                     if isinstance(tgt, ast.Name):
                         self.for_targets.add(tgt.id)
             elif isinstance(node, (ast.Assign, ast.AugAssign)):
@@ -198,10 +211,12 @@ class CandidateSearch:
                     base = base_name(tgt)
                     if base is not None:
                         self.written.add(base)
+                        if not isinstance(tgt, ast.Name):
+                            self.stored_into.add(base)
         # One pass, so the depth test is O(1) and gates the costly liveness walk.
         self.deepest: dict[str, int] = {}
         for expr, depth in stmt_exprs_by_depth(fn.body, 0):
-            for node in ast.walk(expr):
+            for node in walk_nodes(expr):
                 if (
                     isinstance(node, ast.Name)
                     and isinstance(node.ctx, ast.Load)
@@ -209,6 +224,26 @@ class CandidateSearch:
                 ):
                     self.deepest[node.id] = depth
         self.found: tuple[ast.Assign, str, ast.expr] | None = None
+        #: Whether deleting the found assign leaves its block empty.
+        self.emptied = False
+
+    def next_candidate(self, fn: ast.FunctionDef) -> tuple[ast.Assign, str, ast.expr] | None:
+        """The first ``(assign, name, rhs-copy)`` in source order that meets every condition, against the census."""
+        self.found, self.emptied = None, False
+        self.scan(fn.body, 0, (), (), frozenset())
+        return self.found
+
+    def replayed(self, name: str, expr: ast.expr) -> None:
+        """Update the census after ``name``'s single assign was deleted and ``expr`` replayed at its reads: ``name`` is
+        neither stored nor read any more, and every name ``expr`` reads is now read as deep as ``name`` was (deeper
+        than the deleted assign, so dropping that read changes no maximum)."""
+        depth = self.deepest.pop(name)
+        del self.store_counts[name]
+        if name not in self.stored_into:
+            self.written.discard(name)
+        for node in walk_nodes(expr):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and depth > self.deepest.get(node.id, -1):
+                self.deepest[node.id] = depth
 
     def qualifies(self, name: str, expr: ast.expr, depth: int, loop_vars: frozenset[str]) -> bool:
         """Scalar, in a loop, single-assigned, read deeper than it is written, small and pure, and
@@ -219,7 +254,7 @@ class CandidateSearch:
             return False
         if self.store_counts.get(name, 0) != 1 or self.deepest.get(name, -1) <= depth:
             return False
-        nodes = [n for n in ast.walk(expr) if isinstance(n, ast.expr)]
+        nodes = [n for n in walk_nodes(expr) if isinstance(n, ast.expr)]
         subscripts = [n for n in nodes if isinstance(n, ast.Subscript)]
         if len(subscripts) > FWD_SUBST_MAX_SUBSCRIPTS or len(nodes) > FWD_SUBST_MAX_NODES:
             return False
@@ -234,7 +269,7 @@ class CandidateSearch:
     def operands_stable(self, expr: ast.expr, loop_vars: frozenset[str]) -> bool:
         """Every Name ``expr`` reads is a loop variable, never stored, or stored exactly once outside a
         for-target."""
-        for node in ast.walk(expr):
+        for node in walk_nodes(expr):
             if not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)):
                 continue
             count = self.store_counts.get(node.id, 0)
@@ -291,6 +326,7 @@ class CandidateSearch:
         if read_in(name, outside):
             return False
         self.found = (stmt, name, copy.deepcopy(stmt.value))
+        self.emptied = len(stmts) == 1
         return True
 
     def scan_block(
@@ -316,6 +352,6 @@ class CandidateSearch:
             return
         body_vars = loop_vars
         if isinstance(stmt, ast.For):
-            body_vars = loop_vars | frozenset(n.id for n in ast.walk(stmt.target) if isinstance(n, ast.Name))
+            body_vars = loop_vars | frozenset(n.id for n in walk_nodes(stmt.target) if isinstance(n, ast.Name))
         self.scan(stmt.body, depth + 1, ((stmt.orelse, *tail)) if stmt.orelse else tail, inner_reentry, body_vars)
         self.scan(stmt.orelse, depth, tail, inner_reentry, loop_vars)

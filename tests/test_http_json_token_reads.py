@@ -8,7 +8,9 @@ recorded on :data:`http_json.TOKENS_READ_OK`, so a caller IN THIS PROCESS (a dia
 can tell the two apart.
 """
 
+import http.server
 import pathlib
+import threading
 from types import ModuleType
 
 import pytest
@@ -120,3 +122,39 @@ def test_a_runners_usage_file_is_counted_by_the_drivers_fold(tmp_path: pathlib.P
     usage = tmp_path / "usage.jsonl"
     usage.write_text("".join(lines), encoding="utf-8")
     assert tools.usage_jsonl_tokens(str(usage)) == harnesses.accumulate_usage_tokens(lines, {}) == 185
+
+
+def test_without_a_token_path_there_is_no_agent_and_a_silent_zero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A tuner or a direct client sets neither path: it has no transcript, so its 0 is real and nothing warns."""
+    tools = load_http_json()
+    monkeypatch.delenv("HPCAGENT_BENCH_USAGE_PATH", raising=False)
+    monkeypatch.delenv("CLAUDE_LOG_PATH", raising=False)
+
+    assert tools.transcript_tokens() == 0
+    assert tools.TOKENS_READ_OK is True
+    assert capsys.readouterr().err == ""
+
+
+class DropsTheCall(http.server.BaseHTTPRequestHandler):
+    """Reads the request, then closes the connection without an answer."""
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.close_connection = True
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+def test_a_connection_dropped_after_the_request_is_classified_and_spends_no_submission() -> None:
+    from hpcagent_agent.tools import submit
+
+    tools = load_http_json()
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), DropsTheCall) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        result = tools.call_json(f"http://127.0.0.1:{server.server_address[1]}/submit", b"{}", 10.0)
+        server.shutdown()
+    assert (result["ok"], result["dropped"]) == (False, True), result
+    assert submit.spends_submission(result) is False

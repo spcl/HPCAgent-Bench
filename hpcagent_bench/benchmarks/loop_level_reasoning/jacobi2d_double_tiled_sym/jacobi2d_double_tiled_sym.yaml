@@ -23,3 +23,6 @@ parameters:
 args:
   a: (LEN_2D,LEN_2D)
   b: {shape: "(LEN_2D,LEN_2D)", out: true}
+chain_length:
+  # one sweep: each point is one 5-point sum
+  b: 5

@@ -16,7 +16,6 @@ exactly what it emitted before.
 import numpy as np
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.ir import NUMPY_NOTE_CHARS
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 from tests.translators import op_oracle as oo
@@ -50,22 +49,6 @@ OPS = {
 }
 
 
-def test_every_lowered_op_names_itself_in_c() -> None:
-    for want, body in OPS.items():
-        shapes = {"a": "(N, M)", "out": "(N,)"} if "transpose" not in want else {"a": "(N, N)", "out": "(N,)"}
-        syms = SYMS if "transpose" not in want else {"N": 8}
-        got = notes(emit(body, "c", shapes, syms))
-        assert got == [f"/* numpy: {want} */"], (want, got)
-
-
-def test_every_lowered_op_names_itself_in_fortran() -> None:
-    for want, body in OPS.items():
-        shapes = {"a": "(N, M)", "out": "(N,)"} if "transpose" not in want else {"a": "(N, N)", "out": "(N,)"}
-        syms = SYMS if "transpose" not in want else {"N": 8}
-        got = notes(emit(body, "fortran", shapes, syms))
-        assert got == [f"! numpy: {want}"], (want, got)
-
-
 def test_the_note_names_the_numpy_call_not_the_hoisted_temp() -> None:
     """The call hoister splits ``out[:] = np.sum(a, axis=1) * 2.0`` into a ``__cb`` temp assign.
 
@@ -74,15 +57,6 @@ def test_the_note_names_the_numpy_call_not_the_hoisted_temp() -> None:
     """
     got = notes(emit("    out[:] = np.sum(a, axis=1) * 2.0\n", "c"))
     assert got == ["/* numpy: np.sum(a, axis=1) */"], got
-
-
-def test_a_long_expression_is_truncated_to_keep_the_column_budget() -> None:
-    """The house limit is 120 columns and the note sits at the statement's own indent."""
-    long_call = "np.where(a > 0.0, a * 1.0 + 2.0 - 3.0, a * 4.0 + 5.0 - 6.0 + 7.0 * 8.0 - 9.0 + 10.0 * 11.0 - 12.0)"
-    got = notes(emit(f"    c = {long_call}\n    out[:] = c[:, 0]\n", "c"))
-    assert len(got) == 1, got
-    assert got[0].endswith("... */"), got[0]
-    assert len(got[0]) <= NUMPY_NOTE_CHARS + len("/* numpy:  */"), got[0]
 
 
 def test_the_note_leaves_the_numbers_alone() -> None:

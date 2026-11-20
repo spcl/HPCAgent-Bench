@@ -19,31 +19,17 @@ from hpcagent_bench.harness.mpi_descriptor import ArrayDist, AxisDist, Descripto
 from hpcagent_bench.harness.mpi_wire import pack_infile, pack_outfile, unpack_infile, unpack_outfile
 from hpcagent_bench.support.bindings.contract import Arg, Binding
 from hpcagent_bench.support.bindings.stubs import LANGS
+from tests.mpi_launch_helpers import yax_binding, yax_descriptor
 
 
 def binding(*args: Arg) -> Binding:
     return Binding(kernel="k", config="dense", args=tuple(args), symbols=dict.fromkeys(LANGS, "k_fp64"))
 
 
-def _yax_binding() -> Binding:
-    # y = a*x : pointers x (in), y (out) ; symbol N ; value scalar a. Canonical order already.
-    return binding(
-        Arg(name="x", kind="ptr", dtype="float64", is_const=True),
-        Arg(name="y", kind="ptr", dtype="float64", is_const=False, role="output"),
-        Arg(name="N", kind="scalar", dtype="int64", is_const=True, role="symbol"),
-        Arg(name="a", kind="scalar", dtype="float64", is_const=True),
-    )
-
-
-def block0(nranks: int, arrays: tuple[str, str]) -> Descriptor:
-    ad = ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK),))
-    return Descriptor(grid=Grid((nranks,)), arrays=dict.fromkeys(arrays, ad), symbol_axes={"N": [("x", 0)]})
-
-
 # Infile: tiles, localised scalars, per-rank workspace
 def test_infile_roundtrip_localises_symbol_and_workspace() -> None:
     N, R = 10, 4  # ragged: 10 over 4 -> 3,3,2,2
-    b, desc = _yax_binding(), block0(4, ("x", "y"))
+    b, desc = yax_binding(), yax_descriptor(4)
     x = np.arange(N, dtype=np.float64) + 1.0
     raw = pack_infile(b, desc, {"x": x, "y": np.zeros(N)}, {"N": N, "a": 2.5}, k_repeats=3, workspace_expr="8*N")
     p = unpack_infile(raw)
@@ -62,7 +48,7 @@ def test_infile_roundtrip_localises_symbol_and_workspace() -> None:
 
 
 def test_infile_no_workspace_is_zero_per_rank() -> None:
-    b, desc = _yax_binding(), block0(2, ("x", "y"))
+    b, desc = yax_binding(), yax_descriptor(2)
     raw = pack_infile(b, desc, {"x": np.arange(6.0), "y": np.zeros(6)}, {"N": 6, "a": 1.0}, k_repeats=1)
     p = unpack_infile(raw)
     assert p.workspace_bytes == [0, 0]  # no request -> 0 bytes everywhere (ABI Sec. 11)
@@ -105,7 +91,7 @@ def test_infile_2d_block_rows() -> None:
     assert np.array_equal(np.concatenate(p.ptrs[0].tiles, axis=0), A)
 
 
-@pytest.mark.parametrize("dtype", ["float64", "float32", "int64", "int32"])
+@pytest.mark.parametrize("dtype", ["float64", "float32", "int64", "int32", "complex128", "uint16"])
 def test_infile_dtypes_roundtrip(dtype: str) -> None:
     b = binding(
         Arg(name="A", kind="ptr", dtype=dtype, is_const=False, role="output"),
@@ -124,10 +110,10 @@ def test_infile_dtypes_roundtrip(dtype: str) -> None:
 
 
 def test_infile_rejects_unserialisable_dtype() -> None:
-    b = binding(Arg(name="A", kind="ptr", dtype="complex128", is_const=False, role="output"))
+    b = binding(Arg(name="A", kind="ptr", dtype="bool", is_const=False, role="output"))
     desc = Descriptor(grid=Grid((1,)), arrays={"A": ArrayDist(replicated=True)})
     with pytest.raises(ValueError, match="not wire-serialisable"):
-        pack_infile(b, desc, {"A": np.zeros(3, dtype="complex128")}, {}, k_repeats=1)
+        pack_infile(b, desc, {"A": np.zeros(3, dtype="bool")}, {}, k_repeats=1)
 
 
 def test_unpack_rejects_bad_magic() -> None:
@@ -182,7 +168,7 @@ def full_roundtrip(
 
 def test_full_roundtrip_yax_block() -> None:
     N = 13
-    b, desc = _yax_binding(), block0(4, ("x", "y"))
+    b, desc = yax_binding(), yax_descriptor(4)
     x = np.arange(N, dtype=np.float64) + 1.0
     full_roundtrip(
         b,

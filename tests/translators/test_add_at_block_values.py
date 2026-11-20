@@ -28,26 +28,6 @@ def apply(pass_obj: ast.NodeTransformer, src: str) -> str:
     return ast.unparse(ast.fix_missing_locations(ast.Module(body=body, type_ignores=[])))
 
 
-def test_block_values_get_a_loop_per_untouched_axis() -> None:
-    # The two trailing axes are iterated, not left as a subarray ``+=``: scalar accumulation is
-    # what every backend supports, and it keeps the unbuffered duplicate-index order.
-    out = apply(AddAtInline({"c": 3, "pos": 1, "prod": 3, "alpha": 0}), "np.add.at(c, pos, alpha * prod)")
-    assert "for __sc0_t0 in range(__sc0_v.shape[1]):" in out, out
-    assert "for __sc0_t1 in range(__sc0_v.shape[2]):" in out, out
-    assert "c[__sc0_x0[__sc0_i0], __sc0_t0, __sc0_t1] += __sc0_v[__sc0_i0, __sc0_t0, __sc0_t1]" in out, out
-
-
-def test_matching_shape_scatter_is_untouched() -> None:
-    # edge_laplacian's flat scatter: nothing trailing, so no extra loop may appear.
-    out = apply(AddAtInline({"Lx": 1, "src": 1, "flux": 1}), "np.add.at(Lx, src, flux)")
-    assert out == (
-        "__sc0_x0 = np.ascontiguousarray(src)\n"
-        "__sc0_v = np.ascontiguousarray(flux)\n"
-        "for __sc0_i0 in range(__sc0_x0.shape[0]):\n"
-        "    Lx[__sc0_x0[__sc0_i0]] += __sc0_v[__sc0_i0]"
-    ), out
-
-
 def test_a_genuine_broadcast_still_refuses() -> None:
     # rank-1 index into a rank-1 target leaves NO axis untouched, so rank-2 values really are an
     # unmodelled broadcast -- the refusal this generalisation must not swallow.

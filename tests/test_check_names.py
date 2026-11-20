@@ -5,7 +5,6 @@ leave read-only uses and dunders alone, and -- in its default diff mode -- never
 `_private` code for a commit that never touched it.
 """
 
-import importlib.util
 import pathlib
 import subprocess
 import sys
@@ -13,13 +12,9 @@ import sys
 import pytest
 
 from hpcagent_bench import paths
+from tests.fresh_module import module_at
 
-SPEC = importlib.util.spec_from_file_location(
-    "check_names", paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py"
-)
-check_names = importlib.util.module_from_spec(SPEC)
-sys.modules["check_names"] = check_names
-SPEC.loader.exec_module(check_names)
+check_names = module_at(paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py", "check_names")
 
 
 def codes_for(source: str, allow_bare_underscore: bool = False) -> set:
@@ -38,6 +33,12 @@ BINDING_SITES = [
     pytest.param("for _item in range(3):\n    pass", "NAME002", id="for-target"),
     pytest.param("with open('f') as _handle:\n    pass", "NAME002", id="with-target"),
     pytest.param("try:\n    pass\nexcept ValueError as _err:\n    pass", "NAME002", id="except-target"),
+    pytest.param("def f[_T](x: _T) -> _T: ...", "NAME002", id="pep695-type-parameter"),
+    pytest.param("match x:\n    case _val:\n        pass", "NAME002", id="match-capture"),
+    pytest.param("match x:\n    case [_first]:\n        pass", "NAME002", id="match-sequence-capture"),
+    pytest.param("match x:\n    case [*_rest]:\n        pass", "NAME002", id="match-star-capture"),
+    pytest.param("match x:\n    case {'k': _val, **_rest}:\n        pass", "NAME002", id="match-mapping-captures"),
+    pytest.param("match x:\n    case int() as _alias:\n        pass", "NAME002", id="match-as-capture"),
     pytest.param("[_v for _v in range(3)]", "NAME002", id="comprehension-variable"),
     pytest.param("def _func():\n    pass", "NAME002", id="function-name"),
     pytest.param("class _Cls:\n    pass", "NAME002", id="class-name"),

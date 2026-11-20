@@ -6,7 +6,9 @@ from collections.abc import Sequence
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     advanced_index_rank,
     ctor_fill_element,
+    extent_is_one,
     resolve_negative,
+    slice_count,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
@@ -257,7 +259,11 @@ class SubscriptIndexer:
             lo = slice_start(ax, self.axis_len(), step)
             if self.iter_idx >= len(self.iters):
                 return False
-            self.axes.append(strided_index(self.iters[self.iter_idx], lo, step))
+            # A length-1 slice keeps its axis and BROADCASTS it: every result position reads its one
+            # element (``a[:, -1:] - a``), so it consumes a result iter without advancing on it.
+            count = slice_count(ax, self.axis_len())
+            unit = count is not None and extent_is_one(count)
+            self.axes.append(lo if unit else strided_index(self.iters[self.iter_idx], lo, step))
             self.iter_idx += 1
         elif isinstance(ax, ast.Name) and self.shape_table.get(ax.id):
             # Fancy-index gather: ``arr[idx]`` -> ``arr[idx[k]]``.

@@ -13,12 +13,14 @@ import pathlib
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 
 import pytest
 
 from hpcagent_bench import paths
+from hpcagent_bench.cluster import judge_upstream
 
 REPO = paths.ROOT
 SUPERVISOR = REPO / "hpcagent_bench" / "cluster" / "judge_upstream.py"
@@ -28,6 +30,11 @@ RUN_CLUSTER = REPO / "hpcagent_bench" / "cluster" / "run_cluster.sh"
 OOM_KILLED = "import os, signal, sys; open(sys.argv[1], 'a').write('start\\n'); os.kill(os.getpid(), signal.SIGKILL)"
 #: An upstream that stays up and can be found by pid, the way a healthy judge does.
 LONG_LIVED = "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(300)"
+#: An upstream that ignores the shutdown signal, the way one stuck in native code does.
+IGNORES_TERM = (
+    "import os, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+    "open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(300)"
+)
 #: An upstream that fails immediately every time, the way a judge with a taken port or a refused seal does.
 CRASH_LOOP = "import sys; sys.exit(2)"
 
@@ -60,6 +67,16 @@ def supervise(
     )
 
 
+def finish(proc: "subprocess.Popen[str]") -> str:
+    """The stopped supervisor's output. One that does not stop is killed: left behind, it respawns its child for ever."""
+    try:
+        return proc.communicate(timeout=30)[0]
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise
+
+
 def wait_for(predicate: Callable[[], bool], timeout: float = 30.0) -> bool:
     """Poll ``predicate`` until it holds or the timeout runs out."""
     deadline = time.monotonic() + timeout
@@ -79,7 +96,7 @@ def test_an_oom_killed_upstream_is_started_again(tmp_path: pathlib.Path) -> None
         assert wait_for(lambda: starts.exists() and len(starts.read_text().splitlines()) >= 3)
     finally:
         proc.terminate()
-        output = proc.communicate(timeout=30)[0]
+        output = finish(proc)
     assert proc.returncode == 0
     assert "signal=SIGKILL" in output, output
 
@@ -92,9 +109,29 @@ def test_stopping_the_supervisor_takes_the_upstream_with_it(tmp_path: pathlib.Pa
     assert wait_for(lambda: pidfile.exists() and pidfile.read_text().strip().isdigit())
     child = int(pidfile.read_text().strip())
     proc.send_signal(signal.SIGTERM)
-    proc.communicate(timeout=30)
+    finish(proc)
     assert proc.returncode == 0
     assert wait_for(lambda: not process_alive(child), timeout=15)
+
+
+def test_stopping_escalates_when_the_upstream_ignores_sigterm(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(judge_upstream, "TERM_GRACE_S", 0.2)
+    pidfile = tmp_path / "pid"
+    supervisor = judge_upstream.Supervisor([sys.executable, "-c", IGNORES_TERM, str(pidfile)], "rank=4", 60.0, 3, 0.05)
+    results: list[int] = []
+    runner = threading.Thread(target=lambda: results.append(supervisor.run()), daemon=True)
+    runner.start()
+    assert wait_for(lambda: pidfile.exists() and pidfile.read_text().strip().isdigit())
+    supervisor.stop(signal.SIGTERM, None)
+    runner.join(timeout=5)
+    child = supervisor.child
+    if runner.is_alive() and child is not None:
+        child.kill()
+    assert results == [0]
+    assert child is not None
+    assert child.returncode == -signal.SIGKILL
 
 
 def process_alive(pid: int) -> bool:

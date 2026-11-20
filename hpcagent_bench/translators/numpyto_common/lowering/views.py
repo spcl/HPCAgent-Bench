@@ -2,16 +2,16 @@
 
 import ast
 import copy
+import itertools
 from collections.abc import Iterator, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_call, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import is_scalar_axis, slice_axes
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     compose_kept_axis,
     has_negative_step,
     is_fancy_dim,
-    is_scalar_index,
-    slice_dims,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
@@ -36,6 +36,7 @@ __all__ = [
     "reject_view_writes_between_bind_and_use",
     "subarray_alias_candidates",
     "view_alias_candidates",
+    "write_back_views",
 ]
 
 
@@ -131,8 +132,8 @@ class PadImplicitTrailingSlices(ast.NodeTransformer):
         for e in elts:
             if isinstance(e, ast.Slice) or is_newaxis(e):
                 continue
-            if is_scalar_index(e) and not any(
-                isinstance(n, ast.Name) and n.id in self.array_shapes for n in ast.walk(e)
+            if is_scalar_axis(e) and not any(
+                isinstance(n, ast.Name) and n.id in self.array_shapes for n in walk_nodes(e)
             ):
                 continue
             return node  # advanced / unknown index -> skip
@@ -159,7 +160,7 @@ def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, tuple[str, ...]
     assigns: dict[str, int] = {}
     sub_value_ids: set = set()
     load_ids: dict[str, list[int]] = {}
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Assign):
             for t in node.targets:
                 if isinstance(t, ast.Name) and t.id in aliases:
@@ -185,7 +186,7 @@ def subarray_alias_candidates(tree: ast.AST, array_shapes: dict[str, tuple[str, 
     indices (trailing ``:`` axes dropped -- they are what ``alias[k]`` fills) that leave at least one
     trailing source axis (a genuine sub-array, not a full element index)."""
     aliases: dict[str, tuple] = {}
-    for stmt in ast.walk(tree):
+    for stmt in walk_nodes(tree):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         val = stmt.value
@@ -220,7 +221,7 @@ def aliases_with_rebound_base(tree: ast.AST, aliases: dict[str, tuple]) -> set[s
                 and s.targets[0].id in aliases
             ):
                 unused, base = aliases[s.targets[0].id]
-                base_names = {n.id for b in base for n in ast.walk(b) if isinstance(n, ast.Name)}
+                base_names = {n.id for b in base for n in walk_nodes(b) if isinstance(n, ast.Name)}
                 if base_names & names_stored_in(stmts[i + 1 :]):
                     unsafe.add(s.targets[0].id)
             for cb in child_blocks_of(s):
@@ -237,7 +238,7 @@ def names_stored_in(stmts: Sequence[ast.stmt]) -> set[str]:
     """Names rebound anywhere in ``stmts``: Store-context Names and for-loop targets."""
     out: set = set()
     for s in stmts:
-        for n in ast.walk(s):
+        for n in walk_nodes(s):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
                 out.add(n.id)
             elif isinstance(n, ast.For) and isinstance(n.target, ast.Name):
@@ -295,7 +296,7 @@ def names_written_in(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
     Name-rebind scan misses)."""
     out: OrderedSet[str] = OrderedSet()
     for s in stmts:
-        for n in ast.walk(s):
+        for n in walk_nodes(s):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
                 out.add(n.id)
             elif isinstance(n, ast.For) and isinstance(n.target, ast.Name):
@@ -303,6 +304,130 @@ def names_written_in(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
             elif isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store) and isinstance(n.value, ast.Name):
                 out.add(n.value.id)
     return out
+
+
+def reshape_view_of(stmt: ast.stmt) -> tuple[str, str] | None:
+    """``(view, base)`` when ``stmt`` is ``view = np.reshape(base, ...)`` of a bare array name, else None."""
+    if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+        return None
+    call = stmt.value
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "reshape"):
+        return None
+    if not (isinstance(call.func.value, ast.Name) and call.func.value.id == "np" and call.args):
+        return None
+    base = call.args[0]
+    return (stmt.targets[0].id, base.id) if isinstance(base, ast.Name) else None
+
+
+def slice_view_of(stmt: ast.stmt, shapes: dict[str, tuple[str, ...]]) -> tuple[str, str, ast.Subscript] | None:
+    """``(view, base, window)`` when ``stmt`` is ``view = base[lo:hi:k, ...]``, a slice on every axis of a known array:
+    the rank-preserving view the whole-array pass materialises as a copy (:func:`is_rank_preserving_slice_view`)."""
+    if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+        return None
+    value = stmt.value
+    if not (isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name)):
+        return None
+    shape = shapes.get(value.value.id)
+    if not shape or not is_rank_preserving_slice_view(value, shapes, len(shape)):
+        return None
+    return stmt.targets[0].id, value.value.id, value
+
+
+def stores_through(stmt: ast.stmt, name: str) -> bool:
+    """Whether ``stmt`` writes array ``name`` in place: a subscript store or an augmented assignment to it."""
+    return any(
+        (isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store) and isinstance(n.value, ast.Name))
+        and n.value.id == name
+        or (isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name) and n.target.id == name)
+        for n in walk_nodes(stmt)
+    )
+
+
+def mentions(stmt: ast.stmt, name: str) -> bool:
+    return any(isinstance(n, ast.Name) and n.id == name for n in walk_nodes(stmt))
+
+
+def rebinds(stmt: ast.stmt, name: str) -> bool:
+    """Whether ``stmt`` is a plain assignment that rebinds ``name``."""
+    return isinstance(stmt, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in stmt.targets)
+
+
+def write_back_views(tree: ast.AST, shapes: dict[str, tuple[str, ...]]) -> None:
+    """Carry stores through a view back to the array it views.
+
+    ``outg = np.reshape(out, shape)`` and ``outg = out[:, g * c:(g + 1) * c]`` are views in numpy: ``outg[...] += x``
+    writes ``out``. The emitter lowers both as a copy, so every statement of the view's block that stores through
+    it is followed by the copy back, ``out[:] = np.reshape(outg, shape(out))`` or ``out[:, g * c:(g + 1) * c] =
+    outg`` (conv_transposed_1d and grouped conv lost every tap's contribution without it), and one that writes the
+    base in place while the view is used later by the copy forward, ``outg[:] = np.reshape(out, shape(outg))`` or
+    ``outg[:] = out[:, g * c:(g + 1) * c]``. A simple statement evaluates its right side before it stores, so the
+    copies stand for the view around it; a loop or branch that stores through one name and reads the other is
+    refused. Rebinding either name ends the view (``x = np.reshape(x, ...)`` rebinds its own base and is no view
+    to carry back). A slice view nothing writes through is left alone: the view folds compose its reads.
+    """
+
+    def copy_into(dst: str, src: str, window: ast.Subscript | None, after: ast.stmt) -> ast.stmt:
+        """``dst[:] = np.reshape(src, shape(dst))`` for a reshape view; for a slice view ``window``, the
+        window itself on the base side: ``base[window] = view`` or ``view[:] = base[window]``."""
+        whole = ast.Subscript(value=name_(dst), slice=ast.Slice(), ctx=ast.Store())
+        if window is None:
+            dims = ast.Tuple(elts=[ast.parse(d, mode="eval").body for d in shapes[dst]], ctx=ast.Load())
+            stmt = ast.Assign(targets=[whole], value=numpy_call("reshape", [name_(src), dims]))
+        elif isinstance(window.value, ast.Name) and window.value.id == dst:
+            into = ast.Subscript(value=name_(dst), slice=copy.deepcopy(window.slice), ctx=ast.Store())
+            stmt = ast.Assign(targets=[into], value=name_(src))
+        else:
+            stmt = ast.Assign(targets=[whole], value=copy.deepcopy(window))
+        return ast.fix_missing_locations(ast.copy_location(stmt, after))
+
+    def scan(stmts: list[ast.stmt]) -> None:
+        for i, bind in enumerate(stmts):
+            for block in child_blocks_of(bind):
+                scan(block)
+            window = None
+            matched = reshape_view_of(bind)
+            sliced = slice_view_of(bind, shapes) if matched is None else None
+            # Only a slice view written through is carried: a read-only one is left to the folds.
+            if sliced is not None and any(stores_through(s, sliced[0]) for s in stmts[i + 1 :]):
+                matched, window = sliced[:2], sliced[2]
+            if matched is None or matched[1] not in shapes or matched[0] == matched[1]:
+                continue
+            view, base = matched
+            bounds = {n.id for n in walk_nodes(window.slice) if isinstance(n, ast.Name)} if window else set()
+            j = i + 1
+            while j < len(stmts):
+                stmt = stmts[j]
+                if isinstance(stmt, ast.Assign) and any(
+                    isinstance(n, ast.Name) and n.id in matched for n in stmt.targets
+                ):
+                    break  # either name rebound: no longer this view of that array
+                if bounds & names_stored_in([stmt]):
+                    # A copy would re-read the window's bounds, which no longer say where the view sits.
+
+                    def unbound(s: ast.stmt, view: str = view) -> bool:
+                        return not rebinds(s, view)
+
+                    live = list(itertools.takewhile(unbound, stmts[j:]))
+                    if any(mentions(s, view) for s in live) and any(
+                        stores_through(s, view) or stores_through(s, base) for s in live
+                    ):
+                        raise NotImplementedError(f"a bound of view {view!r} is rebound while the view is in use")
+                    break
+                stored = [n for n in (view, base) if stores_through(stmt, n)]
+                if stored and any(child_blocks_of(stmt)) and mentions(stmt, base if stored[0] == view else view):
+                    raise NotImplementedError(f"{stored[0]!r} is written in a block that reads its view alias")
+                if stored == [view]:
+                    stmts.insert(j + 1, copy_into(base, view, window, stmt))
+                    j += 1
+                elif stored == [base] and any(mentions(later, view) for later in stmts[j + 1 :]):
+                    if window is None and view not in shapes:
+                        raise NotImplementedError(f"{base!r} is written in place while its view {view!r} is used")
+                    stmts.insert(j + 1, copy_into(view, base, window, stmt))
+                    j += 1
+                j += 1
+
+    if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+        scan(tree.body)
 
 
 def reject_view_writes_between_bind_and_use(
@@ -316,7 +441,7 @@ def reject_view_writes_between_bind_and_use(
     for name, (base_name, elts) in candidates.items():
         names = OrderedSet((base_name,))
         for e in elts:
-            for n in ast.walk(e):
+            for n in walk_nodes(e):
                 if isinstance(n, ast.Name):
                     names.add(n.id)
         free_names[name] = names
@@ -404,7 +529,7 @@ def is_rank_preserving_slice_view(
     shape = array_shapes.get(node.value.id)
     if not shape or len(shape) != target_rank:
         return False
-    elts = slice_dims(node)
+    elts = slice_axes(node)
     if len(elts) > len(shape) or has_negative_step(elts):
         return False
     return all(isinstance(e, ast.Slice) and not is_fancy_dim(e, array_shapes) for e in elts)
@@ -456,7 +581,7 @@ def fold_slice_view_aliases(tree: ast.AST, array_shapes: dict[str, tuple[str, ..
     good = flatten_view_chains(good)
     SliceViewFold(good).visit(tree)
     ast.fix_missing_locations(tree)
-    live = OrderedSet(n.id for n in ast.walk(tree) if isinstance(n, ast.Name))
+    live = OrderedSet(n.id for n in walk_nodes(tree) if isinstance(n, ast.Name))
     return OrderedSet(name for name in good if name not in live)
 
 
@@ -476,7 +601,7 @@ def refuse_scalarising_a_contraction(value: ast.expr) -> None:
     Reaching this means the matmul hoister declined -- normally a shape it could not resolve. That is
     a gap to fix, and a refusal names it; the silent product does not.
     """
-    for sub in ast.walk(value):
+    for sub in walk_nodes(value):
         if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.MatMult):
             raise NotImplementedError(
                 f"matmul '{ast.unparse(sub)}' was not lowered before slice fusion; "
@@ -497,7 +622,7 @@ class SliceViewFold(AliasFold):
             return node
         base_name, view_elts = self.good[node.value.id]
         kept_positions = [i for i, e in enumerate(view_elts) if isinstance(e, ast.Slice)]
-        use_elts = slice_dims(node)
+        use_elts = slice_axes(node)
         use_elts = use_elts + [
             ast.Slice(lower=None, upper=None, step=None) for unused in range(len(kept_positions) - len(use_elts))
         ]
@@ -515,7 +640,7 @@ def view_alias_candidates(
     is a basic-indexed VIEW: at least one Slice (a fully scalar index is an element read), no index
     array, no negative step (the offset algebra assumes a positive stride)."""
     aliases: dict[str, tuple[str, list[ast.expr]]] = {}
-    for stmt in ast.walk(tree):
+    for stmt in walk_nodes(tree):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         val = stmt.value
@@ -525,7 +650,7 @@ def view_alias_candidates(
         shape = array_shapes.get(base_name)
         if not shape:
             continue
-        elts = slice_dims(val)
+        elts = slice_axes(val)
         if len(elts) > len(shape) or any(is_fancy_dim(e, array_shapes) for e in elts):
             continue
         elts = elts + [ast.Slice(lower=None, upper=None, step=None) for unused in range(len(shape) - len(elts))]
@@ -544,7 +669,7 @@ def composable_view_aliases(
     uses_composable: dict[str, bool] = {}
     sub_value_ids: OrderedSet = OrderedSet()
     load_ids: dict[str, list[int]] = {}
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Assign):
             for t in node.targets:
                 if isinstance(t, ast.Name) and t.id in aliases:
@@ -553,7 +678,7 @@ def composable_view_aliases(
             name = node.value.id
             sub_value_ids.add(id(node.value))
             kept = sum(1 for e in aliases[name][1] if isinstance(e, ast.Slice))
-            use_elts = slice_dims(node)
+            use_elts = slice_axes(node)
             ok = (
                 len(use_elts) <= kept
                 and not any(is_fancy_dim(e, array_shapes) for e in use_elts)

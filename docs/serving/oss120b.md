@@ -1,7 +1,7 @@
 # Serving gpt-oss-120b on MI300A
 
 `openai/gpt-oss-120b` on **vLLM 0.28.0**, one node, `tp=4`: the only model here served by vLLM.
-Source of truth: `experiments/layers/model-oss120b.env`, plus the `hpcagent-bench-vllm-mi300-latest`
+Source of truth: `[model.oss120b]`, plus the `hpcagent-bench-vllm-mi300-latest`
 EDF, which owns `VLLM_PLUGINS`. Background: [`knobs.md`](knobs.md).
 
 ```bash

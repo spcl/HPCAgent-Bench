@@ -4,9 +4,9 @@
 
 ``np.concatenate`` was already lowered (join operands along an existing axis); ``np.stack``
 adds a NEW axis (out rank = operand rank + 1, the k-th extent = number of operands) and is
-lowered here. Both emit per-operand copy loops for the C / Fortran backends (numba / pythran
-/ jax run the numpy verbatim). Validated numerically vs numpy across the full backend matrix
-(C / C++ / Fortran + numba / pythran / jax, skip-tolerant). ``test_stack_negative_axis_appends``
+lowered here. Both emit per-operand copy loops for the C / Fortran backends (numba
+runs the numpy verbatim). Validated numerically vs numpy across the full backend matrix
+(C / C++ / Fortran + numba, skip-tolerant). ``test_stack_negative_axis_appends``
 subsumes the positive last-axis case (``-1`` normalizes to it).
 """
 
@@ -14,7 +14,7 @@ import numpy as np
 
 from tests.translators.op_oracle import all_ok, run_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 
 A = np.arange(6, dtype=np.float64).reshape(2, 3)

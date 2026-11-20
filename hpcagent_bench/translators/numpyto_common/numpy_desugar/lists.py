@@ -5,7 +5,7 @@ import copy
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, statement_lists, walk_nodes
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -26,7 +26,6 @@ __all__ = [
     "offset_add",
     "plan_list_build",
     "range_growth",
-    "statement_blocks",
 ]
 
 
@@ -163,7 +162,7 @@ def cut_target(stmt: ast.stmt | None, name: str, bound: ast.expr) -> str | None:
 def mutation_count(node: ast.AST, name: str) -> int:
     """Stores to ``name`` plus ``name.append`` calls -- every mutation the fold has to account for."""
     total = 0
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         if (isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)) and sub.id == name) or (
             isinstance(sub, ast.Call)
             and isinstance(sub.func, ast.Attribute)
@@ -176,7 +175,7 @@ def mutation_count(node: ast.AST, name: str) -> int:
 
 
 def name_count(node: ast.AST, name: str) -> int:
-    return sum(1 for sub in ast.walk(node) if isinstance(sub, ast.Name) and sub.id == name)
+    return sum(1 for sub in walk_nodes(node) if isinstance(sub, ast.Name) and sub.id == name)
 
 
 def offset_add(offset: str, delta: str) -> str:
@@ -235,7 +234,12 @@ class ListSegment:
 
 
 def plan_list_build(
-    block: Sequence[ast.stmt], start: int, fn: ast.FunctionDef, vectors: frozenset[str], index: str
+    block: Sequence[ast.stmt],
+    start: int,
+    fn: ast.FunctionDef,
+    vectors: frozenset[str],
+    index: str,
+    complex_names: frozenset[str],
 ) -> tuple[list[ast.stmt], int] | None:
     """The fold of the list bound at ``block[start]`` -> ``(replacement, end)``, or None to leave it.
 
@@ -303,13 +307,23 @@ def plan_list_build(
     reads.extend(segment.bound for segment in segments if segment.bound is not None)
     if any(name_count(e, name) for e in reads):
         return None  # an element or bound reading the list would read the preallocated buffer instead
-    return list_build_statements(name, segments, length, pinned), end
+    return list_build_statements(name, segments, length, pinned, complex_names), end
 
 
-def list_build_statements(name: str, segments: list[ListSegment], length: str, pinned: bool) -> list[ast.stmt]:
+def list_build_statements(
+    name: str, segments: list[ListSegment], length: str, pinned: bool, complex_names: frozenset[str]
+) -> list[ast.stmt]:
     """The planned build as an allocation plus stores; a cut length guards every store it may drop."""
     integral = all(integer_expression(e, frozenset({s.counter})) for s in segments for e in s.elements)
-    lines = [f"{name} = np.zeros({length}, dtype=np.{'int64' if integral else 'float64'})"]
+    complex_valued = any(
+        (isinstance(n, ast.Constant) and isinstance(n.value, complex))
+        or (isinstance(n, ast.Name) and n.id in complex_names)
+        for s in segments
+        for e in s.elements
+        for n in walk_nodes(e)
+    )
+    dtype = "complex128" if complex_valued else "int64" if integral else "float64"
+    lines = [f"{name} = np.zeros({length}, dtype=np.{dtype})"]
     fill = segments[-1]
     prefix = [e for s in segments[:-1] for e in s.elements]
     if (
@@ -345,28 +359,19 @@ def list_build_statements(name: str, segments: list[ListSegment], length: str, p
     return ast.parse("\n".join(lines)).body
 
 
-def statement_blocks(node: ast.AST) -> list[list[ast.stmt]]:
-    """Every statement list under ``node``, so a list built inside a loop or a branch folds too."""
-    blocks: list[list[ast.stmt]] = []
-    for sub in ast.walk(node):
-        blocks.extend(
-            value
-            for _field, value in ast.iter_fields(sub)
-            if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value)
-        )
-    return blocks
-
-
-def fold_list_accumulators(fn: ast.FunctionDef, vectors: frozenset[str] = frozenset()) -> None:
+def fold_list_accumulators(
+    fn: ast.FunctionDef, vectors: frozenset[str] = frozenset(), complex_names: frozenset[str] = frozenset()
+) -> None:
     """Rewrite a Python list built by growth into an array plus indexed stores, in every block of ``fn``.
 
     No emitter has a list type, and ``len`` of one is not a symbol, so a list left standing lowers
     with wrong extents. See :func:`plan_list_build` for the recognized builds. A name mutated anywhere
     the build does not account for is left alone, and so is a bare display unless the caller names it
-    in ``vectors`` (``curve_fit``'s ``p0``, which the LM lowering indexes).
+    in ``vectors`` (``curve_fit``'s ``p0``, which the LM lowering indexes). An element reading one of
+    ``complex_names`` makes the build complex.
     """
-    taken = OrderedSet(sub.id for sub in ast.walk(fn) if isinstance(sub, ast.Name))
-    for block in statement_blocks(fn):
+    taken = OrderedSet(sub.id for sub in walk_nodes(fn) if isinstance(sub, ast.Name))
+    for block in statement_lists(fn):  # a list built inside a loop or a branch folds too
         start = 0
         while start < len(block):
             stmt = block[start]
@@ -377,7 +382,7 @@ def fold_list_accumulators(fn: ast.FunctionDef, vectors: frozenset[str] = frozen
             number = 1
             while f"__la{number}" in taken:
                 number += 1
-            plan = plan_list_build(block, start, fn, vectors, f"__la{number}")
+            plan = plan_list_build(block, start, fn, vectors, f"__la{number}", complex_names)
             if plan is None:
                 start += 1
                 continue

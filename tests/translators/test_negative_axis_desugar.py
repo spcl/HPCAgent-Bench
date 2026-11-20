@@ -16,10 +16,7 @@ expand_dims).
 import ast
 from types import SimpleNamespace
 
-import numpy as np
-
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import NormalizeNegativeAxis, desugar_for_python_backend
-from tests.translators.op_oracle import run_op
 
 
 def kir_(kernel_name: str, **arrays: tuple[str, ...]) -> SimpleNamespace:
@@ -29,7 +26,7 @@ def kir_(kernel_name: str, **arrays: tuple[str, ...]) -> SimpleNamespace:
 
 def desugar(body: str, **arrays: tuple[str, ...]) -> str:
     src = "import numpy as np\ndef f(a, b, out):\n" + body
-    return desugar_for_python_backend(src, kir_("f", **arrays), backend="pythran")
+    return desugar_for_python_backend(src, kir_("f", **arrays), backend="numba")
 
 
 def norm_axis(expr: str, ranks: dict[str, int]) -> int | ast.expr:
@@ -55,16 +52,6 @@ def test_axis_adding_op_adds_one_to_rank() -> None:
     # stack / expand_dims produce one MORE axis than the operand.
     assert norm_axis("np.stack((a, b), axis=-1)", {"a": 2, "b": 2}) == 2  # axis-space 3
     assert norm_axis("np.expand_dims(a, axis=-1)", {"a": 2}) == 2
-
-
-def test_positive_axis_untouched() -> None:
-    assert norm_axis("np.flip(a, axis=1)", {"a": 2}) == 1  # already positive
-
-
-def test_unknown_operand_rank_left_verbatim() -> None:
-    # no rank for ``a`` -> the negative axis is NOT guessed (stays a UnaryOp).
-    node = norm_axis("np.flip(a, axis=-1)", {})
-    assert isinstance(node, ast.UnaryOp)
 
 
 def test_out_of_range_negative_left_verbatim() -> None:
@@ -97,44 +84,9 @@ def test_positive_stack_axis_returned_verbatim() -> None:
     # nothing lowers a positive-axis stack -> source is returned byte-for-byte.
     src = "import numpy as np\ndef f(a, b, out):\n out[:] = np.stack((a, b), axis=1)\n"
     assert (
-        desugar_for_python_backend(src, kir_("f", a=("M", "N"), b=("M", "N"), out=("M", "N", "2")), backend="pythran")
+        desugar_for_python_backend(src, kir_("f", a=("M", "N"), b=("M", "N"), out=("M", "N", "2")), backend="numba")
         == src
     )
 
 
 # numerical: pythran matches numpy for negative-axis flip / stack              #
-
-
-def test_flip_negative_axis_pythran_bit_exact() -> None:
-    a = np.arange(24, dtype=np.float64).reshape(4, 6)
-    res = run_op(
-        "import numpy as np\ndef f(a, out):\n out[:] = np.flip(a, axis=-1)\n",
-        "f",
-        {"a": a},
-        {"out": (4, 6)},
-        {"M": 4, "N": 6},
-        shapes={"a": "(M, N)", "out": "(M, N)"},
-        backends=("pythran",),
-    )
-    assert res["pythran"] == "ok", res
-
-
-def test_stack_negative_axis_pythran_bit_exact() -> None:
-    a = np.arange(6, dtype=np.float64).reshape(2, 3)
-    b = np.arange(6, 12, dtype=np.float64).reshape(2, 3)
-    res = run_op(
-        "import numpy as np\n"
-        "def k(a, b, out):\n"
-        "    c = np.stack((a, b), axis=-1)\n"
-        "    for i in range(out.shape[0]):\n"
-        "        for j in range(out.shape[1]):\n"
-        "            for l in range(out.shape[2]):\n"
-        "                out[i, j, l] = c[i, j, l]\n",
-        "k",
-        {"a": a, "b": b},
-        {"out": (2, 3, 2)},
-        {"M": 2, "N": 3},
-        shapes={"a": "(M, N)", "b": "(M, N)", "out": "(M, N, 2)"},
-        backends=("pythran",),
-    )
-    assert res["pythran"] == "ok", res

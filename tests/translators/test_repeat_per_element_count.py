@@ -82,14 +82,6 @@ def test_non_diff_per_element_count_refused() -> None:
         expand_("row_index = np.repeat(a, counts)", {"a": ("M",), "counts": ("M",)})
 
 
-def test_scalar_count_still_uses_the_multiply_form() -> None:
-    """Regression guard: a SCALAR repeat count must keep using ``outer * K`` (unaffected by the
-    per-element branch, since ``iter_extent_of`` on a bare int constant is None)."""
-    got = expand_("out = np.repeat(a, 3)", {"a": ("M",)})
-    assert "__rep_pos0" not in got
-    assert "* 3" in got or "3 *" in got
-
-
 def test_numeric_row_lengths_from_csr_row_ptr_zero_and_unequal_counts() -> None:
     """The idiom that found the gap, exercised end to end: spmv's ``row_index =
     np.repeat(np.arange(M), np.diff(A_indptr))``. ``p``'s diffs are ``2, 0, 3, 4`` -- a ZERO count

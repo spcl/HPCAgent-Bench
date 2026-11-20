@@ -5,7 +5,7 @@
 Lowered as a lib-node expander so the fresh output local is declared like any other
 gather target; the index-array detection is taught the ``np.take`` form so ``idx`` is
 typed int (C rejects a float subscript). Validated numerically vs numpy across the full
-backend matrix (C / C++ / Fortran + numba / pythran / jax, skip-tolerant), for the flat and
+backend matrix (C / C++ / Fortran + numba, skip-tolerant), for the flat and
 axis forms and an intermediate-local operand. ``test_take_negative_axis`` subsumes the
 positive last-axis gather (``-1`` normalizes to it).
 
@@ -18,7 +18,7 @@ import numpy as np
 
 from tests.translators.op_oracle import all_ok, run_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 
 def test_take_flat_1d() -> None:

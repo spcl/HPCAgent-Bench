@@ -24,8 +24,8 @@ from collections.abc import Mapping, Sequence
 from functools import cached_property
 from typing import NamedTuple
 
-from hpcagent_bench.translators.numpyto_common.ast_build import line_of
-from hpcagent_bench.translators.numpyto_common import dtypes, narrow_int
+from hpcagent_bench.translators.numpyto_common import dtypes, narrow_int, parallelism
+from hpcagent_bench.translators.numpyto_common.ast_build import line_of, name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, numpy_origin
 from hpcagent_bench.translators.numpyto_common.statement_desugar import Spelled, SplitTupleUnpack
 
@@ -264,6 +264,12 @@ class BaseEmitter:
         """``text`` (computed in the wide int64) narrowed back to the ``wrap`` element dtype."""
         raise NotImplementedError
 
+    def omp_private_clause(self, node: ast.For, arrays: set[str], reduction_acc: str | None = None) -> str:
+        """`` private(t, u)`` naming the body scalars of a parallel loop as declared (see
+        :func:`parallelism.omp_private_scalars`), or ``""`` when the body binds none."""
+        names = parallelism.omp_private_scalars(node, arrays, reduction_acc)
+        return f" private({', '.join(self.emit_expr(name_(n)) for n in names)})" if names else ""
+
     def emit_expr(self, node: ast.expr) -> str:
         """Emit an expression, re-rounding a float BinOp result to the fp8 grid (per-op in numpy)
         and re-wrapping a narrow-int +/-/* result back to its element width (numpy wraps there;
@@ -287,8 +293,10 @@ class BaseEmitter:
         return fp8_functions(dtype, self.fp8_names)
 
     def fp8_round(self, node: ast.BinOp, text: str) -> str:
-        """Wrap a float BinOp result in the fp8 round-to-grid helper (per-op rounding is load-bearing, not decorative)."""
-        if isinstance(node.op, FP8_NON_ARITH_OPS):
+        """Wrap a float BinOp result in the fp8 round-to-grid helper (per-op rounding is load-bearing, not decorative)
+        -- numpy semantics only: an :attr:`KernelIR.opmath` kernel keeps the result in the compute dtype and rounds
+        where it is stored, so neither a reduction's running sum nor a GEMM's products are rounded to the grid."""
+        if isinstance(node.op, FP8_NON_ARITH_OPS) or self.kir.opmath:
             return text
         fns = self.kernel_fp8_fns
         if fns is None or not self.touches_fp8(node):
@@ -308,7 +316,7 @@ class BaseEmitter:
 
     def touches_fp8(self, node: ast.expr) -> bool:
         """True when the subtree reads an fp8 array/scalar/local, so the enclosing op yields an fp8 float to re-round."""
-        for sub in ast.walk(node):
+        for sub in walk_nodes(node):
             if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
                 name = sub.value.id
             elif isinstance(sub, ast.Name):

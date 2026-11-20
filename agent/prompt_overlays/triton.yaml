@@ -1,0 +1,4 @@
+# The triton track: its build contract fills the build block's {{ADDENDUM}} slot.
+agent:
+  set:
+    build: {vars: {ADDENDUM: "file:../triton-build.md"}}

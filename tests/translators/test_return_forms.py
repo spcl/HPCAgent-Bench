@@ -16,7 +16,7 @@ A numpy kernel expresses its output in one of two ways:
 These assert that, for every accepted form, the RETURN VALUE is genuinely
 compared against numpy on all three native backends (c/cpp/fortran) -- i.e. the
 promoted buffer is in the ABI and numerically validated -- and that the python
-backends (numba/pythran/jax) either match or cleanly skip, but NEVER produce a
+backends (numba) either match or cleanly skip, but NEVER produce a
 wrong answer. ``run_return_op`` captures the kernel's actual return and maps it
 onto the promoted names; ``run_op`` is the in-place counterpart.
 """
@@ -30,7 +30,7 @@ import pytest
 
 from tests.translators.op_oracle import parse_source, run_op, run_return_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 NATIVE = ("c", "cpp", "fortran")
 
 

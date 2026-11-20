@@ -4,6 +4,7 @@ import ast
 from collections.abc import Sequence
 from types import NotImplementedType
 
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, reads_any, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.frontend import collect_inlined_scalar_defs, dtype_from_constructor
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import (
@@ -70,15 +71,8 @@ def branch_pin_(stmt: ast.stmt) -> tuple[dict[str, int], bool]:
 def substitute_ints(token: str, values: dict[str, int]) -> str:
     """``token`` with each named scalar replaced by its assumed integer value."""
 
-    class Substitute(ast.NodeTransformer):
-        __slots__ = ()
-
-        def visit_Name(self, node: ast.Name) -> ast.AST:
-            if node.id not in values:
-                return node
-            return ast.copy_location(ast.Constant(value=values[node.id]), node)
-
-    return ast.unparse(ast.fix_missing_locations(Substitute().visit(ast.parse(token, mode="eval").body)))
+    constants = {name: ast.Constant(value=value) for name, value in values.items()}
+    return ast.unparse(ast.fix_missing_locations(SubstituteLoads(constants).visit(ast.parse(token, mode="eval").body)))
 
 
 def shapes_agree_under(
@@ -154,23 +148,66 @@ def harvest_local_shapes(
     from the constructor's ``dtype=`` kwarg, so the emitter can
     declare ``X = np.zeros((N,), dtype=np.complex128)`` as
     ``double _Complex X[N]``.
+
+    A ``Name = Name`` alias is applied only after a walk, so within that walk an expression reading
+    the alias has no extent for it and takes the extent of the operands it can resolve: the wrong
+    RANK whenever those are the lower-rank side (lenet's ``held = acc`` then ``held + bias`` came
+    back shaped like the rank-1 ``bias``, not the rank-4 activation). So an assignment that reads
+    an alias not yet resolved waits, and the walk repeats while it still resolves new names. A last
+    walk with nothing waiting answers for an alias whose source never resolves, as a single walk did.
     """
+    aliased = alias_targets(tree)
+    if aliased:
+        while True:
+            known = (len(shape_table), len(dtype_table or ()))
+            harvest_walk(tree, shape_table, dtype_table, scalar_helpers, aliased - shape_table.keys())
+            if (len(shape_table), len(dtype_table or ())) == known:
+                break
+    harvest_walk(tree, shape_table, dtype_table, scalar_helpers, frozenset())
+
+
+def alias_targets(tree: ast.AST) -> frozenset[str]:
+    """Every name ``tree`` binds by a ``Name = Name`` alias, which :func:`harvest_walk` resolves only after its walk."""
+    return frozenset(
+        stmt.targets[0].id
+        for stmt in walk_nodes(tree)
+        if isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and isinstance(optional_constructor(stmt.value), ast.Name)
+    )
+
+
+def harvest_walk(
+    tree: ast.AST,
+    shape_table: dict[str, tuple[str, ...]],
+    dtype_table: dict[str, str] | None,
+    scalar_helpers: set[str] | None,
+    waiting: frozenset[str],
+) -> None:
+    """One walk of :func:`harvest_local_shapes`: every assignment except one reading a ``waiting`` alias, then the
+    aliases."""
     # A name bound BOTH ways -- ``padded = x`` in one branch, ``padded = np.zeros(...)`` in the
     # other -- must take the ALLOCATION's shape: the alias is derived, the allocation is the
     # declaration, and the allocation is the larger of the two wherever the branch exists to avoid
     # it (conv_standard_1d's zero-padded buffer). ast.walk is not source order, so aliases are
     # deferred and applied only to targets no allocation claimed.
     aliases: list[tuple[str, str]] = []
-    for stmt in ast.walk(tree):
+    for stmt in walk_nodes(tree):
         if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
             continue
         target = stmt.targets[0]
+        if numpy_submodule_attr(stmt.value, "linalg") in ("eigh", "eigvalsh"):
+            harvest_eigh(target, stmt.value, shape_table)
+            continue
         if not isinstance(target, ast.Name):
             continue
         rhs = optional_constructor(stmt.value)
         if isinstance(rhs, ast.Name):
             # Name = Name alias -- inherit shape and dtype from the source, after every allocation.
             aliases.append((target.id, rhs.id))
+            continue
+        if waiting and reads_any(rhs, waiting):
             continue
         harvest_assign(target.id, rhs, shape_table, dtype_table, scalar_helpers)
     for name, src in aliases:
@@ -181,6 +218,26 @@ def harvest_local_shapes(
             src_dt = dtype_table.get(src)
             if src_dt is not None and name not in dtype_table:
                 dtype_table[name] = src_dt
+
+
+def harvest_eigh(target: ast.expr, call: ast.expr, shape_table: dict[str, tuple[str, ...]]) -> None:
+    """``w, U = np.linalg.eigh(A)`` / ``w = np.linalg.eigvalsh(A)`` kept as a call: ``w`` is ``(n,)`` and ``U`` is
+    ``(n, n)`` for the square ``(n, n)`` operand."""
+    if not isinstance(call, ast.Call) or not call.args:
+        return
+    ext = iter_extent_of(call.args[0], shape_table)
+    if ext is not None and len(ext) == 2:
+        n = ast.unparse(ext[0])
+    elif isinstance(call.args[0], ast.Name):
+        n = f"{call.args[0].id}.shape[0]"
+    else:
+        return
+    names = [e.id for e in target.elts if isinstance(e, ast.Name)] if isinstance(target, ast.Tuple) else []
+    if isinstance(target, ast.Name):
+        names = [target.id]
+    shapes = [(n,), (n, n)]
+    for name, shape in zip(names, shapes, strict=False):
+        shape_table.setdefault(name, shape)
 
 
 def optional_constructor(rhs: ast.expr) -> ast.expr:

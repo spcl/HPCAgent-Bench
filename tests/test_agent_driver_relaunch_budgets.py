@@ -12,7 +12,7 @@ rule through a real relaunch:
   final attempt that never spent it alone.
 
 Both tests drive ``agent_driver.run_agent`` through the golden-fixture harness
-(``tests/fixtures/claude_driver_golden/regen.py``) with a crash-then-success attempt pair, the same
+(``tests/fixtures/claude_driver_golden/capture.py``) with a crash-then-success attempt pair, the same
 shape ``test_agent_driver_fresh_relaunch.py`` uses, and a purpose-built fake process for each
 property: one that reports back the exact ``timeout=`` it was given, one whose ``wait()`` genuinely
 blocks so a live watcher thread has real wall-clock time to poll before the attempt ends.
@@ -39,7 +39,7 @@ DRIVER = REPO / "agent" / "hpcagent_agent" / "driver" / "agent_driver.py"
 
 def load_capture() -> ModuleType:
     """The golden capture harness beside the fixtures: env/paths shared with the fresh-relaunch test."""
-    return module_at(FIXTURES / "regen.py", "relaunch_budgets_capture")
+    return module_at(FIXTURES / "capture.py", "relaunch_budgets_capture")
 
 
 capture = load_capture()

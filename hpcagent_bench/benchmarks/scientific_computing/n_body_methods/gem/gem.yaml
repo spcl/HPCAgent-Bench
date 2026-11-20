@@ -26,8 +26,8 @@ parameters:
     kappa: 0.1
     diel: 80.0
   XL:
-    npoints: 48000
-    natoms: 24000
+    npoints: 45120
+    natoms: 22560
     kappa: 0.1
     diel: 80.0
 args:

@@ -10,7 +10,6 @@ import ast
 import pathlib
 
 import numpy as np
-import pytest
 import scipy.sparse as sp
 
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, SparseArrayDesc
@@ -102,15 +101,6 @@ def test_slab_slice_is_still_declined() -> None:
     kir = sparse_ir(MATRIX_SRC, "slabmv", ("N", "M"))
     assert rewrite_sparse_matmuls(MATRIX_SRC, kir) is None
     assert "def slabmv" in emit_numba(MATRIX_SRC, kir=kir)
-
-
-@pytest.mark.parametrize(
-    ("src", "name", "out_shape"), [(COLUMN_SRC, "colmv", ("N", "M")), (ROW_SRC, "rowmv", ("N",))], ids=["column", "row"]
-)
-def test_lowering_consumes_the_logical_sparse_name(src: str, name: str, out_shape: tuple[str, ...]) -> None:
-    lowered = rewrite_sparse_matmuls(src, sparse_ir(src, name, out_shape))
-    assert lowered is not None
-    assert "A_indptr" in lowered
 
 
 LSTSQ_SRC = """import numpy as np

@@ -14,6 +14,7 @@ from hpcagent_bench import phase_clock
 from hpcagent_bench.harness import results_db
 from hpcagent_bench.phase_clock import Phase
 from hpcagent_bench.support.collect import canon_db
+from tests import results_seed
 
 PHASE_COLUMNS = ("transform_time", "codegen_time", "compile_time")
 
@@ -35,10 +36,8 @@ def test_unmarked_time_is_transform_and_marked_time_is_its_phase() -> None:
 
 
 def test_a_nested_phase_takes_its_own_seconds_from_the_outer_one() -> None:
-    with phase_clock.measuring() as clock:
-        with phase_clock.phase(Phase.CODEGEN):
-            with phase_clock.phase(Phase.COMPILE):
-                time.sleep(0.05)
+    with phase_clock.measuring() as clock, phase_clock.phase(Phase.CODEGEN), phase_clock.phase(Phase.COMPILE):
+        time.sleep(0.05)
     assert clock.seconds[Phase.COMPILE] >= 0.05
     assert clock.seconds[Phase.CODEGEN] < 0.05
 
@@ -73,8 +72,8 @@ def test_a_shift_moves_reported_seconds_between_phases_and_never_below_zero() ->
 def test_concurrent_measurements_in_two_threads_see_only_their_own_time_and_credit() -> None:
     """Judge threads render forms side by side (render_on_demand); one thread's credit and marked phase must
     not reach the other thread's measurement, nor leave a measurement or mark behind once the spans end."""
-    both_running = threading.Barrier(2)
-    credited = threading.Barrier(2)
+    both_running = threading.Barrier(2, timeout=30)
+    credited = threading.Barrier(2, timeout=30)
     clocks: dict[str, phase_clock.Clock] = {}
 
     def measure(label: str, seconds: float, name: phase_clock.Phase) -> None:
@@ -92,7 +91,7 @@ def test_concurrent_measurements_in_two_threads_see_only_their_own_time_and_cred
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join()
+        thread.join(timeout=30)
     assert clocks["a"].seconds[Phase.CODEGEN] == 10.0
     assert clocks["a"].seconds[Phase.TRANSFORM] < 1.0
     assert clocks["b"].seconds[Phase.CODEGEN] == 0.0
@@ -103,12 +102,8 @@ def test_concurrent_measurements_in_two_threads_see_only_their_own_time_and_cred
 
 def version_13_canon_file(path: pathlib.Path) -> None:
     """A results file as user_version 13 wrote it: the current schema without the phase columns."""
-    with contextlib.closing(results_db.open_db(path)) as conn:
-        for column in PHASE_COLUMNS:
-            conn.execute(f"ALTER TABLE canon DROP COLUMN {column}")
-        conn.execute("ALTER TABLE setups DROP COLUMN plugins")
-        conn.execute("PRAGMA user_version = 13")
-        conn.commit()
+    results_db.open_db(path).close()
+    results_seed.as_version(path, 13)
 
 
 def test_a_version_13_file_is_upgraded_in_place_when_opened_for_writing(tmp_path: pathlib.Path) -> None:

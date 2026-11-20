@@ -2,6 +2,8 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
+
 __all__ = ["SSA_SUFFIX", "ZEROS_MARKER", "SsaRename", "ssa_versionable", "store_root", "top_level_plain_bindings"]
 
 
@@ -52,7 +54,7 @@ def ssa_versionable(fn: ast.AST, pinned: set[str]) -> set[str]:
     blocked.update(v.arg for v in (args.vararg, args.kwarg) if v is not None)
     counts, plain = top_level_plain_bindings(fn, blocked)
     used: set[str] = set()
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Name):
             used.add(node.id)
             if not isinstance(node.ctx, ast.Load) and id(node) not in plain:
@@ -62,10 +64,10 @@ def ssa_versionable(fn: ast.AST, pinned: set[str]) -> set[str]:
         elif isinstance(node, ast.ExceptHandler) and node.name is not None:
             blocked.add(node.name)  # ``except E as e`` binds through a str field, not a Name node
         elif isinstance(node, (ast.Return, ast.Lambda)) or (isinstance(node, ast.FunctionDef) and node is not fn):
-            blocked.update(n.id for n in ast.walk(node) if isinstance(n, ast.Name))
+            blocked.update(n.id for n in walk_nodes(node) if isinstance(n, ast.Name))
         elif isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
             for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
-                for sub in ast.walk(target):
+                for sub in walk_nodes(target):
                     root = store_root(sub) if isinstance(sub, (ast.Subscript, ast.Attribute)) else None
                     if root is not None:
                         blocked.add(root)

@@ -1,0 +1,4 @@
+# How-to section: optimize one loop nest at a time to completion, then fuse.
+task:
+  set:
+    optimizations: {vars: {strategy: loopnest}}

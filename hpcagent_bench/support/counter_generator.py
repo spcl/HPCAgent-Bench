@@ -202,6 +202,8 @@ class CounterGenerator:
         library compares the same thresholds; without replacement, the first ``size`` of a permutation."""
         population = int(a) if isinstance(a, (int, np.integer)) else len(a)
         if not replace:
+            if p is not None:
+                raise ValueError("choice: p with replace=False is not supported")
             count = math.prod(shape_of(size))
             if count > population:
                 raise ValueError(f"choice: {count} draws without replacement from {population}")
@@ -212,6 +214,8 @@ class CounterGenerator:
             device = module_of(p)
             weights = device.asnumpy(p) if device not in (None, np) else p  # thresholds are summed on the host
             cumulative = np.cumsum(np.asarray(weights, dtype=np.float64))
+            if np.any(np.less(weights, 0.0)) or not cumulative[-1] > 0.0:
+                raise ValueError("choice: p must be non-negative with a positive sum")
             cumulative /= cumulative[-1]
             unit = counter_rng.uniform_field(shape_of(size), self.seed, self.next_stream(), self.xp)
             picked = self.xp.minimum(

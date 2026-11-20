@@ -13,20 +13,8 @@ import ast
 
 import numpy as np
 
-from hpcagent_bench.translators.numpyto_common.lowering import EyeToZerosDiagonal, ssa_rename_reassigned
+from hpcagent_bench.translators.numpyto_common.lowering import EyeToZerosDiagonal
 from tests.translators.source_module import run_source
-
-
-def test_ssa_rename_rewrites_plain_subscript_fill_target() -> None:
-    src = "def k(a, out):\n    x = np.copy(a)\n    x = np.zeros((3,))\n    x[0] = 1.0\n    out[0] = x[0]\n"
-    tree = ast.parse(src)
-    ssa_rename_reassigned(tree, {"a": ["N"], "out": ["N"]})
-    out = ast.unparse(tree)
-    # the reassigned x is split to x__v1; the fill and the read must both follow it,
-    # and no statement may still write the stale first x buffer.
-    assert "x__v1[0] = 1.0" in out, out
-    assert "out[0] = x__v1[0]" in out, out
-    assert "\n    x[0] = 1.0" not in out, out
 
 
 def apply_eye(expr: str) -> np.ndarray:

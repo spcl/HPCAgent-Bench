@@ -14,3 +14,6 @@ parameters:
     N: 6720
 args:
   A: {shape: "(N, N)", out: true}
+chain_length:
+  # A[i, j] subtracts one product per pivot k < min(i, j): at most N terms
+  A: N

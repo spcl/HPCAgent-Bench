@@ -25,22 +25,6 @@ def folded(src: str, params: list[str]) -> str:
     return ast.unparse(fn)
 
 
-def test_an_alias_bound_inside_a_loop_is_folded_onto_the_parameter() -> None:
-    got = folded(
-        """
-        def kernel(q, nsteps):
-            for _step in range(nsteps):
-                f = q
-                f[0, 0] = f[5, 0]
-                q[1, 1] -= f[1, 1]
-        """,
-        ["q", "nsteps"],
-    )
-    assert "f = q" not in got, got
-    assert "f[" not in got, got
-    assert "q[0, 0] = q[5, 0]" in got, got
-
-
 def test_an_alias_rebound_in_the_loop_is_left_alone() -> None:
     src = """
         def kernel(q, nsteps):

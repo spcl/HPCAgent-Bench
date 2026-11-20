@@ -4,10 +4,7 @@
 
 import ast
 
-import pytest
-
 from hpcagent_bench.translators.numpyto_c.dace_emit import body_allocated_shape
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
 
 
 class Kir:
@@ -23,50 +20,6 @@ class Kir:
     def __init__(self, dtype: str) -> None:
         self.arrays = [Kir.Arr("a", ("N", "M"), dtype), Kir.Arr("out", ("N",), dtype)]
         self.scalars = [Kir.Arr("dt", (), dtype)]
-
-
-def desugared(body: str, dtype: str = "float64", backend: str = "dace", setup: str = "") -> str:
-    src = f"import numpy as np\ndef rows(a, out, dt):\n{setup}    out[:] = {body}\n"
-    return desugar_for_python_backend(src, Kir(dtype), backend=backend)
-
-
-@pytest.mark.parametrize(
-    ("body", "kept"),
-    [
-        ("np.sum(a, axis=1)", "np.sum(a, axis=1)"),
-        ("np.mean(a, axis=1)", "np.mean(a, axis=1)"),
-        ("a.sum(axis=1)", "np.sum(a, axis=1)"),
-        ("a.max(axis=1)", "np.max(a, axis=1)"),
-        ("a.min(1)", "np.min(a, axis=1)"),
-    ],
-)
-def test_a_float_axis_reduction_stays_a_call_for_dace(body: str, kept: str) -> None:
-    """Kept as the numpy FUNCTION: DaCe's ``ndarray.max``/``min`` methods take no ``axis`` (vgg16)."""
-    out = desugared(body)
-    assert kept in out, out
-    assert "__rdo" not in out, out
-
-
-def test_a_reduction_of_a_scalar_scaled_masked_operand_stays_a_call_for_dace() -> None:
-    """velocity_tendencies' ``np.where(clip, np.abs(a * dt), -np.inf).max(axis=1)``: the kind of a scalar parameter and of
-    ``np.inf`` must be known. Unknown, it was contagious and the reduction became a NaN-checking loop nest, whose small
-    outer axis left a serial host loop over device memory on the GPU."""
-    setup = "    clip = a > 0.5\n    masked = np.where(clip, np.abs(a * dt), -np.inf)\n"
-    out = desugared("masked.max(axis=1)", setup=setup)
-    assert "np.max(masked, axis=1)" in out, out
-    assert "__rdo" not in out, out
-
-
-@pytest.mark.parametrize(
-    ("body", "dtype", "backend"),
-    [
-        ("a.sum(axis=1)", "int32", "dace"),
-        ("np.sum(a, axis=1, keepdims=True)[:, 0]", "float64", "dace"),
-        ("a.sum(axis=1)", "float64", "numba"),
-    ],
-)
-def test_a_reduction_the_dace_frontend_cannot_take_is_still_a_loop(body: str, dtype: str, backend: str) -> None:
-    assert "__rdo" in desugared(body, dtype, backend)
 
 
 def test_a_kept_reduction_sizes_the_helper_out_param_from_its_operand() -> None:

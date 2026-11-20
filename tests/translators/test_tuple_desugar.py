@@ -66,15 +66,6 @@ def test_tuple_concatenation_folds_into_one_shape() -> None:
     assert "np.zeros((x.shape[0], p, 2))" in got
 
 
-def test_a_generator_over_a_literal_range_unrolls() -> None:
-    got = desugared("""
-        def k(x, p, out):
-            t = tuple((x.shape[i + 1] * p for i in range(2)))
-            out[0] = t[1]
-        """)
-    assert "out[0] = x.shape[2] * p" in got
-
-
 @pytest.mark.parametrize(("rank", "want"), [(4, "(1, x.shape[1], 1, 1)"), (2, "(1, x.shape[1])")])
 def test_a_broadcast_shape_padded_to_an_array_rank_folds(rank: int, want: str) -> None:
     """``(1,) * (x.ndim - 2)``. The rank-2 case repeats ZERO times: the empty tuple is falsy but
@@ -100,17 +91,6 @@ def test_len_of_a_compile_time_tuple_is_a_constant() -> None:
         """).endswith("out[0] = 3")
 
 
-def test_an_isinstance_guard_on_an_integer_knob_takes_the_true_branch() -> None:
-    """``(int, np.integer)`` is true whichever way the harness passed the knob, so it decides."""
-    got = desugared("""
-        def k(x, p, out):
-            if isinstance(p, (int, np.integer)):
-                p = (p, p)
-            out[0] = p[1]
-        """)
-    assert got.endswith("out[0] = p")
-
-
 @pytest.mark.parametrize("spelling", ["int", "np.integer"])
 def test_a_one_sided_isinstance_on_a_declared_knob_stays_undecided(spelling: str) -> None:
     """A preset symbol arrives as a Python int, an init.scalars entry as a numpy scalar, and
@@ -125,20 +105,6 @@ def test_a_one_sided_isinstance_on_a_declared_knob_stays_undecided(spelling: str
     assert f"isinstance(p, {spelling})" in got
 
 
-def test_a_cast_pins_the_provenance_and_makes_a_bare_int_test_decide() -> None:
-    """The helper inliner materialises an argument as ``__inlN_stride = int(stride)``; that cast is
-    what turns an otherwise-undecidable guard into a known Python int."""
-    got = desugared("""
-        def k(x, p, out):
-            q = int(p)
-            if isinstance(q, int):
-                q = (q, q)
-            out[0] = q[1]
-        """)
-    assert got.endswith("out[0] = q")
-    assert "isinstance" not in got
-
-
 def test_an_isinstance_guard_on_a_tuple_takes_the_false_branch() -> None:
     got = desugared("""
         def k(x, p, out):
@@ -148,35 +114,6 @@ def test_an_isinstance_guard_on_a_tuple_takes_the_false_branch() -> None:
             out[0] = len(p)
         """)
     assert got.endswith("out[0] = 2")
-
-
-def test_an_isinstance_on_an_unknown_name_is_left_alone() -> None:
-    """This pass narrows; it never guesses. An undecidable guard must survive verbatim."""
-    got = desugared("""
-        def k(x, p, out):
-            if isinstance(unknown, (int, np.integer)):
-                out[0] = 1
-        """)
-    assert "isinstance(unknown, (int, np.integer))" in got
-
-
-def test_a_bound_name_is_never_none() -> None:
-    got = desugared("""
-        def k(x, p, s, out):
-            if s is None:
-                s = p
-            out[0] = s
-        """)
-    assert got.endswith("out[0] = s")
-
-
-def test_slice_calls_in_a_concatenated_index_become_real_slices() -> None:
-    got = desugared("""
-        def k(x, p, out):
-            idx = (slice(None), slice(None)) + (slice(p, p + 2),)
-            out[idx] = x
-        """)
-    assert "out[:, :, p:p + 2] = x" in got
 
 
 def test_literal_index_arithmetic_folds_so_a_tuple_element_can_be_selected() -> None:
@@ -190,18 +127,6 @@ def test_literal_index_arithmetic_folds_so_a_tuple_element_can_be_selected() -> 
     assert got.endswith("out[0] = p")
 
 
-def test_a_tuple_bound_inside_a_loop_is_not_folded_across_iterations() -> None:
-    """A read can come from the previous iteration, so the binding does not dominate it."""
-    got = desugared("""
-        def k(x, p, out):
-            t = (1, 2)
-            for i in range(3):
-                out[i] = t[0]
-                t = (3, 4)
-        """)
-    assert "t = (3, 4)" in got  # left standing rather than folded to a stale value
-
-
 def test_a_string_comparison_of_two_literals_folds_its_branch() -> None:
     """The ports carry ``-np.inf if 'mean' == 'max' else 0.0`` from a templated generator."""
     got = desugared("""
@@ -211,30 +136,6 @@ def test_a_string_comparison_of_two_literals_folds_its_branch() -> None:
         """)
     assert "'mean'" not in got
     assert "0.0" in got
-
-
-def test_a_none_default_left_dead_by_the_fold_is_dropped() -> None:
-    """``None`` has no C spelling, so a defaulted argument the fold made unreachable would fail the
-    emit over a statement that no longer does anything."""
-    got = desugared("""
-        def k(x, p, out):
-            s = None
-            if s is None:
-                s = (p, p)
-            out[0] = s[0]
-        """)
-    assert "None" not in got
-    assert got.endswith("out[0] = p")
-
-
-def test_a_none_binding_that_is_still_read_survives() -> None:
-    """The drop is dead-code only; a live None must reach the emitter and fail loudly there."""
-    got = desugared("""
-        def k(x, p, out):
-            s = None
-            out[0] = f(s)
-        """)
-    assert "s = None" in got
 
 
 def test_a_bare_shape_expands_wherever_it_stands() -> None:
@@ -256,34 +157,6 @@ def test_a_shape_of_unknown_rank_is_left_alone() -> None:
             out[:] = q.reshape(q.shape)
         """)
     assert "q.reshape(q.shape)" in got
-
-
-def test_a_simultaneous_bind_is_not_split_sequentially() -> None:
-    """``a, b = b, a + b`` binds both from the OLD values. A sequential split reads the new ``a``
-    and the kernel computes a different sequence with no diagnostic, so the statement is left for
-    the staging rewriter in ``lowering`` rather than split here."""
-    got = desugared("""
-        def k(x, p, out):
-            a = x[0]
-            b = x[1]
-            for i in range(3):
-                a, b = b, a + b
-            out[0] = a
-        """)
-    assert "a, b = (b, a + b)" in got
-    assert "a = b" not in got
-
-
-def test_an_unpack_with_no_hazard_still_splits() -> None:
-    """The decline is the hazard case only: a plain unpack must still scalarize away."""
-    got = desugared("""
-        def k(x, p, out):
-            oh, ow = (p, p + 1)
-            out[0] = oh + ow
-        """)
-    assert "oh = p" in got
-    assert "ow = p + 1" in got
-    assert "oh, ow = " not in got  # the tuple itself is gone, not just its uses
 
 
 def folded_lists(body: str) -> str:

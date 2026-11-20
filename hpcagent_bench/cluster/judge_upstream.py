@@ -41,6 +41,8 @@ __all__ = [
 GAVE_UP = 1
 #: How long the supervisor waits for a signalled child before it escalates to SIGKILL.
 TERM_GRACE_S = 10.0
+#: How often the supervisor looks up from its child for a stop request.
+WAIT_POLL_S = 0.1
 
 
 def announce(message: str) -> None:
@@ -85,13 +87,18 @@ class Supervisor:
             child.send_signal(signum if signum in (signal.SIGINT, signal.SIGTERM) else signal.SIGTERM)
 
     def wait(self) -> int:
-        """The child's exit status, or its terminating signal as a negative number."""
+        """The child's exit status, or its terminating signal as a negative number. Polled: an upstream that ignores
+        the stop signal must still reach the escalation in :meth:`reap`."""
         child = self.child
         if child is None:  # only called between spawn and reap
             raise RuntimeError("judge_upstream: waited with no child running")
         while True:
             try:
-                return child.wait()
+                return child.wait(timeout=WAIT_POLL_S)
+            except subprocess.TimeoutExpired:
+                if self.stopping:
+                    self.reap()
+                    return child.wait()
             except KeyboardInterrupt:  # SIGINT reached the wait, not the handler
                 self.stop(signal.SIGINT, None)
 

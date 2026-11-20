@@ -36,10 +36,16 @@
  *
  * Inert without -fopenmp (the pragma needs it) and off non-glibc/non-x86_64 hosts. The
  * CPU baselines always pass -fopenmp, and flags.py adds this header on Linux only.
+ *
+ * Inert under nvcc (__CUDACC__): its purpose is GCC's host libmvec vectorization, and a
+ * force-included <math.h> ahead of libstdc++'s own first include breaks the nvcc host pass
+ * (bits/c++config.h "redefinition of std::__terminate" on GCC 15 / clang 21 toolchains).
  */
+#if !defined(__CUDACC__)
 #include <math.h>
+#endif
 
-#if defined __x86_64__ && defined __GLIBC__ && defined _OPENMP
+#if defined __x86_64__ && defined __GLIBC__ && defined _OPENMP && !defined(__CUDACC__)
 
 #ifdef __cplusplus
 /* glibc declares these extern "C" and noexcept (__THROW); a C++-linkage or

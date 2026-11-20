@@ -6,8 +6,12 @@ import re
 
 import pytest
 from dace.codegen.targets.experimental_cuda_helpers import scope_strategies
+from dace.libraries.standard.nodes import scan as scans
+from dace.transformation.passes import loop_specialization as guards
 from dace.transformation.passes.canonicalize import annotate_loop_kinds as kinds
-from dace.transformation.passes.cpu_specialization import sequentialize_unprofitable_parallel_scopes as cpu_costs
+from dace.transformation.passes.canonicalize import segment_confined_loops as segments
+from dace.transformation.passes.cpu_specialization import chunk_anti_dependence as chunks
+from dace.transformation.passes.cpu_specialization import decide_cpu_parallel_axes as cpu_costs
 from dace.transformation.passes.gpu_specialization import block_tile_kernels, promote_warp_tiles
 
 from hpcagent_bench import modules, paths
@@ -17,14 +21,24 @@ SKILLS = paths.ROOT / "hpcagent_bench" / "skills"
 #: Hint texts every form can carry, CPU and GPU alike: the loop classes and the wavefront axes.
 COMMON = (
     kinds.PARALLEL,
+    kinds.REDUCTION,
+    kinds.ORDERED_CALL,
+    kinds.EARLY_EXIT,
+    kinds.SMALL_LOOP,
+    kinds.WHILE_LOOP,
+    scans.PARALLEL_SCAN_HINT,
+    scans.SEQUENTIAL_SCAN_HINT,
     kinds.SEQUENTIAL_PROVEN,
     kinds.SEQUENTIAL_PINNED,
-    kinds.UNSURE,
+    kinds.UNKNOWN,
     kinds.WAVEFRONT_DIAGONAL,
     kinds.WAVEFRONT_FRONT,
     kinds.WAVEFRONT_TILE_DIAGONAL,
     kinds.WAVEFRONT_TILE_COLUMN,
     kinds.WAVEFRONT_TILE_INTERIOR,
+    guards.GUARDED,
+    guards.GUARD_FALLBACK,
+    segments.SEGMENT_HINT,
 )
 #: Hint texts only the GPU form carries: the scopes of a launch.
 GPU_ONLY = (
@@ -37,13 +51,15 @@ GPU_ONLY = (
     block_tile_kernels.LANE_STRIDED_HINT,
     promote_warp_tiles.WARP_TILE_HINT,
 )
+#: Hint texts only the CPU form carries: the chunked sweep of a write-after-read loop.
+CPU_ONLY = (chunks.CHUNK_SWEEP_HINT,)
 PAGE_HINTS = {
-    "cpf-cpu-src": COMMON,
-    "cpf-tool-cpu": COMMON,
+    "cpf-cpu-src": COMMON + CPU_ONLY,
+    "cpf-tool-cpu": COMMON + CPU_ONLY,
     "cpf-gpu-src": COMMON + GPU_ONLY,
     "cpf-tool-gpu": COMMON + GPU_ONLY,
 }
-CLASS_LINE = re.compile(r"^(parallel|sequential|unsure) -- ")
+CLASS_LINE = re.compile(r"^(parallel|sequential|unknown) -- ")
 
 
 def identity(hint: str) -> str:

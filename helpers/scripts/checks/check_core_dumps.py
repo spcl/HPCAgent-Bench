@@ -18,9 +18,8 @@ that genuinely wants its own dump.
 Three rules, because each one alone has been escaped:
 
 1. EVERY shell entry point carries the guard -- ``*.sbatch``, ``*.sh``, and any tracked file whose
-   shebang names a shell (``agent/bin/hpcagent-bench-tool`` and the OpenHands shell
-   ``bash-norc`` carry no suffix and sit closest to the compiler that crashes). A sourced library
-   counts too: setting the limit there is what carries the floor into the caller's shell.
+   shebang names a shell (``agent/bin/hpcagent-bench-tool`` carries no suffix and sits closest to the compiler
+   that crashes). A sourced library counts too: setting the limit there is what carries the floor into the caller's shell.
 2. No script RE-ENABLES them: "the text contains ``ulimit -c 0``" would accept a later
    ``ulimit -c unlimited`` that still dumps, so a non-zero ``ulimit -c`` needs
    a same-line ``# core-dumps-ok: <reason>`` marker, so a deliberate one (a probe that gdbs its own
@@ -65,9 +64,8 @@ ulimit -c 0
 SHELL_SUFFIXES = (".sbatch", ".sh")
 
 #: ...and a shebang naming a shell, for the entry points that carry no suffix at all. The agent's
-#: own `agent/bin/hpcagent-bench-tool` and the OpenHands shell `bash-norc` are both
-#: extensionless `#!/bin/sh` wrappers, so a suffix rule never sees the two scripts closest to the
-#: compiler that crashes.
+#: own `agent/bin/hpcagent-bench-tool` is an extensionless `#!/bin/sh` wrapper, so a suffix rule never sees
+#: the script closest to the compiler that crashes.
 SHELL_SHEBANG = re.compile(rb"^#!.*\b(?:ba|da|k|z|a)?sh\b")
 
 #: A real submission header always names the job; `#SBATCH` alone also matches prose about it.
@@ -118,11 +116,15 @@ def shell_scripts(paths: list[str]) -> list[pathlib.Path]:
 
 
 def emitters(paths: list[str]) -> list[pathlib.Path]:
-    """Tracked non-``.sbatch`` files that write an SBATCH header into a script they generate."""
+    """``.py``/``.sh`` files that write an SBATCH header into a script they generate.
+
+    The suffix scope holds in BOTH modes: the pre-commit hook filters no paths, so it hands over
+    every staged file, and a doc that QUOTES a job header is not an emitter.
+    """
     candidates = [pathlib.Path(p) for p in paths] if paths else tracked(repo_root(), "*.py", "*.sh")
     found = []
     for path in candidates:
-        if path.suffix == ".sbatch" or not path.is_file() or path.name == pathlib.Path(__file__).name:
+        if path.suffix not in (".py", ".sh") or not path.is_file() or path.name == pathlib.Path(__file__).name:
             continue
         if EMITTED_HEADER in path.read_text(encoding="utf-8", errors="ignore"):
             found.append(path)
@@ -130,13 +132,7 @@ def emitters(paths: list[str]) -> list[pathlib.Path]:
 
 
 def reenabled(path: pathlib.Path) -> list[tuple[int, str]]:
-    """Unmarked ``ulimit -c <non-zero>`` lines -- the guard string alone does not prove cores are off.
-
-    Shell files only: this script and its test both SPELL the offending command, and a suffix rule
-    that cannot match them beats an exclusion list that a rename would silently invalidate.
-    """
-    if path.suffix not in SHELL_SUFFIXES:
-        return []
+    """A shell entry point's unmarked ``ulimit -c <non-zero>`` lines: the guard string alone proves nothing."""
     hits = []
     for number, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), start=1):
         if REENABLE.search(line) and MARKER not in line:
@@ -176,7 +172,9 @@ def main() -> int:
 
     offenders, rearmed = [], []
     for path in shell_scripts(args.paths):
-        text = path.read_text(encoding="utf-8")
+        # ``reenabled``/``emitters`` read with errors="ignore"; here the text is also written back
+        # under --fix, so surrogateescape keeps bytes the guard never touches exactly as they were.
+        text = path.read_text(encoding="utf-8", errors="surrogateescape")
         hits = reenabled(path)
         if hits:
             rearmed.append(path)
@@ -192,7 +190,7 @@ def main() -> int:
         at = insertion_point(lines)
         pad = "" if at and not lines[at - 1].strip() else "\n"
         lines.insert(at, pad + BLOCK)
-        path.write_text("".join(lines), encoding="utf-8")
+        path.write_text("".join(lines), encoding="utf-8", errors="surrogateescape")
         print(f"core-dumps: added the guard to {display(path)}")
 
     emitted = [p for p in emitters(args.paths) if not guarded(p.read_text(encoding="utf-8", errors="ignore"))]

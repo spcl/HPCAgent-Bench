@@ -17,6 +17,7 @@ directory on the shared file system:
 * ``<id>.req``   -- JSON ``{"argv": [...]}`` written by the judge, renamed into place;
 * ``<id>.alive`` -- touched by the judge while it waits. Stale for :data:`HEARTBEAT_S` seconds
   means the judge gave up, and the step is cancelled;
+* ``<id>.cancel`` -- touched by a launch the judge timed out: the step is cancelled at once;
 * ``<id>.out`` / ``<id>.err`` -- the step's output;
 * ``<id>.rc``    -- the exit status, renamed into place LAST: the judge's completion signal;
 * :data:`ALIVE`  -- touched by the relay every pass, so a judge waiting on a dead relay fails at
@@ -35,7 +36,7 @@ import subprocess
 import sys
 import time
 
-from hpcagent_bench.harness.mpi_gang import GangRequest
+from hpcagent_bench.harness.mpi_gang import CANCEL_MARK, GangRequest
 
 __all__ = [
     "ALIVE",
@@ -150,8 +151,8 @@ def kill(ident: str, proc: subprocess.Popen[bytes]) -> int:
         with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             subprocess.call(["scancel", sid], timeout=SLURM_CALL_S)
     signal_group(proc, signal.SIGTERM)
-    deadline = time.time() + TERM_GRACE_S
-    while proc.poll() is None and time.time() < deadline:
+    deadline = time.monotonic() + TERM_GRACE_S
+    while proc.poll() is None and time.monotonic() < deadline:
         time.sleep(POLL_S)
     if proc.poll() is None:
         signal_group(proc, signal.SIGKILL)
@@ -183,7 +184,9 @@ def step(directory: str, running: dict[str, subprocess.Popen[bytes]], watching_s
     for ident, proc in list(running.items()):
         base = str(pathlib.Path(directory, ident))
         rc = proc.poll()
-        if rc is None and stale(base, now, watching_since):
+        if rc is None and pathlib.Path(base + CANCEL_MARK).exists():
+            rc = kill(ident, proc)
+        elif rc is None and stale(base, now, watching_since):
             touch(base + STALE_MARK)
             rc = kill(ident, proc)
         if rc is not None:
@@ -196,12 +199,19 @@ def serve(directory: str, parent: int) -> None:
     pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
     running: dict[str, subprocess.Popen[bytes]] = {}
     watching_since = last = time.time()
+    last_fault = ""
     try:
         while os.getppid() == parent:
             now = time.time()
             if now - last > STALL_S:
                 watching_since = now
-            step(directory, running, watching_since)
+            try:
+                step(directory, running, watching_since)
+            except OSError as exc:
+                # A stale handle on the shared directory loses one pass; ending the relay would cancel every launch.
+                if str(exc) != last_fault:
+                    sys.stderr.write(f"gang_relay: a pass over {directory} failed: {exc!r}\n")
+                    last_fault = str(exc)
             last = time.time()
             time.sleep(POLL_S)
     finally:

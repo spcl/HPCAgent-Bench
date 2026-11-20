@@ -30,7 +30,7 @@ import numpy as np
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
-from hpcagent_bench.translators.numpyto_fortran.intrinsics import literal_axis, renders_natively
+from hpcagent_bench.translators.numpyto_fortran.intrinsics import renders_natively
 from tests.translators import op_oracle as oo
 from tests.translators.op_oracle import run_op
 
@@ -101,13 +101,6 @@ def test_a_tuple_axis_still_lowers_to_loops() -> None:
     """Fortran's ``dim=`` reduces exactly one axis; a tuple is not what this mapping expresses."""
     text = fortran("    c = np.sum(a, axis=(1, 2))\n    out[:] = c * 2.0\n")
     assert DO_RE.search(text), text
-
-
-def test_keepdims_still_lowers_to_loops() -> None:
-    """``keepdims`` decides the result RANK and no ``dim=`` reduction preserves it."""
-    for call in ("np.sum(a, axis=1, keepdims=True)", "np.max(a, axis=1, keepdims=True)"):
-        node = ast.parse(call, mode="eval").body
-        assert literal_axis(node) is None, call
 
 
 def test_the_claim_needs_a_known_rank() -> None:

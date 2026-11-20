@@ -54,10 +54,16 @@ seed() {
     local shared="$1" local_dir="$2"
     mkdir -p "${local_dir}" || return 1
     [[ -d "${shared}" ]] || return 0
-    # -n: a local entry (a previous seed on this node) is never replaced by a shared one mid-run.
+    # A publisher killed between copy and rename leaves its staging entry, which seed and publish both skip. A copy
+    # takes minutes, so a top-level one a day old is dead; if it was not, its publisher stages the entry again.
+    find "${shared}" -maxdepth 1 -name "${STAGE_PREFIX}*" -mtime +0 -exec rm -rf -- {} + 2>/dev/null || true
+    # A local entry (a previous seed on this node) is never replaced by a shared one mid-run, and a copy that fails
+    # part way is dropped whole: an entry without its binary is a cache hit without its contents.
     (cd "${shared}" && find . -mindepth 1 -maxdepth 1 ! -name "${STAGE_PREFIX}*" -print0) |
         while IFS= read -r -d '' entry; do
-            cp -dRn --preserve=mode,timestamps -- "${shared}/${entry#./}" "${local_dir}/" 2>/dev/null || true
+            [[ ! -e "${local_dir}/${entry#./}" ]] || continue
+            cp -dR --preserve=mode,timestamps -- "${shared}/${entry#./}" "${local_dir}/" 2>/dev/null \
+                || rm -rf -- "${local_dir:?}/${entry#./}"
         done
     scrub_dead_entries "${local_dir}"
     return 0

@@ -23,6 +23,8 @@ from tests.problem_facts import problem as problem_line
 
 
 def load_driver(monkeypatch: pytest.MonkeyPatch, **env: str) -> types.ModuleType:
+    # The fake processes have no pid to cap.
+    monkeypatch.setenv("AGENT_MEMORY_CAP_GB", "0")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     driver = fresh("agent_driver")
@@ -56,6 +58,7 @@ def fake_popen_class(statuses: list[str], seen: list[int] | None = None) -> type
             if seen is not None:
                 seen.append(cls.live)
             self.returncode = None
+            self.pid = 0
             status = statuses[min(cls.spawned - 1, len(statuses) - 1)]
             stdout.write(init_line(status))
             stdout.flush()
@@ -93,7 +96,7 @@ def start(
     monkeypatch.setattr(driver.subprocess, "Popen", fake_popen_class(statuses, seen))
     log_path = tmp_path / "claude.log"
     with log_path.open("w", encoding="utf-8") as log:
-        process, attempts = driver.start_agent(["claude"], tmp_path, {}, log, log_path, _UNPINNED)
+        process, attempts = driver.start_agent(["claude"], tmp_path, {}, log, log_path, _UNPINNED, 0)
     return process, attempts, log_path
 
 
@@ -166,6 +169,7 @@ def test_only_so_many_agents_start_at_once(monkeypatch: pytest.MonkeyPatch, tmp_
             with lock:
                 spawned.append(1)
             self.returncode = None
+            self.pid = 0
             release.wait(timeout=30)
             stdout.write(init_line("connected"))
             stdout.flush()
@@ -192,7 +196,7 @@ def test_only_so_many_agents_start_at_once(monkeypatch: pytest.MonkeyPatch, tmp_
         def run(workdir: pathlib.Path = workdir) -> None:
             log_path = workdir / "claude.log"
             with log_path.open("w", encoding="utf-8") as log:
-                driver.start_agent(["claude"], workdir, {}, log, log_path, _UNPINNED)
+                driver.start_agent(["claude"], workdir, {}, log, log_path, _UNPINNED, 0)
 
         threads.append(threading.Thread(target=run))
     for thread in threads:
@@ -264,6 +268,7 @@ def crashing_popen_class(exit_codes: list[int]) -> type:
             # Recorded so a test can assert on exactly what production passed to Popen.
             self.kwargs = {"cwd": cwd, "env": env, "stdout": stdout, "stderr": stderr, "text": text, **kwargs}
             self.returncode = None
+            self.pid = 0
             self.captured = ""
             if isinstance(stdout, int) or stdout is None:
                 # claude_supports_flag's --help probe goes through subprocess.run(capture_output=True,

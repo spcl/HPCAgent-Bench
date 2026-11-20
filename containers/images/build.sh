@@ -6,6 +6,8 @@
 #   BUILD_TARGETS=judge containers/images/build.sh judge-agent-amd    one target (OUTPUT_SQSH overrides its path)
 #   CE_IMAGE_FLAVOR=native containers/images/build.sh judge-agent-cpu this machine's CPU; never pushed
 #   containers/images/build.sh <image> --roles                        print the images.env roles it writes
+#   containers/images/build.sh <image> --drift                        compare this checkout with the published
+#                                                                     labels (exit 1: a target would rebuild); no build
 #
 # <image>/image.sh holds what differs per image: TARGET_ROLE (Dockerfile target -> images.env role,
 # "-" for a one-stage Dockerfile) with TARGET_ORDER, BASE_IMAGE pinned by digest, ce_image_args (the
@@ -40,6 +42,19 @@ if [[ "${2:-}" == --roles ]]; then
     for target in "${targets[@]}"; do printf '%s\n' "${TARGET_ROLE[${target}]}"; done
     exit 0
 fi
+dockerfile_target() { [[ "$1" == - ]] || printf '%s' "$1"; }
+if [[ "${2:-}" == --drift ]]; then
+    CE_PULL=1
+    ce_image_args >/dev/null
+    for kv in ${EXTRA_BUILD_ARGS:-}; do BUILD_ARGS+=(--build-arg "${kv}"); done
+    drifted=0
+    for target in "${targets[@]}"; do
+        stage="$(dockerfile_target "${target}")"
+        fingerprint="$(ce_build_fingerprint "${IMAGE_DIR}/Dockerfile" "${stage}" "${BUILD_ARGS[@]}")" || fingerprint=""
+        ce_pull_wanted "${TARGET_ROLE[${target}]}" "${fingerprint}" || drifted=1
+    done
+    exit "${drifted}"
+fi
 : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
 mkdir -p "${CE_IMAGES}"
 # OUTPUT_SQSH names the output of a one-target build only: two targets cannot share one name.
@@ -53,13 +68,14 @@ output() {
 local_tag() {
     if [[ "$1" == - ]]; then printf 'hpcagent-bench-ce-%s:latest' "${IMAGE}"; else printf 'hpcagent-bench-ce-%s-%s:latest' "${IMAGE}" "$1"; fi
 }
-dockerfile_target() { [[ "$1" == - ]] || printf '%s' "$1"; }
 
 outputs=()
 for target in "${targets[@]}"; do outputs+=("$(output "${target}")"); done
 ce_refuse_mounted "${outputs[@]}"
 
 ce_podman_env
+# The registry lives for this build, not the job's verify stage or a native rebuild that follows it.
+trap '[[ -z "${CE_LAYER_PID:-}" ]] || kill "${CE_LAYER_PID}" 2>/dev/null || true' EXIT
 ce_image_args
 for kv in ${EXTRA_BUILD_ARGS:-}; do BUILD_ARGS+=(--build-arg "${kv}"); done
 

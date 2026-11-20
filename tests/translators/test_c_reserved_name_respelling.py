@@ -118,19 +118,6 @@ def test_locals_and_a_helper_spelled_like_libc_or_a_keyword_compute_the_referenc
     assert build_run_c(kernel_source, LOCALS_DRIVER, cpp=cpp).returncode == 0
 
 
-@pytest.mark.parametrize("emit", EMITTERS)
-def test_a_parameter_spelled_like_libc_keeps_its_abi_slot_under_its_respelling(
-    tmp_path: pathlib.Path, emit: Callable[..., str]
-) -> None:
-    kir = lowered(tmp_path, PARAMS_SRC, ["y1", "exp", "out"])
-    text = emit(kir, fn_name="f")
-    # The binding reads the kernel's own names in this order; the signature has to fill the same slots.
-    assert kir.param_order() == ["exp", "out", "y1", "n"]
-    signature = r"void f\(const double \*\w+ exp_, double \*\w+ out, const double \*\w+ y1_, const int64_t n\)"
-    assert re.search(signature, text) is not None, text
-    assert "exp(exp_[" in text
-
-
 @pytest.mark.integration
 @pytest.mark.parametrize(("emit", "cpp"), COMPILED_EMITTERS)
 def test_a_parameter_spelled_like_libc_receives_the_argument_of_its_abi_slot(

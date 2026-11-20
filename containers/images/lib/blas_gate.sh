@@ -69,8 +69,20 @@ int main(int argc, char **argv) {
 C
 cc -O2 "${work}/gemm.c" -I"${inc}" -L"${lib}" -lopenblas -fopenmp -lm -Wl,-rpath,"${lib}" -o "${work}/gemm"
 cc -O2 "${work}/callers.c" -I"${inc}" -L"${lib}" -lopenblas -fopenmp -lpthread -lm -Wl,-rpath,"${lib}" -o "${work}/callers"
+# A forced kernel family runs only where the build host has its ISA: SkylakeX needs AVX-512, Haswell and Zen AVX2.
+# An mi200 build node (Zen 3, no AVX-512) otherwise dies with SIGILL in a kernel it would never select.
 coretypes=""
-case "$(uname -m)" in x86_64) coretypes="Haswell SkylakeX Zen" ;; esac
+skipped=""
+if [ "$(uname -m)" = x86_64 ]; then
+  flags="$(grep -m1 '^flags' /proc/cpuinfo)"
+  for coretype in Haswell SkylakeX Zen; do
+    case "${coretype}" in SkylakeX) need=avx512f ;; *) need=avx2 ;; esac
+    case " ${flags} " in
+      *" ${need} "*) coretypes="${coretypes} ${coretype}" ;;
+      *) skipped="${skipped} ${coretype}" ;;
+    esac
+  done
+fi
 for coretype in "" ${coretypes}; do
   for threads in 1 "$(nproc)"; do
     for shape in "100000 406 815" "8192 406 512" "406 100000 815"; do
@@ -82,7 +94,7 @@ for coretype in "" ${coretypes}; do
     done
   done
 done
-echo "blas_gate: tall GEMMs pass (coretypes: default ${coretypes})"
+echo "blas_gate: tall GEMMs pass (coretypes: default${coretypes}; skipped, host lacks the ISA:${skipped:- none})"
 # Four threads per call keeps OpenBLAS threading on without nproc^2 threads (libgomp EAGAIN).
 OMP_NUM_THREADS=4 "${work}/callers" "$(nproc)" || { echo "blas_gate: $(nproc) concurrent callers crashed" >&2; exit 1; }
 OMP_NUM_THREADS=1 "${work}/callers" "$(( 2 * $(nproc) ))" \

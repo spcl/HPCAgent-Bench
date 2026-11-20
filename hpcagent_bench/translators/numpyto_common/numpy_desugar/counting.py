@@ -2,8 +2,16 @@
 
 import ast
 import copy
+from typing import cast
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    const_int,
+    name_,
+    reads_any,
+    statement_lists,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     DesugarError,
@@ -12,6 +20,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     replace_call_with_name,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ufuncs import ufunc_method_op
 
@@ -24,6 +33,7 @@ __all__ = [
     "DiffToSliceDifference",
     "RepeatCountsInline",
     "SearchsortedMaterialize",
+    "SegmentSumInline",
     "StripAstypeCopyKwarg",
     "hoist_histogram",
     "hoist_repeat_axis",
@@ -83,6 +93,187 @@ class StripAstypeCopyKwarg(RewritePass):
         return node
 
 
+def repeated_rows(node: ast.stmt) -> tuple[str, ast.expr, ast.expr] | None:
+    """``R = np.repeat(np.arange(N[, dtype=...]), np.diff(P))`` -> ``(R, N, P)``: the row of every CSR entry."""
+    if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+        return None
+    call = node.value
+    if not (isinstance(call, ast.Call) and numpy_call_attr(call) == "repeat" and len(call.args) == 2) or call.keywords:
+        return None
+    rows, counts = call.args
+    if not (isinstance(rows, ast.Call) and numpy_call_attr(rows) == "arange" and len(rows.args) == 1):
+        return None
+    if not (isinstance(counts, ast.Call) and numpy_call_attr(counts) == "diff" and len(counts.args) == 1):
+        return None
+    return node.targets[0].id, rows.args[0], counts.args[0]
+
+
+def segment_sum_call(node: ast.AST, rows: str, extent: ast.expr) -> ast.Call | None:
+    """The ``np.bincount(rows, weights=W, minlength=N)`` in ``node`` that sums the CSR entries of each row."""
+    for call in walk_nodes(node):
+        if not (isinstance(call, ast.Call) and numpy_call_attr(call) == "bincount" and len(call.args) == 1):
+            continue
+        kw = {k.arg: k.value for k in call.keywords}
+        if not (isinstance(call.args[0], ast.Name) and call.args[0].id == rows) or set(kw) != {"weights", "minlength"}:
+            continue
+        if ast.unparse(kw["minlength"]) == ast.unparse(extent):
+            return call
+    return None
+
+
+class SegmentSumInline(RewritePass):
+    """``np.bincount(np.repeat(np.arange(N), np.diff(P)), weights=W, minlength=N)`` -> per-row sums of ``W``.
+
+    A CSR SpMV spells its row sums that way (minife). Lowered one call at a time it is a serial prefix-sum fill of
+    one row index per entry, then a scatter-add through it; as one loop over the rows each sums its own entries
+    ``W[P[i] - P[0] : P[i + 1] - P[0]]`` in index order -- bincount's order -- with no index array, no carried
+    position, and a write ``out[i]`` the rows share nothing through.
+    """
+
+    __slots__ = ("fn", "ranks")
+
+    def __init__(self, fn: ast.FunctionDef | ast.Module, ranks: dict[str, int]) -> None:
+        super().__init__()
+        #: The function the visited statements belong to: a row index read anywhere else in it stays.
+        self.fn = fn
+        self.ranks = ranks
+        # A pair at the top level spans two of the statements the driver visits one at a time: rewritten here, before
+        # it walks the body.
+        while self.rewrite_block(fn, fn.body):
+            self.changed = True
+
+    def generic_visit(self, node: ast.AST) -> ast.AST:
+        # Any statement list under the statement: inlined helpers put the pair inside the solver's loops.
+        while any(self.rewrite_block(self.fn, body) for body in statement_lists(node)):
+            self.changed = True
+        return node
+
+    def rewrite_block(self, fn: ast.FunctionDef | ast.Module, body: list[ast.stmt]) -> bool:
+        """Rewrite the first pair in the statement list ``body``, in place; whether one was."""
+        for k, stmt in enumerate(body):
+            found = repeated_rows(stmt)
+            if found is None:
+                continue
+            rows, extent, ptr = found
+            if sum(1 for n in walk_nodes(fn) if isinstance(n, ast.Name) and n.id == rows) != 2:
+                continue  # the binding and one bincount read, or not ours
+            users = [j for j in range(k + 1, len(body)) if segment_sum_call(body[j], rows, extent) is not None]
+            if len(users) != 1:
+                continue
+            j = users[0]
+            call = segment_sum_call(body[j], rows, extent)
+            if call is None:
+                continue
+            weights = {kw.arg: kw.value for kw in call.keywords}["weights"]
+            name = f"__ss{self._ctr}"
+            self._ctr += 1
+            p, n, w = ast.unparse(ptr), ast.unparse(extent), ast.unparse(weights)
+            # The entries summed in place when their array is an elementwise expression read nowhere else: minife's
+            # ``values[:nnz] * x[cols[:nnz]]`` was a 27-per-row temporary written and read back every CG iteration.
+            binding = single_use_binding(fn, body[:j], weights)
+            entry = element_at(binding.value if binding else weights, ast.Name(f"{name}_j"), self.ranks)
+            summand = f"{name}_w[{name}_j]" if entry is None else ast.unparse(entry)
+            lines = [
+                *([f"{name}_w = {w}"] if entry is None else []),
+                f"{name} = np.zeros(({n},), dtype=np.float64)",
+                f"for {name}_i in range({n}):",
+                f"    {name}_s = 0.0",
+                f"    for {name}_j in range({p}[{name}_i] - {p}[0], {p}[{name}_i + 1] - {p}[0]):",
+                f"        {name}_s = {name}_s + {summand}",
+                f"    {name}[{name}_i] = {name}_s",
+            ]
+            replace_call_with_name(body[j], call, name)
+            pre = ast.parse("\n".join(lines)).body
+            for new in pre:
+                ast.copy_location(new, body[j])
+                ast.fix_missing_locations(new)
+            kept = [stmt for stmt in body[k + 1 : j] if entry is None or stmt is not binding]
+            body[:] = body[:k] + kept + pre + body[j:]
+            return True
+        return False
+
+
+def single_use_binding(fn: ast.AST, before: list[ast.stmt], weights: ast.expr) -> ast.Assign | None:
+    """The ``W = expr`` among ``before`` that ``weights`` names, when that read is the only one of ``W`` in ``fn``."""
+    if not isinstance(weights, ast.Name):
+        return None
+    bindings = [
+        stmt
+        for stmt in before
+        if isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id == weights.id
+    ]
+    uses = sum(1 for n in walk_nodes(fn) if isinstance(n, ast.Name) and n.id == weights.id)
+    if len(bindings) != 1 or uses != 2:
+        return None
+    binding = bindings[0]
+    # Read at the bincount instead of the binding: no statement in between may change what it reads.
+    reads = {n.id for n in walk_nodes(binding.value) if isinstance(n, ast.Name)}
+    between = before[before.index(binding) + 1 :]
+    return None if any(may_write(stmt, reads) for stmt in between) else binding
+
+
+def may_write(stmt: ast.stmt, names: set[str]) -> bool:
+    """Whether ``stmt`` may change one of ``names``: binds it, stores into it, or hands it to a call."""
+    for node in walk_nodes(stmt):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in names:
+            return True
+        if isinstance(node, (ast.Subscript, ast.Attribute)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            base = node.value
+            while isinstance(base, (ast.Subscript, ast.Attribute)):
+                base = base.value
+            if isinstance(base, ast.Name) and base.id in names:
+                return True
+        if isinstance(node, ast.Call):
+            operands = [node.func, *node.args, *(k.value for k in node.keywords)]
+            if any(reads_any(o, names) for o in operands):
+                return True
+    return False
+
+
+def element_at(expr: ast.expr, j: ast.Name, ranks: dict[str, int]) -> ast.expr | None:
+    """Element ``j`` of the 1-D elementwise expression ``expr`` (``a[:n] * x[c[:n]]`` -> ``a[j] * x[c[j]]``), or
+    ``None`` when ``expr`` is anything else: a name of unknown rank, a call, a 2-D operand."""
+
+    def element(node: ast.expr) -> tuple[ast.expr, bool] | None:
+        """``(element j of node, whether it varies with j)``."""
+        if isinstance(node, ast.Constant):
+            return node, False
+        if isinstance(node, ast.Name):
+            rank = ranks.get(node.id)
+            if rank == 0:
+                return node, False
+            return (ast.Subscript(node, copy.deepcopy(j), ast.Load()), True) if rank == 1 else None
+        if isinstance(node, ast.UnaryOp):
+            inner = element(node.operand)
+            return None if inner is None else (ast.UnaryOp(node.op, inner[0]), inner[1])
+        if isinstance(node, ast.BinOp):
+            left, right = element(node.left), element(node.right)
+            if left is None or right is None:
+                return None
+            return ast.BinOp(left[0], node.op, right[0]), left[1] or right[1]
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and ranks.get(node.value.id) == 1:
+            if isinstance(node.slice, ast.Slice):
+                if node.slice.step is not None:
+                    return None
+                at = (
+                    copy.deepcopy(j)
+                    if node.slice.lower is None
+                    else ast.BinOp(node.slice.lower, ast.Add(), copy.deepcopy(j))
+                )
+                return ast.Subscript(node.value, at, ast.Load()), True
+            index = element(node.slice)  # a gather through an index array
+            if index is None or not index[1]:
+                return None
+            return ast.Subscript(node.value, index[0], ast.Load()), True
+        return None
+
+    found = element(expr)
+    return found[0] if found is not None and found[1] else None
+
+
 class RepeatCountsInline(RankedRewritePass):
     """``np.repeat(src, np.diff(p))`` -> a prefix-sum fill loop.
 
@@ -98,7 +289,7 @@ class RepeatCountsInline(RankedRewritePass):
         self.generic_visit(node)
         calls = [
             n
-            for n in ast.walk(node.value)
+            for n in walk_nodes(node.value)
             if isinstance(n, ast.Call) and numpy_call_attr(n) == "repeat" and len(n.args) == 2 and not n.keywords
         ]
         pre: list[ast.stmt] = []
@@ -147,7 +338,7 @@ class BincountInline(RankedRewritePass):
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         calls = [
-            n for n in ast.walk(node.value) if isinstance(n, ast.Call) and numpy_call_attr(n) == "bincount" and n.args
+            n for n in walk_nodes(node.value) if isinstance(n, ast.Call) and numpy_call_attr(n) == "bincount" and n.args
         ]
         if not calls:
             return node
@@ -272,7 +463,7 @@ class SearchsortedMaterialize(RewritePass):
         self.generic_visit(node)
         calls = [
             n
-            for n in ast.walk(node.value)
+            for n in walk_nodes(node.value)
             if isinstance(n, ast.Call) and numpy_call_attr(n) == "searchsorted" and n.args
         ]
         if not calls:
@@ -301,6 +492,23 @@ class SearchsortedMaterialize(RewritePass):
         return out
 
 
+def unit_integer_bins(lo: ast.expr | None, hi: ast.expr | None, bins: str) -> int | None:
+    """``lo`` as an int when it is an integral constant and ``hi - lo`` is ``bins`` exactly, else ``None``."""
+    if lo is None or hi is None:
+        return None
+    import sympy  # Deferred: the harness imports this module, and sympy costs every forked child 2 s
+
+    try:
+        low, high, count = (
+            cast(sympy.Expr, sympy.sympify(ast.unparse(e) if isinstance(e, ast.expr) else e)) for e in (lo, hi, bins)
+        )
+        if not low.is_number or float(low) != int(float(low)) or sympy.simplify(high - low - count) != 0:
+            return None
+    except (sympy.SympifyError, SyntaxError, TypeError):
+        return None
+    return int(float(low))
+
+
 def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """``np.histogram(a, bins[, lo, hi][, weights=w])[0]`` -> the temp its binning loop fills.
 
@@ -314,6 +522,8 @@ def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
         return None
     a, bins = ast.unparse(call.args[0]), ast.unparse(call.args[1])
     kw = {k.arg: k.value for k in call.keywords}
+    if "density" in kw or isinstance(call.args[1], (ast.List, ast.Tuple)):
+        return None  # edge-array bins / density= are not what this inline computes
     lo: ast.expr | None = None
     hi: ast.expr | None = None
     if len(call.args) >= 4:
@@ -348,12 +558,30 @@ def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
         wdtype, add = f"{wname}.dtype", f"{wname}[{p}_i]"
     # numpy's bin is defined by its edge array, not the closed form: it truncates the same
     # index, then walks it one step against linspace's edges, and the two round apart. The
-    # edges are rebuilt with linspace's arithmetic in the sample dtype, one rounding per
-    # statement, since half an ulp of edge already misbins samples. Only edges 0..bins-1 are
-    # read (the walk up stops at bins-1), hence ``bins`` entries and no top edge.
+    # edges are rebuilt with linspace's arithmetic in numpy's edge dtype, one rounding per
+    # statement, since half an ulp of edge already misbins samples: the sample dtype for float
+    # samples, float64 for any other (an integer sample's edges are float). Only edges 0..bins-1
+    # are read (the walk up stops at bins-1), hence ``bins`` entries and no top edge.
+    kind = dtype_kind(call.args[0], hoist.tables.dtypes)
+    unit = unit_integer_bins(lo, hi, bins) if kind == "int" else None
+    if unit is not None:
+        # An integer sample over an integral lo with unit-width bins: every edge is the integer lo + j, so numpy's
+        # bin is the sample's offset and the edge walk never moves it (histogram_equalization's range=(0, nbins)).
+        lines += [
+            f"{temp} = np.zeros({bins}, {wdtype})",
+            f"for {p}_i in range({a}.shape[0]):",
+            f"    if {lo_s} <= {a}[{p}_i] and {a}[{p}_i] <= {hi_s}:",
+            f"        {p}_b = {a}[{p}_i] - {unit}",
+            f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
+            f"        {temp}[{p}_b] += {add}",
+        ]
+        hoist.queue(lines)
+        return name_(temp)
     edges = f"{p}_e"
+    float_sample = kind in ("float", "complex")
+    edge_dtype = f"{a}.dtype" if float_sample else "np.float64"
     lines += [
-        f"{edges} = np.zeros({bins}, {a}.dtype)",
+        f"{edges} = np.zeros({bins}, {edge_dtype})",
         f"{edges}[0] = ({hi_s} - {lo_s}) / {bins}",
         f"{p}_st = {edges}[0]",
         f"for {p}_j in range({bins}):",
@@ -362,11 +590,13 @@ def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     ]
     # numpy drops samples outside [lo, hi] (only the last bin is closed); the clamp alone would
     # fold them into the end bins. The guard is a no-op for the auto range.
+    # numpy's own index, ``(a - lo) * norm`` with ``norm = bins / (hi - lo)``: one multiply per sample.
     lines += [
         f"{temp} = np.zeros({bins}, {wdtype})",
+        f"{p}_norm = {bins} / ({hi_s} - {lo_s})",
         f"for {p}_i in range({a}.shape[0]):",
         f"    if {lo_s} <= {a}[{p}_i] and {a}[{p}_i] <= {hi_s}:",
-        f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))",
+        f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {p}_norm)",
         f"        if {p}_b < 0: {p}_b = 0",
         f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
         f"        if {a}[{p}_i] < {edges}[{p}_b]: {p}_b = {p}_b - 1",

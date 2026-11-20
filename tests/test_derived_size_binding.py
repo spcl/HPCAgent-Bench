@@ -11,7 +11,7 @@ from hpcagent_bench.frameworks.benchmark import Benchmark
 from hpcagent_bench.initialize import bind_shape_params
 
 #: Kernels whose fuzzed preset leaves a size to the initializer, with the sizes it owes.
-DERIVED_SIZES = [("lulesh", ("numNode", "numSymm")), ("vexx_k", ("maxbox",))]
+DERIVED_SIZES = [("lulesh", ("numNode", "numSymm")), ("qe_vexx_k", ("maxbox",))]
 
 
 def declared_sizes(bench: Benchmark) -> list[str]:
@@ -56,7 +56,7 @@ def test_a_shape_over_several_symbols_binds_none_of_them() -> None:
     Those two reach the data because vexx_k's initializer returns them; a size that is neither
     returned nor a bare declared extent has to be listed in the preset.
     """
-    bench = Benchmark("vexx_k")
+    bench = Benchmark("qe_vexx_k")
     data: dict[str, object] = {"psi": np.zeros((12, 3))}
     assert "nrxxs" not in bind_shape_params(bench.spec, data)
     assert "nrxxs" not in data

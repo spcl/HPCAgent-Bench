@@ -2,8 +2,10 @@
 
 `containers/inference/serve-private.sbatch` starts a keyed, OpenAI-compatible
 Qwen3.8 SGLang server on one Beverin node that only you can use. `hpcagent_bench/cluster/serve-only.sbatch`, by
-contrast, serves every interface without a key ([`README.md`](README.md)). Contributors:
-[`extending-private-inference.md`](extending-private-inference.md).
+contrast, serves every interface without a key ([`README.md`](README.md)), unless `ACCESS=alps`, which serves an
+experiment's SGLang model under the same rules (section 1) for your own setups on another partition
+([`cross-partition.md`](cross-partition.md)). Both launchers share `containers/inference/private_endpoint.sh`.
+Contributors: [`extending-private-inference.md`](extending-private-inference.md).
 
 | Client | `ACCESS` | Server binds | Connection |
 |---|---|---|---|
@@ -31,13 +33,13 @@ contrast, serves every interface without a key ([`README.md`](README.md)). Contr
 
 | `PRESET` | Hardware | Engine | EDF | Weights | Default `LEGS` | Serve with |
 |---|---|---|---|---|---|---|
-| `mi300` | 4x MI300A | SGLang | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B-FP8` | `tp4:0.306` | `tp4:0.306` |
+| `mi300` | 4x MI300A | SGLang | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B` | `tp4:0.306` | `tp4:0.306` |
 | `mi200` | 8x MI250X, 64 GiB each | vLLM 0.28 | `hpcagent-bench-vllm-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | `tp8:0.85` | `tp8:0.85` |
 
 Both serve a 262144-token context and 128 running requests with the qwen3 reasoning and qwen3_coder
 tool parsers and the chat template `containers/inference/chat-template-qwen38.jinja`, as `hpcagent-bench-vllm`.
 
-- `mi300` matches `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/setups.yaml`
+- `mi300` matches `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/experiments.toml`
   (`tests/test_serve_private.py` fails if they diverge). 0.306 is node-wide on the APU and derated
   to 0.26 by aiter; move it only with the backend and mamba ratio ([`qwen38.md`](qwen38.md)).
 - `mi200`: MI250X has neither FP8 nor aiter kernels, so BF16 on the AMD vLLM image (the same one
@@ -113,7 +115,7 @@ PRESET=mi300 MODE=serve DRY_RUN=1 bash "$L"                                   # 
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PRESET` | required | `mi300` |
+| `PRESET` | required | `mi300` or `mi200` |
 | `MODE` | `smoke` | `smoke`: start, check (401/200, tool gate, load probe) and stop each leg. `serve`: first leg only, held until the job ends |
 | `ACCESS` | `tunnel` | `tunnel` or `alps` |
 | `LEGS` | per preset | `tp<N>:<mem-fraction-static>` entries, N up to the node's GPUs; entry i listens on `API_PORT + i` |

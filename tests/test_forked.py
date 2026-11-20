@@ -13,7 +13,9 @@ import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 
+import numpy as np
 import pytest
 
 from hpcagent_bench import osinfo
@@ -436,3 +438,120 @@ def test_a_forked_child_starts_its_own_forkserver_when_its_parent_runs_one() -> 
     run = run_forked(run_under_forkserver, mp_context="fork", timeout=120)
     assert run.ok, run.error
     assert run.result is True, run.error
+
+
+def environ_probe() -> str | None:
+    return os.environ.get("HB_CONTEXT_PROBE")
+
+
+def test_a_child_started_beside_another_threads_context_environment_does_not_inherit_it() -> None:
+    """A context environment set for one spawn must not reach a child another thread starts meanwhile."""
+    entered, release = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        with forked.child_environment({"HB_CONTEXT_PROBE": "llvm"}):
+            entered.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    entered.wait(5)
+    threading.Timer(0.5, release.set).start()
+    res = run_forked(environ_probe, mp_context="fork", timeout=30)
+    holder.join()
+    assert res.ok and res.result is None
+
+
+def sleep_then_answer() -> int:
+    time.sleep(1.0)
+    return 7
+
+
+def test_a_reference_run_finishes_after_its_request_is_abandoned() -> None:
+    """A reference timing outlives the client that asked for it, so its cached result serves the next request."""
+    abandoned = threading.Event()
+    threading.Timer(0.2, abandoned.set).start()
+    with forked.abandoned_by(abandoned), forked.not_abandoned():
+        r = run_forked(sleep_then_answer, timeout=30)
+    assert r.ok and r.result == 7, r
+
+
+def bump_and_sum(data: dict[str, np.ndarray]) -> tuple[float, bool]:
+    array = data["a"]
+    array[0, 0] += 1.0
+    return float(array.sum()), bool(array.flags.f_contiguous)
+
+
+@pytest.mark.parametrize("method", ["spawn", "forkserver"])
+def test_a_large_argument_reaches_a_started_child_without_a_copy_in_the_parent(
+    method: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spawn/forkserver start stages an array of SHM_ARG_BYTES or more as a file the child maps copy-on-write: the
+    parent allocates no pickled copy, the child sees the values and layout, its writes stay its own, and no file is
+    left behind."""
+    monkeypatch.setattr(forked, "shm_root", lambda: str(tmp_path))  # this test's own: workers share /dev/shm
+    array = np.asfortranarray(np.ones((forked.SHM_ARG_BYTES // 8 // 1024 + 1, 1024)))
+    tracemalloc.start()
+    try:
+        r = run_forked(bump_and_sum, {"a": array}, mp_context=method, timeout=120)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert r.ok and r.result == (float(array.size) + 1.0, True), r
+    assert peak < array.nbytes // 4, f"the parent allocated {peak} bytes for a {array.nbytes}-byte argument"
+    assert array[0, 0] == 1.0
+    assert not list(tmp_path.glob("hb-arg-*"))
+
+
+def bump_and_sum_kw(
+    *, data: dict[str, np.ndarray], progress: forked.ProgressQueue[tuple[float, bool]]
+) -> tuple[float, bool]:
+    out = bump_and_sum(data)
+    progress.put(out)
+    return out
+
+
+def test_a_large_keyword_argument_is_staged_beside_a_streamed_progress_queue(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A large array passed as a kwarg is staged like a positional one (no pickled copy in the parent), while the
+    progress queue, picklable only inside ``Process.start``, still reaches the child."""
+    monkeypatch.setattr(forked, "shm_root", lambda: str(tmp_path))
+    array = np.asfortranarray(np.ones((forked.SHM_ARG_BYTES // 8 // 1024 + 1, 1024)))
+    tracemalloc.start()
+    try:
+        r = run_forked(bump_and_sum_kw, data={"a": array}, mp_context="spawn", stream_progress=True, timeout=120)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert r.ok and r.result == (float(array.size) + 1.0, True), r
+    assert peak < array.nbytes // 4, f"the parent allocated {peak} bytes for a {array.nbytes}-byte kwarg"
+    assert not list(tmp_path.glob("hb-arg-*"))
+
+
+def test_a_start_that_fails_after_staging_an_argument_leaves_no_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An argument that will not pickle fails the start after an earlier array was staged in /dev/shm (node RAM): the
+    staged file, the error pipe and the result queue go with the failure."""
+    monkeypatch.setattr(forked, "shm_root", lambda: str(tmp_path))
+    array = np.ones(forked.SHM_ARG_BYTES // 8 + 1)
+    fds: list[int] = []
+    for _ in range(3):  # the first spawn opens the process-wide resource tracker's pipe
+        with pytest.raises(Exception):  # noqa: B017 -- pickle's error type depends on the start method
+            run_forked(bump_and_sum, {"a": array, "b": lambda: 0}, mp_context="spawn", timeout=120)
+        fds.append(len(os.listdir("/proc/self/fd")))
+    assert not list(tmp_path.glob("hb-arg-*"))
+    assert fds[1] == fds[2], f"open fds after each failed start: {fds}"
+
+
+def dtype_name(data: dict[str, np.ndarray]) -> str:
+    return str(data["a"].dtype)
+
+
+def test_a_large_extension_typed_argument_keeps_its_dtype() -> None:
+    """A staged bfloat16 array (ml_dtypes: its dtype spells "<V2") reaches the child as bfloat16, not raw void."""
+    ml_dtypes = pytest.importorskip("ml_dtypes")
+    array = np.zeros(forked.SHM_ARG_BYTES // 2 + 1, dtype=ml_dtypes.bfloat16)
+    r = run_forked(dtype_name, {"a": array}, mp_context="spawn", timeout=120)
+    assert r.ok and r.result == "bfloat16", r

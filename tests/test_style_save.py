@@ -45,31 +45,25 @@ def test_the_value_axis_helper_rules_minors_on_a_log_axis_only(scale: str, minor
     on a log axis is what every log value axis gets; a linear axis does not know
     whether it holds log2 units or a count, so its caller names that to ``minor_ticks``."""
     fig, ax = plt.subplots()
-    try:
-        ax.set_yscale(scale)
-        style.value_axis(ax, "y")
-        assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-        drawn = [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
-        assert bool(drawn) == minor_grid
-        assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
-    finally:
-        plt.close(fig)
+    ax.set_yscale(scale)
+    style.value_axis(ax, "y")
+    assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+    drawn = [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+    assert bool(drawn) == minor_grid
+    assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
 
 
 def test_a_log_value_axis_labels_no_minor_tick_in_scientific_notation() -> None:
     """Matplotlib's own log minor formatter labels a 3x10^n tick whenever few majors are visible,
     which puts a scientific-notation number on an axis whose majors are plain ones."""
     fig, ax = plt.subplots()
-    try:
-        ax.set_yscale("log")
-        ax.set_ylim(400.0, 3000.0)
-        style.value_axis(ax, "y", log_base=10.0)
-        fig.canvas.draw()
-        texts = [tick.get_text() for tick in ax.yaxis.get_minorticklabels()]
-        assert texts
-        assert not any(texts)
-    finally:
-        plt.close(fig)
+    ax.set_yscale("log")
+    ax.set_ylim(400.0, 3000.0)
+    style.value_axis(ax, "y", log_base=10.0)
+    fig.canvas.draw()
+    texts = [tick.get_text() for tick in ax.yaxis.get_minorticklabels()]
+    assert texts
+    assert not any(texts)
 
 
 def test_a_point_mark_that_never_delivered_an_answer_carries_a_cross_on_the_model_shape() -> None:
@@ -77,14 +71,11 @@ def test_a_point_mark_that_never_delivered_an_answer_carries_a_cross_on_the_mode
     tokens, so the mark is a PLACEHOLDER, not a measurement. The cross says so while the shape still
     names the model and the colour still names the intervention."""
     fig, ax = plt.subplots()
-    try:
-        style.point_mark(ax, 0.0, 1.0, "#0072b2", "o", True, delivered=True)
-        delivered_marks = len(ax.collections)
-        style.point_mark(ax, 1.0, 1.0, "#0072b2", "o", True, delivered=False)
-        assert len(ax.collections) == delivered_marks * 2 + 1
-        assert ax.collections[-1].get_zorder() > style.MARK_Z
-    finally:
-        plt.close(fig)
+    style.point_mark(ax, 0.0, 1.0, "#0072b2", "o", True, delivered=True)
+    delivered_marks = len(ax.collections)
+    style.point_mark(ax, 1.0, 1.0, "#0072b2", "o", True, delivered=False)
+    assert len(ax.collections) == delivered_marks * 2 + 1
+    assert ax.collections[-1].get_zorder() > style.MARK_Z
 
 
 def small_figure(width_in: float, fontsize: float = style.PRINT_TICK_PT) -> plt.Figure:

@@ -2,6 +2,8 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
+
 __all__ = ["base_name", "has_slice_subscript", "index_slot", "is_ellipsis", "is_full_slice", "is_newaxis"]
 
 
@@ -39,7 +41,7 @@ def is_newaxis(e: ast.AST) -> bool:
 
 def has_slice_subscript(expr: ast.expr) -> bool:
     """True when ``expr`` contains a Subscript with a literal ``ast.Slice`` axis."""
-    for sub in ast.walk(expr):
+    for sub in walk_nodes(expr):
         if isinstance(sub, ast.Subscript):
             sl = sub.slice
             if isinstance(sl, ast.Slice):

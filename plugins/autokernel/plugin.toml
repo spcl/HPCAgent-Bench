@@ -1,8 +1,8 @@
-# AutoKernel's experiment loop as a method (github.com/RightNow-AI/autokernel, MIT; see SOURCE and LICENSE).
+# AutoKernel's experiment loop as a packet (github.com/RightNow-AI/autokernel, MIT; see SOURCE and LICENSE).
 name = "autokernel"
 description = "AutoKernel's hypothesize / one change / keep-or-revert loop, with an experiment ledger tool."
 
 [packets.autokernel]
 name = "AutoKernel"
-method = "autokernel"
 tools = ["experiment"]
+overlays = ["autokernel:prompt/overlay.yaml"]

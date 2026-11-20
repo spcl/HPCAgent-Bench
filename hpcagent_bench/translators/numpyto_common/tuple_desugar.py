@@ -33,11 +33,15 @@ from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import (
     SubstituteLoads,
+    const_int,
     map_statement_lists,
     name_,
+    reads_any,
     set_field,
     store_,
+    walk_nodes,
 )
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import NUMPY_MODULE_NAMES
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -77,8 +81,8 @@ __all__ = [
     "written_after_capture",
 ]
 
-#: Module aliases a kernel may spell numpy as.
-NUMPY_MODULES = frozenset({"np", "numpy"})
+#: Module aliases a kernel may spell numpy as (the one table in emit_helpers.numpy_names).
+NUMPY_MODULES = frozenset(NUMPY_MODULE_NAMES)
 
 #: Type name as written in an ``isinstance`` -> the concrete runtime types it accepts. Provenance is
 #: tracked because ``isinstance(np.int64(3), int)`` is FALSE: a fold that ignored that would emit a
@@ -169,6 +173,10 @@ class Env:
             self.tuples.pop(name, None)
             self.kinds.pop(name, None)
             self.bound.discard(name)
+        # A recorded element reading a rebound name no longer means what it meant.
+        stale = [key for key, elts in self.tuples.items() if any(reads_any(e, names) for e in elts)]
+        for key in stale:
+            del self.tuples[key]
 
 
 def is_index_element(node: ast.expr) -> bool:
@@ -208,7 +216,7 @@ def target_names(target: ast.expr) -> OrderedSet[str]:
 def assigned_names(node: ast.AST) -> OrderedSet[str]:
     """Every name the subtree can rebind -- the conservative kill set for a branch or loop body."""
     out: OrderedSet[str] = OrderedSet()
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         targets: list[ast.expr] = []
         if isinstance(sub, ast.Assign):
             targets = list(sub.targets)
@@ -245,9 +253,12 @@ def const_value(node: ast.expr) -> object:
 NO_VALUE = object()
 
 
-def const_int(node: ast.expr) -> int | None:
-    v = const_value(node)
-    return v if isinstance(v, int) and not isinstance(v, bool) else None
+def exact_tuple(node: ast.expr) -> tuple[object, ...] | None:
+    """The values of a tuple display of int/bool/str literals (compared exactly), else ``None``."""
+    if not isinstance(node, ast.Tuple):
+        return None
+    values = tuple(const_value(e) for e in node.elts)
+    return values if all(isinstance(v, (bool, int, str)) for v in values) else None
 
 
 def static_bool(node: ast.expr) -> bool | None:
@@ -350,7 +361,9 @@ class TupleDesugar:
         if isinstance(node, ast.Name) and node.id in env.tuples:
             return list(env.tuples[node.id])
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            left, right = self.tuple_of(node.left, env), self.tuple_of(node.right, env)
+            # A concatenated list is a sequence built at compile time, never an array literal:
+            # ``[(0, 0), (0, 0)] + [(p, p) for i in range(3)]`` is np.pad's pad-width list.
+            left, right = self.concat_operand(node.left, env), self.concat_operand(node.right, env)
             return None if left is None or right is None else left + right
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
             # `is not None`, never `or`: a 0-repeat is the empty tuple, which is falsy but correct.
@@ -381,6 +394,12 @@ class TupleDesugar:
             if sliced is not None:
                 return sliced
         return self.shape_tuple(node)
+
+    def concat_operand(self, node: ast.expr, env: Env) -> list[ast.expr] | None:
+        """The elements one side of a ``+`` concatenation contributes: a compile-time tuple's, or a
+        list literal's of any kind."""
+        elements = self.tuple_of(node, env)
+        return list(node.elts) if elements is None and isinstance(node, ast.List) else elements
 
     def slice_of(self, node: ast.Subscript, env: Env) -> list[ast.expr] | None:
         """``x.shape[2:]`` -- a SLICE of a compile-time tuple is still one.
@@ -545,7 +564,7 @@ class TupleDesugar:
         reads_itself = any(
             isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)
             for e in elements
-            for n in ast.walk(e)
+            for n in walk_nodes(e)
         )
         if not reads_itself:
             return elements, []
@@ -582,8 +601,13 @@ class TupleDesugar:
         if elements is None or len(elements) != len(targets):
             return None
         # Positional self-copies never race: they write back what they read.
-        changed = [i for i, e in enumerate(elements) if not (isinstance(e, ast.Name) and e.id == targets[i].id)]
-        read = {n.id for i in changed for n in ast.walk(elements[i]) if isinstance(n, ast.Name)}
+        names = [target.id for target in targets]
+        changed = [
+            i
+            for i, e in enumerate(elements)
+            if not (isinstance(e, ast.Name) and e.id == names[i]) or names.count(names[i]) > 1
+        ]
+        read = {n.id for i in changed for n in walk_nodes(elements[i]) if isinstance(n, ast.Name)}
         if {targets[i].id for i in changed} & read:
             return None
         out: list[ast.stmt] = []
@@ -816,6 +840,11 @@ class Folder(ast.NodeTransformer):
                 return ast.copy_location(ast.Constant(value=decide(lv, rv)), node)
             if isinstance(node.ops[0], (ast.Eq, ast.NotEq)) and isinstance(lv, str) and isinstance(rv, str):
                 return ast.copy_location(ast.Constant(value=decide(lv, rv)), node)
+            # Tuple equality is exact element-wise equality: ``output_size == (1, 1, 1)`` once a
+            # literal tuple argument has been bound in.
+            lt, rt = exact_tuple(left), exact_tuple(right)
+            if isinstance(node.ops[0], (ast.Eq, ast.NotEq)) and lt is not None and rt is not None:
+                return ast.copy_location(ast.Constant(value=decide(lt, rt)), node)
         return node
 
     def is_none(self, left: ast.expr, right: ast.expr) -> bool | None:
@@ -939,7 +968,7 @@ def collapse_capture_aliases(fn: ast.FunctionDef, captured: list[tuple[str, str]
         if minted[name] != 1 or written_after_capture(fn, alias, name):
             continue
         map_statement_lists(fn, functools.partial(without_capture_binds, alias=alias, name=name))
-        for node in ast.walk(fn):
+        for node in walk_nodes(fn):
             if isinstance(node, ast.Name) and node.id == alias:
                 node.id = name
 
@@ -1003,7 +1032,7 @@ def drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
     ahead of the per-geometry branches that fill them). A name still tested against ``None`` is left
     alone: there the sentinel IS the value being read.
     """
-    read = OrderedSet(n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load))
+    read = OrderedSet(n.id for n in walk_nodes(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load))
     tested, rebound = none_sentinel_uses(fn)
 
     def dead(name: str, i: int, stmts: Sequence[ast.stmt]) -> bool:
@@ -1029,13 +1058,13 @@ def none_sentinel_uses(fn: ast.FunctionDef) -> tuple[OrderedSet[str], OrderedSet
     """``(tested, rebound)``: the names some comparison tests against ``None``, and the names some
     assignment binds to a value other than ``None``."""
     tested: OrderedSet[str] = OrderedSet()
-    for cmp in ast.walk(fn):
+    for cmp in walk_nodes(fn):
         if isinstance(cmp, ast.Compare) and any(
             isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators
         ):
-            tested.update(n.id for n in ast.walk(cmp) if isinstance(n, ast.Name))
+            tested.update(n.id for n in walk_nodes(cmp) if isinstance(n, ast.Name))
     rebound: OrderedSet[str] = OrderedSet()
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if not isinstance(node, ast.Assign) or (isinstance(node.value, ast.Constant) and node.value.value is None):
             continue
         for tgt in node.targets:

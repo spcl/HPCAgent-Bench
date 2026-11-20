@@ -16,3 +16,6 @@ args:
   L: (N, N)
   x: {shape: "(N,)", out: true}
   b: (N,)
+chain_length:
+  # x[i] subtracts the i-term dot L[i, :i] @ x[:i]: at most N terms
+  x: N

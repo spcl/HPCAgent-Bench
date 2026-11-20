@@ -1,15 +1,21 @@
 """Control-flow cleanup: validation guards, ``errstate``, ``issubdtype``, dead branches, boolean-op ifs."""
 
 import ast
+import builtins
 import copy
 
+from hpcagent_bench import modules
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_arg_kind, dtype_kind
 
 __all__ = [
     "BOOLOP_CLONE_MAX",
+    "GUARD_MESSAGE",
     "ISSUBDTYPE_CATEGORY",
+    "METADATA_ATTRS",
+    "METADATA_CALLS",
     "BoolOpIfToChain",
     "DeadBranchElim",
     "DropGuards",
@@ -17,6 +23,7 @@ __all__ = [
     "IssubdtypeFold",
     "SpliceErrstate",
     "symbolic_eq_test",
+    "validates_metadata",
 ]
 
 
@@ -46,19 +53,63 @@ class SpliceErrstate(RewritePass):
         return node.body
 
 
+#: What a kernel guard raises when its own message is not a constant: numba cannot format one at run time.
+GUARD_MESSAGE = "kernel guard"
+
+#: Reads of an array's metadata; a test holding one validates its input's shape or dtype, never its values.
+METADATA_ATTRS = frozenset({"dtype", "flags", "ndim", "shape"})
+METADATA_CALLS = frozenset({"isinstance", "issubdtype"})
+
+
+def validates_metadata(test: ast.expr) -> bool:
+    """Whether a guard's ``test`` checks shape or dtype rather than data."""
+    for node in walk_nodes(test):
+        if isinstance(node, ast.Attribute) and node.attr in METADATA_ATTRS | METADATA_CALLS:
+            return True
+        if isinstance(node, ast.Name) and node.id in METADATA_CALLS:
+            return True
+    return False
+
+
 class DropGuards(RewritePass):
-    """``raise ...`` / ``assert ...`` -> ``pass``.
+    """``raise ...`` / ``assert ...`` -> ``pass``; ``pass`` keeps an otherwise-empty ``if`` body valid.
 
-    Sound because kernels run on oracle-validated inputs, so input-validation guards never fire.
-    ``pass`` keeps an otherwise-empty ``if`` body valid."""
+    Sound for a validation guard: kernels run on oracle-validated inputs. A guard on data (a CG breakdown, a sanity
+    check) can fire on such inputs, so ``keep_data`` keeps it, with a constant message, for a backend that can raise."""
 
-    __slots__ = ()
+    __slots__ = ("data_tests", "keep_data")
 
-    def visit_Raise(self, node: ast.Raise | ast.Assert) -> ast.stmt:
-        self.changed = True
-        return ast.copy_location(ast.Pass(), node)
+    def __init__(self, keep_data: bool = False) -> None:
+        super().__init__()
+        self.keep_data = keep_data
+        self.data_tests = 0
 
-    visit_Assert = visit_Raise
+    def visit_If(self, node: ast.If) -> ast.AST:
+        data = self.keep_data and not validates_metadata(node.test)
+        self.data_tests += data
+        self.generic_visit(node)
+        self.data_tests -= data
+        return node
+
+    def visit_Raise(self, node: ast.Raise) -> ast.stmt:
+        exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+        builtin = modules.optional(builtins, exc.id) if isinstance(exc, ast.Name) else None
+        if not (self.data_tests and isinstance(builtin, type) and issubclass(builtin, BaseException)):
+            self.changed = True
+            return ast.copy_location(ast.Pass(), node)
+        if isinstance(node.exc, ast.Call) and not all(isinstance(a, ast.Constant) for a in node.exc.args):
+            self.changed = True
+            node.exc.args = [ast.Constant(value=GUARD_MESSAGE)]
+        return node
+
+    def visit_Assert(self, node: ast.Assert) -> ast.stmt:
+        if not (self.keep_data and not validates_metadata(node.test)):
+            self.changed = True
+            return ast.copy_location(ast.Pass(), node)
+        if node.msg is not None and not isinstance(node.msg, ast.Constant):
+            self.changed = True
+            node.msg = ast.Constant(value=GUARD_MESSAGE)
+        return node
 
 
 class DropValidationGuards(ast.NodeTransformer):

@@ -5,14 +5,14 @@ import copy
 import inspect
 from collections.abc import Callable, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc, tag_numpy_origin
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_LOWERING_FLOAT
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist import CallHoister, numpy_call_key
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import UNARY_C_MATH
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr, iter_extent_of
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr, iter_extent_of, reshape_tokens
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
@@ -47,6 +47,12 @@ def call_expander(
     dim_aliases: dict[str, str] | None = None,
     library: bool = False,
     library_nd: bool = False,
+    blas_float: str | None = None,
+    extent_values: dict[str, int] | None = None,
+    blas_complex: bool = False,
+    element_dtypes: dict[str, str] | None = None,
+    opmath: bool = False,
+    sort_library: bool = False,
 ) -> list[ast.stmt]:
     """Adapter: pass ``keywords``/``local_dtypes``/``fresh_local_allocs``/``library`` to
     expanders that accept them, else call with the legacy signature. The two
@@ -54,7 +60,11 @@ def call_expander(
     dtype) so the emit declares them correctly. ``library`` is the same "prefer a real library
     over a loop nest" signal :data:`BLAS_GEMM_MARKER` uses for matmul (``expand_fft``/
     ``expand_ifft``/``expand_fftn``/``expand_ifftn`` are its other consumer, see
-    FFT_LIBRARY_MARKER).
+    FFT_LIBRARY_MARKER). ``blas_float`` is the float of the gemm a BLAS target renders (None: no BLAS),
+    ``extent_values`` the compile-time integer behind a shape token (a pinned knob), ``blas_complex`` whether
+    that gemm also takes complex operands, ``element_dtypes`` every array's element dtype (a scan picks its carry
+    from its target's), ``opmath`` the kernel's arithmetic on narrow floats (:attr:`KernelIR.opmath`),
+    ``sort_library`` whether the target renders SORT_LIBRARY_MARKER.
     """
     sig = inspect.signature(expander)
     params = sig.parameters
@@ -71,6 +81,18 @@ def call_expander(
         extras["library"] = library
     if "library_nd" in params:
         extras["library_nd"] = library_nd
+    if "blas_float" in params:
+        extras["blas_float"] = blas_float
+    if "blas_complex" in params:
+        extras["blas_complex"] = blas_complex
+    if "extent_values" in params and extent_values is not None:
+        extras["extent_values"] = extent_values
+    if "element_dtypes" in params and element_dtypes is not None:
+        extras["element_dtypes"] = element_dtypes
+    if "opmath" in params:
+        extras["opmath"] = opmath
+    if "sort_library" in params:
+        extras["sort_library"] = sort_library
     return expander(target, args, shape_table, **extras)
 
 
@@ -115,6 +137,7 @@ ELEMENT_WRITE_EXPANDERS = {
     ("np", "abs"),
     ("np", "absolute"),
     ("np", "sort"),
+    ("np", "argsort"),
     ("np", "histogram"),
     ("np", "linalg.inv"),
     ("np", "linalg.solve"),
@@ -181,10 +204,10 @@ def reduction_misses_target(target: ast.Subscript, loop: ast.For, body: ast.expr
     if not isinstance(target.value, ast.Name):
         return False
     base = target.value.id
-    mentions = [n for n in ast.walk(body) if isinstance(n, ast.Name) and n.id == base]
+    mentions = [n for n in walk_nodes(body) if isinstance(n, ast.Name) and n.id == base]
     if not mentions:
         return True
-    reads = [n for n in ast.walk(body) if isinstance(n, ast.Subscript) and n.value in mentions]
+    reads = [n for n in walk_nodes(body) if isinstance(n, ast.Subscript) and n.value in mentions]
     if len(reads) != len(mentions):
         return False  # a bare-Name (whole-array) mention -- no cell to compare
     axes = index_axes(target)
@@ -302,7 +325,7 @@ def retarget_scalar_accumulator(node: ast.stmt, prelude: Sequence[ast.stmt]) -> 
     addend = accumulation_addend(loop.body[0], scalar)
     if addend is None:
         return None
-    if any(isinstance(n, ast.Name) and n.id == scalar for n in ast.walk(addend)):
+    if any(isinstance(n, ast.Name) and n.id == scalar for n in walk_nodes(addend)):
         return None  # self-referential accumulation -- not a plain reduction
     if not reduction_misses_target(target, loop, addend):
         return None
@@ -333,8 +356,10 @@ class LibNodeRewriter(ast.NodeTransformer):
     __slots__ = (
         "_counter",
         "blas",
+        "blas_complex",
         "blas_float",
         "dim_aliases",
+        "extent_values",
         "fft_library",
         "fft_library_nd",
         "fresh_local_allocs",
@@ -343,9 +368,11 @@ class LibNodeRewriter(ast.NodeTransformer):
         "matmul_temps",
         "native_call",
         "native_dtypes",
+        "opmath",
         "scalar_call_temps",
         "scalar_helpers",
         "shape_table",
+        "sort_library",
         "sparse",
     )
 
@@ -363,8 +390,14 @@ class LibNodeRewriter(ast.NodeTransformer):
         scalar_helpers: set[str] | None = None,
         fft_library_nd: bool = False,
         blas_float: str = BLAS_LOWERING_FLOAT,
+        extent_values: dict[str, int] | None = None,
+        blas_complex: bool = False,
+        opmath: bool = False,
+        sort_library: bool = False,
     ) -> None:
         self.shape_table = shape_table
+        #: The kernel's arithmetic on narrow floats (:attr:`KernelIR.opmath`), for the expanders that read it.
+        self.opmath = opmath
         #: Kernel helpers emitted as by-value SCALAR functions. A call to one is rank 0 whatever
         #: its array arguments are, and the generic extent sizer reads an unrecognised call as
         #: elementwise -- which sizes a reduction's result like the array it reduces.
@@ -374,6 +407,10 @@ class LibNodeRewriter(ast.NodeTransformer):
         self.blas = blas
         #: The kernel's float: a gemm operand of another width keeps the loop nest (BLAS_LOWERING_FLOAT).
         self.blas_float = blas_float
+        #: The target's gemm also takes complex operands (Fortran's MATMUL).
+        self.blas_complex = blas_complex
+        #: Compile-time integer behind a shape token (a pinned knob), which an einsum path plans with.
+        self.extent_values: dict[str, int] = extent_values or {}
         #: Target renders a whole-array 1-D np.fft.fft/ifft/fftn/ifftn as FFT_LIBRARY_MARKER
         #: instead of the naive O(N^2) loop. SEPARATE from ``blas`` (not reused): a target that
         #: cannot render BLAS_GEMM_MARKER (numpyto_fortran/numpyto_numba's emitters have no
@@ -382,6 +419,8 @@ class LibNodeRewriter(ast.NodeTransformer):
         self.fft_library = fft_library
         #: Target also renders a batched / N-D np.fft.* as FFTN_LIBRARY_MARKER (numpyto_c only).
         self.fft_library_nd = fft_library_nd
+        #: Target renders np.sort / np.argsort as SORT_LIBRARY_MARKER (C, C++, Fortran).
+        self.sort_library = sort_library
         #: Target's "I render this numpy call myself" predicate. A call it claims is left
         #: UNEXPANDED so the emitter can use its own intrinsic -- Fortran's SUM/MAXVAL/NORM2 --
         #: instead of the loop nest every target would otherwise get. Default: claims nothing.
@@ -419,6 +458,11 @@ class LibNodeRewriter(ast.NodeTransformer):
         self.fresh_local_allocs: dict[str, tuple[str, ...]] = {}
         self._counter = [0]
 
+    @property
+    def gemm_float(self) -> str | None:
+        """The float of the gemm this target renders, None when it renders none."""
+        return self.blas_float if self.blas else None
+
     def hoist_value(self, value: ast.expr) -> tuple[ast.expr, list[ast.stmt]]:
         # First hoist registered library-node calls, so e.g. ``A[i, j] -=
         # np.dot(A[i, :j], A[j, :j])`` becomes ``__cb1 = np.dot(...); A[i, j]
@@ -433,6 +477,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             dim_aliases=self.dim_aliases,
             blas=self.blas,
             blas_float=self.blas_float,
+            blas_complex=self.blas_complex,
         )
         call_hoister.sparse = self.sparse
         value = call_hoister.visit(value)
@@ -447,6 +492,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             dim_aliases=self.dim_aliases,
             blas=self.blas,
             blas_float=self.blas_float,
+            blas_complex=self.blas_complex,
         )
         new_value = mm_hoister.visit(value)
         pre.extend(mm_hoister.pre_stmts)
@@ -485,6 +531,11 @@ class LibNodeRewriter(ast.NodeTransformer):
                 src = self.shape_table.get(rhs_call.args[0].id)
                 if src is not None:
                     self.shape_table[target_id] = tuple(src)
+            # Its dtype too, for the same reason: an untyped local reads as real to the matmul hoist, so a complex
+            # product built from it reached a real gemm (eigh_generalized's ``bu`` and ``scaled``).
+            dtype_of = constructor_dtype_source(rhs_call, np_attr)
+            if dtype_of is not None and dtype_of in self.local_dtypes:
+                self.local_dtypes.setdefault(target_id, self.local_dtypes[dtype_of])
             return
         if rhs_call is not None and np_attr in {"reshape", "repeat", "transpose"}:
             # Shape-CHANGING ops: ``iter_extent_of`` would report the source operand's extent. A
@@ -508,22 +559,12 @@ class LibNodeRewriter(ast.NodeTransformer):
         newshape that is not a tuple, a Name or an int literal."""
         newshape = rhs.args[1]
         if isinstance(newshape, (ast.Tuple, ast.List)):
-            toks = tuple(ast.unparse(e) for e in newshape.elts)
-        elif isinstance(newshape, ast.Name):
-            toks = (newshape.id,)
-        elif const_int(newshape) is not None:
-            toks = (str(const_int(newshape)),)
+            elts = list(newshape.elts)
+        elif isinstance(newshape, ast.Name) or const_int(newshape) is not None:
+            elts = [newshape]
         else:
             return None
-        neg1 = [i for i, t in enumerate(toks) if t.strip() == "-1"]
-        src = rhs.args[0]
-        src_shape = self.shape_table.get(src.id) if isinstance(src, ast.Name) else None
-        if len(neg1) == 1 and src_shape:
-            total = " * ".join(f"({t})" for t in src_shape)
-            others = [t for j, t in enumerate(toks) if j != neg1[0]]
-            denom = " * ".join(f"({t})" for t in others) if others else "1"
-            toks = tuple(f"({total}) / ({denom})" if j == neg1[0] else t for j, t in enumerate(toks))
-        return toks
+        return reshape_tokens(elts, rhs.args[0], self.shape_table)
 
     def update_broadcast_result(self, target_id: str, rhs: ast.expr) -> None:
         """BinOp/UnaryOp/IfExp/Call/Subscript: the broadcast extent. ``Subscript`` covers a dynamic-bound
@@ -539,6 +580,9 @@ class LibNodeRewriter(ast.NodeTransformer):
             if target_id not in self.local_dtypes:
                 self.local_dtypes[target_id] = "int64"
             return
+        if isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name) and rhs.value.id in self.local_dtypes:
+            # A slice or gather has its base's dtype (as harvest_assign): a bf16 slice untagged reads as a gemm operand.
+            self.local_dtypes.setdefault(target_id, self.local_dtypes[rhs.value.id])
         if target_id not in self.local_dtypes and reads_complex(rhs, self.local_dtypes):
             self.local_dtypes[target_id] = "complex128"
 
@@ -600,18 +644,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         if self.target_renders(key, call):
             return node
         try:
-            expanded = call_expander(
-                expander,
-                target,
-                call.args,
-                call.keywords,
-                self.shape_table,
-                local_dtypes=self.local_dtypes,
-                fresh_local_allocs=self.fresh_local_allocs,
-                dim_aliases=self.dim_aliases,
-                library=self.fft_library,
-                library_nd=self.fft_library_nd,
-            )
+            expanded = self.expand(expander, target, call)
         except NotImplementedError:
             return None
         if key in ELEMENT_WRITE_EXPANDERS and target.id in self.shape_table and target.id not in self.known_arrays:
@@ -650,19 +683,30 @@ class LibNodeRewriter(ast.NodeTransformer):
         if key not in SLICE_TARGET_EXPANDERS:
             return None
         try:
-            return call_expander(
-                NP_CALL_EXPANDERS[key],
-                node.targets[0],
-                node.value.args,
-                node.value.keywords,
-                self.shape_table,
-                local_dtypes=self.local_dtypes,
-                fresh_local_allocs=self.fresh_local_allocs,
-                library=self.fft_library,
-                library_nd=self.fft_library_nd,
-            )
+            return self.expand(NP_CALL_EXPANDERS[key], node.targets[0], node.value)
         except NotImplementedError:
             return None
+
+    def expand(self, expander: Callable, target: ast.expr, call: ast.Call) -> list[ast.stmt]:
+        """``target = call`` through ``expander``, handed this target's tables and library choices."""
+        return call_expander(
+            expander,
+            target,
+            call.args,
+            call.keywords,
+            self.shape_table,
+            local_dtypes=self.local_dtypes,
+            fresh_local_allocs=self.fresh_local_allocs,
+            dim_aliases=self.dim_aliases,
+            library=self.fft_library,
+            library_nd=self.fft_library_nd,
+            blas_float=self.gemm_float,
+            extent_values=self.extent_values,
+            blas_complex=self.blas_complex,
+            element_dtypes=self.native_dtypes,
+            opmath=self.opmath,
+            sort_library=self.sort_library,
+        )
 
     def target_renders(self, key: tuple[str, str] | None, call: ast.Call) -> bool:
         """The target claims this call as its own intrinsic, so leave it unexpanded.
@@ -696,18 +740,7 @@ class LibNodeRewriter(ast.NodeTransformer):
                     continue
                 if expander is not None:
                     try:
-                        expanded = call_expander(
-                            expander,
-                            stmt.targets[0],
-                            stmt.value.args,
-                            stmt.value.keywords,
-                            self.shape_table,
-                            local_dtypes=self.local_dtypes,
-                            fresh_local_allocs=self.fresh_local_allocs,
-                            dim_aliases=self.dim_aliases,
-                            library=self.fft_library,
-                            library_nd=self.fft_library_nd,
-                        )
+                        expanded = self.expand(expander, stmt.targets[0], stmt.value)
                         # Same note as the direct path: the hoister split ``out = f(np.sum(a))`` into
                         # a temp assign, and it is THIS statement that becomes the loop nest.
                         tag_numpy_origin(expanded, ast.unparse(stmt.value))
@@ -756,7 +789,12 @@ class LibNodeRewriter(ast.NodeTransformer):
         return self.hoist_test_call(node)
 
     def visit_While(self, node: ast.While) -> ast.AST | list[ast.stmt]:
-        return self.hoist_test_call(node)
+        hoisted = self.hoist_test_call(node)
+        if isinstance(hoisted, list):
+            raise NotImplementedError(
+                f"while test {ast.unparse(node.test)}: a call hoisted above the loop would not re-run per trip"
+            )
+        return hoisted
 
     def hoist_test_call(self, node: ast.If | ast.While) -> ast.AST | list[ast.stmt]:
         """Hoist any registered ``np.X(...)`` call inside the ``if`` test
@@ -779,6 +817,20 @@ class LibNodeRewriter(ast.NodeTransformer):
         retargeted = retarget_scalar_accumulator(node, prelude)
         if retargeted is not None:
             return retargeted
+        if prelude:
+            return [*prelude, node]
+        return node
+
+    def visit_Return(self, node: ast.Return) -> ast.AST | list[ast.stmt]:
+        """A kept helper's ``return <value>``: a registered call in it is hoisted and lowered as an
+        assignment's is. ``return -np.mean(log_probs[rows, targets])`` reached the backend whole:
+        C refused the bare ``np.mean``, and Fortran rendered the zipped gather as an outer-product
+        section (cross_entropy_loss)."""
+        if node.value is None:
+            return node
+        self.generic_visit(node)
+        node.value, prelude = self.hoist_value(node.value)
+        prelude = self.lower_prelude_calls(prelude)
         if prelude:
             return [*prelude, node]
         return node
@@ -808,3 +860,19 @@ def canonicalize_call_assign(node: ast.Assign) -> None:
         inner = node.value.value
         if numpy_call_key(inner) in {("np", "linalg.lstsq"), ("np", "histogram")}:
             node.value = inner
+
+
+def constructor_dtype_source(call: ast.Call, np_attr: str) -> str | None:
+    """The array whose dtype a ``np.zeros``-family constructor takes: the ``x`` of an explicit ``x.dtype`` argument
+    (second positional or ``dtype=``), else a ``_like`` form's source array; None for any other spelling (a literal
+    dtype is the ZerosRewriter's)."""
+    explicit = next((kw.value for kw in call.keywords if kw.arg == "dtype"), None)
+    if explicit is None and len(call.args) >= 2:
+        explicit = call.args[1]
+    if explicit is not None:
+        if isinstance(explicit, ast.Attribute) and explicit.attr == "dtype" and isinstance(explicit.value, ast.Name):
+            return explicit.value.id
+        return None
+    if np_attr.endswith("_like") and call.args and isinstance(call.args[0], ast.Name):
+        return call.args[0].id
+    return None

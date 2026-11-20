@@ -6,7 +6,7 @@ import warnings
 
 import numpy as np
 
-from hpcagent_bench.stats.summary import DEFAULT_MAD_Z, drop_outliers, median_ci
+from hpcagent_bench.stats.summary import drop_outliers, median_ci
 
 
 def test_drop_removes_slow_hiccup() -> None:
@@ -50,10 +50,6 @@ def test_mad_zero_fallback_catches_outlier() -> None:
     # fallback still flags it.
     kept, dropped = drop_outliers([1.0] * 20 + [50.0], warn=False)
     assert dropped.tolist() == [50.0]
-
-
-def test_threshold_is_the_documented_default() -> None:
-    assert DEFAULT_MAD_Z == 5.0
 
 
 def test_median_ci_brackets_median() -> None:

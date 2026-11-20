@@ -7,20 +7,16 @@ Covers comment-stripping for a small C snippet and a small Python snippet:
 * all comments removed;
 * stripped C still compiles (``gcc -fsyntax-only``; skipped if gcc absent).
 
-tree-sitter-only assertions are guarded behind ``find_spec`` so the suite
-passes on the stdlib fallback (tree-sitter is not installed in CI here).
+The suite runs the tree-sitter path, the only one (tree-sitter-language-pack is a core dependency).
 """
 
-import importlib.util
 import shutil
 import subprocess
 import tempfile
 
 import pytest
 
-from hpcagent_bench.support.sanitize import strip_comments, tree_sitter_available
-
-TREE_SITTER = tree_sitter_available()
+from hpcagent_bench.support.sanitize import strip_comments
 
 # Sample snippets
 
@@ -184,27 +180,6 @@ def test_stripped_c_still_compiles() -> None:
         fh.flush()
         proc = subprocess.run(["gcc", "-fsyntax-only", fh.name], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, f"gcc rejected stripped C:\n{proc.stderr}"
-
-
-# tree-sitter parity (only when installed)
-
-
-@pytest.mark.skipif(
-    importlib.util.find_spec("tree_sitter_language_pack") is None,
-    reason="tree-sitter (tree-sitter-language-pack) not installed",
-)
-def test_tree_sitter_path_used_when_available() -> None:
-    assert TREE_SITTER is True
-    # Comment strip still satisfies the core contract on the ts path.
-    out = strip_comments(C_SRC, "c")
-    # Every comment is gone (line, block, inline).
-    assert "leading comment" not in out
-    assert "block comment" not in out
-    assert "inline comment" not in out
-    assert "call helper" not in out
-    assert "void relu(" in out
-    # The string literal is untouched -- strip never treats `//` in a string as a comment.
-    assert "relu stays in this string // not a comment" in out
 
 
 def test_unsupported_lang_rejected() -> None:

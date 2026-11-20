@@ -7,7 +7,7 @@ from typing import Any, Literal, cast
 import pydantic
 
 from hpcagent_agent.tools import http_json
-from hpcagent_agent.tools.registry import Setup, Spec, tool
+from hpcagent_agent.tools.registry import Hints, Setup, Spec, tool
 
 __all__ = [
     "COUNTER_GROUPS",
@@ -105,6 +105,9 @@ class ProfileInput(http_json.SubmissionInput):
     )
     min_percent: float | None = pydantic.Field(
         None,
+        ge=0.0,
+        le=100.0,
+        allow_inf_nan=False,
         description="Drop call-graph branches, or device-trace kernels, below this share (0-100, default 1.0). A "
         "device trace's totals then sum the kept kernels only: send 0 for complete totals.",
     )
@@ -215,6 +218,7 @@ def spec(setup: Setup) -> Spec:
         DESCRIPTION.format(opt_report=opt_report) + http_json.language_clause(setup.language_enforced, setup.language),
         profile_input(setup),
         prompt(setup),
+        Hints(read_only=True, idempotent=True, open_world=False),  # a preview: nothing is recorded
     )
 
 

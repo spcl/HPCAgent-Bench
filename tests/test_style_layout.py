@@ -52,7 +52,6 @@ def test_a_longer_y_label_widens_the_measured_left_protrusion() -> None:
         ax.set_yticks([1, 10, 100], ["1x", "10x", "0.00391x"])
         fig.canvas.draw()
         widths.append(style.left_protrusion_in(fig, ax))
-        plt.close(fig)
     assert widths[1] > widths[0] > 0.0
 
 
@@ -63,7 +62,6 @@ def test_rotated_long_names_deepen_the_measured_band_below() -> None:
         ax.set_xticks([0], [name], rotation=90)
         fig.canvas.draw()
         depths.append(style.below_protrusion_in(fig, ax))
-        plt.close(fig)
     assert depths[1] > depths[0]
 
 
@@ -80,13 +78,11 @@ def test_crowded_tick_labels_step_down_until_no_two_touch() -> None:
     size = style.shrink_crowded_ticks(fig, [ax], 9.0, 3.0)
     assert size < 9.0
     assert not style.crowded_ticks(ax, fig.canvas.get_renderer(), size / 3.0 * fig.dpi / 72.0)
-    plt.close(fig)
 
 
 def test_tick_labels_that_already_fit_keep_their_size() -> None:
     fig, ax = crowded_axes(["C", "C"], 4.0)
     assert style.shrink_crowded_ticks(fig, [ax], 7.0, 3.0) == 7.0
-    plt.close(fig)
 
 
 def test_labels_still_crowded_at_the_floor_are_reported(caplog: pytest.LogCaptureFixture) -> None:
@@ -95,7 +91,6 @@ def test_labels_still_crowded_at_the_floor_are_reported(caplog: pytest.LogCaptur
     with caplog.at_level(logging.WARNING, logger=style.LOG.name):
         assert style.shrink_crowded_ticks(fig, [ax], 7.0, 6.0) == 6.0
     assert "floor" in caplog.text
-    plt.close(fig)
 
 
 def test_mark_boxes_takes_an_errorbar_cap_drawn_from_python_lists_on_a_log_axis() -> None:
@@ -108,7 +103,6 @@ def test_mark_boxes_takes_an_errorbar_cap_drawn_from_python_lists_on_a_log_axis(
     fig.canvas.draw()
     boxes = style.mark_boxes(ax)
     assert len(boxes) >= 3  # the scatter point, the bar, and its caps
-    plt.close(fig)
 
 
 def clear_label(ax: plt.Axes, x: float, y: float, text: str = "3.1x") -> Annotation:
@@ -130,7 +124,6 @@ def test_a_label_drawn_over_a_mark_settles_off_it() -> None:
     settled(fig)
     box = label.get_window_extent(fig.canvas.get_renderer())
     assert not any(box.overlaps(mark) for mark in style.mark_boxes(ax))
-    plt.close(fig)
 
 
 def test_a_label_above_the_frame_settles_inside_it() -> None:
@@ -143,7 +136,6 @@ def test_a_label_above_the_frame_settles_inside_it() -> None:
     box, frame = label.get_window_extent(renderer), ax.get_window_extent(renderer)
     assert frame.y0 <= box.y0
     assert box.y1 <= frame.y1
-    plt.close(fig)
 
 
 def test_two_labels_drawn_at_one_place_settle_apart() -> None:
@@ -156,7 +148,6 @@ def test_two_labels_drawn_at_one_place_settle_apart() -> None:
     settled(fig)
     renderer = fig.canvas.get_renderer()
     assert not first.get_window_extent(renderer).overlaps(second.get_window_extent(renderer))
-    plt.close(fig)
 
 
 def log2_of(*ratios: float) -> list[float]:
@@ -210,7 +201,6 @@ def test_minor_ticks_fall_where_the_shared_rule_puts_them(
     axis takes every whole multiple of a power of ten, a count axis whole-number parts of a step."""
     fig, ax = ruled_axis(kind, majors, view)
     assert list(ax.yaxis.get_minorticklocs()) == pytest.approx(want)
-    plt.close(fig)
 
 
 @pytest.mark.parametrize(("kind", "majors", "view", "want"), MINOR_CASES)
@@ -225,7 +215,6 @@ def test_no_minor_tick_carries_a_label(
     texts = [label.get_text() for label in ax.yaxis.get_minorticklabels()]
     assert texts
     assert not any(texts)
-    plt.close(fig)
 
 
 @pytest.mark.parametrize(("kind", "majors", "view", "want"), MINOR_CASES)
@@ -240,7 +229,6 @@ def test_no_minor_tick_lands_on_a_major(
     located = [float(value) for value in ax.yaxis.get_minor_locator()()]
     assert located
     assert not [value for value in located if any(math.isclose(value, major) for major in ax.yaxis.get_majorticklocs())]
-    plt.close(fig)
 
 
 def test_a_count_step_no_whole_part_divides_gets_no_minor_ticks() -> None:
@@ -248,7 +236,6 @@ def test_a_count_step_no_whole_part_divides_gets_no_minor_ticks() -> None:
     5.25 tasks, lines that mark no count at all."""
     fig, ax = ruled_axis(style.MinorKind.COUNT, FixedLocator([0.0, 7.0]), (-0.5, 7.5))
     assert list(ax.yaxis.get_minorticklocs()) == []
-    plt.close(fig)
 
 
 @pytest.mark.parametrize(
@@ -265,7 +252,6 @@ def test_a_minor_tick_mark_is_a_fixed_share_of_a_major_one(measure: Callable[[Li
     fig.canvas.draw()
     major, minor = ax.yaxis.get_major_ticks()[0].tick1line, ax.yaxis.get_minor_ticks()[0].tick1line
     assert measure(minor) == pytest.approx(share * measure(major))
-    plt.close(fig)
 
 
 def test_minors_follow_majors_and_limits_set_after_the_axis_was_ruled() -> None:
@@ -275,7 +261,6 @@ def test_minors_follow_majors_and_limits_set_after_the_axis_was_ruled() -> None:
     ax.set_yticks([1.0, 4.0, 16.0])
     ax.set_ylim(1.0, 16.0)
     assert list(ax.yaxis.get_minorticklocs()) == pytest.approx([2.0, 8.0])
-    plt.close(fig)
 
 
 def test_a_triangle_mark_is_drawn_larger_than_a_square_at_the_same_nominal_size() -> None:
@@ -286,12 +271,9 @@ def test_a_triangle_mark_is_drawn_larger_than_a_square_at_the_same_nominal_size(
     from hpcagent_bench.stats import style
 
     fig, ax = plt.subplots()
-    try:
-        style.point_mark(ax, 0.0, 1.0, "#000000", "<", True, size=100.0)
-        style.point_mark(ax, 1.0, 1.0, "#000000", "s", True, size=100.0)
-        triangle, square = ax.collections[1].get_sizes()[0], ax.collections[3].get_sizes()[0]
-        assert triangle == 100.0 * style.MARKER_AREA_SCALE["<"]
-        assert square == 100.0 * style.MARKER_AREA_SCALE["s"]
-        assert triangle > square
-    finally:
-        plt.close(fig)
+    style.point_mark(ax, 0.0, 1.0, "#000000", "<", True, size=100.0)
+    style.point_mark(ax, 1.0, 1.0, "#000000", "s", True, size=100.0)
+    triangle, square = ax.collections[1].get_sizes()[0], ax.collections[3].get_sizes()[0]
+    assert triangle == 100.0 * style.MARKER_AREA_SCALE["<"]
+    assert square == 100.0 * style.MARKER_AREA_SCALE["s"]
+    assert triangle > square

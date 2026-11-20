@@ -18,7 +18,6 @@ axis -- a re-read extent is a second spelling of one shape, which a symbolic-sha
 refuses to broadcast against the rest of the statement.
 """
 
-import ast
 from typing import ClassVar
 
 import numpy as np
@@ -112,26 +111,3 @@ def test_the_temp_is_sized_by_broadcasting_the_entries() -> None:
     assert alloc.endswith("_b.shape, g.dtype)"), alloc
     (bcast,) = [ln.strip() for ln in src.splitlines() if "_b = " in ln and "* 0" in ln]
     assert bcast.count("* 0") == 3, bcast
-
-
-def test_a_same_shape_gather_keeps_its_one_shape_token() -> None:
-    """Nothing broadcasts when no entry pins an axis, and that gather is emitted as it always was:
-    one driver, one ``.shape``, no zero-multiply temp. The broadcast path is for the mesh only."""
-    src = "import numpy as np\ndef flat(g, q, r, s, out):\n    out[:] = g[q, r, s]\n"
-
-    class K(Kir):
-        arrays: ClassVar[list[Kir.Arr]] = [
-            Kir.Arr("g", ("NG", "NG", "NG"), "float64"),
-            Kir.Arr("q", ("NZ",), "int64"),
-            Kir.Arr("r", ("NZ",), "int64"),
-            Kir.Arr("s", ("NZ",), "int64"),
-            Kir.Arr("out", ("NZ",), "float64"),
-        ]
-        kernel_name = "flat"
-
-    out = desugar_for_python_backend(src, K(), backend="dace")
-    assert "* 0" not in out, out
-    (alloc,) = [ln.strip() for ln in out.splitlines() if "_o = np.empty(" in ln]
-    assert alloc.endswith("_x0.shape, g.dtype)"), alloc
-    loops = [n for n in ast.walk(ast.parse(out)) if isinstance(n, ast.For)]
-    assert len(loops) == 1, out

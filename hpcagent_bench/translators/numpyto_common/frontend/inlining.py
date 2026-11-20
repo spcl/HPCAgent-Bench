@@ -1,12 +1,20 @@
 """Helper inlining: inlinable forms, the inliner, static-flag guards, constant-list loop unrolling."""
 
 import ast
+import collections
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, nested_blocks, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    name_,
+    nested_blocks,
+    positional_defaults,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.limits import HELPER_NESTING_ROUNDS
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
 __all__ = [
     "INLINABLE_STMTS",
@@ -18,6 +26,7 @@ __all__ = [
     "SubstNames",
     "collect_assigned_names",
     "collect_inlinable_helpers",
+    "computes",
     "constant_truth",
     "flatten_nested_helpers",
     "fold_constant_branches",
@@ -70,9 +79,7 @@ def resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> list[ast.expr]
     untouched.
     """
     param_names = [a.arg for a in helper.args.args]
-    defaults = dict(
-        zip(param_names[len(param_names) - len(helper.args.defaults) :], helper.args.defaults, strict=False)
-    )
+    defaults = positional_defaults(helper.args)
     call_args = list(call.args)
     if len(call_args) > len(param_names) or any(kw.arg is None for kw in call.keywords):
         return None  # too many positionals, or a **kwargs splat we cannot resolve
@@ -220,13 +227,13 @@ def collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> d
         if isinstance(body[-1], ast.Return) and body[-1].value is not None:
             mid = body[:-1]
             if all(isinstance(s, INLINABLE_STMTS) for s in mid) and not any(
-                isinstance(sub, ast.Return) for s in mid for sub in ast.walk(s)
+                isinstance(sub, ast.Return) for s in mid for sub in walk_nodes(s)
             ):
                 return True
         # Form 4: void helper -- simple Assign / AugAssign / For / While / If / Expr
         # statements with NO Return (in-place writes to argument arrays).
         return all(isinstance(s, INLINABLE_STMTS) for s in body) and not any(
-            isinstance(sub, ast.Return) for s in body for sub in ast.walk(s)
+            isinstance(sub, ast.Return) for s in body for sub in walk_nodes(s)
         )
 
     # Top-level helpers defined ABOVE the kernel...
@@ -238,7 +245,7 @@ def collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> d
     # shorthand). These are stripped from the body after their calls are inlined
     # (see InlineHelpers.visit_FunctionDef) -- a backend can't emit a Python
     # ``def``, so the only correct lowering is full inlining.
-    for nested in ast.walk(kernel_fn):
+    for nested in walk_nodes(kernel_fn):
         if isinstance(nested, ast.FunctionDef) and nested is not kernel_fn and classify(nested):
             out[nested.name] = nested
     return out
@@ -253,17 +260,14 @@ def static_flag_params(tree: ast.Module) -> dict[str, frozenset[str]]:
     """
     defs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     literal: dict[str, dict[str, bool]] = {name: {} for name in defs}
-    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+    for call in (n for n in walk_nodes(tree) if isinstance(n, ast.Call)):
         if not (isinstance(call.func, ast.Name) and call.func.id in defs):
             continue
         hdef = defs[call.func.id]
         pnames = [a.arg for a in hdef.args.args]
         # An unsupplied trailing parameter takes its default, which is itself a compile-time value
         # when the default is a literal -- ``_logsumexp(x, axis=1)`` leaves keepdims=False.
-        bound: dict[str, ast.expr | None] = {}
-        offset = len(pnames) - len(hdef.args.defaults)
-        for i, default in enumerate(hdef.args.defaults):
-            bound[pnames[offset + i]] = default
+        bound: dict[str, ast.expr | None] = {**positional_defaults(hdef.args)}
         for i, arg in enumerate(call.args):
             if i < len(pnames):
                 bound[pnames[i]] = arg
@@ -292,7 +296,7 @@ def fuse_guarded_returns(tree: ast.Module) -> None:
     subscript would run on the values the guard exists to exclude).
     """
     flags_by_helper = static_flag_params(tree)
-    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+    for fn in (n for n in walk_nodes(tree) if isinstance(n, ast.FunctionDef)):
         flags = flags_by_helper.get(fn.name, frozenset())
         body = fn.body
         while True:
@@ -327,7 +331,7 @@ def is_pure_expression(node: ast.expr) -> bool:
     which is what a shape or index expression is made of.
     """
     impure = (ast.Call, ast.Await, ast.Yield, ast.YieldFrom, ast.NamedExpr)
-    return not any(isinstance(sub, impure) for sub in ast.walk(node))
+    return not any(isinstance(sub, impure) for sub in walk_nodes(node))
 
 
 def lift_pure_assignment_over_guard(body: list[ast.stmt], flags: frozenset[str]) -> None:
@@ -364,7 +368,7 @@ def lift_pure_assignment_over_guard(body: list[ast.stmt], flags: frozenset[str])
         ):
             return
         target = assign.targets[0].id
-        if any(isinstance(sub, ast.Name) and sub.id == target for sub in ast.walk(guard)):
+        if any(isinstance(sub, ast.Name) and sub.id == target for sub in walk_nodes(guard)):
             return  # the guard reads it, so the value it sees would change
         body[-3:] = [assign, guard, body[-1]]
 
@@ -479,13 +483,13 @@ class LoopVarSubst(ast.NodeTransformer):
 def single_list_bindings(fn: ast.FunctionDef) -> dict[str, list[ast.expr]]:
     """Locals bound exactly once, to a list or tuple literal: ``name -> elements``."""
     binds_count: dict[str, int] = {}
-    for s in ast.walk(fn):
+    for s in walk_nodes(fn):
         if isinstance(s, ast.Assign):
             for t in s.targets:
                 if isinstance(t, ast.Name):
                     binds_count[t.id] = binds_count.get(t.id, 0) + 1
     list_binds: dict[str, list[ast.expr]] = {}
-    for s in ast.walk(fn):
+    for s in walk_nodes(fn):
         if (
             isinstance(s, ast.Assign)
             and len(s.targets) == 1
@@ -520,6 +524,12 @@ class ConstListLoopUnroller(ast.NodeTransformer):
             seq = self.list_binds[node.iter.id]
             src = node.iter.id
         if seq is None:
+            return node
+        target_names = {n.id for n in walk_nodes(node.target) if isinstance(n, ast.Name)}
+        if any(
+            n.id in target_names and is_store(n) for st in node.body for n in walk_nodes(st) if isinstance(n, ast.Name)
+        ):
+            # A rebound loop variable has no element to substitute; left as a loop it is refused.
             return node
         out: list[ast.stmt] = []
         for elt in seq:
@@ -591,7 +601,7 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
         self._taken: set[str] = set()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
-        self._taken |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        self._taken |= {n.id for n in walk_nodes(node) if isinstance(n, ast.Name)}
         node.body = self.rewrite_stmt_list(node.body)
         return node
 
@@ -691,6 +701,15 @@ def is_multi_stmt_return_form(fn: ast.FunctionDef) -> bool:
     return isinstance(last, ast.Return) and last.value is not None
 
 
+def computes(arg: ast.expr) -> bool:
+    """Whether evaluating ``arg`` does work on a value (an operator or a call over a name), as opposed to naming a
+    value or a view of one (``a``, ``a[i]``, ``a.T``), which a reader can repeat for free. A constant (``-1``) is
+    never bound: a parameter like ``axis`` must stay a literal."""
+    nodes = list(ast.walk(arg))
+    works = any(isinstance(n, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.Call, ast.IfExp)) for n in nodes)
+    return works and any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) for n in nodes)
+
+
 class InlineHelpers(ast.NodeTransformer):
     """Substitute calls to recognised helpers with their inline body.
 
@@ -756,6 +775,15 @@ class InlineHelpers(ast.NodeTransformer):
                     rename[ln] = name_(f"{prefix}{ln}")
                     if ln in arg_map:
                         reassigned_params.append(ln)
+                # A computed argument (``softmax_rows(x @ w.T)``) read more than once is evaluated once, as Python
+                # does, into a prefixed local: substituted, every read recomputed it into a transient of its own.
+                reads = collections.Counter(
+                    n.id for s in body for n in ast.walk(s) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                )
+                for pn_, arg_ in arg_map.items():
+                    if pn_ not in local_names and reads[pn_] > 1 and computes(arg_):
+                        rename[pn_] = name_(f"{prefix}{pn_}")
+                        reassigned_params.append(pn_)
                 # Substitute throughout the helper body and the return
                 # expression.
                 renamer = SubstNames(rename)
@@ -817,7 +845,7 @@ class InlineHelpers(ast.NodeTransformer):
         # a bare ``(ux, uy, uz)`` statement, which no backend can render. An early return elsewhere
         # in the body IS control flow, so that form still declines.
         if body and isinstance(body[-1], ast.Return):
-            if any(isinstance(n, ast.Return) for s in body[:-1] for n in ast.walk(s)):
+            if any(isinstance(n, ast.Return) for s in body[:-1] for n in walk_nodes(s)):
                 return node
             body = body[:-1]
             if not body:
@@ -832,17 +860,30 @@ class InlineHelpers(ast.NodeTransformer):
         prefix = f"__inl{self._counter[0]}_"
         local_names = collect_assigned_names(body)
         rename: dict[str, ast.expr] = dict(zip(param_names, node.value.args, strict=False))
+        param_inits: list[ast.stmt] = []
+        nodes = [n for st in body for n in walk_nodes(st)]
+        in_place = {id(n.target) for n in nodes if isinstance(n, ast.AugAssign)}
+        rebound = {n.id for n in nodes if isinstance(n, ast.Name) and is_store(n) and id(n) not in in_place}
         for ln in local_names:
             if ln in param_names:
-                # The helper rebinds a parameter (e.g. ``pn = p.copy()``
-                # then later uses of ``pn``). Don't rename it, but
-                # tracking it in ``rename`` would shadow the call-site
-                # arg -- which is what we want for ``pn`` to remain a
-                # distinct local through the inlined body.
+                # ``p += x`` updates the caller's array. A rebound parameter is instead a fresh local seeded
+                # from the arg, so reads after the rebind see the rebound value and the caller keeps its own.
+                if ln not in rebound:
+                    continue
+                if any(isinstance(n, ast.Subscript) and is_store(n) and base_name(n) == ln for n in nodes):
+                    raise NotImplementedError(f"helper {helper.name} both writes through and rebinds parameter {ln}")
+                local = f"{prefix}{ln}"
+                rename[ln] = name_(local)
+                param_inits.append(
+                    ast.Assign(
+                        targets=[store_(local)],
+                        value=copy.deepcopy(node.value.args[param_names.index(ln)]),
+                    )
+                )
                 continue
             rename[ln] = name_(f"{prefix}{ln}")
         renamer = SubstNames(rename)
-        new_body: list[ast.stmt] = []
+        new_body: list[ast.stmt] = param_inits
         for stmt in body:
             cloned = ast.parse(ast.unparse(stmt)).body[0]
             cloned = renamer.visit(cloned)
@@ -895,6 +936,10 @@ class InlineHelpers(ast.NodeTransformer):
         return node
 
 
+def is_store(node: ast.Name | ast.Subscript) -> bool:
+    return isinstance(node.ctx, ast.Store)
+
+
 def collect_assigned_names(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
     """Return the set of Name targets assigned in any of ``stmts``,
     recursing into For / If bodies.
@@ -920,7 +965,7 @@ def collect_assigned_names(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
                 bind(elt)
 
     for s in stmts:
-        for sub in ast.walk(s):
+        for sub in walk_nodes(s):
             if isinstance(sub, ast.Assign):
                 for t in sub.targets:
                     bind(t)

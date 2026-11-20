@@ -12,6 +12,9 @@ import pytest
 from hpcagent_bench import framework_cache as fc
 from hpcagent_bench import phase_clock
 from hpcagent_bench.cache_files import sha256_hex
+from hpcagent_bench.cpf import bridge as cpf_bridge
+from hpcagent_bench.cpf import prerender
+from hpcagent_bench.cpf.cache import HintDetail, Target
 from hpcagent_bench.spec import BenchSpec
 from tests.optional_imports import import_or_skip
 
@@ -37,7 +40,7 @@ def test_source_fingerprint_folds_in_the_translator_tree(tmp_path: pathlib.Path)
     key = fc.source_fingerprint(numpy_py, b"bench-info-1")
     reference_only = sha256_hex(numpy_py.read_bytes() + b"\x00" + b"bench-info-1")
     assert key != reference_only, "the translator sources are not part of the freshness key"
-    assert fc.translator_fingerprint() == fc.translator_fingerprint()  # memoized, one walk per process
+    assert fc.bench_tree_fingerprint() == fc.bench_tree_fingerprint()  # memoized, one walk per process
 
 
 def test_dace_tree_fingerprint_is_memoized_and_well_defined() -> None:
@@ -79,6 +82,26 @@ def test_generated_source_cache_hit_restore_and_invalidation(tmp_path: pathlib.P
 
     # The guard: a changed source fingerprint MISSES -- a stale entry is never served.
     assert fc.load_generated(cache, canonical, sha256_hex(b"source-v2")) is False
+
+
+def test_interleaved_writers_leave_a_miss_never_the_other_writers_source(tmp_path: pathlib.Path) -> None:
+    """Two emitters of one kernel under different fingerprints: A writes its payload, B writes payload and sidecar,
+    then A writes its sidecar. The cache now holds B's source under A's fingerprint, which A must not be served."""
+    kdir = tmp_path / "k"
+    kdir.mkdir()
+    cache = fc.kernel_cache_dir(kdir)
+    canonical = kdir / "k_dace.py"
+    fp_a, fp_b = sha256_hex(b"source-a"), sha256_hex(b"source-b")
+    canonical.write_text("# gen B\n")
+    fc.save_generated(cache, canonical, fp_b, 1.0)
+    cached = cache / canonical.name
+    fc.sidecar_path(cached).write_bytes(fc.sidecar_text(fp_a, b"# gen A\n"))  # A's sidecar lands last
+    canonical.write_text("# gen A\n")
+    assert fc.load_generated(cache, canonical, fp_a) is False, "B's source under A's fingerprint must MISS"
+    assert fc.load_generated(cache, canonical, fp_b) is False, "the sidecar no longer names B's fingerprint"
+    assert canonical.read_text() == "# gen A\n", "a miss restores nothing"
+    fc.sidecar_path(cached).write_text(fp_b)
+    assert fc.load_generated(cache, canonical, fp_b) is False, "a sidecar without the payload hash is stale"
 
 
 def widget_kernel(benchmarks_root: pathlib.Path) -> pathlib.Path:
@@ -254,7 +277,9 @@ def test_ensure_never_restores_a_stale_cache_entry_over_a_hand_override(
         cache = fc.kernel_cache_dir(kdir)
         (cache / override.name).write_text("# hpcagent_bench-autogen -- generated\nX = 0\n")
         fc.sidecar_path(cache / override.name).write_text(fingerprint)
-        assert fc.stored_fingerprint(cache / override.name) == fingerprint, "the stale entry must be a HIT"
+        assert fc.sidecar_path(cache / override.name).read_text().split()[0] == fingerprint, (
+            "the stale entry must be a HIT"
+        )
 
         autogen.ensure("widget", ["numba"])
         assert override.read_text() == hand
@@ -396,6 +421,67 @@ def test_cache_tree_is_fully_gitignored() -> None:
     assert ignored(base + "/gemm_cpu.sdfgz.fp"), "fingerprint sidecars must be gitignored"
     assert ignored(base + "/gemm_dace.py"), "cached generated siblings must be gitignored"
     assert ignored(base + "/.gitkeep"), "the .gitkeep must be ignored too -- 356 kernels, dir is made on demand"
+
+
+def test_the_tree_fingerprint_reads_the_bytes_of_tracked_and_untracked_edits(tmp_path: pathlib.Path) -> None:
+    """A dirty tree stays dirty with the same status lines, so only the bytes can tell two edits apart."""
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, check=True, capture_output=True
+        )
+
+    tracked, untracked = tmp_path / "tracked.py", tmp_path / "untracked.py"
+    tracked.write_text("a = 0\n", encoding="utf-8")
+    git("init")
+    git("add", "tracked.py")
+    git("commit", "-m", "first")
+    tracked.write_text("a = 1\n", encoding="utf-8")
+    untracked.write_text("b = 1\n", encoding="utf-8")
+    first = fc.git_tree_fingerprint(tmp_path)
+    untracked.write_text("b = 2\n", encoding="utf-8")
+    second = fc.git_tree_fingerprint(tmp_path)
+    tracked.write_bytes(b"# caf\xe9\n")
+    assert len({first, second, fc.git_tree_fingerprint(tmp_path)}) == 3
+
+
+def test_a_pinned_tree_fingerprint_is_the_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A render child takes its parent's fingerprint: one taken after a file appeared keyed bout_elm_pb's form under
+    a fingerprint the verify step and the stage check never computed (2026-11-17)."""
+    fc.bench_tree_fingerprint.cache_clear()
+    monkeypatch.setenv(fc.TREE_FINGERPRINT_ENV, "pinned-by-the-parent")
+    try:
+        assert fc.bench_tree_fingerprint() == "pinned-by-the-parent"
+    finally:
+        fc.bench_tree_fingerprint.cache_clear()
+
+
+def test_the_prerender_child_gets_the_parents_fingerprint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    seen: dict[str, str] = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake_prerender_kernel(*args: object, extra_env: dict[str, str] | None = None, **kwargs: object) -> None:
+        seen.update(extra_env or {})
+        raise Stop
+
+    monkeypatch.setattr(cpf_bridge, "prerender_kernel", fake_prerender_kernel)
+    with pytest.raises(Stop):
+        prerender.render_kernel(
+            "gemm",
+            tmp_path / "cache",
+            target=Target.CPU,
+            precision="",
+            hints=HintDetail.PROOFS,
+            package=tmp_path / "dace",
+            before="dace",
+            timeout=None,
+            scratch=tmp_path / "scratch",
+        )
+    assert seen[fc.TREE_FINGERPRINT_ENV] == fc.bench_tree_fingerprint()
 
 
 if __name__ == "__main__":

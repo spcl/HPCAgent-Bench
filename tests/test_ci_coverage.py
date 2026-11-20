@@ -292,7 +292,7 @@ MATRIX_FIELD = re.compile(r"^\$\{\{\s*matrix\.([\w.]+)(?:\s*\|\|\s*'')?\s*\}\}$"
 
 def runs_on_leg(step: dict, leg: dict) -> bool:
     """Whether a step's ``if:`` lets it run on this leg. The workflow's conditions on the matrix are conjunctions of
-    fields (``matrix.leg.pythran && !cancelled()``) and comparisons (``matrix.shard.id == 0``)."""
+    fields (``matrix.leg.perf && !cancelled()``) and comparisons (``matrix.shard.id == 0``)."""
     for path, op, literal in MATRIX_TEST.findall(str(step.get("if", ""))):
         value = matrix_value(leg, path)
         if (op == "==" and str(value) != literal) or (op == "!=" and str(value) == literal) or (not op and not value):
@@ -358,7 +358,7 @@ def test_every_sliced_sweep_runs_each_slice_exactly_once() -> None:
 def test_every_e2e_backend_is_swept_at_fp64() -> None:
     """The slice guard sees a sweep only while one of its slices runs; this sees a sweep that no step runs at all
     (a rider whose leg lost its field, a backend whose leg was dropped)."""
-    from tests.test_e2e_numerical import _ALL_E2E_BACKENDS
+    from tests.test_e2e_numerical import ALL_E2E_BACKENDS
 
     swept = {
         backend.strip()
@@ -368,7 +368,7 @@ def test_every_e2e_backend_is_swept_at_fp64() -> None:
         for backend in env.get("HPCAGENT_BENCH_E2E_BACKENDS", "").split(",")
         if backend.strip()
     }
-    missing = sorted(set(_ALL_E2E_BACKENDS) - swept)
+    missing = sorted(set(ALL_E2E_BACKENDS) - swept)
     assert not missing, f"no CI step sweeps tests/test_e2e_numerical.py at fp64 on {missing}"
 
 

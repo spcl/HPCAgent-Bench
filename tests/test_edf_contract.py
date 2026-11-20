@@ -141,3 +141,28 @@ def test_cwd_is_off_sys_path(edf: pathlib.Path) -> None:
         f"{edf_id(edf)}: PYTHONSAFEPATH=1 is missing: import dace from the workdir returns a broken "
         "namespace package shadowed by ${SCRATCH}/dace"
     )
+
+
+#: CSCS's NCCL-over-Slingshot settings (https://docs.cscs.ch/software/communication/nccl/). The EDF's ``[env]`` wins
+#: over the netstack hook, which sets ``NCCL_CROSS_NIC=0`` (docs/containers.md, job 754679).
+CSCS_RCCL_ENV = {
+    "NCCL_NET": "AWS Libfabric",
+    "NCCL_NET_GDR_LEVEL": "PHB",
+    "NCCL_CROSS_NIC": "1",
+    "NCCL_PROTO": "^LL128",
+    "FI_CXI_DEFAULT_CQ_SIZE": "131072",
+    "FI_CXI_DEFAULT_TX_SIZE": "16384",
+    "FI_CXI_DISABLE_HOST_REGISTER": "1",
+}
+
+
+@pytest.mark.parametrize("edf", [edf for edf in LAUNCH_EDFS if "judge-agent-cpu" not in str(edf)], ids=edf_id)
+def test_a_gpu_edf_sets_cscss_nccl_settings_over_the_hooks(edf: pathlib.Path) -> None:
+    env = edf_env(edf)
+    assert {name: env.get(name) for name in CSCS_RCCL_ENV} == CSCS_RCCL_ENV, edf
+
+
+@pytest.mark.parametrize("edf", sorted(IMAGES.glob("judge-agent-amd/*.edf.toml.in")), ids=edf_id)
+def test_the_amd_edfs_keep_the_memory_registration_cache_off(edf: pathlib.Path) -> None:
+    """CSCS's userfaultfd monitor is not shown to work on Beverin; its vLLM tutorial runs with the cache off."""
+    assert edf_env(edf)["FI_MR_CACHE_MONITOR"] == "disabled"

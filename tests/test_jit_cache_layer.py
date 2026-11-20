@@ -6,12 +6,14 @@ The shared cache is NFS; engines writing it concurrently turn each other's rewri
 These tests pin the contract that makes the layer safe to share.
 """
 
+import os
 import pathlib
 import subprocess
 
 import pytest
 
 from hpcagent_bench import paths
+from tests.bash_stub import bash_stub
 
 REPO = paths.ROOT
 LAYER = REPO / "hpcagent_bench" / "cluster" / "jit_cache_layer.sh"
@@ -82,6 +84,31 @@ def test_seed_never_replaces_an_entry_already_in_the_local_layer(tmp_path: pathl
     write(local / "abc123" / "kernel.so", "local")
     run("seed", str(shared), str(local))
     assert (local / "abc123" / "kernel.so").read_text() == "local"
+
+
+def test_a_seed_copy_that_fails_part_way_leaves_no_entry(tmp_path: pathlib.Path) -> None:
+    shared, local = tmp_path / "shared", tmp_path / "local"
+    write(shared / "abc123" / "kernel.so", "binary")
+    bash_stub(tmp_path / "bin", "cp", '/bin/cp "$@"; exit 1')
+    subprocess.run(
+        ["bash", str(LAYER), "seed", str(shared), str(local)],
+        check=True,
+        env={**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"},
+        capture_output=True,
+    )
+    assert tree(local) == {}
+
+
+def test_seed_sweeps_a_dead_publishers_staging_entry_and_keeps_a_fresh_one(tmp_path: pathlib.Path) -> None:
+    shared, local = tmp_path / "shared", tmp_path / "local"
+    dead = shared / f"{STAGE_PREFIX}.nid1.42.def456"
+    fresh = shared / f"{STAGE_PREFIX}.nid2.43.ghi789"
+    write(dead / "kernel.so", "half")
+    write(fresh / "kernel.so", "in-flight")
+    subprocess.run(["touch", "-d", "2 days ago", str(dead)], check=True)
+    run("seed", str(shared), str(local))
+    assert not dead.exists()
+    assert fresh.exists()
 
 
 def test_seed_of_a_cache_that_does_not_exist_yet_creates_an_empty_layer(tmp_path: pathlib.Path) -> None:

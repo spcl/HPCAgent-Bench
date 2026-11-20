@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Callable, Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import RenameNames, const_int, literal_loads, name_
+from hpcagent_bench.translators.numpyto_common.ast_build import RenameNames, const_int, literal_loads, name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.frontend.manifest import preset_constant_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import slice_axes
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import REDUCE_FNS, expr_rank
@@ -89,6 +89,10 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
                 node.args[0], [ast.Constant(value=None) if d == axis else ast.Slice() for d in range(rank + 1)], node
             )
         if name == "squeeze":
+            if not isinstance(node.args[0], (ast.Name, ast.Subscript)):
+                # An expression operand keeps the call, which the hoister spills to a sized temp: no lowering
+                # indexes ``(a + m)[:, 0]``, and the emitter spelled it as pointer arithmetic (dist_mlp_tp).
+                return node
             axis = axes[0] % rank
             return self.index_(
                 node.args[0], [ast.Constant(value=0) if d == axis else ast.Slice() for d in range(rank)], node
@@ -324,7 +328,7 @@ def structural_constants(
             parsed = ast.parse(str(shape).strip(), mode="eval")
         except SyntaxError:
             continue
-        extent_names.update(n.id for n in ast.walk(parsed) if isinstance(n, ast.Name))
+        extent_names.update(n.id for n in walk_nodes(parsed) if isinstance(n, ast.Name))
     runtime = frozenset(runtime_args)
     return {
         name: value
@@ -344,7 +348,7 @@ def rebound_names(fn: ast.FunctionDef) -> frozenset[str]:
     scope, but treating it as a rebinding only costs a fold that was never necessary.
     """
     names: set[str] = set()
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Assign):
             targets: list[ast.expr | None] = list(node.targets)
         elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.NamedExpr, ast.comprehension)):
@@ -358,7 +362,7 @@ def rebound_names(fn: ast.FunctionDef) -> frozenset[str]:
         else:
             continue
         names.update(
-            leaf.id for tgt in targets if tgt is not None for leaf in ast.walk(tgt) if isinstance(leaf, ast.Name)
+            leaf.id for tgt in targets if tgt is not None for leaf in walk_nodes(tgt) if isinstance(leaf, ast.Name)
         )
     return frozenset(names)
 
@@ -406,7 +410,7 @@ def reject_symbolic_axis(fn: ast.FunctionDef) -> None:
     Reached only for an axis :func:`specialize_runtime_axis` could not dispatch on -- a runtime
     axis with a known operand rank is emitted as one specialised nest per axis, chosen at run time.
     """
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if not isinstance(node, ast.Call) or np_attr_name(node) not in AXIS_STRUCTURAL_FNS:
             continue
         kw = {k.arg: k.value for k in node.keywords if k.arg is not None}
@@ -443,7 +447,7 @@ def reject_unsupported_slices(fn: ast.FunctionDef) -> None:
     an upper bound both signs produce a full-length axis and a forward index would silently be the
     wrong one, so that form keeps the refusal.
     """
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if not isinstance(node, ast.Slice):
             continue
         if node.step is not None and not is_literal_axis(node.step) and node.upper is None:
@@ -509,6 +513,12 @@ def sequence_length(value: ast.expr, ranks: dict[str, int]) -> int | None:
 #: inserts one. Reading their axis against the operand's rank would size the dispatch one short.
 AXIS_INSERTS = frozenset({"expand_dims", "stack"})
 
+#: Structural calls whose first argument is a SEQUENCE of arrays, not one array (``np.stack([a, b])``,
+#: ``np.concatenate([a, b])``). ``expr_rank`` of a list literal already counts the container itself
+#: as one axis over its elements, so for these the dispatch reads the ELEMENTS' rank -- one lower --
+#: before :data:`AXIS_INSERTS` adds the axis ``stack`` inserts back.
+SEQUENCE_OPERAND_FNS = frozenset({"stack", "concatenate"})
+
 
 def axis_index_spaces(fn: ast.FunctionDef, ranks: dict[str, int]) -> dict[int, int]:
     """``id(index node) -> how many AXES that index selects among``, for the two sequences an axis
@@ -521,10 +531,10 @@ def axis_index_spaces(fn: ast.FunctionDef, ranks: dict[str, int]) -> dict[int, i
     """
     out: dict[int, int] = {}
     bound: dict[str, list[ast.expr]] = {}
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             bound.setdefault(node.targets[0].id, []).append(node.value)
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if not isinstance(node, ast.Subscript):
             continue
         base = node.value
@@ -571,18 +581,21 @@ def runtime_axis_dispatch(fn: ast.FunctionDef, scalars: frozenset[str], ranks: d
       trailing statement (:func:`synthesize_return_temps`), which a dispatch buries inside a
       branch -- the kernel would then emit with no output at all.
     """
-    if any(isinstance(node, ast.Return) and node.value is not None for node in ast.walk(fn)):
+    if any(isinstance(node, ast.Return) and node.value is not None for node in walk_nodes(fn)):
         return None
     axis_names: OrderedSet[str] = OrderedSet()
     axis_spaces: dict[int, int | None] = {}
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if not isinstance(node, ast.Call):
             continue
         axis = axis_argument(node)
         if axis is None:
             continue
+        name = np_attr_name(node)
         operand = expr_rank(node.args[0], ranks) if node.args else None
-        insert = 1 if np_attr_name(node) in AXIS_INSERTS else 0
+        if operand is not None and isinstance(node.args[0], (ast.List, ast.Tuple)) and name in SEQUENCE_OPERAND_FNS:
+            operand -= 1  # the list literal counts itself as an axis; the elements are the operand
+        insert = 1 if name in AXIS_INSERTS else 0
         axis_spaces[id(axis)] = None if operand is None else operand + insert
         if isinstance(axis, ast.Name) and axis.id in scalars:
             axis_names.add(axis.id)
@@ -590,7 +603,7 @@ def runtime_axis_dispatch(fn: ast.FunctionDef, scalars: frozenset[str], ranks: d
         return None
     name = next(iter(axis_names))
     index_spaces = axis_index_spaces(fn, ranks)
-    uses = [n for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id == name]
+    uses = [n for n in walk_nodes(fn) if isinstance(n, ast.Name) and n.id == name]
     if not all(id(u) in axis_spaces or id(u) in index_spaces for u in uses):
         return None
     # An operand whose rank the table does not know reveals nothing and is skipped; one that

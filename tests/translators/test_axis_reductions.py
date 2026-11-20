@@ -27,7 +27,7 @@ from hpcagent_bench.translators.numpyto_common.frontend import AxisReshapeToInde
 from hpcagent_bench.translators.numpyto_common.lib_nodes import expand_sum, read_axis_keepdims
 from tests.translators.op_oracle import run_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 
 def call_args(src: str) -> tuple[list[ast.expr], list[ast.keyword]]:
@@ -182,21 +182,6 @@ def reshape_to_index(src: str, ranks: dict[str, int]) -> str:
     return ast.unparse(ast.fix_missing_locations(tree))
 
 
-def test_nested_expand_dims_is_one_subscript() -> None:
-    """Two ``expand_dims`` merge into ONE newaxis subscript, not ``z[:, None, :][:, None, :, :]``.
-
-    The chain is what broke the reduction over it: ``iter_extent_of`` sizes a subscript of a
-    NAME, so a subscript of a subscript came back unsized, the reduction operand was never
-    hoisted to a temp, and ``np.mean`` reached the emitter unlowered.
-    """
-    assert reshape_to_index("np.expand_dims(np.expand_dims(z, axis=1), axis=1)", {"z": 2}) == "z[:, None, None, :]"
-
-
-def test_nested_squeeze_is_one_subscript() -> None:
-    """The undo side merges the same way: two ``squeeze`` calls index one subscript."""
-    assert reshape_to_index("np.squeeze(np.squeeze(t, axis=1), axis=1)", {"t": 4}) == "t[:, 0, 0, :]"
-
-
 def test_expand_dims_of_a_partial_slice_is_left_chained() -> None:
     """A partial slice keeps an offset an outer index would drop, so it is NOT merged."""
     assert reshape_to_index("np.expand_dims(a[1:3], axis=0)", {"a": 1}) == "a[1:3][None, :]"
@@ -223,6 +208,7 @@ def test_mean_over_nested_expand_dims() -> None:
         backends=ALL,
     )
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
+    assert any(v == "ok" for v in res.values()), res
 
 
 def test_instance_norm_over_expanded_operand() -> None:
@@ -251,6 +237,24 @@ def test_instance_norm_over_expanded_operand() -> None:
         backends=ALL,
     )
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
+    assert any(v == "ok" for v in res.values()), res
+
+
+def test_squeeze_of_an_expression_reads_its_elements() -> None:
+    """dist_mlp_tp's logsumexp squeezes an EXPRESSION: ``np.squeeze(np.log(s) + m, axis=1)``. Rewritten to
+    ``(np.log(s) + m)[:, 0]``, no lowering indexed it and C read ``(__cb4 + m)[i][0]``, a sum of two pointers;
+    the call keeps its operand spilled to a temp instead."""
+    x = np.linspace(-1.0, 2.0, 12).reshape(4, 3)
+    src = (
+        "import numpy as np\n"
+        "def f(x, out):\n"
+        "    m = np.max(x, axis=1, keepdims=True)\n"
+        "    out[:] = np.squeeze(np.log(np.sum(np.exp(x - m), axis=1, keepdims=True)) + m, axis=1)\n"
+    )
+    shapes = {"x": "(M, N)", "out": "(M,)"}
+    res = run_op(src, "f", {"x": x}, {"out": (4,)}, {"M": 4, "N": 3}, shapes=shapes, backends=ALL)
+    assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
+    assert any(v == "ok" for v in res.values()), res
 
 
 # E. Full-reduction accumulation -- one chain in source order, no blocking.     #

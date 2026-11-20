@@ -1,7 +1,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One colour and one shape per entity, decided by its identity (its registered ``order``), so dropping a series
-never repaints the others. Shape is the MODEL and colour what the figure varies, except the packet efficacy panels
+never repaints the others. Shape is the MODEL and colour what the figure varies, except the packet figures
 (colour = model, shape = packet). One palette: ``tab20``, extended by ``tab20b``."""
 
 import colorsys
@@ -23,16 +23,17 @@ __all__ = [
     "CONTROL_MARKER",
     "CONTROL_SHADE",
     "LOG",
-    "Look",
     "TAB20",
     "TAB20B",
     "TAB20B_ORDER",
     "TAB20_ORDER",
+    "Look",
     "color",
     "colormap_slot",
     "colors",
-    "cycled",
     "control_color",
+    "cycled",
+    "darken",
     "fixed_packet_markers",
     "framework_color",
     "framework_marker",
@@ -40,14 +41,12 @@ __all__ = [
     "hue_order",
     "hues",
     "in_order",
-    "darken",
     "lighten",
     "look",
     "marker",
     "marker_style",
     "markers",
     "model_color",
-    "model_markers",
     "model_shade",
     "ordered_color",
     "packet_marker",
@@ -132,7 +131,7 @@ def look(kind: str, name: str) -> Look:
     without a slot. An unregistered name takes a stable CRC slot (never ``hash()``, which PYTHONHASHSEED salts)."""
     entries = KINDS.get(kind)
     key = canonical(kind, name)
-    if entries is not None and key in entries.keys():
+    if entries is not None and key in entries.orders:
         index = entries.slot(key)
         return slot_look(index) if index is not None else Look(control_color(), CONTROL_MARKER)
     return slot_look(zlib.crc32(str(name).encode()) % (len(hues()) * len(markers())))
@@ -147,7 +146,7 @@ def slot_color(kind: str, name: str) -> str:
 def ordered_color(kind: str, name: str) -> str:
     """``name``'s tab20 slot within one entity ``kind``, warning when the registry does not name it."""
     entries = KINDS.get(kind)
-    if entries is None or canonical(kind, name) not in entries.keys():
+    if entries is None or canonical(kind, name) not in entries.orders:
         LOG.warning("palette: %s %r is not registered; using a hash colour", kind, name)
     return slot_color(kind, name)
 
@@ -234,7 +233,7 @@ def marker(model: str) -> str:
 def framework_marker(name: str) -> Marker:
     """The marker a framework column wears: a standalone optimizer's shape (:func:`marker`) when the column is one,
     else its slot's (:func:`look`), so a column registered at runtime or by a plugin needs no plot-code edit."""
-    if canonical("optimizers", name) in KINDS["optimizers"].keys():
+    if canonical("optimizers", name) in KINDS["optimizers"].keys():  # noqa: SIM118 -- Kind.keys() is exact; `in` also resolves aliases
         return marker(name)
     return look("frameworks", name).marker
 
@@ -309,18 +308,6 @@ def harness_marker(harness: str) -> Marker:
     """The one SHAPE an agent HARNESS wears (:func:`shape_table`), from the same pool as the packets,
     so a harness and a packet in one figure never share a shape."""
     return treatment_shape("harnesses", harness)
-
-
-def model_markers(models: Iterable[str]) -> dict[str, str]:
-    """``{model: marker}`` for one figure."""
-    chosen = {m: marker(m) for m in dict.fromkeys(models)}
-    seen: dict[str, str] = {}
-    for name, shape in chosen.items():
-        entity = canonical("models", name)
-        if shape in seen and seen[shape] != entity:
-            LOG.warning("palette: models %r and %r both draw %r; extend markers", seen[shape], name, shape)
-        seen[shape] = entity
-    return chosen
 
 
 def framework_color(name: str) -> str:

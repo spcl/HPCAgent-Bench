@@ -119,9 +119,10 @@ def write_generated(out_path: str | pathlib.Path, src: str, *, line_comment: str
 
 
 def write_python_sibling(
-    kernel: pathlib.Path, out_dir: pathlib.Path, config: str | None, framework: str, src: str, prog: str
-) -> int:
-    """Write ``src`` as the ``<short>[_<config>]_<framework>.py`` sibling of ``kernel`` and report it on stdout.
+    kernel: pathlib.Path, out_dir: pathlib.Path, config: str | None, framework: str, src: str
+) -> str:
+    """Write ``src`` as the ``<short>[_<config>]_<framework>.py`` sibling of ``kernel``; :func:`write_generated`'s
+    status.
 
     A sparse config names a distinct sub-benchmark (spmv_csr vs spmv_csc), so the filename carries the
     layout tag.
@@ -129,6 +130,4 @@ def write_python_sibling(
     short = short_for(kernel)
     base = f"{short}_{config}" if config else short
     name = f"{base}_{framework}.py"
-    status = write_generated(out_dir / name, src, source=f"{short}_numpy.py")
-    print(f"{prog}: {status} {name}")
-    return 0
+    return write_generated(out_dir / name, src, source=f"{short}_numpy.py")

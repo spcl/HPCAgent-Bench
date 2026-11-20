@@ -21,6 +21,7 @@
 // Every index table (nl0/nlg, ofsbeta, ijtoh, ikq_iq, ik_iq, tabxx_box) arrives 0-based, the
 // corpus-wide rule -- subscript them bare. QE's 1-based numbering stops at the port boundary.
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstring>
@@ -73,7 +74,7 @@ struct VexxCtx {
   const double *g, *xk_cur, *x_occ, *at, *cfq, *ke, *vcut_a, *vcut_corr, *tabxx_qr;
   const cd *exxbuff, *becpsi, *becxx, *qgm, *qgm_q, *sfac, *sf_q, *eigqts, *vkb, *psi;
   cd *hpsi;
-  const int *nl0, *nlg, *xkq_iq, *ikq_iq, *ik_iq, *ibands, *egrp_pairs, *all_start, *all_end;
+  const int *nl0, *nlg, *ikq_iq, *ik_iq, *ibands, *egrp_pairs, *all_start, *all_end;
   const int *ijtoh, *ofsbeta, *tabxx_box;
   const double *xkq_all; // (3, nqs) pre-sliced k+q
 };

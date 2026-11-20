@@ -17,8 +17,8 @@ import pytest
 from tests.fresh_module import DRIVER_DIR, fresh
 
 SCRIPT = DRIVER_DIR / "effort.py"
-#: What ``openhands.sdk.LLM.reasoning_effort`` is typed for; anything else fails validation.
-OPENHANDS_RUNGS = frozenset({"low", "medium", "high", "xhigh", "none"})
+#: A client that types the field as a Literal without ``max``; anything else fails validation.
+LITERAL_RUNGS = frozenset({"low", "medium", "high", "xhigh", "none"})
 
 
 @pytest.fixture(name="effort", scope="module")
@@ -46,7 +46,7 @@ def test_a_model_with_no_ladder_is_sent_no_field_rather_than_a_guessed_rung(effo
     """Moonshot documents reasoning_effort as a K3-only field, and a rung sent to a server that has
     none is not ignored -- it is a 400 on every request until the agent gives up."""
     assert effort.resolve("") == ""
-    assert effort.for_client("", OPENHANDS_RUNGS) == ""
+    assert effort.for_client("", LITERAL_RUNGS) == ""
 
 
 @pytest.mark.parametrize(
@@ -60,10 +60,10 @@ def test_a_model_with_no_ladder_is_sent_no_field_rather_than_a_guessed_rung(effo
 def test_a_client_that_spells_fewer_rungs_gets_the_top_of_what_it_can_spell(
     effort: types.ModuleType, declared: str, rung: str
 ) -> None:
-    """OpenHands types the field as a Literal, so a rung outside it fails validation and the episode
+    """A client that types the field as a Literal fails validation on a rung outside it, and the episode
     never starts. The clamp is recorded in harness-end.json because it is a real difference between
     that setup and the same setup under another harness."""
-    assert effort.for_client(declared, OPENHANDS_RUNGS) == rung
+    assert effort.for_client(declared, LITERAL_RUNGS) == rung
 
 
 def test_an_unknown_policy_refuses_instead_of_falling_back_to_a_rung(effort: types.ModuleType) -> None:

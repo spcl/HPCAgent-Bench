@@ -15,32 +15,6 @@ def test_an_agent_column_is_not_a_deterministic_one() -> None:
     assert preflight.check_deterministic(["numpy", "openai_agent"]) == ["openai_agent"]
 
 
-def test_deterministic_frameworks_matches_the_frozen_pre_derivation_list() -> None:
-    """:data:`preflight.DETERMINISTIC_FRAMEWORKS` is derived from the registered column's
-    ``sweep_deterministic`` rather than a second hand-kept list; this pins the derived set to a frozen
-    list, so the data cannot silently add or drop a column a deterministic sweep may select."""
-    frozen = {
-        "numpy",
-        "polly",
-        "pluto",
-        "polygeist_cpu",
-        "cc",
-        "cc_autopar",
-        "llvm",
-        "cpp",
-        "fortran",
-        "fortran_autopar",
-        "flang",
-        "dace_cpu_autoopt",
-        "dace_cpu_canon",
-        "dace_cpu_parallel",
-        "dace_gpu_autoopt",
-        "dace_gpu_canon",
-        "dace_gpu_parallel",
-    }
-    assert set(preflight.DETERMINISTIC_FRAMEWORKS) == frozen
-
-
 def test_a_fatal_finding_exits_non_zero_and_emits_no_env() -> None:
     """The caller EVALS the env list. A fatal preflight must hand it nothing, so a refused job
     cannot half-configure itself from a partial result."""

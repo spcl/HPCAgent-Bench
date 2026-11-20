@@ -2,7 +2,7 @@
 # Private serving of Qwen3.8-27B on one beverin node. PRESET picks the hardware and the engine:
 #
 #   PRESET  partition  GPUs       engine  EDF                                 weights             default LEGS
-#   mi300   mi300      4x MI300A  SGLang  hpcagent-bench-sglang-mi300-latest  Qwen3.8-27B-FP8     tp4:0.306
+#   mi300   mi300      4x MI300A  SGLang  hpcagent-bench-sglang-mi300-latest  Qwen3.8-27B         tp4:0.306
 #   mi200   mi200      8x MI250X  vLLM    hpcagent-bench-vllm-mi200-latest    Qwen3.8-27B (BF16)  tp8:0.85
 #
 # MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<memory fraction>" (SGLang
@@ -62,13 +62,13 @@ refuse() {
 
 use_preset() {  # sets the PRESET_* values; key file, triton cache and run root derive from the name
     case "${PRESET:-}" in
-        mi300)  # the qwen38 experiment line (llrbase-c:qwen38, experiments/setups.yaml); 0.306 is node-wide on the APU
-            PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_ENGINE=sglang PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
+        mi300)  # the qwen38 experiment line (llrbase-c:qwen38, experiments/experiments.toml); 0.306 is node-wide on the APU
+            PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_ENGINE=sglang PRESET_MODEL=Qwen/Qwen3.8-27B
             PRESET_EDF=hpcagent-bench-sglang-mi300-latest PRESET_LEGS="tp4:0.306"
             PRESET_FLAGS=(--attention-backend aiter)
             PRESET_ENV=(SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0 SGLANG_WARMUP_TIMEOUT=1800)
             ;;
-        mi200)  # MI250X: no aiter gfx90a kernels, no FP8; the AMD vLLM image (layers/hardware-mi200-qwen38.env).
+        mi200)  # MI250X: no aiter gfx90a kernels, no FP8; the AMD vLLM image ([hardware.mi200.models.qwen38]).
             # TRITON_ATTN: 3.4x the default backend at 40 agents, both gates pass (docs/serving/mi200-endpoint.md)
             PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_ENGINE=vllm PRESET_MODEL=Qwen/Qwen3.8-27B
             PRESET_EDF=hpcagent-bench-vllm-mi200-latest PRESET_LEGS="tp8:0.85"
@@ -96,6 +96,8 @@ ACCESS="${ACCESS:-tunnel}"
 REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
 GATE="${REPO}/containers/inference/verify-tools-reasoning.py"
 [[ -n "${REPO}" && -f "${GATE}" ]] || refuse "no checkout: set REPO or submit from inside one"
+# shellcheck source=private_endpoint.sh
+. "${REPO}/containers/inference/private_endpoint.sh"
 
 KEY_FILE="${KEY_FILE:-${HOME}/.config/hpcagent-bench/${PRESET}-endpoint.key}"
 EDF="${EDF:-${PRESET_EDF}}"
@@ -118,28 +120,6 @@ MONITOR_PID=""
 # The interpreter of the preset's image, which runs the tools gate.
 declare -A IMAGE_PYTHON=([sglang]=/opt/venv/bin/python3 [vllm]=/usr/bin/python3)
 ENGINE_PYTHON="${IMAGE_PYTHON[${PRESET_ENGINE}]}"
-
-# Sets API_KEY, unexported, so srun --export=ALL never carries it.
-read_key_file() {
-    local mode
-    [[ -f "${KEY_FILE}" ]] || refuse "no key file ${KEY_FILE}; create it as the header shows"
-    mode="$(stat -c %a -- "${KEY_FILE}")"
-    [[ "${mode}" == 600 ]] || refuse "key file ${KEY_FILE} is mode ${mode}, not 600"
-    [[ "$(stat -c %u -- "${KEY_FILE}")" == "$(id -u)" ]] || refuse "key file ${KEY_FILE} is not owned by $(id -un)"
-    API_KEY="$(tr -d '\n' < "${KEY_FILE}")"
-    [[ ${#API_KEY} -ge 32 ]] || refuse "key in ${KEY_FILE} is shorter than 32 characters"
-    [[ "${API_KEY}" =~ ^[A-Za-z0-9._~+/=-]+$ ]] || refuse "key in ${KEY_FILE} has characters outside [A-Za-z0-9._~+/=-]"
-}
-
-validate_extra_args() {
-    local word
-    for word in ${EXTRA_ARGS}; do
-        case "${word}" in
-            --host*|--port*|--api*|--admin*|--config*|--tokenizer-worker*|--enable-metrics*)
-                refuse "EXTRA_ARGS may not set ${word%%=*}" ;;
-        esac
-    done
-}
 
 parse_leg() {  # sets LEG_TP and LEG_FRAC
     [[ "$1" =~ ^tp(1|2|4|8):(0\.[0-9]+)$ ]] || refuse "leg '$1' is not tp<1|2|4|8>:<0.fraction>"
@@ -164,32 +144,13 @@ use_access() {  # sets BIND_HOST and METRICS_FLAGS
     [[ "${BIND_HOST}" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || refuse "ACCESS=alps: ${NODE} has no ${iface} IPv4 address"
 }
 
-make_private_dir() {
-    local acl
-    (umask 077 && mkdir -p -- "$1")
-    chmod 700 -- "$1"
-    # Scratch default ACLs (group:csstaff r-x) are inherited and beat umask.
-    if command -v setfacl >/dev/null 2>&1; then setfacl -b -- "$1" 2>/dev/null || true; fi
-    [[ "$(stat -c %a -- "$1")" == 700 ]] || refuse "$1 is not mode 700"
-    if command -v getfacl >/dev/null 2>&1; then
-        acl="$(getfacl -cp -- "$1" 2>/dev/null || true)"
-        if grep -qvE '^(user|group|other)::|^$' <<< "${acl}"; then refuse "$1 still carries extended ACL entries"; fi
-    fi
-}
-
-write_secret() {  # write_secret <file> <line>: printf is a builtin, so the content never reaches argv
-    (umask 077 && printf '%s\n' "$2" > "$1")
-    chmod 600 -- "$1"
-    [[ "$(stat -c %a -- "$1")" == 600 ]] || refuse "$1 is not mode 600"
-}
-
 sglang_argv() {  # sglang_argv <tp> <fraction> <port>: sets SERVER_ARGV
     # shellcheck disable=SC2206 # EXTRA_ARGS is an operator word list
     SERVER_ARGV=(/opt/venv/bin/python3 -m sglang.launch_server
         --config "${RUN_DIR}/sglang-auth.yaml"
         --model-path "${MODEL_REPO}" --served-model-name "${SERVED_MODEL}"
         --tp-size "$1" --mem-fraction-static "$2" "${PRESET_FLAGS[@]}"
-        --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code --language-only
+        --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code --language-only --kv-cache-dtype fp8_e4m3
         --watchdog-timeout 1800 --context-length 262144 --mamba-full-memory-ratio 0.5 --max-running-requests 128
         "${METRICS_FLAGS[@]}" --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
         ${EXTRA_ARGS}
@@ -245,20 +206,8 @@ record_memory() {  # record_memory <dir>
     cat "$1/memory.txt"
 }
 
-http_status() {  # http_status <port> <body> [header-file]
-    local auth=()
-    [[ $# -lt 3 ]] || auth=(-H "@$3")
-    curl -s -o /dev/null -w '%{http_code}' --max-time 600 -H 'Content-Type: application/json' "${auth[@]}" \
-        --data-binary "@$2" "http://${BIND_HOST}:$1/v1/chat/completions" || true
-}
-
 auth_checks() {  # auth_checks <port> <dir>
-    local closed open
-    closed="$(http_status "$1" "${RUN_DIR}/hello.json")"
-    open="$(http_status "$1" "${RUN_DIR}/hello.json" "${RUN_DIR}/auth.header")"
-    printf 'unauthenticated POST: %s (want 401)\nauthenticated POST:   %s (want 200)\n' "${closed}" "${open}" \
-        | tee "$2/auth.txt"
-    [[ "${closed}" == 401 && "${open}" == 200 ]]
+    private_auth_check "http://${BIND_HOST}:$1" "${RUN_DIR}/hello.json" "${RUN_DIR}/auth.header" | tee "$2/auth.txt"
 }
 
 tools_gate() {  # tools_gate <port> <dir>
@@ -402,8 +351,9 @@ cleanup() {
     rm -f -- "${RUN_DIR}/sglang-auth.yaml" "${RUN_DIR}/api.key" "${RUN_DIR}/auth.header"
 }
 
-read_key_file
-validate_extra_args
+private_key "${KEY_FILE}"
+# shellcheck disable=SC2086 # EXTRA_ARGS is an operator word list
+private_refuse_words EXTRA_ARGS ${EXTRA_ARGS}
 use_access
 read -r -a LEG_SPECS <<< "${LEGS}"
 ((${#LEG_SPECS[@]} > 0)) || refuse "LEGS is empty"
@@ -413,13 +363,11 @@ for spec in "${LEG_SPECS[@]}"; do parse_leg "${spec}"; done
 # Partition table, image stamp and rocminfo agree before any secret is written or weights load.
 [[ "${DRY_RUN}" == 1 ]] || bash "${REPO}/containers/images/gpu_arch_check.sh" "${EDF}"
 
-make_private_dir "${RUN_DIR}"
+private_dir "${RUN_DIR}"
 trap cleanup EXIT
 # scancel sends TERM: leave through the EXIT trap so the secret files go.
 trap 'exit 143' TERM INT
-[[ "${PRESET_ENGINE}" != sglang ]] || write_secret "${RUN_DIR}/sglang-auth.yaml" "api-key: \"${API_KEY}\""
-write_secret "${RUN_DIR}/api.key" "${API_KEY}"
-write_secret "${RUN_DIR}/auth.header" "Authorization: Bearer ${API_KEY}"
+private_secrets "${RUN_DIR}"
 printf '{"model": "%s", "messages": [{"role": "user", "content": "Say hi."}], "max_tokens": 16}\n' \
     "${SERVED_MODEL}" > "${RUN_DIR}/hello.json"
 filler="$(printf 'The kernel iterates over the array and accumulates into the result buffer. %.0s' {1..200})"

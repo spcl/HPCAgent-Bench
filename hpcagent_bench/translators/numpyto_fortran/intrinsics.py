@@ -20,6 +20,7 @@ are held back for the neighbouring reason -- ``MAXLOC`` is 1-based where numpy i
 import ast
 from collections.abc import Sequence
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, shape_exprs_equal
 
 __all__ = [
@@ -186,7 +187,7 @@ def conformable_operands(args: Sequence[ast.expr], shapes: dict[str, tuple[str, 
     """
     extents: list[list[str]] = []
     for arg in args:
-        for sub in ast.walk(arg):
+        for sub in walk_nodes(arg):
             if isinstance(sub, ast.Constant) and sub.value is None:
                 return False
         if isinstance(arg, ast.Constant):

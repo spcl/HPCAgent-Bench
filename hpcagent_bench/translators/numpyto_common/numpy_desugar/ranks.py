@@ -3,7 +3,7 @@
 import ast
 from collections.abc import Callable, Iterator, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.lib_nodes import (
@@ -39,7 +39,6 @@ __all__ = [
     "diag_rank",
     "drop_rank_conflicts",
     "einsum_rank",
-    "outer_rank",
     "expand_dims_rank",
     "expr_rank",
     "extent_tokens",
@@ -59,6 +58,7 @@ __all__ = [
     "np_fallthrough_rank",
     "np_reshape_rank",
     "one_axis_rank",
+    "outer_rank",
     "param_body_rank_evidence",
     "rank_table",
     "reduce_call_rank",
@@ -368,7 +368,11 @@ def take_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
         return np_fallthrough_rank(value, attr, ranks)
     base = expr_rank(value.args[0], ranks)
     idx = expr_rank(value.args[1], ranks)
-    return None if base is None or idx is None else base - 1 + idx
+    if base is None or idx is None:
+        return None
+    if len(value.args) < 3 and not any(k.arg == "axis" for k in value.keywords):
+        return idx  # an axis-less take flattens the base first: the result rank is the index's
+    return base - 1 + idx
 
 
 def expand_dims_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
@@ -481,7 +485,7 @@ def name_value_pairs(tree: ast.AST) -> Iterator[tuple[str, ast.expr]]:
 
     ``X, Y, sigma = Y, Ynew, sigma_new`` is three bindings; a loop-carried swap needs them as forward edges.
     """
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         target = node.targets[0]
@@ -516,7 +520,7 @@ def extent_tokens(
     # An unsized ARRAY operand makes the whole expression unsized: ``iter_extent_of`` reports a broadcast's
     # known side, which is wrong for ``v[..., None] * X`` while ``X`` is unknown. Scalars contribute no axis
     # and are never in the table, so only arrays count.
-    if any(n.id in arrays and n.id not in table for n in ast.walk(value) if isinstance(n, ast.Name)):
+    if any(n.id in arrays and n.id not in table for n in walk_nodes(value) if isinstance(n, ast.Name)):
         return None
     ext = iter_extent_of(value, table)
     if ext is None or extent_is_scalar(ext):
@@ -539,7 +543,7 @@ def shape_table(tree: ast.AST, seed: dict[str, tuple[str, ...]]) -> dict[str, tu
     """
     tuple_locals = frozenset(
         node.targets[0].id
-        for node in ast.walk(tree)
+        for node in walk_nodes(tree)
         if isinstance(node, ast.Assign)
         and len(node.targets) == 1
         and isinstance(node.targets[0], ast.Name)
@@ -607,7 +611,7 @@ def drop_rank_conflicts(tree: ast.AST, ranks: dict[str, int], seed: dict[str, in
     program point. One rank per name or none; a caller that needs the rank AT a statement tracks it itself.
     """
     per_name: dict[str, OrderedSet] = {}
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             rank = expr_rank(node.value, ranks)
             if rank is not None:
@@ -716,7 +720,7 @@ def name_binding_index(tree: ast.AST) -> tuple[list[tuple[str, ast.expr]], dict[
     bindings: list[tuple[str, ast.expr]] = []
     first: dict[str, ast.expr] = {}
     body_statements: OrderedSet[int] = OrderedSet()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.ClassDef)):
             body_statements.update(id(stmt) for stmt in node.body)
         elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -770,7 +774,7 @@ def param_body_rank_evidence(fn: ast.FunctionDef) -> dict[str, int]:
         if name in params and r > ev.get(name, 0):
             ev[name] = r
 
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Subscript):
             v = node.value
             if isinstance(v, ast.Attribute) and v.attr == "shape" and isinstance(v.value, ast.Name):
@@ -789,7 +793,7 @@ def return_rank(fn: ast.FunctionDef, ranks: dict[str, int], seed_ranks: dict[str
     prev = active_tuple_lengths
     active_tuple_lengths = build_tuple_lengths(fn, ranks, seed_ranks=seed_ranks)
     try:
-        rs = [expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
+        rs = [expr_rank(n.value, ranks) for n in walk_nodes(fn) if isinstance(n, ast.Return) and n.value is not None]
         known = [r for r in rs if r is not None]
         return max(known) if known else None
     finally:
@@ -819,7 +823,7 @@ def infer_param_ranks(
             if rr is not None and ret_rank.get(fn.name) != rr:
                 ret_rank[fn.name] = rr
                 changed = True
-            for node in ast.walk(fn):
+            for node in walk_nodes(fn):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in by_name:
                     callee = node.func.id
                     for i, arg in enumerate(node.args):
@@ -878,7 +882,7 @@ def agreed_param_ranks(
         if fn.name == kernel_name:
             seed.update(kernel_seed)
         ranks = rank_table(fn, seed, call_returns=returns)
-        for node in ast.walk(fn):
+        for node in walk_nodes(fn):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in by_name):
                 continue
             callee_names.add(id(node.func))
@@ -887,11 +891,11 @@ def agreed_param_ranks(
             for i, pname in enumerate(params):
                 rank = None if unreadable or i >= len(node.args) else expr_rank(node.args[i], ranks)
                 observed.setdefault((node.func.id, pname), set()).add(rank)
-    escaped = {n.id for n in ast.walk(ast.Module(body=list(funcs), type_ignores=[])) if isinstance(n, ast.Name)}
+    escaped = {n.id for n in walk_nodes(ast.Module(body=list(funcs), type_ignores=[])) if isinstance(n, ast.Name)}
     escaped = {name for name in escaped if name in by_name} - {
         n.func.id
         for fn in funcs
-        for n in ast.walk(fn)
+        for n in walk_nodes(fn)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and id(n.func) in callee_names
     }
     agreed: dict[str, dict[str, int]] = {fn.name: {} for fn in funcs}

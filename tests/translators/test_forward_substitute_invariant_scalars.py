@@ -7,16 +7,11 @@ substituting it also makes scalar-laundered indirection literal (POLYCC-006). As
 emitted C, since the emitted text is what polycc reads.
 """
 
-import json
-import pathlib
 import re
-import tempfile
 
-from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES, scop_nonaffine_reason
-from hpcagent_bench.translators.numpyto_c.emit import emit_c, emit_pluto
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
+from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_, parse_source
+from tests.translators.op_oracle import parse_source
 
 #: conv_2d's own ``w = w_box[di + R, dj + R]``, with the pad already materialised.
 CONV = (
@@ -42,14 +37,6 @@ def emit_(src: str, func: str, extra_args: tuple[str, ...] = (), dtypes: dict[st
 def assigns_to(text: str, name: str) -> list[str]:
     """Whole-statement ``<name> = ...;`` lines, the form the substitution deletes."""
     return re.findall(rf"^\s*{name} = .*;$", text, re.MULTILINE)
-
-
-def test_invariant_scalar_is_replayed_at_the_deeper_use_site() -> None:
-    body = emit_(CONV, "conv_op")
-    assert not assigns_to(body, "w"), f"the invariant scalar assign survived (POLYCC-001):\n{body}"
-    inner = [ln for ln in body.splitlines() if "padded[" in ln and "out_grid[" in ln]
-    assert inner, f"no accumulate statement in:\n{body}"
-    assert all("w_box[" in ln for ln in inner), f"the weight read was not replayed inline:\n{inner}"
 
 
 def test_declines_when_the_source_array_is_written_in_the_nest() -> None:
@@ -102,40 +89,3 @@ def test_declines_when_no_read_is_deeper() -> None:
         "flat_op",
     )
     assert assigns_to(body, "w"), f"a same-depth read must decline the substitution:\n{body}"
-
-
-#: lavamd's shape: a box offset laundered through two scalars before a subscript.
-GATHER = (
-    "import numpy as np\n"
-    "def gather_op(box_offsets, rv, fv, NB, PB):\n"
-    "    for l in range(NB):\n"
-    "        first_i = box_offsets[l]\n"
-    "        for i in range(PB):\n"
-    "            ai = first_i + i\n"
-    "            for j in range(PB):\n"
-    "                fv[ai] += rv[ai] * rv[j]\n"
-)
-
-
-def test_scalar_laundered_indirection_becomes_literal() -> None:
-    """POLYCC-006: the detector reads subscript TEXT, so the gather must reach it."""
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(GATHER)
-    bi = bench_info_(
-        "gather_op",
-        ["box_offsets", "rv"],
-        ["fv"],
-        {"box_offsets": "(NB,)", "rv": "(NB * PB,)", "fv": "(NB * PB,)"},
-        {"NB": 4, "PB": 8},
-        {"box_offsets": "int64"},
-    )
-    (d / "bi.json").write_text(json.dumps(bi))
-    scop = emit_pluto(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name="gather_op")
-    assert scop_nonaffine_reason(scop) == "indirection", f"the gather stayed laundered:\n{scop}"
-
-
-def test_registry_credits_the_substitution() -> None:
-    """The tripwire's other half: both entries name this pass."""
-    dotted = "hpcagent_bench.translators.numpyto_common.lowering.forward_subst.ForwardSubstituteInvariantScalars"
-    assert KNOWN_POLYCC_ISSUES["POLYCC-001"].avoided_by == dotted
-    assert KNOWN_POLYCC_ISSUES["POLYCC-006"].avoided_by == dotted

@@ -11,7 +11,9 @@ Numba types a large subset of numpy plus plain loops, so a dense kernel keeps it
 * a ``max`` / ``min`` / ``eye`` call runs through a serial module function and an overlapping slice store
   stores a copy (:mod:`numpyto_numba.parfor`); ``parallel=True`` is dropped only for a form neither fix
   takes (an overlapping ``@=``, a starred unsafe call);
-* every loop stays a ``range``: the emit never writes ``nb.prange``;
+* in a ``parallel=True`` build, the outermost proven independent unit-step ``range`` loop of every loop nest
+  becomes ``nb.prange`` (:mod:`numpyto_numba.prange`), and so does a sparse CSR matvec's row loop; a loop that
+  cannot be proven independent stays a serial ``range``, and a function running inside a prange is a serial build;
 * an augmented store of a reshaped operand is spelled out as a plain store, which numba's parfor
   pass broadcasts correctly (:func:`numpyto_numba.parfor.spell_out_reshape_augassigns`);
 * a ``functools.lru_cache`` / ``cache`` decorator is dropped (:func:`without_memo_decorators`).
@@ -20,9 +22,11 @@ Numba types a large subset of numpy plus plain loops, so a dense kernel keeps it
 import ast
 import re
 
+from hpcagent_bench.translators.numpyto_common import operators
+from hpcagent_bench.translators.numpyto_common.ast_build import set_field
 from hpcagent_bench.translators.numpyto_common.emit_io import assemble_python_module
 from hpcagent_bench.translators.numpyto_common.frontend import PruneSparseDispatch
-from hpcagent_bench.translators.numpyto_common.ir import KernelIR
+from hpcagent_bench.translators.numpyto_common.ir import FLOAT_DTYPES, KernelIR, descs
 from hpcagent_bench.translators.numpyto_numba.lstsq import rewrite_lstsq_rcond
 from hpcagent_bench.translators.numpyto_numba.objmode_fft import rewrite_fft_to_objmode
 from hpcagent_bench.translators.numpyto_numba.parfor import (
@@ -33,9 +37,19 @@ from hpcagent_bench.translators.numpyto_numba.parfor import (
     spell_out_overlapping_augassigns,
     spell_out_reshape_augassigns,
 )
+from hpcagent_bench.translators.numpyto_numba.prange import parallelize_range_loops
 from hpcagent_bench.translators.numpyto_numba.sparse import rewrite_sparse_matmuls
 
-__all__ = ["emit_numba", "emits_parallel", "njit_decorator", "without_memo_decorators", "without_sparse_dispatch"]
+__all__ = [
+    "NarrowFloatLiterals",
+    "declares_float32",
+    "emit_numba",
+    "emits_parallel",
+    "narrow_float_literals",
+    "njit_decorator",
+    "without_memo_decorators",
+    "without_sparse_dispatch",
+]
 
 
 def without_sparse_dispatch(source: str) -> str:
@@ -106,6 +120,48 @@ def njit_decorator(parallel: bool, fastmath: bool) -> str:
     return f"@nb.njit({', '.join(opts)})"
 
 
+class NarrowFloatLiterals(ast.NodeTransformer):
+    """``0.1`` -> ``np.float32(0.1)``: numba has no weak scalars, so a float64 literal promotes a float32 operation.
+
+    A float constant expression narrows whole, once folded in double; as a comparison operand it stays double, as the
+    references compare it (:func:`operators.folded_float_constant`)."""
+
+    __slots__ = ()
+
+    def visit_Compare(self, node: ast.Compare) -> ast.expr:
+        kept = [
+            v if operators.folded_float_constant(v) is not None else self.visit(v)
+            for v in (node.left, *node.comparators)
+        ]
+        set_field(node, "left", kept[0])
+        set_field(node, "comparators", kept[1:])
+        return node
+
+    def visit(self, node: ast.AST) -> ast.AST:
+        if (
+            isinstance(node, ast.expr)
+            and not isinstance(node, ast.Compare)
+            and operators.folded_float_constant(node) is not None
+        ):
+            return ast.parse(f"np.float32({ast.unparse(node)})", mode="eval").body
+        return super().visit(node)
+
+
+def narrow_float_literals(source: str) -> str:
+    """``source`` with every literal in a function body narrowed (:class:`NarrowFloatLiterals`)."""
+    tree = ast.parse(source)
+    for fn in tree.body:
+        if isinstance(fn, ast.FunctionDef):
+            for stmt in fn.body:
+                NarrowFloatLiterals().visit(stmt)
+    return ast.unparse(tree)
+
+
+def declares_float32(kir: KernelIR) -> bool:
+    """Whether the manifest declares every float of the kernel's signature float32."""
+    return {d.dtype for d in descs(kir.arrays, kir.scalars)} & FLOAT_DTYPES == {"float32"}
+
+
 def emit_numba(numpy_source: str, fastmath: bool = False, kir: KernelIR | None = None) -> str:
     """Translate one numpy kernel source into its Numba sibling.
 
@@ -126,8 +182,11 @@ def emit_numba(numpy_source: str, fastmath: bool = False, kir: KernelIR | None =
         unpacked = rewrite_sparse_matmuls(numpy_source, kir)
         if unpacked is not None:
             numpy_source, sparse = unpacked, True
+        if declares_float32(kir):
+            numpy_source = narrow_float_literals(numpy_source)
     numpy_source = rewrite_lstsq_rcond(numpy_source)
-    numpy_source, uses_objmode = rewrite_fft_to_objmode(numpy_source)
+    ranks = {} if kir is None else {array.name: len(array.shape) for array in kir.arrays}
+    numpy_source, uses_objmode = rewrite_fft_to_objmode(numpy_source, ranks)
     numpy_source = spell_out_overlapping_augassigns(numpy_source)
     parallel = emits_parallel(numpy_source)
     copier = None
@@ -166,7 +225,12 @@ def emit_numba(numpy_source: str, fastmath: bool = False, kir: KernelIR | None =
     #    helper is never compiled; a called one must be njit to be callable from
     #    nopython code, so decorating all top-level defs is both correct and free.
     #    The helpers the parfor fixes add must run serial, so they get no ``parallel=True``.
+    #    In a parallel build the outermost proven loop of every nest is a ``nb.prange`` first
+    #    (:func:`parallelize_range_loops`); a function that runs inside one is a serial build too.
     serial = routed | ({copier} if copier is not None else set())
+    if parallel:
+        out, nested = parallelize_range_loops(out, frozenset(serial), None if kir is None else {kir.kernel_name: ranks})
+        serial |= nested
     out = re.sub(
         r"(?m)^def\s+(\w+)\(", lambda m: f"{njit_decorator(parallel and m[1] not in serial, fastmath)}\n{m[0]}", out
     )

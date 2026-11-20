@@ -3,21 +3,24 @@
 
 import ast
 import copy
-from collections.abc import Callable, Mapping, Sequence
+from collections import deque
+from collections.abc import Callable, Container, Iterator, Mapping, Sequence
 from types import EllipsisType
 
 __all__ = [
     "ALL_BLOCK_FIELDS",
-    "attach",
-    "attached",
     "NESTED_BLOCK_FIELDS",
     "ConstantValue",
     "InlineDefinitions",
     "RenameNames",
     "SubstituteLoads",
+    "attach",
+    "attached",
     "callee_attribute",
+    "const_float",
     "const_int",
     "expr_of",
+    "line_of",
     "literal_loads",
     "map_blocks",
     "map_statement_lists",
@@ -26,11 +29,40 @@ __all__ = [
     "nested_blocks",
     "numpy_attribute",
     "numpy_call",
-    "line_of",
     "range_for",
+    "reads_any",
     "set_field",
+    "statement_lists",
     "store_",
+    "walk_nodes",
 ]
+
+
+def walk_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    """:func:`ast.walk`, same nodes in the same order (children queued before the parent is yielded), reading
+    ``_fields`` straight from the node instead of through ``ast.iter_child_nodes``."""
+    todo: deque[ast.AST] = deque((node,))
+    while todo:
+        node = todo.popleft()
+        fields = vars(node)
+        for name in node._fields:
+            value = fields.get(name)
+            if isinstance(value, ast.AST):
+                todo.append(value)
+            elif isinstance(value, list):
+                todo.extend(item for item in value if isinstance(item, ast.AST))
+        yield node
+
+
+def reads_any(node: ast.AST, names: Container[str]) -> bool:
+    """Whether a Name in ``node``'s subtree (``node`` included), read or written, is one of ``names``."""
+    return any(isinstance(sub, ast.Name) and sub.id in names for sub in walk_nodes(node))
+
+
+def positional_defaults(args: ast.arguments) -> dict[str, ast.expr]:
+    """Each defaulted positional parameter with its default; ``ast.arguments`` aligns defaults to the last params."""
+    names = [a.arg for a in args.args]
+    return dict(zip(names[len(names) - len(args.defaults) :], args.defaults, strict=True))
 
 
 def name_(name: str) -> ast.Name:
@@ -82,6 +114,27 @@ def const_int(node: ast.expr | None) -> int | None:
         if inner is not None:
             return -inner if isinstance(node.op, ast.USub) else inner
     return None
+
+
+def const_float(node: ast.expr | None) -> float | None:
+    """``node`` as a Python float, or ``None``. Accepts a signed literal, as :func:`const_int` does."""
+    if isinstance(node, ast.Constant) and type(node.value) is float:
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        inner = const_float(node.operand)
+        if inner is not None:
+            return -inner if isinstance(node.op, ast.USub) else inner
+    return None
+
+
+def refuse_negative_int_power(base: ast.expr, exponent: ast.expr) -> None:
+    """Refuse an integer base under a negated exponent, for a caller that has proven both operands integer.
+
+    Python answers a float and numpy raises, so no integer power helper can stand in for it."""
+    if isinstance(exponent, ast.UnaryOp) and isinstance(exponent.op, ast.USub) or (const_int(exponent) or 0) < 0:
+        raise NotImplementedError(
+            f"{ast.unparse(base)} ** {ast.unparse(exponent)}: an integer to a negative power; use a float base"
+        )
 
 
 class SubstituteLoads(ast.NodeTransformer):
@@ -190,6 +243,12 @@ def set_field(node: ast.AST, field: str, value: object) -> None:
     setattr(node, field, value)
 
 
+def statement_lists(root: ast.AST) -> list[list[ast.stmt]]:
+    """Every non-empty statement list anywhere under ``root``: bodies, else branches and finally blocks, in
+    :func:`walk_nodes` order."""
+    return [block for node in walk_nodes(root) for block in nested_blocks(node) if block]
+
+
 def map_blocks(
     stmt: ast.AST, rewrite: Callable[[list[ast.stmt]], list[ast.stmt]], fields: tuple[str, ...] = NESTED_BLOCK_FIELDS
 ) -> None:
@@ -201,7 +260,7 @@ def map_blocks(
 
 def map_statement_lists(root: ast.AST, rewrite: Callable[[list[ast.stmt]], list[ast.stmt]]) -> None:
     """Replace every statement list anywhere under ``root`` (bodies, branches, handlers) by ``rewrite`` of it."""
-    for node in ast.walk(root):
+    for node in walk_nodes(root):
         for field, value in ast.iter_fields(node):
             if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
                 set_field(node, field, rewrite(value))

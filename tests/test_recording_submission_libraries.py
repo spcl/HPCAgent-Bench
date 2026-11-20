@@ -65,7 +65,7 @@ def test_a_successful_request_records_what_was_asked(tmp_path: pathlib.Path) -> 
     )
     (row,) = grades(db)
     assert json.loads(row["requested_build"]) == ["-lmine"]
-    assert json.loads(row["requests"]) == {"startup": {"load": ["blas"]}}
+    assert Requests.from_recorded(row["requests"]) == Requests.of(libraries=("blas",))
 
 
 def test_a_failed_build_records_the_request_beside_the_failure(tmp_path: pathlib.Path) -> None:
@@ -114,5 +114,5 @@ def test_the_request_rides_on_the_leaderboard_grade_itself(tmp_path: pathlib.Pat
         path=db,
     )
     (row,) = submissions(db)
-    assert json.loads(row["requests"]) == {"startup": {"load": ["blas"]}}
+    assert Requests.from_recorded(row["requests"]) == Requests.of(libraries=("blas",))
     assert row["requested_build"] == ""

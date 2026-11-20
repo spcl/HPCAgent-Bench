@@ -4,7 +4,13 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import NESTED_BLOCK_FIELDS, name_, nested_blocks, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    NESTED_BLOCK_FIELDS,
+    name_,
+    nested_blocks,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import (
     SubstNames,
     collect_assigned_names,
@@ -67,7 +73,7 @@ def collect_none_guarded_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -
         rest = mid[:guard_idx] + mid[guard_idx + 1 :]
         if not all(isinstance(s, (ast.Assign, ast.AugAssign, ast.For, ast.If, ast.Expr, ast.While)) for s in rest):
             return False
-        return not any(isinstance(sub, ast.Return) for s in rest for sub in ast.walk(s))
+        return not any(isinstance(sub, ast.Return) for s in rest for sub in walk_nodes(s))
 
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node is not kernel_fn and classify(node):
@@ -163,12 +169,12 @@ class SpliceNoneGuardedCalls:
         # Every other read of ``name`` would survive the splice with nothing to bind it to.
         readers = sum(
             1
-            for sub in ast.walk(self.current_fn())
+            for sub in walk_nodes(self.current_fn())
             if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load)
         )
         guard = stmts[stmts.index(call_stmt) + 1] if stmts.index(call_stmt) + 1 < len(stmts) else None
         guard_reads = (
-            sum(1 for sub in ast.walk(guard.test) if isinstance(sub, ast.Name) and sub.id == name)
+            sum(1 for sub in walk_nodes(guard.test) if isinstance(sub, ast.Name) and sub.id == name)
             if isinstance(guard, ast.If)
             else 0
         )

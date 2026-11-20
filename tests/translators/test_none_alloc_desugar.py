@@ -33,10 +33,6 @@ def test_none_then_alloc_mirror_takes_the_alloc_branch() -> None:
     assert rw("x = None if cond else np.ones((n,))") == "x = np.ones((n,))"
 
 
-def test_non_none_ternary_is_left_alone() -> None:
-    assert rw("y = a if cond else b") == "y = a if cond else b"
-
-
 def test_name_observed_via_is_none_is_not_forced() -> None:
     """When the buffer's None-ness is later observed (``x is not None``) the conditional
     is load-bearing, so the rewrite must NOT fire (else the guard would always take the

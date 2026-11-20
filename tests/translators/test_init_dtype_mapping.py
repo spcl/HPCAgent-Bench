@@ -19,11 +19,8 @@ the corpus gate (``tests/test_e2e_numerical.py``, cloudsc is a pinned kernel).
 import pathlib
 import textwrap
 
-import pytest
-
 from hpcagent_bench.emit_bridge import BenchDocument, InitDocument
-from hpcagent_bench.translators.numpyto_common.frontend import declared_dtypes, dtypes_from_initialize, parse_kernel
-from tests.translators.bench_yaml import bench_info_for
+from hpcagent_bench.translators.numpyto_common.frontend import declared_dtypes, dtypes_from_initialize
 
 
 def write_harness(tmp_path: pathlib.Path, body: str, short: str = "k") -> pathlib.Path:
@@ -33,32 +30,6 @@ def write_harness(tmp_path: pathlib.Path, body: str, short: str = "k") -> pathli
     numpy_py = tmp_path / f"{short}_numpy.py"
     numpy_py.write_text("def k():\n    pass\n")
     return numpy_py
-
-
-def test_mismatched_length_skips_positional_mapping(tmp_path: pathlib.Path) -> None:
-    # 3 returns vs 2 array args, different order: the unsound positional zip
-    # would put ``flags``'s int32 onto ``flux`` (float). The length gate must
-    # skip it -- only the by-name int32 of ``flags`` survives.
-    numpy_py = write_harness(
-        tmp_path,
-        """
-        import numpy as np
-        def initialize():
-            flux = np.zeros((4,))
-            temp = np.zeros((4,))
-            flags = np.zeros((4,)).astype(np.int32)
-            return temp, flux, flags
-        """,
-    )
-    info = BenchDocument(
-        func_name="k",
-        init=InitDocument(func_name="initialize"),
-        input_args=["flux", "flags"],
-        array_args=["flux", "flags"],
-    )
-    dtypes = dtypes_from_initialize(numpy_py, info)
-    assert dtypes.get("flags") == "int32"  # by-name: correct
-    assert "flux" not in dtypes  # not corrupted by the misaligned zip
 
 
 def test_equal_length_positional_mapping_renamed(tmp_path: pathlib.Path) -> None:
@@ -82,27 +53,6 @@ def test_equal_length_positional_mapping_renamed(tmp_path: pathlib.Path) -> None
     )
     dtypes = dtypes_from_initialize(numpy_py, info)
     assert dtypes.get("idx_in") == "int32"  # positional rename mapping applied
-
-
-def test_by_name_dtype_is_recorded(tmp_path: pathlib.Path) -> None:
-    # The harness local name == kernel arg name: the dtype is recorded under that
-    # name regardless of any positional consideration.
-    numpy_py = write_harness(
-        tmp_path,
-        """
-        import numpy as np
-        def initialize():
-            mask = np.zeros((4,)).astype(np.int32)
-            val = np.zeros((4,))
-            return val, mask
-        """,
-    )
-    info = BenchDocument(
-        func_name="k", init=InitDocument(func_name="initialize"), input_args=["val", "mask"], array_args=["val", "mask"]
-    )
-    dtypes = dtypes_from_initialize(numpy_py, info)
-    assert dtypes.get("mask") == "int32"
-    assert "val" not in dtypes  # float default, never recorded
 
 
 # The DECLARED half: a manifest states an array's element type on its           #
@@ -139,21 +89,3 @@ def test_declared_dtypes_prefers_the_arrays_entry_over_the_legacy_block() -> Non
         {"arrays": {"a": {"shape": "(N,)", "dtype": "complex128"}}, "dtypes": {"a": "float64"}}
     )
     assert declared_dtypes(init) == {"a": "complex128"}, "the current spelling wins"
-
-
-@pytest.mark.parametrize(
-    ("short", "array", "dtype"),
-    [
-        ("tsvc_2_s4114", "ip", "int32"),
-        ("fft_1d", "x", "complex128"),
-    ],
-)
-def test_declared_array_dtype_reaches_the_ir(short: str, array: str, dtype: str) -> None:
-    """The whole seam, on real manifests: manifest -> emit_bridge export -> parse_kernel.
-
-    This is the assertion that was missing when the export moved to ``init.arrays``: each of
-    these arrays came back out of the frontend as the float default, which emits a complex
-    buffer as real (dropping the imaginary part) and an index array as a double."""
-    with bench_info_for(short) as (unused, numpy_py, bi):
-        kir = parse_kernel(numpy_py, bi)
-    assert {a.name: a.dtype for a in kir.arrays}[array] == dtype

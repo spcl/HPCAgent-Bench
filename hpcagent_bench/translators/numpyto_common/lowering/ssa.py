@@ -4,6 +4,7 @@ import ast
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import (
@@ -35,7 +36,7 @@ def read_in(name: str, blocks: tuple[Sequence[ast.AST], ...]) -> bool:
     """
     for block in blocks:
         for stmt in block:
-            for sub in ast.walk(stmt):
+            for sub in walk_nodes(stmt):
                 if not (isinstance(sub, ast.Name) and sub.id == name):
                     continue
                 # Load is the obvious read. An AugAssign target and a `del` also READ the binding
@@ -44,7 +45,7 @@ def read_in(name: str, blocks: tuple[Sequence[ast.AST], ...]) -> bool:
                 if isinstance(sub.ctx, (ast.Load, ast.Del)):
                     return True
                 if isinstance(sub.ctx, ast.Store) and any(
-                    isinstance(anc, ast.AugAssign) and anc.target is sub for anc in ast.walk(stmt)
+                    isinstance(anc, ast.AugAssign) and anc.target is sub for anc in walk_nodes(stmt)
                 ):
                     return True
     return False
@@ -130,7 +131,7 @@ def ssa_rename_reassigned(tree: ast.FunctionDef, arrays_shapes: dict[str, tuple[
     ``LiftFreshArrayFromSlices`` lifter bails on the shape mismatch.
     """
     renamer = SsaRenamer(arrays_shapes, collect_dim_aliases(tree, set(arrays_shapes)))
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.FunctionDef):
             # Per function, like ``version``: a helper's locals are not the kernel's.
             renamer.shape_toks_of.clear()
@@ -372,7 +373,10 @@ def rename_reads(stmt: ast.stmt, rename_map: dict[str, str]) -> None:
     Store-context Name of a ``name = ...`` target is left to the version-mint decision."""
     if isinstance(stmt, (ast.Assign, ast.AugAssign)):
         apply_renames(stmt.value, rename_map)
-        if isinstance(stmt, ast.AugAssign):
+        if isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name):
+            # ``x += y`` reads and writes the binding in force; its Name target carries ctx=Store.
+            stmt.target.id = rename_map.get(stmt.target.id, stmt.target.id)
+        elif isinstance(stmt, ast.AugAssign):
             apply_renames(stmt.target, rename_map)
         else:
             for tgt in stmt.targets:
@@ -392,6 +396,6 @@ def rename_reads(stmt: ast.stmt, rename_map: dict[str, str]) -> None:
 def apply_renames(node: ast.expr, rename_map: dict[str, str]) -> None:
     if not rename_map:
         return
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load) and sub.id in rename_map:
             sub.id = rename_map[sub.id]

@@ -12,7 +12,9 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     name_ids,
     nested_blocks,
     numpy_attribute,
+    numpy_call,
     store_,
+    walk_nodes,
 )
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.initialize import FRAMEWORK_DTYPE_ALIASES
@@ -152,14 +154,14 @@ class FoldSliceLocals:
         folded: set[str] = set()
         for stmt in body:
             binding = None
-            if (
-                isinstance(stmt, ast.Assign)
-                and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name)
-                and isinstance(stmt.value, ast.Call)
-                and slice_call_args(stmt.value) is not None
-            ):
-                binding = (stmt.targets[0].id, slice_from_call(stmt.value))
+            bound = slice_binding_target(stmt)
+            if bound is not None and isinstance(bound[1], ast.Call):
+                binding = (bound[0], slice_from_call(bound[1]))
+            elif bound is not None and isinstance(bound[1], ast.Name) and bound[1].id in live:
+                # ``iz_sl = in_slice``: an inlined helper that returns its window hands it to the
+                # caller's name through a plain copy, which binds the same window.
+                folded.add(bound[1].id)
+                binding = (bound[0], live[bound[1].id])
             else:
                 folded |= self.rewrite_uses(stmt, live)
             blocks = nested_blocks(stmt)
@@ -176,10 +178,15 @@ class FoldSliceLocals:
         return folded
 
     def rewrite_uses(self, stmt: ast.stmt, live: dict[str, ast.Slice]) -> set[str]:
-        """Substitute every live window into this statement's own index slots."""
+        """Substitute every live window into this statement's own index slots.
+
+        Nested blocks are skipped: walk_() revisits them with their own live map, and a window
+        rebound inside an if/for body must not be folded with THIS statement's binding (a folded
+        use is deep-copied, leaving no Name for the inner pass to correct)."""
         folded: set[str] = set()
-        for node in ast.walk(stmt):
-            if not isinstance(node, ast.Subscript):
+        nested = {id(n) for blk in nested_blocks(stmt) for st in blk for n in walk_nodes(st)}
+        for node in walk_nodes(stmt):
+            if id(node) in nested or not isinstance(node, ast.Subscript):
                 continue
             slots = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
             new_slots: list[ast.expr] = []
@@ -197,18 +204,18 @@ class FoldSliceLocals:
 
 
 def slice_bound_names(body: Sequence[ast.stmt]) -> set[str]:
-    """Every name bound to a ``slice(...)`` anywhere inside ``body``, nested blocks included."""
-    out: set[str] = set()
-    for stmt in body:
-        for node in ast.walk(stmt):
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and slice_call_args(node.value) is not None
-            ):
-                out.add(node.targets[0].id)
-    return out
+    """Every name that may be bound to a window anywhere inside ``body``, nested blocks included."""
+    return {bound[0] for stmt in body for node in walk_nodes(stmt) if (bound := slice_binding_target(node)) is not None}
+
+
+def slice_binding_target(node: ast.AST) -> tuple[str, ast.expr] | None:
+    """``(name, value)`` when ``node`` may bind a window to ``name``: ``name = slice(...)``, or
+    ``name = other`` (a copy, which binds a window when ``other`` holds one)."""
+    if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+        return None
+    if isinstance(node.value, ast.Name) or slice_call_args(node.value) is not None:
+        return node.targets[0].id, node.value
+    return None
 
 
 def slice_call_args(value: ast.expr) -> list[ast.expr] | None:
@@ -248,25 +255,32 @@ def drop_dead_slice_bindings(fn: ast.FunctionDef, folds: set[str]) -> None:
     A surviving binding is not harmless: the backends have no slice object at all, so it would be
     emitted as an unsupported call rather than quietly ignored.
     """
-    live = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in folds}
+    dropped = True
 
     def prune(body: Sequence[ast.stmt]) -> list[ast.stmt]:
+        nonlocal dropped
         out: list[ast.stmt] = []
         for stmt in body:
             map_blocks(stmt, prune, ALL_BLOCK_FIELDS)
+            bound = slice_binding_target(stmt)
             if (
-                isinstance(stmt, ast.Assign)
-                and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id in folds
-                and stmt.targets[0].id not in live
-                and slice_call_args(stmt.value) is not None
+                bound is not None
+                and bound[0] in folds
+                and bound[0] not in live
+                and (not isinstance(bound[1], ast.Name) or bound[1].id in folds)
             ):
+                dropped = True
                 continue
             out.append(stmt)
         return out
 
-    fn.body = prune(fn.body)
+    # A dropped copy ``iz_sl = in_slice`` was the last reader of the window it copied: repeat until none is left.
+    while dropped:
+        dropped = False
+        live = {
+            n.id for n in walk_nodes(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in folds
+        }
+        fn.body = prune(fn.body)
 
 
 class ListRepeatToFull(ast.NodeTransformer):
@@ -461,10 +475,10 @@ def reads_only_as_index(fn: ast.FunctionDef, name: str) -> bool:
     them -- are integer expressions for the same reason. A single read anywhere else and the name
     is something the AST cannot type, so nothing is claimed about it."""
     indexed: OrderedSet[int] = OrderedSet()
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Subscript):
-            indexed.update(id(inner) for inner in ast.walk(node.slice))
-    reads = [n for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)]
+            indexed.update(id(inner) for inner in walk_nodes(node.slice))
+    reads = [n for n in walk_nodes(fn) if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)]
     return bool(reads) and all(id(n) in indexed for n in reads)
 
 
@@ -472,7 +486,7 @@ def list_mutated_names(fn: ast.FunctionDef) -> frozenset[str]:
     """Names the body treats as a growable list -- ``append`` / ``pop`` / ``insert`` / ``extend``
     / ``remove``, or a target of ``+=``. An array cannot stand in for any of those."""
     names: set[str] = set()
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -495,8 +509,39 @@ def rename_rebound_parameters(fn: ast.FunctionDef, inputs: frozenset[str]) -> No
     is untouched -- that IS an in-place write -- and an output parameter is excluded, since writing
     it is the point.
     """
-    # Only a TOP-LEVEL rebinding is handled: one inside a loop would need the rename to apply to
-    # reads from the previous iteration too, so those are left exactly as they are.
+    # A rebinding anywhere else -- inside a loop, a branch, or a tuple unpack (``X, Y = Y, Ynew`` in a
+    # Chebyshev recurrence) -- has no single point after which every read sees the new value: the next
+    # iteration reads it through the same name. The function then works on its own copy of the
+    # parameter from entry on, so the caller's buffer is only ever read.
+    top_level = {
+        id(s.targets[0])
+        for s in fn.body
+        if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+    }
+    in_place = {id(node.target) for node in walk_nodes(fn) if isinstance(node, ast.AugAssign)}
+    carried = sorted(
+        {
+            node.id
+            for node in walk_nodes(fn)
+            if isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node.id in inputs
+            and id(node) not in top_level
+            and id(node) not in in_place
+        }
+    )
+    if carried:
+        own = {name: f"__rb_{name}" for name in carried}
+        for node in walk_nodes(fn):
+            if isinstance(node, ast.Name) and node.id in own:
+                node.id = own[node.id]
+        first = fn.body[0] if fn.body else None
+        docstring = int(isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant))
+        fn.body[docstring:docstring] = [
+            ast.Assign(targets=[store_(own[name])], value=numpy_call("copy", [name_(name)])) for name in carried
+        ]
+        inputs = inputs - frozenset(carried)
+    # A TOP-LEVEL rebinding is renamed from its assignment on: reads before it see the parameter.
     rebound = [
         s.targets[0].id
         for s in fn.body
@@ -506,12 +551,13 @@ def rename_rebound_parameters(fn: ast.FunctionDef, inputs: frozenset[str]) -> No
         and s.targets[0].id in inputs
     ]
     if not rebound:
+        ast.fix_missing_locations(fn)
         return
     renamed = {name: f"__rb_{name}" for name in rebound}
     bound: set[str] = set()
 
     def rewrite_loads(node: ast.AST) -> None:
-        for sub in ast.walk(node):
+        for sub in walk_nodes(node):
             if isinstance(sub, ast.Name) and sub.id in bound:
                 sub.id = renamed[sub.id]
 
@@ -552,7 +598,7 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
     nested: set[str] = set()
     for stmt in fn.body:
         if isinstance(stmt, (ast.For, ast.While, ast.If, ast.With, ast.Try)):
-            for sub in ast.walk(stmt):
+            for sub in walk_nodes(stmt):
                 if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
                     nested.add(sub.id)
     # Only a name whose SHAPE is asked for. One descriptor per name is a problem exactly when
@@ -563,7 +609,7 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
     # ``restrict`` over what the call itself aliases (vgg16's ``_maxpool2d(h, h, n)``).
     shape_read = {
         base
-        for node in ast.walk(fn)
+        for node in walk_nodes(fn)
         if isinstance(node, ast.Attribute) and node.attr == "shape" and (base := base_name(node.value))
     }
     # A name a local ALLOCATION is sized by needs separating for the same reason, one step further
@@ -575,12 +621,12 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
     # 256-channel batchnorm at 448.
     shape_read |= {
         sub.id
-        for node in ast.walk(fn)
+        for node in walk_nodes(fn)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr in ("zeros", "empty", "ones", "full")
         and node.args
-        for sub in ast.walk(node.args[0])
+        for sub in walk_nodes(node.args[0])
         if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
     }
     targets = {n for n, c in counts.items() if c > 1 and n not in nested and n not in skip and n in shape_read}
@@ -590,7 +636,7 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
     live: dict[str, str] = {}
 
     def rewrite_loads(node: ast.AST) -> None:
-        for sub in ast.walk(node):
+        for sub in walk_nodes(node):
             if isinstance(sub, ast.Name) and sub.id in live:
                 sub.id = live[sub.id]
 
@@ -615,7 +661,9 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
 class NonFiniteNormalizer(ast.NodeTransformer):
     """Canonicalise IEEE infinity/NaN spellings to ``np.inf``/``np.nan``, the one
     form every backend lowers (native maps it to ``INFINITY``/``NAN``/
-    ``ieee_value``; python backends keep it verbatim).
+    ``ieee_value``; python backends keep it verbatim). ``math.pi`` / ``math.e``
+    become ``np.pi`` / ``np.e`` the same way: the same IEEE value, one spelling
+    the backends fold to a literal.
 
     Covers ``math.inf``/``math.nan`` and ``float('inf'|'-inf'|'nan')`` (any
     casing, ``'infinity'`` spelling too). Without this a bare ``inf`` reaches
@@ -627,7 +675,7 @@ class NonFiniteNormalizer(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
-        if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in ("inf", "nan"):
+        if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in ("inf", "nan", "pi", "e"):
             return ast.copy_location(numpy_attribute(node.attr), node)
         return node
 
@@ -712,13 +760,13 @@ class SubstituteParamAliases(ast.NodeTransformer):
         # A Store context covers every binding form at once: Assign (including a tuple target),
         # AugAssign, a for-loop target and a walrus.
         bare_binds: dict[str, int] = {}
-        for node in ast.walk(fn):
+        for node in walk_nodes(fn):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
                 bare_binds[node.id] = bare_binds.get(node.id, 0) + 1
         # Every ``local = param`` statement counts, at any depth: inlining a helper into a time-step loop
         # leaves its ``f = field`` aliases inside the loop body, and a copy there loses the helper's
         # in-place writes (fv3_dycore's corner fills never reached ``q``).
-        for s in ast.walk(fn):
+        for s in walk_nodes(fn):
             if (
                 isinstance(s, ast.Assign)
                 and len(s.targets) == 1
@@ -838,12 +886,15 @@ class FoldTupleLocals(ast.NodeTransformer):
     literal ``(a, b, c)`` so ``reshape`` sees an ordinary shape tuple.
 
     Conservative: only a ``name = <Tuple>`` bound exactly once and not a parameter is inlined, and
-    only when the tuple is built from values that do not change under a loop. A binding NESTED in a
-    loop counts: ls3df_scf's ``shp = Y.shape`` sits in the per-fragment loop, and a top-level-only
-    scan left ``reshape(shp)`` reading a name that both the rank table and the extent oracle then
-    sized as a single dimension. What makes that safe to lift out of the loop is the second half of
-    the rule -- an element naming a loop VARIABLE has a different value each iteration, so the
-    definition and its uses are not interchangeable and the local stays.
+    only when the tuple is built from values that do not change under a loop or a REBINDING. A
+    binding NESTED in a loop counts: ls3df_scf's ``shp = Y.shape`` sits in the per-fragment loop,
+    and a top-level-only scan left ``reshape(shp)`` reading a name that both the rank table and the
+    extent oracle then sized as a single dimension. What makes that safe to lift out of the loop is
+    the second half of the rule -- an element naming a loop VARIABLE has a different value each
+    iteration, so the definition and its uses are not interchangeable and the local stays. A
+    rebinding is the same hazard off a loop: the substitution re-reads each element at the USE site,
+    so an element bound again after the tuple would trade the snapshot the tuple captured for the
+    live value.
     """
 
     __slots__ = ("params", "subst")
@@ -855,16 +906,16 @@ class FoldTupleLocals(ast.NodeTransformer):
     def collect(self, fn: ast.FunctionDef) -> None:
         loop_vars = {
             n.id
-            for node in ast.walk(fn)
+            for node in walk_nodes(fn)
             if isinstance(node, (ast.For, ast.comprehension))
-            for n in ast.walk(node.target)
+            for n in walk_nodes(node.target)
             if isinstance(n, ast.Name)
         }
         binds: dict[str, int] = {}
-        for s in ast.walk(fn):
+        for s in walk_nodes(fn):
             if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
                 binds[s.targets[0].id] = binds.get(s.targets[0].id, 0) + 1
-        for s in ast.walk(fn):
+        for s in walk_nodes(fn):
             if not (
                 isinstance(s, ast.Assign)
                 and len(s.targets) == 1
@@ -874,7 +925,14 @@ class FoldTupleLocals(ast.NodeTransformer):
                 and binds.get(s.targets[0].id) == 1
             ):
                 continue
-            if any(n.id in loop_vars for n in ast.walk(s.value) if isinstance(n, ast.Name)):
+            if any(n.id in loop_vars for n in walk_nodes(s.value) if isinstance(n, ast.Name)):
+                continue
+            # An element keeps its value only when it is bound at most ONCE here, a parameter counting
+            # as one binding: otherwise the inline re-reads it at the use site with a value the tuple
+            # never held (``shp = (n, m)`` then ``n = n * 2``).
+            if any(
+                binds.get(n.id, 0) + (n.id in self.params) > 1 for n in walk_nodes(s.value) if isinstance(n, ast.Name)
+            ):
                 continue
             self.subst[s.targets[0].id] = s.value
 

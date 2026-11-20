@@ -21,6 +21,7 @@ ROOT_FILES = ("README.md", "CONTRIBUTING.md")
 INLINE = re.compile(r"\]\(<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\)")
 DEFINITION = re.compile(r"^\s*\[[^\]]+\]:\s*<?(\S+?)>?\s*$")
 EXTERNAL = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|#|//)", re.IGNORECASE)
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def markdown_files() -> Iterator[Path]:
@@ -30,11 +31,15 @@ def markdown_files() -> Iterator[Path]:
 
 
 def targets(path: Path) -> Iterator[tuple[int, str]]:
-    fenced = False
+    fence = ""
     for number, line in enumerate(path.read_text().splitlines(), 1):
-        if line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
-        elif not fenced:
+        marker = FENCE.match(line)
+        if fence:
+            closes = marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip()
+            fence = "" if closes else fence
+        elif marker:
+            fence = marker[1]
+        else:
             found = INLINE.findall(line)
             if match := DEFINITION.match(line):
                 found.append(match.group(1))
@@ -45,7 +50,8 @@ def broken(path: Path) -> Iterator[str]:
     for number, target in targets(path):
         if EXTERNAL.match(target):
             continue
-        if not (path.parent / target.split("#")[0]).resolve().exists():
+        resolved = (path.parent / target.split("#")[0]).resolve()
+        if not (resolved.is_relative_to(REPO) and resolved.exists()):
             yield f"{path.relative_to(REPO)}:{number}: broken link -> {target}"
 
 

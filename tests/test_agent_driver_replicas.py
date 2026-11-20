@@ -25,17 +25,25 @@ import pytest
 from tests.fresh_module import fresh
 
 
-def load_example_module(name: str) -> ModuleType:
-    """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    return fresh(name)
-
-
 @pytest.fixture(name="driver")
 def driver_fixture() -> ModuleType:
-    return load_example_module("agent_driver")
+    return fresh("agent_driver")
 
 
 REPLICAS = ["http://a:8000", "http://b:8000", "http://c:8000"]
+
+
+def test_a_replica_that_failed_readiness_is_dropped_from_the_list_workers_read(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run_agent and a fused child read the replicas from the environment after readiness has passed."""
+    monkeypatch.setenv("VLLM_REPLICA_URLS", ",".join(REPLICAS))
+    monkeypatch.setenv("JUDGE_BASE_URL", "http://judge:8080")
+    monkeypatch.setattr(driver, "wait_for_ready_replicas", lambda replicas, _timeout, _headers: replicas[1:])
+    monkeypatch.setattr(driver, "wait_for_json", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(driver, "load_problems", list)
+    assert driver.main() == 2  # no problems: everything up to dispatch has run
+    assert driver.vllm_urls() == REPLICAS[1:]
 
 
 def test_a_late_replica_does_not_abort_the_run(driver: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:

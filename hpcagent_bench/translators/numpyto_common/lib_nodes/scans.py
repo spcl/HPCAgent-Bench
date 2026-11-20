@@ -5,6 +5,7 @@ import copy
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
@@ -15,6 +16,10 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 )
 
 __all__ = [
+    "SCAN_CARRY_DTYPE",
+    "SCAN_CARRY_PREFIX",
+    "carried_scan",
+    "carries_in_compute_dtype",
     "expand_cummax",
     "expand_cummin",
     "expand_cumprod",
@@ -109,13 +114,23 @@ def expand_cumulative(
     op: ast.operator | None,
     kwargs: list[ast.keyword] | None = None,
     combine: Callable[[ast.expr, ast.expr], ast.expr] | None = None,
+    element_dtypes: dict[str, str] | None = None,
+    local_dtypes: dict[str, str] | None = None,
+    opmath: bool = False,
 ) -> list[ast.stmt]:
     """Shared prefix-scan for cumsum/cumprod/maximum.accumulate/minimum.accumulate.
     1-D (or ``axis=None`` over a 1-D operand): ``out[0] = a[0]``, then ``out[i] =
     combine(out[i-1], a[i])``. N-D with ``axis=k``: same recurrence along axis
     ``k``, other axes as outer loops. ``combine`` builds the recurrence from
     ``(prev, cur)``; ``None`` means the binary ``op`` (Add for cumsum, Mult for
-    cumprod)."""
+    cumprod).
+
+    A target stored in a narrow float (:func:`carries_in_compute_dtype`) carries the running value in a
+    float32 scalar instead (``acc = a[0]; out[0] = acc``, then ``acc = combine(acc, a[i]); out[i] = acc``):
+    reading it back from the target rounded the running sum to bf16 / fp8 at every step, which PyTorch's
+    scan never does (an fp8 cumsum of 4096 elements was off by up to 128x). Under numpy semantics the
+    emitter still rounds every update of a storage-only scan to the grid, so only the opmath path changes
+    numerically; a float32 / float64 target keeps the read-back form."""
     a = first_name(args)
     if a is None:
         raise NotImplementedError("cumulative scan needs a bare-Name array")
@@ -152,6 +167,8 @@ def expand_cumulative(
     out_at = lambda e: ast.Subscript(value=name_(target_base), slice=tidx(e), ctx=ast.Load())
     a_at = lambda e: ast.Subscript(value=name_(a.id), slice=idx_(e), ctx=ast.Load())
     sc_prev = ast.BinOp(left=name_(sc), op=ast.Sub(), right=const_(1))
+    if carries_in_compute_dtype((element_dtypes or {}).get(target_base), opmath):
+        return carried_scan(target_base, tidx, a_at, sc, shape[axis], op, combine, local_dtypes, outer, iters, shape)
     # out[..start+0..] = a[..0..]
     init = ast.Assign(
         targets=[ast.Subscript(value=name_(target_base), slice=tidx(const_(0)), ctx=ast.Store())],
@@ -172,13 +189,75 @@ def expand_cumulative(
     return wrap_for_loops([iters[i] for i in outer], [shape[i] for i in outer], inner)
 
 
+#: The scalar a :func:`carried_scan` keeps its running value in, suffixed with the target's name.
+SCAN_CARRY_PREFIX = "__cs_carry_"
+#: The dtype that scalar computes in.
+SCAN_CARRY_DTYPE = "float32"
+
+
+def carries_in_compute_dtype(target_dtype: str | None, opmath: bool) -> bool:
+    """Whether a scan into a ``target_dtype`` array carries its running value in a float32 scalar: a storage-only
+    format (bf16, fp8) always -- the emitter rounds each update to the grid under numpy semantics, so the
+    carry changes nothing there -- and a half target under opmath (numpy's half scan rounds per step)."""
+    if not target_dtype:
+        return False
+    return dtypes.is_storage_only(target_dtype) or (opmath and dtypes.canonical(target_dtype) == "float16")
+
+
+def carried_scan(
+    target_base: str,
+    tidx: Callable[[ast.expr], ast.expr],
+    a_at: Callable[[ast.expr], ast.expr],
+    sc: str,
+    extent: str,
+    op: ast.operator | None,
+    combine: Callable[[ast.expr, ast.expr], ast.expr] | None,
+    local_dtypes: dict[str, str] | None,
+    outer: list[int],
+    iters: dict[int, str],
+    shape: tuple[str, ...],
+) -> list[ast.stmt]:
+    """The scan of :func:`expand_cumulative` with its running value in a float32 scalar (see there)."""
+    carry = f"{SCAN_CARRY_PREFIX}{target_base}"
+    if local_dtypes is not None:
+        local_dtypes[carry] = SCAN_CARRY_DTYPE
+
+    def store(at: ast.expr) -> ast.Assign:
+        return ast.Assign(
+            targets=[ast.Subscript(value=name_(target_base), slice=tidx(at), ctx=ast.Store())], value=name_(carry)
+        )
+
+    if combine is not None:
+        update = combine(name_(carry), a_at(name_(sc)))
+    elif op is not None:
+        update = ast.BinOp(left=name_(carry), op=op, right=a_at(name_(sc)))
+    else:
+        raise ValueError("a cumulative scan needs an operator or a combine function")
+    init = [ast.Assign(targets=[ast.Name(id=carry, ctx=ast.Store())], value=a_at(const_(0))), store(const_(0))]
+    step: list[ast.stmt] = [ast.Assign(targets=[ast.Name(id=carry, ctx=ast.Store())], value=update), store(name_(sc))]
+    inner: list[ast.stmt] = [*init, range_for(sc, [const_(1), const_or_name(extent)], step)]
+    return wrap_for_loops([iters[i] for i in outer], [shape[i] for i in outer], inner)
+
+
 def expand_cumsum(
     target: ast.Name | ast.Subscript,
     args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
+    element_dtypes: dict[str, str] | None = None,
+    local_dtypes: dict[str, str] | None = None,
+    opmath: bool = False,
 ) -> list[ast.stmt]:
-    return expand_cumulative(target, args, shape_table, ast.Add(), kwargs)
+    return expand_cumulative(
+        target,
+        args,
+        shape_table,
+        ast.Add(),
+        kwargs,
+        element_dtypes=element_dtypes,
+        local_dtypes=local_dtypes,
+        opmath=opmath,
+    )
 
 
 def expand_cumprod(
@@ -186,8 +265,20 @@ def expand_cumprod(
     args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
+    element_dtypes: dict[str, str] | None = None,
+    local_dtypes: dict[str, str] | None = None,
+    opmath: bool = False,
 ) -> list[ast.stmt]:
-    return expand_cumulative(target, args, shape_table, ast.Mult(), kwargs)
+    return expand_cumulative(
+        target,
+        args,
+        shape_table,
+        ast.Mult(),
+        kwargs,
+        element_dtypes=element_dtypes,
+        local_dtypes=local_dtypes,
+        opmath=opmath,
+    )
 
 
 def running_extreme_combine(cmp: type[ast.cmpop]) -> Callable[[ast.expr, ast.expr], ast.expr]:

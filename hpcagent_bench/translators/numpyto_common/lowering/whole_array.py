@@ -7,7 +7,14 @@ from types import NotImplementedType
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    name_,
+    numpy_attribute,
+    range_for,
+    reads_any,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend import fold_shape_expr, substitute_inlined_scalar_defs
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import MESHGRID_AXIS_KW, expand_meshgrid
@@ -20,6 +27,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
+    slice_axes,
     slice_step_any,
     wrap_for_loops,
 )
@@ -29,7 +37,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.complex import (
     dtype_carrying_operands,
     scalar_expr_complex,
 )
-from hpcagent_bench.translators.numpyto_common.lowering.indexing import slice_dims
 from hpcagent_bench.translators.numpyto_common.lowering.overlap import (
     OVERLAP_TEMP_PREFIX,
     reads_a_stored_cell,
@@ -44,6 +51,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.views import (
     refuse_scalarising_a_contraction,
 )
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 __all__ = [
     "UNCHANGED",
@@ -311,7 +319,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         # same rewriter a sliced LHS uses -- the target is a fresh full-extent local, so every axis
         # is a full slice starting at 0.
         rhs = copy.deepcopy(value)
-        if any(isinstance(n, ast.Slice) or is_newaxis(n) for n in ast.walk(rhs)):
+        if any(isinstance(n, ast.Slice) or is_newaxis(n) for n in walk_nodes(rhs)):
             iter_nodes = [name_(i) for i in iters]
             full_dims = [ast.Slice(lower=None, upper=None, step=None) for unused in iters]
             zero_ranges = [(const_(0), const_(0)) for unused in iters]
@@ -356,7 +364,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         # ``self_ref`` says the same about a symbolic size: rayleigh_ritz's ``U = U * np.sign(...)``
         # reads the OLD U at every index, so a deferred-malloc emitter may not realloc it either.
         if op is None:
-            self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in ast.walk(value))
+            self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in walk_nodes(value))
             marker = ast.Assign(
                 targets=[store_(target.id)],
                 value=ast.Call(
@@ -525,9 +533,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         idx_names = bare_index_arrays(lead, name, self.shape_table)
         if not idx_names:
             return []
-        carriers = [
-            k for k, e in enumerate(lead) if any(isinstance(n, ast.Name) and n.id in idx_names for n in ast.walk(e))
-        ]
+        carriers = [k for k, e in enumerate(lead) if reads_any(e, idx_names)]
         if slice_axes and len(carriers) != 1:
             # Two advanced positions broadcast into ONE result axis block; this loop gives each its
             # own iter, which is a different (wrong) pairing.
@@ -548,7 +554,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 )
         extent = self.shape_table[idx_name0][0]
         it = "__sc0"
-        rhs_carries_index = any(isinstance(n, ast.Name) and n.id in idx_names for n in ast.walk(value))
+        rhs_carries_index = reads_any(value, idx_names)
         new_lead, plan = self.scatter_plan(lead, name, slice_axes, carriers, idx_names, extent, rhs_carries_index)
         iters = [i for i, unused in plan]
         bounds = [b for unused, b in plan]
@@ -820,9 +826,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             isinstance(target, ast.Subscript)
             and isinstance(target.value, ast.Name)
             and target.value.id in self.shape_table
-            and isinstance(target.slice, ast.Slice)
-            and target.slice.lower is None
-            and target.slice.upper is None
+            and is_full_slice(target.slice)
         ):
             # Skip constructor-style calls (np.repeat / reshape /
             # transpose / mgrid / zeros etc.) -- they are NOT
@@ -1083,7 +1087,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         of 8 bins that way, and nothing on the path said a word. The scatter side already refuses
         this (see "index array ... is not a known integer dtype"); the read side did not.
         """
-        for sub in ast.walk(value):
+        for sub in walk_nodes(value):
             if not (
                 isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name) and isinstance(sub.slice, ast.Name)
             ):
@@ -1121,11 +1125,11 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         # are accessed in lower-rank form via the Subscript, so the
         # bare Name's full-rank shape is not the relevant constraint.
         subscript_targets: set[str] = set()
-        for sub in ast.walk(expr):
+        for sub in walk_nodes(expr):
             if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
                 subscript_targets.add(sub.value.id)
         has_array = False
-        for sub in ast.walk(expr):
+        for sub in walk_nodes(expr):
             if isinstance(sub, ast.Name):
                 if sub.id in subscript_targets:
                     continue
@@ -1147,8 +1151,8 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         leaves no bare array Name to constrain, so the extent is read off the slices themselves:
         True when there is one and every one matches the target."""
         has_array = False
-        for sub in ast.walk(expr):
-            if not (isinstance(sub, ast.Subscript) and any(isinstance(e, ast.Slice) for e in slice_dims(sub))):
+        for sub in walk_nodes(expr):
+            if not (isinstance(sub, ast.Subscript) and any(isinstance(e, ast.Slice) for e in slice_axes(sub))):
                 continue
             extent = iter_extent_of(sub, self.shape_table)
             if extent is None:

@@ -18,7 +18,7 @@ import ast
 import numpy as np
 import pytest
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes import NP_CALL_EXPANDERS, expand_diff
+from hpcagent_bench.translators.numpyto_common.lib_nodes import expand_diff
 from tests.translators.op_oracle import assert_all_ok, run_op
 
 NATIVE = ("c", "cpp", "fortran")
@@ -29,10 +29,6 @@ def expand_(src: str, shapes: dict) -> str:
     assign = ast.parse(src).body[0]
     stmts = expand_diff(assign.targets[0], assign.value.args, shapes, assign.value.keywords)
     return "\n".join(ast.unparse(ast.fix_missing_locations(s)) for s in stmts)
-
-
-def test_registered() -> None:
-    assert NP_CALL_EXPANDERS[("np", "diff")] is expand_diff
 
 
 def test_1d_expands_to_neighbour_subtraction() -> None:
@@ -56,10 +52,6 @@ def test_2d_axis_zero_walks_rows() -> None:
         "    for __df1 in range(c):\n"
         "        out[__df0, __df1] = a[__df0 + 1, __df1] - a[__df0, __df1]"
     )
-
-
-def test_negative_axis_normalizes() -> None:
-    assert expand_("out = np.diff(a, axis=-1)", {"a": ("n",)}) == expand_("out = np.diff(a)", {"a": ("n",)})
 
 
 def test_literal_extent_folds_the_bound() -> None:

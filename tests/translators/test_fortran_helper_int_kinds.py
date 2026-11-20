@@ -8,6 +8,8 @@ declaration; the contained helper mapped every non-int64 integer local to ``int3
 ``integer(c_int16_t)`` local met a ``3_c_int32_t`` literal and gfortran rejected the ``IAND``.
 """
 
+import re
+
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 from hpcagent_bench.translators.numpyto_fortran.intrinsics import renders_natively
@@ -38,14 +40,7 @@ def test_helper_and_kernel_suffix_an_int16_bitwise_literal_alike() -> None:
     src = emitted()
     kernel, helper = src.split("contains", 1)
     assert "IAND(m, 3_c_int16_t)" in kernel, kernel
-    assert "IAND(m, 3_c_int16_t)" in helper, helper
+    # The helper's ``m`` may carry a private suffix: the kernel binds an ``m`` of its own, and a helper
+    # local named like a caller's is renamed (helper_params.rename_shadowing_bindings).
+    assert re.search(r"IAND\(m(_\d+)?, 3_c_int16_t\)", helper), helper
     assert "3_c_int32_t" not in src, src
-
-
-def test_a_narrow_integer_scalar_parameter_is_declared_with_the_integers() -> None:
-    """Every integer kind joins the integer-scalar group ahead of the arrays (``dtypes.is_integer``),
-    not only int32/int64: an ``int16`` scalar landed after the arrays with the real scalars."""
-    src = "import numpy as np\ndef f(a, k, out):\n for i in range(a.shape[0]):\n  out[i] = a[i] * k\n"
-    kir = parse_source(src, "f", ["a", "k"], ["out"], {"a": "(N,)", "out": "(N,)"}, {"N": 8}, {"k": "int16"})
-    text = emit_fortran(lower(kir, native_call=renders_natively), fn_name="f")
-    assert text.index("integer(c_int16_t), value, intent(in) :: k") < text.index(":: a(N)"), text

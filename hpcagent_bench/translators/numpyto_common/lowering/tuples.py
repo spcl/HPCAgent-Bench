@@ -4,6 +4,7 @@ import ast
 import copy
 from collections.abc import Mapping, Sequence
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 from hpcagent_bench.translators.numpyto_common.statement_desugar import Spelled, SplitTupleUnpack
 
@@ -66,7 +67,7 @@ def fill_empty_blocks(tree: ast.AST) -> None:
     statement removal -- an empty ``for`` / ``while`` / ``if`` body is invalid
     Python and fails the next parse / compile. An empty ``orelse`` (no ``else``
     clause) is left as-is; only the primary body must be non-empty."""
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, BLOCK_STMT_TYPES) and not node.body:
             filler = ast.Pass()
             ast.copy_location(filler, node)
@@ -117,10 +118,10 @@ class TupleLocalPropagator(ast.NodeTransformer):
 
     def run(self, tree: ast.AST) -> "TupleLocalPropagator":
         store_counts: dict[str, int] = {}
-        for n in ast.walk(tree):
+        for n in walk_nodes(tree):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
                 store_counts[n.id] = store_counts.get(n.id, 0) + 1
-        for stmt in ast.walk(tree):
+        for stmt in walk_nodes(tree):
             if not (
                 isinstance(stmt, ast.Assign)
                 and len(stmt.targets) == 1
@@ -132,7 +133,7 @@ class TupleLocalPropagator(ast.NodeTransformer):
             ):
                 continue
             target = stmt.targets[0].id
-            reads = {n.id for e in stmt.value.elts for n in ast.walk(e) if isinstance(n, ast.Name)}
+            reads = {n.id for e in stmt.value.elts for n in walk_nodes(e) if isinstance(n, ast.Name)}
             # A reassigned element name is unstable; a self-referential tuple would
             # inline a Name whose defining assign we are about to drop.
             if target in reads or any(store_counts.get(name, 0) > 1 for name in reads):

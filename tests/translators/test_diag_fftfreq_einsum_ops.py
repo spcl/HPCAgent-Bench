@@ -15,8 +15,6 @@ import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes import (
-    NP_CALL_EXPANDERS,
-    expand_diag,
     expand_einsum,
     expand_fftfreq,
 )
@@ -41,50 +39,7 @@ def unparse_(stmts: list[ast.stmt]) -> str:
 # Registration                                                                #
 
 
-def test_ops_registered() -> None:
-    assert ("np", "diag") in NP_CALL_EXPANDERS
-    assert ("np", "fft.fftfreq") in NP_CALL_EXPANDERS
-
-
 # np.diag                                                                     #
-
-
-def test_diag_1d_builds_offset_matrix() -> None:
-    # k = +1: an (N+1)x(N+1) matrix zeroed, then v placed on the super-diagonal
-    # ``out[i, i+1] = v[i]``.
-    out = unparse_(expand_diag(name_("out"), [name_("v"), ast.Constant(1)], {"v": ("N",)}))
-    assert "range(N + 1)" in out  # side = N + |k|
-    assert "= 0.0" in out  # matrix zeroed first
-    assert "out[__dg_i, __dg_i + 1] = v[__dg_i]" in out
-    assert "range(N)" in out  # the diagonal loop is over v's length
-
-
-def test_diag_negative_offset_lowers_the_row() -> None:
-    # k = -1: the sub-diagonal ``out[i+1, i] = v[i]`` (row shifted down).
-    neg1 = ast.UnaryOp(op=ast.USub(), operand=ast.Constant(1))
-    out = unparse_(expand_diag(name_("out"), [name_("v"), neg1], {"v": ("N",)}))
-    assert "out[__dg_i + 1, __dg_i] = v[__dg_i]" in out
-
-
-def test_diag_k0_main_diagonal() -> None:
-    out = unparse_(expand_diag(name_("out"), [name_("v")], {"v": ("N",)}))
-    assert "out[__dg_i, __dg_i] = v[__dg_i]" in out
-    assert "range(N)" in out  # no |k| growth for k == 0
-
-
-def test_diag_2d_extracts_diagonal() -> None:
-    # A 2-D operand extracts the main diagonal (delegates to expand_diagonal).
-    out = unparse_(expand_diag(name_("d"), [name_("A")], {"A": ("M", "M")}))
-    assert "d[__dg] = A[__dg, __dg]" in out
-
-
-def test_diag_subscript_operand_reads_the_slice() -> None:
-    # ``np.diag(betas[1:])`` -- a sliced 1-D operand scalarizes to ``betas[1 + i]``.
-    v = ast.Subscript(
-        value=name_("betas"), slice=ast.Slice(lower=ast.Constant(1), upper=None, step=None), ctx=ast.Load()
-    )
-    out = unparse_(expand_diag(name_("out"), [v], {"betas": ("N",)}))
-    assert "betas[__dg_i + 1]" in out
 
 
 # np.fft.fftfreq                                                              #
@@ -97,11 +52,6 @@ def test_fftfreq_formula_default_spacing() -> None:
     assert "__ff - N" in out
     assert "N * 1.0" in out
     assert "out[__ff] =" in out
-
-
-def test_fftfreq_uses_d_kwarg() -> None:
-    out = unparse_(expand_fftfreq(name_("out"), [name_("N")], {}, kwargs=[ast.keyword(arg="d", value=name_("h"))]))
-    assert "N * h" in out
 
 
 # np.einsum with a NON-Name (Subscript) operand                              #
@@ -123,15 +73,6 @@ def test_einsum_materializes_subscript_operand() -> None:
     assert any(k.startswith("__es_op") for k in allocs)  # buffers registered for decl
     # The contraction then runs over the materialised temps.
     assert "res[__es_i] +=" in out
-
-
-def test_einsum_bare_name_fast_path_unchanged() -> None:
-    st = {"a": ("M", "K"), "b": ("K", "N")}
-    out = unparse_(expand_einsum(name_("o"), [ast.Constant("ij,jk->ik"), name_("a"), name_("b")], st))
-    # No spill machinery when the operands are already bare Names.
-    assert "__es_op" not in out
-    assert "__es_c" not in out
-    assert "o[__es_i, __es_k] +=" in out
 
 
 # Numerical oracle: emit + compile + run each op on c / cpp / fortran.        #

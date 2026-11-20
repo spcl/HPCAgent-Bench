@@ -16,9 +16,8 @@ containers/
     install_edfs.sh          render ~/.edf/<edf>.toml for every row of a platform
     <image>/                 Dockerfile, image.sh (its own build inputs) and the EDF template(s):
                              edf.toml.in, or agent.edf.toml.in + judge.edf.toml.in for a pair
-  lib/                     build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
+    lib/                     build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
   inference/               serving jobs, weight fetch, serving smokes and gates, tuned MoE configs
-  judge/                   .env.example for the web-search tool (hpcagent_bench/harness/judge_web_search.py)
 ```
 
 The agent payload (prompt fragments, MCP tools, method packets, harness pins) is `agent/` at the
@@ -58,7 +57,7 @@ verifies it (promote it with `CE_IMAGE_FLAVOR=native`, as the job's last line sa
 to build the portable image instead. `containers/images/DOCKERHUB.md` is the repository's Docker Hub overview; an
 admin of the `spcleth` organization pastes it in (editing the overview needs admin rights, a push does not).
 
-Code an agent writes and every baseline the judge compiles (C, C++, Fortran, Pluto, PPCG, pythran,
+Code an agent writes and every baseline the judge compiles (C, C++, Fortran, Pluto, PPCG,
 DaCe) are built on the node with `-march=native` either way; the choice only changes the
 libraries and tools inside the image.
 
@@ -76,6 +75,23 @@ containers/images/registry.sh promote judge-agent-amd judge   # after it passes;
 With `CE_IMAGE_FLAVOR=native` set at submission, an experiment's agent and judge EDFs become the
 `-native` ones (`hpcagent_bench/cluster/submit_common.sh` `apply_flavor`), as do the default EDFs of the
 standalone scripts (regrade, preflight).
+
+### A frozen release
+
+`CE_IMAGE_RELEASE=v<N>` names one release for every role, so a campaign runs in images nothing can repoint while it
+runs. Freeze the live images once, after the last promote of the release:
+
+```bash
+CE_IMAGE_RELEASE=v10 containers/images/install_edfs.sh   # hpcagent-bench-agent-mi300-latest-v10, ...-judge-mi200-latest-v10, ...
+```
+
+Each EDF `<edf>-v10` mounts `<sqsh stem>-v10.sqsh`, a hard link of the live squashfs (no copy) with copies of its
+`.digest` and `.sha256`. A later promote renames a new image over the live name and a pull removes the live file
+before writing it, so the link keeps the image it froze, and `install_edfs.sh` never rewrites a release EDF that
+exists (`ALLOW_REPOINT` does not apply; `registry.sh promote` renders the live names only). With the same variable
+set at submission, `submit.sh` and `serve-only.sbatch` append `-v10` to every `*_CE_ENV`, serving included
+(`submit_common.sh` `apply_release`), so each setup's env snapshot names the release it ran in and `inference.json`
+its serving EDF; the frozen `.digest` is the image identity a table cites.
 
 A plain `podman build` / `docker build` of a Dockerfile, without the build scripts, is a native
 build too: `SPACK_TARGET` defaults to empty, which is spack's host detection. Every image records
@@ -101,19 +117,17 @@ ONE image and ONE registry tag, `<thing>-latest`, per thing we run. An AMD image
 which renders that partition's arch for run-time JIT builds. Rows with a `-` directory are such
 EDF-only views of another row's image.
 
-| image (tag) | build directory | CPU / GPU targets | EDFs |
-|---|---|---|---|
-| `agent-amd-latest`, `judge-amd-latest` | `judge-agent-amd` (targets `agent`, `judge`) | x86-64-v3; gfx90a, gfx942, gfx950 | `hpcagent-bench-{agent,judge}-{mi300,mi200}-<flavor>`, `judge-{mi300,mi200}-mlscale-<flavor>` |
-| `sglang-mi300-latest` | `sglang` | gfx942 (the upstream base is MI300-only) | `hpcagent-bench-sglang-mi300-latest` |
-| `vllm-amd-latest` | `vllm` | gfx90a, gfx942, gfx950 | `hpcagent-bench-vllm-{mi300,mi200}-latest` |
-| `agent-nvidia-latest`, `judge-nvidia-latest` | `judge-agent-cuda` (targets `agent`, `judge`) | armv8.2-a; sm_80, sm_90, sm_100, sm_120 | `hpcagent-bench-{agent,judge}-gh200-<flavor>` |
-| `vllm-gh200-latest` | `vllm-cuda` | aarch64; the official build | `hpcagent-bench-vllm-gh200-latest` |
-| `agent-cpu-<arch>-latest`, `judge-cpu-<arch>-latest` | `judge-agent-cpu` (targets `agent`, `judge`) | x86-64-v3 or armv8.2-a | `hpcagent-bench-{agent,judge}-cpu-<arch>-<flavor>` |
+The table of images (tag, build directory, CPU and GPU targets, toolkit, EDF) is in
+[docs/containers.md](../docs/containers.md#the-images). Each `judge-agent-*` directory builds two targets, `agent`
+and `judge`; `verifier` is one commit over the platform's judge, for Harbor. The agent and judge EDFs exist per
+`<flavor>` (`latest`, `native`), and the AMD judge also has `judge-{mi300,mi200}-mlscale-<flavor>`.
 
 CPU targets: [download or build natively](#getting-the-images-download-default-or-build-natively).
 
-The `agent` target is the whole toolchain without `hpcagent_bench`; `judge` is `agent` plus the
-KernelBench data. Neither carries the package, nor any Python but what it builds from source: torch, jax, triton,
+The `agent` target is the whole toolchain without `hpcagent_bench`; `judge` is `agent` with the judge's launch sync,
+and it reads `third_party/KernelBench` from the mounted checkout, so check the submodule out first
+(`git submodule update --init third_party/KernelBench`): a judge step refuses to start without it.
+Neither carries the package, nor any Python but what it builds from source: torch, jax, triton,
 dace and the rest of `uv.lock` are installed when a job starts, into a node-local venv shared by every step of the
 node and reused by later jobs with the same pins (`lib/launch_venv.sh`, the ENTRYPOINT; `images/IMAGE_REQUIREMENTS.md`,
 "The launch venv"). A judge job's venv also installs `hpcagent_bench` editable from the checkout its EDF mounts at
@@ -125,11 +139,11 @@ the judge reads them from the host checkout.
 Every build writes a candidate squashfs (the podman image's root filesystem through `mksquashfs`, in `build_common.sh`
 `ce_squash_image`; plus `.digest`, `.sha256` and an `.oci.tar` for publishing),
 verifies it inside itself, and leaves promotion to a separate, explicit step. A mounted squashfs is
-held by its inode, so promotion is safe while jobs run. There is no layer cache between build jobs.
+held by its inode, so promotion is safe while jobs run. Layers persist between build jobs in a registry on scratch
+(`CE_LAYER_CACHE`, default 1; `build_common.sh`).
 
 Run everything below from `containers/images/` of a checkout under `$SCRATCH` (the EDFs
-mount `$SCRATCH` and the iopsstor scratch, not `$HOME`). The judge stage COPYs `third_party/KernelBench`, so check
-the submodule out first (`git submodule update --init third_party/KernelBench`); a build says so before it starts.
+mount `$SCRATCH` and the iopsstor scratch, not `$HOME`).
 A build reads the checkout until its last stage (COPY steps run hours in), so start it from a worktree nothing
 edits while it runs, e.g. `git worktree add --detach $SCRATCH/hpcagent-bench-wt/frozen-<sha> <sha>`, and remove
 that worktree once the build and its verification are done.
@@ -167,7 +181,7 @@ Build gates prove that an engine imports, not that it serves, so a serving candi
 before promotion with `hpcagent_bench/cluster/serve-only.sbatch` (SGLang and vLLM alike),
 which serves what an experiment serves: copy `~/.edf/hpcagent-bench-vllm-mi300-latest.toml` to
 `~/.edf/candidate-vllm.toml` with `image` pointing at the vllm role's candidate squashfs, then
-run `SERVE_ENV_FILE=<copy of serve-only.env plus INFERENCE_CE_ENV=candidate-vllm> MODEL=oss120b
+run `SERVE_ENV_FILE=<an env file with INFERENCE_CE_ENV=candidate-vllm> MODEL=oss120b
 hpcagent_bench/cluster/serve-only.sbatch` and query the endpoint it prints.
 
 One vLLM release everywhere: `vllm` and `vllm-cuda` both pin v0.28.0 by base-image digest.
@@ -191,13 +205,13 @@ cd <checkout under $SCRATCH>/containers/images
 sbatch build_and_verify.sbatch vllm-cuda          # < 1 h
 sbatch build_and_verify.sbatch judge-agent-cuda   # up to 24 h cold
 
-CE_PLATFORM=gh200 ./registry.sh promote --all     # renders the gh200 EDFs
+./registry.sh promote --all                       # renders this host's EDFs (ce_platform)
 ```
 
 `judge-agent-cuda` carries the CUDA counterparts of `judge-agent-amd`: nvcc, cuBLAS/cuFFT/cuSOLVER/
 cuSPARSE/cuRAND/cuTENSOR/NCCL, NVHPC (OpenACC), LLVM OpenMP offload to `sm_90`, CUDA-aware MPICH
 (netmod=ofi, host Slurm PMI), PETSc/MAGMA/SuperLU_DIST/STRUMPACK/SUNDIALS `+cuda`, PAPI cuda/nvml,
-Nsight, cupy, jax, Pluto, ppcg, dace and every agent harness. Its base is NGC PyTorch 26.09 (CUDA 13.4.1),
+Nsight, Pluto and ppcg. Its base is NGC PyTorch 26.09 (CUDA 13.4.1),
 so the CE's `aws_ofi_nccl` plugin variant is `cuda13`; `vllm-cuda` is CUDA 12.9 and keeps `cuda12`. The
 serving smoke checks the plugin loads. nvcc uses the image's own gcc 16 and LLVM 22 as its host compilers
 (CUDA 13.4 supports GCC 6-16 and Clang 7-22), with no compiler waiver.
@@ -216,18 +230,18 @@ From a Daint job, a Beverin endpoint served with `serve-private.sbatch` (`ACCESS
 checks the endpoint and exports `VLLM_BASE_URL`, `VLLM_API_KEY` and `VLLM_MODEL`. For an experiment the
 endpoint is a service setup (`hpcagent_bench/cluster/inference_service.py`) with
 `AMD_CE_ENV=hpcagent-bench-agent-gh200-latest` and `JUDGE_CE_ENV=hpcagent-bench-judge-gh200-latest`.
-`hpcagent_bench/cluster/run_cluster.sh` and the `experiments/layers/*.env` model layers are beverin-shaped.
+`hpcagent_bench/cluster/run_cluster.sh` and the `[model.*]` tables of `experiments/experiments.toml` are beverin-shaped.
 
 ### CPU only (any node, x86_64 or aarch64)
 
 The light judge+agent pair: gcc 16, clang/flang 22 with Polly, OpenBLAS/BLIS/FFTW/ScaLAPACK/HDF5/
 SuiteSparse/SuperLU/METIS/Scotch/ARPACK/MUMPS-seq, a spack MPICH (no Open MPI from apt), tblis,
-HPTT, Pluto, numba, dace and the harnesses; no GPU stack, about an hour to build.
+HPTT and Pluto; no GPU stack, about an hour to build.
 
 ```bash
 export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=<partition of the target architecture>
 sbatch build_and_verify.sbatch judge-agent-cpu
-CE_PLATFORM=cpu ./registry.sh promote --all
+./registry.sh promote --all
 srun -N1 --environment=hpcagent-bench-judge-cpu-$(uname -m)-latest python3 -c 'import hpcagent_bench, dace'
 ```
 
@@ -243,8 +257,7 @@ podman save hpcagent_bench:judge -o hpcagent_bench-judge.tar
 apptainer build hpcagent_bench-judge.sif docker-archive:hpcagent_bench-judge.tar
 ```
 
-`helpers/scripts/run_agent_in_container.sh` and the CLI's container launch (`hpcagent_bench/containers.py`) run
-inside the local tag `hpcagent_bench:<cpu|nvidia|amd>`, so tag a judge target that way, or name it with
+`helpers/scripts/run_agent_in_container.sh` runs inside the local tag `hpcagent_bench:<cpu|nvidia|amd>`, so tag a judge target that way, or name it with
 `HPCAGENT_BENCH_DOCKER_IMAGE` / `HPCAGENT_BENCH_SIF`. The Harbor adapter pulls the registry tags `images:` in
 `hpcagent_bench/config.py` names. `nvidia` is `judge-agent-cuda` and `amd` is `judge-agent-amd`; their `image.sh`
 shows the further build args they take ([docs/containers.md](../docs/containers.md)).
@@ -274,7 +287,7 @@ run time. With no hook, the image's own `LD_LIBRARY_PATH` reaches `/opt/ofi-fall
 libfabric with the `tcp` and `sockets` providers, so MPI runs over TCP with nothing from the host:
 
 ```bash
-podman run --rm --device /dev/kfd --device /dev/dri <image> fi_info -p tcp -l
+podman run --rm -e HPCAGENT_BENCH_LAUNCH_VENV=0 --device /dev/kfd --device /dev/dri <image> fi_info -p tcp -l
 ```
 
 For a fast fabric there are two ways in, lightest first:
@@ -313,7 +326,18 @@ xGMI regardless.
 `registry.sh push` publishes a role's live `<sqsh>.oci.tar` under its one tag in `REGISTRY_REPO`
 (`docker.io/spcleth/hpcagent-bench`); a push replaces the tag, and the digest pins a version.
 `--check` runs every registry gate (10 GB per layer, 100 GB per image, portable flavor, `-latest`
-tag) and sends nothing. Credentials come only from the environment.
+tag) and sends nothing. Credentials come only from the environment. With `trivy` on `PATH` the preflight also writes a
+CVE report beside the archive (`.scan.txt`, its first line the digest); it informs and never refuses. A push that
+succeeded replaces the archive with a `.pushed` marker naming the tag and digest, and a role whose marker names its
+target counts as done, so `push --all` resumes after a partial failure.
+
+There is one tag per CPU family (`agent-nvidia-latest`, `agent-nvidia-x86_64-latest`, `agent-cpu-<arch>-latest`), not
+one multi-arch manifest: the families differ in more than the architecture (their `CUDA_ARCHS` lists), and a manifest
+list would hand a host whichever image its architecture names.
+
+`registry.sh prune [--days N] <role>... | --all` removes unverified candidates and the base-image copies no Dockerfile
+names any more, once idle N days (7). `build.sh <image> --drift` compares a checkout's fingerprints with the published
+labels; CI reports it on every push to `main` (x86_64 targets: the runner's family decides the roles).
 
 ```bash
 sbatch registry.sbatch push --check --all
@@ -341,6 +365,62 @@ BLIS comes from apt for the same gcc 16 reason. OpenBLAS holds the `libblas.so.3
 alternatives. `perf` comes from `linux-perf` where the base packages it, else from the
 `linux-tools-*` binary directly.
 
+### Site compilers
+
+Three compilers no image carries are installed by hand into a user prefix, without root, for the `cc_icx`, `cc_aocc`
+and `cc_nvhpc` columns. Run the installs inside a Slurm job: each download is several GB.
+
+| column | script | what it runs | digest | prints |
+|---|---|---|---|---|
+| `cc_icx` | `lib/install-icx.sh PREFIX [INSTALLER]` | Intel's standalone DPC++/C++ offline installer (`--silent --eula accept --install-dir PREFIX`); 2026.2.0's URL is pinned | `sha384`, listed by Intel next to each installer; 2026.2.0's is pinned | `HPCAGENT_BENCH_ICX_ROOT` |
+| `cc_aocc` | `lib/install-aocc.sh PREFIX [TARBALL]` | unpacks AMD's AOCC tarball (AOCC 6 or later: the column needs LLVM 19 for `-std=c23`) | AMD publishes none; 6.0.0's is pinned in the script | `HPCAGENT_BENCH_AOCC_ROOT` |
+| `cc_nvhpc` | `lib/install-nvhpc.sh PREFIX [TARBALL]` | NVIDIA's HPC SDK tarball installer (`NVHPC_SILENT`, single install); `CPU_ONLY=1` (default) leaves CUDA, the math and comm libraries, profilers and examples out | `md5` only, from NVIDIA's `md5sum.txt` (the one script that accepts md5); 26.11's is pinned | `HPCAGENT_BENCH_NVHPC_ROOT` |
+
+Each refuses a download whose digest is not `CHECKSUM=<algo>:<hex>` (`lib/verify_checksum.sh`). Each root names the
+directory holding the driver's `bin/`; `languages.COMPILER_ROOT_ENV` takes the driver from there before `PATH`, so
+the vendor's `clang` or `nvc` never shadows another, and a set root without its driver resolves nothing. Without a
+root or a driver on `PATH` the column reports `tool_missing`. Install NVHPC inside the judge image: its installer
+writes the gcc it finds into nvc's `localrc`.
+
+The AMD judge picks icx and NVHPC up from `${HPCAGENT_BENCH_SITE_COMPILERS:-$SCRATCH/site-compilers}`.
+Neither is installed unless asked for: each is a multi-GB download. [`site_compilers.sbatch`](images/site_compilers.sbatch)
+installs the ones `SITE_COMPILERS` names there inside the judge image, renders the judge EDF with the ones present into
+a temporary file, and checks them: the `cc`, `cc_llvm`, `cc_icx` and `cc_nvhpc` columns over `gemm` and `scaled_add`,
+the OpenMP runtimes a process maps after loading a kernel each built, and the CPF form of `tsvc_2_s171` graded under
+each `build.compiler.c` family. Then register the EDFs:
+
+```bash
+SITE_COMPILERS="icx nvhpc" sbatch -A <account> containers/images/site_compilers.sbatch   # from the checkout root, on mi300
+containers/images/install_edfs.sh
+```
+
+`install_edfs.sh` fills `HPCAGENT_BENCH_ICX_ROOT` and `HPCAGENT_BENCH_NVHPC_ROOT` into the judge EDFs and mounts each
+prefix, only for the compilers installed there (the `# <site_*_root>` lines of `judge-agent-amd/judge.edf.toml.in`).
+
+A setup grades C submissions (a CPF form among them) with one of them by pinning `build.compiler.c`: `nvhpc` (a
+family a submission may request too) or `intel`, a pin-only family (`languages.PIN_ONLY_FAMILIES`) that the task
+text does not list and a submission's `compiler` may not name. The reference the speedup divides by builds with the
+same compiler.
+
+**One OpenMP runtime per process** ([OpenMP contexts](#openmp-contexts)). icx's own `-fopenmp` links Intel's
+`libiomp5`: a second runtime beside the image's libgomp (numpy's OpenBLAS), and one that aborts at load beside LLVM's
+libomp ("OMP: Hint ... multiple copies of the OpenMP runtime"). The `icx` block therefore builds with clang's
+`-fopenmp=libomp` and links with `-static-intel`: Intel's libimf, libsvml, libirng and libintlc go into the library,
+which needs nothing of the prefix at run time (a plain `-shared` one dies at `dlopen` on `libimf.so`, as icx writes
+no RUNPATH), and the `intel` family runs in the `llvm` context, where a grading child maps libomp alone.
+
+NVHPC's `nvc -mp` always links `libnvomp`; no flag selects libgomp. libnvomp defines the GOMP ABI, but the image's
+OpenBLAS carries a DT_RPATH to the image gcc's `lib64`, which the loader searches before `LD_LIBRARY_PATH`, so a
+process that loads it maps the image's libgomp beside libnvomp whatever its environment. An nvhpc grading child
+therefore runs in an `nvhpc` context that has no OpenBLAS of the image in it: `lib/nvhpc_context.sh` writes one into the
+install, `<HPCAGENT_BENCH_NVHPC_ROOT>/omp-context`, with every shared library of NVHPC's `lib/` (they find each other
+through `$ORIGIN`), `libgomp.so.1` as libnvomp, and a `libopenblas.so.0` with no code that is DT_NEEDED on NVHPC's
+libblas and liblapack (numpy and scipy name OpenBLAS by soname through a RUNPATH, so there they run on NVHPC's BLAS,
+as on the CUDA image). `lib/install-nvhpc.sh` writes it after an install and `site_compilers.sbatch` rewrites it on
+every run (it is idempotent); `openmp.context.context_dir` takes it when the image has no `/opt/omp/nvhpc`
+(`SITE_CONTEXT`). An `nvc -mp` grade then maps libnvomp alone, and the grading child's gate holds NVHPC to one runtime
+as every other family.
+
 ## OpenMP contexts
 
 A process maps ONE OpenMP runtime, and no runtime serves every toolchain (clang, flang, hipcc and Polly
@@ -349,15 +429,17 @@ context per toolchain family under `/opt/omp` (`lib/omp_contexts.sh`, the last O
 Dockerfile): `gnu` (the image default, libgomp and the `/opt/view` libraries), `llvm` (libomp,
 `libgomp.so.1` as a link to it inside `/opt/omp/llvm/lib` only, and `/opt/omp/llvm/view`,
 the OpenMP-linking libraries rebuilt with clang by a second spack environment with `shared_linking:
-runpath`) and, on the CUDA image, `nvhpc`. A library whose build can only run on one runtime lives in that
+runpath`) and, on the CUDA image, `nvhpc` (for the AMD judge's site NVHPC it is in the install:
+[Site compilers](#site-compilers)). A library whose build can only run on one runtime lives in that
 context alone and declares it (`openmp:` in `hpcagent_bench/envs/libraries.yaml`): MAGMA's HIP host code is
 hipcc code on libomp, so the AMD image builds it in the llvm view only, and only the llvm family is offered it. The judge starts a grading child of a family with that
-context's `lib/` first on `LD_LIBRARY_PATH` (`hpcagent_bench/omp_context.py`), so numpy, scipy, numba
+context's `lib/` first on `LD_LIBRARY_PATH` (`hpcagent_bench/openmp/context.py`), so numpy, scipy, numba
 and every library resolve inside the family's context. `lib/openmp_gate.py context` proves one context in
 one process (each of the family's compilers, BLAS, numba, torch multi-threaded, one runtime mapped),
-`lib/openmp_gate.py scan` that no library of a context maps another runtime, and every judge job writes, at its
-start, the catalog of which libraries each context can serve into its run directory
-(`python -m hpcagent_bench.omp_catalog --write`; the image carries none). `verify_image.py` runs all three. Details, the measured
+`lib/openmp_gate.py scan` that no library of a context maps another runtime, and the same build step writes the
+catalog of which libraries each context can serve to `/opt/omp/catalog.json`
+(`python -m hpcagent_bench.openmp.catalog --write`, with the checkout bind-mounted for that step only).
+`verify_image.py` runs all three and checks the shipped catalog matches a fresh scan. Details, the measured
 build cost and what an unbuildable package means: `docs/anti_cheat.md`, "Judge fault: a second OpenMP
 runtime".
 
@@ -389,10 +471,12 @@ Every package added to a Dockerfile gets a probe that uses it (compile, import, 
 
 ## Agent harness pins
 
-Both judge-agent images install the harnesses from `agent/harness/`: `node/package.json` +
-`package-lock.json` (claude-code 2.1.303), `pins.env` (uv, node and their per-architecture sha256),
-and the `harness-{miniswe,openhands,optimas,anthropic,openai}` groups of `agent/pyproject.toml` (one venv each under
-`/opt/harness/`).
-To bump one, edit the pin (for the npm lock, then run `agent/harness/freeze.sh`), run
-`tests/test_harness_pins.py`, rebuild.
-Each image's final gate checks every version against these files.
+The images bake only uv and node, from `agent/harness/pins.env`. Every agent step installs the rest at launch inside
+its launch venv (`lib/launch_venv.sh`), from the checkout: claude-code 2.1.303 from `node/package.json` +
+`package-lock.json`, one venv each for the `harness-{miniswe,anthropic,openai}` groups of
+`agent/pyproject.toml`, at `harness/<name>` and `harness/node`, and one for each harness a plugin ships, from the
+plugin's install argv (optimas: `plugins/optimas/requirements.txt`).
+To bump a harness, edit the pin (for the npm lock, then run `agent/harness/freeze.sh`) and run
+`tests/test_harness_pins.py`: nothing rebuilds. A uv or node bump in `pins.env` needs a rebuild.
+The launch build checks uv and node against `pins.env`, the CLI against `package.json` and each harness's imports, and
+a mismatch stops the agent step before any agent starts.

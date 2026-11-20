@@ -10,9 +10,9 @@ import dace
 import numpy as np
 import pytest
 
-from hpcagent_bench import cpf_cache, cpf_canonical
-from hpcagent_bench.cpf_cache import Target
-from hpcagent_bench.cpf_cache import RenderVerdict
+from hpcagent_bench.cpf import cache as cpf_cache
+from hpcagent_bench.cpf import canonical as cpf_canonical
+from hpcagent_bench.cpf.cache import RenderVerdict, Target
 
 PROGRAM = "@dc.program\ndef k(a: dc.float64[N]):\n    a[:] = 1.0\n"
 
@@ -30,6 +30,7 @@ def no_sign_facts(monkeypatch: pytest.MonkeyPatch) -> None:
     """:class:`FakeSpec` has no binding to read integer scalars from: these tests key and produce entries
     without non-negative symbols, as a kernel declaring none would."""
     monkeypatch.setattr(cpf_canonical, "nonnegative_symbols", lambda spec: frozenset())
+    monkeypatch.setattr(cpf_canonical, "positive_symbols", lambda spec: frozenset())
 
 
 def program(tmp_path: pathlib.Path, text: str = PROGRAM) -> pathlib.Path:
@@ -111,7 +112,7 @@ def test_a_canonicalize_ended_by_a_signal_is_not_cached(
     key = cpf_canonical.canonical_key(impl, "commit", "fp64", Target.CPU)
     with pytest.raises(SystemExit):
         cpf_canonical.canonical_sdfg(FakeSpec("k"), impl, key, cache, "fp64", Target.CPU)
-    assert cpf_cache.canonical_entry(cache, key) is None
+    assert cpf_cache.read_entry(cache, key) is None
 
 
 @dace.program
@@ -130,3 +131,26 @@ def test_a_constant_numpy_expression_is_folded_out_of_the_entry() -> None:
     for name in lifted:
         assert sdfg.arrays[name].transient
         assert np.array_equal(sdfg.constants_prop[name][1], np.arange(3)[None, :])
+
+
+N = dace.symbol("N")
+
+
+@dace.program
+def doubled(a: dace.float64[N], out: dace.float64[N]) -> None:
+    for i in range(N):
+        out[i] = 2.0 * a[i]
+
+
+def test_a_stats_dict_records_the_stage_that_settled_each_loop() -> None:
+    """The record E4 reads (experiments/E4-cost-coverage/canon_stats.py): every loop the parse produced is either
+    settled by a named stage or left remaining, and the solver seconds are reported."""
+    sdfg = doubled.to_sdfg(simplify=False)
+    stats: dict[str, object] = {}
+    cpf_canonical.canonicalize_for(sdfg, Target.CPU, nonnegative=frozenset({"N"}), stats=stats)
+    settled, remaining = stats["settled"], stats["remaining"]
+    assert isinstance(settled, list) and settled, stats
+    assert isinstance(remaining, list)
+    assert stats["loops_in"] == len(settled) + len(remaining)
+    assert all(entry["stage"] for entry in settled)
+    assert {"z3_seconds", "isl_seconds", "seconds"} <= stats.keys()

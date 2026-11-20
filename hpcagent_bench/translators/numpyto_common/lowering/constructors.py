@@ -504,6 +504,8 @@ class MgridLowering(ast.NodeTransformer):
             return node
         shape_elts: list[ast.expr] = []
         for ax, hi in zip(axes, highs, strict=False):
+            if ax.step is not None:
+                return node  # stepped entries select ceil((hi-lo)/step) points lo + i*step
             lo = ax.lower if ax.lower is not None else ast.Constant(value=0)
             shape_elts.append(ast.BinOp(left=hi, op=ast.Sub(), right=lo))
         shape_tuple = ast.Tuple(elts=shape_elts, ctx=ast.Load())

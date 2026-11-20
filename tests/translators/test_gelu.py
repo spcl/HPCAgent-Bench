@@ -9,15 +9,15 @@ translator supports, so this locks that in rather than adding new machinery:
   converted models emit -- from np.tanh / np.sqrt / np.pi / power;
 * the exact ``x/2 (1 + erf(x/sqrt(2)))`` -- ``erf`` maps to the C/Fortran intrinsic.
 
-Validated numerically vs numpy across the full backend matrix (C / C++ / Fortran + numba /
-pythran / jax, skip-tolerant).
+Validated numerically vs numpy across the full backend matrix (C / C++ / Fortran + numba,
+skip-tolerant).
 """
 
 import numpy as np
 
 from tests.translators.op_oracle import all_ok, run_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 
 X = np.linspace(-3.0, 3.0, 8).astype(np.float64)

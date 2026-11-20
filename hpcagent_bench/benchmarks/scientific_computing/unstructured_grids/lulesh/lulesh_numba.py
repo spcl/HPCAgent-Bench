@@ -18,7 +18,8 @@ node, so no pass races:
 4. elements: the monotonic-q limiter (reads neighbour gradients of pass 3), the EOS, the volume
    update, and the per-element Courant / hydro candidates, reduced serially to the next dt.
 
-Operand order and association follow ``lulesh_numpy.py`` expression by expression.
+Operand order and association follow ``lulesh_numpy.py`` expression by expression, and
+``error_model="numpy"`` divides by zero as numpy does (inf/nan), never raising ZeroDivisionError.
 """
 
 import numba as nb
@@ -92,12 +93,12 @@ _NORMAL_FACES = np.array([[0, 1, 2, 3], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3]
 _CHAR_FACES = np.array([[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]])
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _triple_product(x1, y1, z1, x2, y2, z2, x3, y3, z3):
     return x1 * (y2 * z3 - z2 * y3) + x2 * (z1 * y3 - y1 * z3) + x3 * (y1 * z2 - z1 * y2)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _elem_volume(x, y, z):
     """CalcElemVolume of one hexahedron (x/y/z: its 8 corner coordinates)."""
     dx61, dy61, dz61 = x[6] - x[1], y[6] - y[1], z[6] - z[1]
@@ -120,7 +121,7 @@ def _elem_volume(x, y, z):
     return vol * _TWELFTH
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _area_face(x0, x1, x2, x3, y0, y1, y2, y3, z0, z1, z2, z3):
     fx = (x2 - x0) - (x3 - x1)
     fy = (y2 - y0) - (y3 - y1)
@@ -133,7 +134,7 @@ def _area_face(x0, x1, x2, x3, y0, y1, y2, y3, z0, z1, z2, z3):
     )
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _char_length(x, y, z, volume):
     """CalcElemCharacteristicLength of one element."""
     charl = 0.0
@@ -144,7 +145,7 @@ def _char_length(x, y, z, volume):
     return 4.0 * volume / np.sqrt(charl)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _shape_fn_derivatives(x, y, z, bx, by, bz):
     """CalcElemShapeFunctionDerivatives of one element: fills bx/by/bz (8 each), returns the volume."""
     fjxxi = 0.125 * ((x[6] - x[0]) + (x[5] - x[3]) - (x[7] - x[1]) - (x[4] - x[2]))
@@ -194,7 +195,7 @@ def _shape_fn_derivatives(x, y, z, bx, by, bz):
     return 8.0 * (fjxet * cjxet + fjyet * cjyet + fjzet * cjzet)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _node_normals(x, y, z, pfx, pfy, pfz):
     """CalcElemNodeNormals of one element: the six face-area normals summed onto their corners."""
     for k in range(8):
@@ -226,7 +227,7 @@ def _node_normals(x, y, z, pfx, pfy, pfz):
         pfz[n3] += area_z
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _voluder(x, y, z, k):
     """VoluDer for corner k of one element; returns (dvdx, dvdy, dvdz)."""
     p = _VOLU_PERM[k]
@@ -260,7 +261,7 @@ def _voluder(x, y, z, k):
     return dvdx * _TWELFTH, dvdy * _TWELFTH, dvdz * _TWELFTH
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _hourglass_force(x, y, z, xd, yd, zd, determ, coefficient, dvdx, dvdy, dvdz, hmod, hourgam, hgx, hgy, hgz):
     """CalcElemFBHourglassForce of one element: fills the per-corner hourglass forces hgx/hgy/hgz."""
     volinv = 1.0 / determ
@@ -280,7 +281,7 @@ def _hourglass_force(x, y, z, xd, yd, zd, determ, coefficient, dvdx, dvdy, dvdz,
     _fb_force(zd, hourgam, coefficient, hmod, hgz)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _fb_force(vd, hourgam, coefficient, hxx, out):
     for i in range(4):
         acc = 0.0
@@ -294,7 +295,7 @@ def _fb_force(vd, hourgam, coefficient, hxx, out):
         out[k] = coefficient * acc
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _neighbor_delv(delv, neigh, ielem, bcmask, mask_all, mask_symm, mask_free, num_elem):
     sel = bcmask & mask_all
     n = min(max(neigh, 0), num_elem - 1)
@@ -306,7 +307,7 @@ def _neighbor_delv(delv, neigh, ielem, bcmask, mask_all, mask_symm, mask_free, n
     return out
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _phi(delvm, delvp, normd):
     delvm1 = delvm * normd
     delvp1 = delvp * normd
@@ -320,7 +321,7 @@ def _phi(delvm, delvp, normd):
     return phi3
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _pressure(e_val, compression, vnewc):
     """CalcPressureForElems of one element; returns (p, bvc); pbvc is the constant c1s."""
     bvc = _C1S * (compression + 1.0)
@@ -333,14 +334,14 @@ def _pressure(e_val, compression, vnewc):
     return p_new, bvc
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _sound(ssc):
     if ssc <= _TINY1:
         return _TINY3
     return np.sqrt(ssc)
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _eos(e_old, delvc, p_old, q_old, ql, qq, vnewc):
     """EvalEOSForElems of one element (single region, work == 0); returns (p, e, q, ss)."""
     work = 0.0
@@ -385,7 +386,7 @@ def _eos(e_old, delvc, p_old, q_old, ql, qq, vnewc):
     return p_new, e_new, q_new, ssc
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, error_model="numpy")
 def _node_corners(nodelist, num_elem, num_node):
     """Node-to-corner CSR over the flattened (element, corner) index, in np.add.at's order."""
     count = np.zeros(num_node + 1, dtype=np.int64)
@@ -404,7 +405,7 @@ def _node_corners(nodelist, num_elem, num_node):
     return count, corners
 
 
-@nb.njit(parallel=True, cache=True)
+@nb.njit(parallel=True, cache=True, error_model="numpy")
 def lulesh(
     e,
     p,

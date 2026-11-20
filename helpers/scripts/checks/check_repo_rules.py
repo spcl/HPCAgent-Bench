@@ -6,12 +6,15 @@ Each rule maps the files to check (the ones pre-commit passes; every tracked fil
 arguments or under ``--all-files``, which is what CI runs) to offender lines. Every allowlist
 entry carries its reason and must still name a tracked file:
 
-* ``hash-seed``: PYTHONHASHSEED=0 is set in exactly three places, the job environment
-  (hpcagent_bench/cluster/env.sh), CI's workflow env and the images' entrypoint
-  (containers/images/lib/launch_venv.sh), because dace hashes iteration order into generated code.
+* ``hash-seed``: PYTHONHASHSEED=0 is set in exactly four places, the job environment
+  (hpcagent_bench/cluster/env.sh), CI's workflow env, the images' entrypoint
+  (containers/images/lib/launch_venv.sh) and the verifier image, whose grader never passes that entrypoint, because
+  dace hashes iteration order into generated code.
 * ``import-path``: no file edits ``sys.path`` or ``PYTHONPATH``; the packages are installed.
 * ``no-requeue``: every submittable batch script carries ``#SBATCH --no-requeue``: a NODE_FAIL
   requeue reruns the job id into the same run directory and stacks duplicate rows.
+* ``mem-zero``: every submittable batch script carries ``#SBATCH --mem=0``: without it the job's memory follows its
+  CPU share, and on an APU (host and GPU share one pool) a step dies in the OOM killer with no traceback.
 * ``scratch``: ``.scratch/`` tracks only its ``.gitkeep``.
 * ``gitignore``: no tracked file matches an ignore rule, except a hand override at a generated benchmark name.
 * ``gfx-literal``: AMD archs come from containers/images/gpu_arch.env, never spelled in builds,
@@ -36,11 +39,12 @@ import ast
 import enum
 import functools
 import getpass
+import itertools
 import pathlib
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 SELF = "helpers/scripts/checks/check_repo_rules.py"
@@ -106,11 +110,12 @@ def stale(allow: Iterable[str], rule: str) -> list[str]:
 
 # hash-seed
 
-HASH_SEED = re.compile(r"PYTHONHASHSEED\s*[=:]\s*['\"]?0|[\"']PYTHONHASHSEED[\"']\s*:")
+HASH_SEED = re.compile(r"PYTHONHASHSEED\s*[=:]\s*['\"]?0|[\"']PYTHONHASHSEED[\"']\s*(:|\]\s*=(?!=))")
 HASH_SEED_HOMES = {
     "hpcagent_bench/cluster/env.sh",
     ".github/workflows/tests.yml",
     "containers/images/lib/launch_venv.sh",
+    "containers/images/verifier/Dockerfile",
 }
 
 
@@ -132,7 +137,7 @@ def hash_seed(files: list[str]) -> list[str]:
 #: ``site.addsitedir``, or ``PYTHONPATH`` set in a shell, an env dict or a keyword. Reading it is not an edit.
 IMPORT_PATH_EDIT = re.compile(
     r"""sys\.path\.(insert|append|extend)\("""
-    r"""|sys\.path(\[[^\]]*\])?\s*=(?!=)"""
+    r"""|sys\.path(\[[^\]]*\])?\s*\+?=(?!=)"""
     r"""|syspath_prepend\("""
     r"""|addsitedir\("""
     r"""|\bPYTHONPATH\s*=(?!=)"""
@@ -142,7 +147,10 @@ IMPORT_PATH_EDIT = re.compile(
 )
 
 
-IMPORT_PATH_ALLOW = {"tests/test_check_repo_rules.py": "spells the edits the pattern must catch"}
+IMPORT_PATH_ALLOW = {
+    "tests/test_check_repo_rules.py": "spells the edits the pattern must catch",
+    "hpcagent_bench/harness/python_envs.py": "puts a submission's named python_env first, in the one process grading it",
+}
 
 
 def import_path(files: list[str]) -> list[str]:
@@ -160,20 +168,44 @@ def import_path(files: list[str]) -> list[str]:
 
 REQUEUE_GUARD = "#SBATCH --no-requeue"
 #: A real directive line (a flag right after the keyword), not prose about one.
-SBATCH_DIRECTIVE = re.compile(r"^\s*#SBATCH\s+--", re.MULTILINE)
+SBATCH_DIRECTIVE = re.compile(r"^#SBATCH[ \t]+--")
 SHELL_SHEBANG = re.compile(r"^#!.*\b(?:ba|da|k|z|a)?sh\b")
 
 
-def no_requeue(files: list[str]) -> list[str]:
-    out = []
+def sbatch_header(text: str) -> list[str]:
+    """The directives Slurm reads: sbatch stops at the first line that is neither blank nor a comment."""
+    header = itertools.takewhile(lambda line: not line.strip() or line.startswith("#"), text.splitlines())
+    return [line for line in header if SBATCH_DIRECTIVE.match(line)]
+
+
+MEM_GUARD = "#SBATCH --mem=0"
+
+
+def batch_headers(files: list[str]) -> Iterator[tuple[str, list[str]]]:
+    """Each submittable batch script (a .sbatch, or a shell script with an #SBATCH header) with its directives."""
     for rel in files:
         text = text_of(rel)
         if text is None:
             continue
-        entry = rel.endswith(".sbatch") or (SHELL_SHEBANG.match(text) and SBATCH_DIRECTIVE.search(text))
-        if entry and REQUEUE_GUARD not in text:
-            out.append(f"{rel}: batch script without `{REQUEUE_GUARD}`")
-    return out
+        directives = sbatch_header(text)
+        if rel.endswith(".sbatch") or (SHELL_SHEBANG.match(text) and directives):
+            yield rel, directives
+
+
+def no_requeue(files: list[str]) -> list[str]:
+    return [
+        f"{rel}: batch script without `{REQUEUE_GUARD}`"
+        for rel, directives in batch_headers(files)
+        if not any(line.split()[:2] == REQUEUE_GUARD.split() for line in directives)
+    ]
+
+
+def mem_zero(files: list[str]) -> list[str]:
+    return [
+        f"{rel}: batch script without `{MEM_GUARD}`"
+        for rel, directives in batch_headers(files)
+        if not any(line.split()[:2] == MEM_GUARD.split() for line in directives)
+    ]
 
 
 # scratch, gitignore
@@ -245,7 +277,7 @@ def in_gfx_scope(rel: str) -> bool:
         return True
     if parts[0] == "hpcagent_bench":
         return name.endswith(".py")
-    return parts[0] in ("experiments", "scripts") and rel != SELF
+    return parts[0] in ("experiments", "helpers") and rel != SELF
 
 
 def gfx_literal(files: list[str]) -> list[str]:
@@ -273,7 +305,7 @@ def gfx_literal(files: list[str]) -> list[str]:
 OPT_FLAG = re.compile(r"-O3|-march=native|-ffast-math")
 OPT_FLAG_ALLOW = {
     "hpcagent_bench/flags.py": "the matrix itself",
-    "hpcagent_bench/harbor.py": "agent-facing prose naming the flags the harness applies, not a build command",
+    "hpcagent_bench/export/harbor.py": "agent-facing prose naming the flags the harness applies, not a build command",
     "hpcagent_bench/benchmarks/scientific_computing/n_body_methods/gromacs/nbnxm/tests/test_gromacs_nbnxm.py": (
         "builds a reference-C correctness oracle, not the graded matrix"
     ),
@@ -289,7 +321,7 @@ OPT_FLAG_ALLOW = {
 def opt_flags(files: list[str]) -> list[str]:
     out = stale(OPT_FLAG_ALLOW, "opt-flags")
     for rel in files:
-        in_scope = rel.endswith(".py") and rel.split("/")[0] in ("hpcagent_bench", "scripts")
+        in_scope = rel.endswith(".py") and rel.split("/")[0] in ("hpcagent_bench", "helpers")
         if not in_scope or rel == SELF or rel in OPT_FLAG_ALLOW:
             continue
         text = text_of(rel)
@@ -390,13 +422,13 @@ CODE_PATTERNS: Patterns = {
 }
 #: Files (or ``path::matched text``) that legitimately carry a flagged string, one reason each.
 SITE_ALLOW = {
-    "experiments/layers/site-cscs.env": "THE site layer for one real site: its values live here",
-    "experiments/layers/hardware-mi200.env": "names the MI250X hardware (docs/configuration.md)",
+    "experiments/site-cscs.env": "THE site layer for one real site: its values live here",
+    "experiments/experiments.toml": "[hardware.mi200] names the MI250X hardware (docs/configuration.md)",
     "hpcagent_bench/cluster/systems.yaml": "the job shape of each named system (docs/configuration.md)",
     "docs/configuration.md": "shows the CSCS site layer's values next to the generic ones",
     "pyproject.toml": "package author contact (PyPI metadata), not a runtime value",
     "agent/pyproject.toml": "package author contact (metadata), not a runtime value",
-    "hpcagent_bench/observations_extract.py": "reads the recorded MCP server/env keys of existing rows",
+    "hpcagent_bench/results/extract.py": "reads the recorded MCP server/env keys of existing rows",
     "tests/test_extract_llr40_episode_rows.py": "fixtures of recorded keys",
     "tests/test_iteration_counts.py": "fixtures of recorded keys",
     "tests/test_harbor_images.py": "asserts a generated Harbor task names no storage mount",
@@ -512,7 +544,7 @@ ABSOLUTE_PREFIXES = ("/opt/rocm", "/dev/shm/")
 PACKAGE_LITERAL_ALLOW = {
     "hpcagent_bench/paths.py": "THE absolute defaults",
     "hpcagent_bench/run_layout.py": "THE run-directory names",
-    "hpcagent_bench/harbor.py": "a Harbor task's own tasks/ output directory, not a run directory",
+    "hpcagent_bench/export/harbor.py": "a Harbor task's own tasks/ output directory, not a run directory",
 }
 
 
@@ -577,6 +609,7 @@ RULES: dict[str, Callable[[list[str]], list[str]]] = {
     "hash-seed": hash_seed,
     "import-path": import_path,
     "no-requeue": no_requeue,
+    "mem-zero": mem_zero,
     "scratch": scratch,
     "gitignore": gitignore,
     "gfx-literal": gfx_literal,

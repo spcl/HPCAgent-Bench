@@ -5,8 +5,8 @@ import re
 from collections.abc import Callable
 from functools import lru_cache
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
-from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import expand_definitions
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, walk_nodes
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE, expand_definitions
 
 __all__ = [
     "FOLD_OPS",
@@ -42,11 +42,6 @@ def resolve_shape_attr_tokens(tokens: tuple[str, ...], parsed_seed: dict[str, tu
     return tuple(re.sub(r"(\w+)\.shape\[(\d+)\]", repl_, str(tok)) for tok in tokens)
 
 
-#: Word-boundary matcher for a single identifier token inside a shape
-#: string (so substituting ``K`` does not also hit ``C_out`` / ``__inl1_K``).
-IDENT_RE = re.compile(r"[A-Za-z_]\w*")
-
-
 def binding_counts(fn: ast.FunctionDef) -> dict[str, int]:
     """How often each name is bound in ``fn`` (tuple targets unpacked); an augmented assignment
     counts twice, so an updated name is never single-assignment."""
@@ -59,7 +54,7 @@ def binding_counts(fn: ast.FunctionDef) -> dict[str, int]:
             for e in tgt.elts:
                 count(e, inc)
 
-    for stmt in ast.walk(fn):
+    for stmt in walk_nodes(fn):
         if isinstance(stmt, ast.AugAssign):
             count(stmt.target, 2)
         elif isinstance(stmt, ast.Assign):
@@ -92,7 +87,7 @@ def collect_inlined_scalar_defs(fn: ast.FunctionDef, prefix: str | None = "__inl
     # A rebound name is a runtime value (a step counter), not a fixed dimension.
     rebind_counts = binding_counts(fn)
     defs: dict[str, str] = {}
-    for stmt in ast.walk(fn):
+    for stmt in walk_nodes(fn):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         name = stmt.targets[0].id

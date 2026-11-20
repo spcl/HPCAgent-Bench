@@ -43,16 +43,16 @@ def test_resolve_preset_does_not_leak_its_anchor_into_the_next_test() -> None:
     assert config.get("fuzz.anchor") == CONFTEST_ANCHOR
 
 
-def test_override_snapshot_restores_exactly_what_was_there() -> None:
+def test_override_table_replace_restores_exactly_what_was_there() -> None:
     config.set_override("fuzz.anchor", "XL")
-    snapshot = config.override_snapshot()
+    snapshot = config.OVERRIDES.snapshot()
     spec.resolve_preset("S")
     assert config.get("fuzz.anchor") == "S"  # the side effect this guards against
-    config.restore_overrides(snapshot)
+    config.OVERRIDES.replace(snapshot)
     assert config.get("fuzz.anchor") == "XL"
     config.clear_override("fuzz.anchor")
     # Restoring a snapshot taken with the key ABSENT must remove it, not leave the last value.
-    empty = config.override_snapshot()
+    empty = config.OVERRIDES.snapshot()
     spec.resolve_preset("M")
-    config.restore_overrides(empty)
+    config.OVERRIDES.replace(empty)
     assert config.get("fuzz.anchor") == CONFTEST_ANCHOR

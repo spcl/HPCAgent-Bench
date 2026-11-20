@@ -13,24 +13,22 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    SubstituteLoads,
+    name_,
+    range_for,
+    reads_any,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import constant_difference
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import binop
+from hpcagent_bench.translators.numpyto_common.parallelism import index_exprs
 
-__all__ = ["OVERLAP_TEMP_PREFIX", "index_list", "reads_a_stored_cell", "staged_through_temp", "temp_extents"]
+__all__ = ["OVERLAP_TEMP_PREFIX", "reads_a_stored_cell", "staged_through_temp", "temp_extents"]
 
 #: Prefix of the temps :func:`staged_through_temp` evaluates an overlapping right-hand side into.
 OVERLAP_TEMP_PREFIX = "__sfov"
-
-
-def index_list(sub: ast.Subscript) -> list[ast.expr]:
-    """The per-axis entries of ``sub``'s index."""
-    sl = sub.slice
-    return list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
-
-
-def mentions(expr: ast.expr, names: set[str]) -> bool:
-    return any(isinstance(n, ast.Name) and n.id in names for n in ast.walk(expr))
 
 
 def index_distance(read: ast.expr, write: ast.expr) -> int | None:
@@ -66,14 +64,14 @@ def reads_a_stored_cell(
     Anything not decided is reported as a possible overlap: staging it costs a temp, while a wrong
     "safe" is a silent miscompile.
     """
-    subscript_bases = {id(n.value) for n in ast.walk(rhs) if isinstance(n, ast.Subscript)}
-    for node in ast.walk(rhs):
+    subscript_bases = {id(n.value) for n in walk_nodes(rhs) if isinstance(n, ast.Subscript)}
+    for node in walk_nodes(rhs):
         if isinstance(node, ast.Name) and node.id == array and id(node) not in subscript_bases:
             # A bare whole-array read inside an element expression: nothing to compare.
             return True
         if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id == array):
             continue
-        read_index = index_list(node)
+        read_index = index_exprs(node)
         if len(read_index) != len(write_index):
             return True
         if any(isinstance(d, ast.Slice) for d in read_index):
@@ -90,11 +88,11 @@ def read_is_safe(
     moving = {var for var, unused_lo, unused_hi in loops}
     walked: list[tuple[ast.expr, ast.expr]] = []
     for r, w in zip(read_index, write_index, strict=True):
-        if mentions(w, moving):
-            if not mentions(r, moving) and outside_walked_range(r, w, loops):
+        if reads_any(w, moving):
+            if not reads_any(r, moving) and outside_walked_range(r, w, loops):
                 return True  # a fixed row the store never reaches
             walked.append((r, w))
-        elif mentions(r, moving):
+        elif reads_any(r, moving):
             return False
         elif index_distance(r, w) not in (0, None):
             return True  # a different fixed row: no cell in common
@@ -110,7 +108,7 @@ def read_is_safe(
 def outside_walked_range(read: ast.expr, write: ast.expr, loops: Sequence[tuple[str, ast.expr, ast.expr]]) -> bool:
     """True when the fixed index ``read`` lies a constant distance below the store's first index on
     this axis or above its last one. ``write`` must move with exactly one loop variable."""
-    walking = [(var, lo, hi) for var, lo, hi in loops if mentions(write, {var})]
+    walking = [(var, lo, hi) for var, lo, hi in loops if reads_any(write, {var})]
     if len(walking) != 1:
         return False
     var, lo, hi = walking[0]
@@ -123,14 +121,7 @@ def outside_walked_range(read: ast.expr, write: ast.expr, loops: Sequence[tuple[
 
 def substituted(expr: ast.expr, var: str, value: ast.expr) -> ast.expr:
     """``expr`` with every read of ``var`` replaced by ``value``."""
-
-    class Substitute(ast.NodeTransformer):
-        __slots__ = ()
-
-        def visit_Name(self, node: ast.Name) -> ast.expr:
-            return copy.deepcopy(value) if node.id == var else node
-
-    return Substitute().visit(copy.deepcopy(expr))
+    return SubstituteLoads({var: value}).visit(copy.deepcopy(expr))
 
 
 def staged_through_temp(

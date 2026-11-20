@@ -4,6 +4,7 @@ import ast
 from collections.abc import Mapping, Sequence
 from typing import NamedTuple
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
     numpy_call_attr,
     numpy_func_attr,
@@ -353,11 +354,10 @@ def derived_kind(attr: str | None, inner: str | None) -> str | None:
 def dtype_table_(tree: ast.AST, seed: dict[str, str], calls: CallKinds = NO_CALLS) -> dict[str, str]:
     """Propagate dtype kinds across straight-line assignments to a fixpoint (:func:`assigned_kinds`)."""
     dtypes = dict(seed)
+    assigns = [node for node in walk_nodes(tree) if isinstance(node, ast.Assign) and len(node.targets) == 1]
     for unused in range(FIXPOINT_ROUNDS):
         changed = False
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
-                continue
+        for node in assigns:
             for name, k in assigned_kinds(node.targets[0], node.value, dtypes, calls):
                 if k is not None and dtypes.get(name) != k:
                     dtypes[name] = k
@@ -464,11 +464,11 @@ def helper_sites(tree: ast.Module, funcs: dict[str, ast.FunctionDef]) -> HelperS
     calls: dict[str, list[tuple[str, ast.Call]]] = {name: [] for name in funcs}
     callee_nodes: set[int] = set()
     for owner, fn in funcs.items():
-        for node in ast.walk(fn):
+        for node in walk_nodes(fn):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in funcs:
                 calls[node.func.id].append((owner, node))
                 callee_nodes.add(id(node.func))
-    names = (node for node in ast.walk(tree) if isinstance(node, ast.Name))
+    names = (node for node in walk_nodes(tree) if isinstance(node, ast.Name))
     return HelperSites(calls, {node.id for node in names if node.id in funcs and id(node) not in callee_nodes})
 
 
@@ -605,7 +605,7 @@ def agreed_return_kinds(funcs: list[ast.FunctionDef], tables: dict[str, dict[str
     """Each function whose ``return`` values all have one known kind -> that kind."""
     returns: dict[str, str] = {}
     for fn in funcs:
-        kinds = {dtype_kind(r.value, tables[fn.name]) for r in ast.walk(fn) if isinstance(r, ast.Return) and r.value}
+        kinds = {dtype_kind(r.value, tables[fn.name]) for r in walk_nodes(fn) if isinstance(r, ast.Return) and r.value}
         kind = next(iter(kinds)) if len(kinds) == 1 else None
         if kind is not None:
             returns[fn.name] = kind
@@ -621,7 +621,7 @@ def observe_helper_calls(
 ) -> None:
     """Add to ``observed`` the kind of each positional argument ``fn`` passes a helper, and the return kind
     of each name ``fn`` binds to a helper call."""
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             value = node.value
             if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id in by_name:

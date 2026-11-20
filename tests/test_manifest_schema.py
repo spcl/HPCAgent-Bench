@@ -49,6 +49,10 @@ def test_every_corpus_manifest_matches_the_schema() -> None:
         ("mpi", {"decomposition": {"axis": ["NI"], "work_exponent": "1"}}, "mpi.decomposition.work_exponent"),
         ("level", True, "level: Input should be a valid integer"),
         ("timeout_s", "600", "timeout_s: expected a number (got str)"),
+        ("timeout_s", 0, "timeout_s: Input should be greater than 0"),
+        ("timeout_s", -5, "timeout_s: Input should be greater than 0"),
+        ("floor_bytes_fraction", 1.5, "floor_bytes_fraction: Input should be less than or equal to 1"),
+        ("args", {"A": {"dtype": "flaot64"}}, "unknown dtype 'flaot64'"),
     ],
 )
 def test_a_mistyped_block_is_refused_naming_its_key_path(key: str, value: object, reported: str) -> None:
@@ -122,39 +126,51 @@ def test_a_non_text_parameter_key_is_refused() -> None:
         BenchSpec.from_yaml(raw, source=str(GEMM))
 
 
+def test_a_non_text_key_inside_a_parameter_value_is_named() -> None:
+    """pydantic does not render ``!r`` in custom error templates, so the repr travels in the error
+    context: the refusal must name the offending key, not show a literal ``{key!r}`` placeholder."""
+    raw = gemm_raw()
+    raw["parameters"] = {"S": {"NI": {1: "x"}}}
+    with pytest.raises(ValueError, match=r"parameters\.S\.NI: expected text mapping keys \(got int key 1\)"):
+        BenchSpec.from_yaml(raw, source=str(GEMM))
+
+
 def test_a_scalar_args_value_keeps_its_int_type() -> None:
     """Strict float validation turns ``2`` into ``2.0``; the ABI passes a scalar in its manifest type."""
     entries = {
         "n": manifest_schema.ArgEntry.model_validate(2),
         "x": manifest_schema.ArgEntry.model_validate({"shape": "(n,)", "out": True}),
     }
-    block = spec.parse_args(entries, fallback=False, source="<test>")
-    assert block.scalars == {"n": 2}
-    assert type(block.scalars["n"]) is int
+    block = spec.parse_args(entries, None, None, "<test>")
+    assert block.init.scalars == {"n": 2}
+    assert type(block.init.scalars["n"]) is int
 
 
 @pytest.mark.parametrize(
     ("constant", "keys"),
     [
         (
-            spec.KNOWN_MANIFEST_KEYS,
+            manifest_schema.field_keys(manifest_schema.Manifest),
             {
                 "name", "short-name", "relative_path", "module_name", "parameters", "config", "constraints",
                 "args", "output_extent", "chain_length", "init", "languages", "allowed_precisions", "fuzz",
                 "layouts", "mpi", "level", "timeout_s", "memory_cap_gb", "floor_bytes_fraction",
-                "conditioning_rtol", "conditioning_atol", "mismatch_fraction", "scale_axes", "public",
+                "conditioning_rtol", "conditioning_atol", "conditioning_by_precision", "mismatch_fraction",
+                "rounding_scale", "degenerate", "scale_axes", "public", "array_facts",
             },
         ),
         (spec.ARG_ENTRY_KEYS, spec.ARRAY_ENTRY_KEYS | {"value"} | set(spec.ArgFlag.texts())),
-        (spec.MANIFEST_INIT_KEYS, {"scenarios", "revalue", "constants", "workspace"}),
-        (spec.LAYOUT_KEYS, {"logical_shape", "nnz", "offered", "default", "dtype", "pattern"}),
-        (spec.SCENARIO_KEYS, {"description", "layouts"}),
-        (spec.CONFIG_KNOB_KEYS, {"domain", "value", "selects"}),
+        (manifest_schema.field_keys(manifest_schema.InitBlock), {"scenarios", "revalue", "constants", "workspace"}),
+        (
+            manifest_schema.field_keys(manifest_schema.LayoutEntry),
+            {"logical_shape", "nnz", "offered", "default", "dtype", "pattern"},
+        ),
+        (manifest_schema.field_keys(manifest_schema.ScenarioEntry), {"description", "layouts"}),
+        (manifest_schema.field_keys(manifest_schema.ConfigKnobEntry), {"domain", "value", "selects"}),
     ],
 )  # fmt: skip
 def test_the_key_sets_are_the_schema_fields(constant: frozenset[str], keys: set[str]) -> None:
-    """The key-set constants name the manifest keys in error messages; a schema field missing from
-    one would be accepted at load and reported as unknown elsewhere."""
+    """The schema's key sets are exactly the manifest keys the docs and the loader name."""
     assert constant == keys
 
 

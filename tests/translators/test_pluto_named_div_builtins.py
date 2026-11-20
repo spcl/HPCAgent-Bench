@@ -12,8 +12,7 @@ import re
 
 import pytest
 
-from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES
-from hpcagent_bench.translators.numpyto_c.emit import C_HEADER, emit_c, emit_pluto, pluto_floordiv
+from hpcagent_bench.translators.numpyto_c.emit import C_HEADER, emit_c, emit_pluto
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from tests.translators import op_oracle
@@ -73,10 +72,11 @@ def test_integer_floordiv_in_a_scop_is_spelled_floord() -> None:
     assert "int_floor" not in body, body
 
 
-def test_the_c_leg_keeps_int_floor() -> None:
-    """Only the pluto reader cares about the name; the C emit is unchanged."""
-    body = emit_c(int_bound_kir(), fn_name="blk_op")
-    assert "int_floor(N, 8)" in body.split("void blk_op", 1)[1], body
+def test_the_c_leg_shifts_by_the_power_of_two() -> None:
+    """Only the pluto reader needs the name; plain C floors ``N // 8`` with the arithmetic shift."""
+    body = emit_c(int_bound_kir(), fn_name="blk_op").split("void blk_op", 1)[1]
+    assert "((N) >> 3)" in body, body
+    assert "floord(" not in body, body
 
 
 def test_float_floordiv_stays_on_the_generic_macro() -> None:
@@ -97,7 +97,7 @@ def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name: str,
     )
 
 
-@pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
+@have_gcc
 def test_floord_and_ceild_agree_with_the_helpers_they_alias() -> None:
     """The spelling claim, executed: same values for both signs, and the guarded block compiles."""
     lines = ["#include <stdio.h>", "int main(void) {"]
@@ -121,8 +121,3 @@ def test_floord_and_ceild_agree_with_the_helpers_they_alias() -> None:
         expected += [a // b, -((-a) // b)]
     for (got, alias), exp in zip(rows, expected, strict=False):
         assert int(got) == int(alias) == exp, (rows, expected)
-
-
-def test_polycc_008_names_the_rule_that_avoids_it() -> None:
-    entry = KNOWN_POLYCC_ISSUES["POLYCC-008"]
-    assert entry.avoided_by == f"hpcagent_bench.translators.numpyto_c.emit.{pluto_floordiv.__name__}"

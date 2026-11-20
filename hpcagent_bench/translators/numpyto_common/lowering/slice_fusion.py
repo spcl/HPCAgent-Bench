@@ -4,12 +4,13 @@ import ast
 import copy
 from collections.abc import Callable, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, reads_any, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, span_multiple_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
+    slice_axes,
     slice_step_any,
     step_is_negative,
     step_node,
@@ -20,11 +21,9 @@ from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     has_any_slice,
     iter_var_name,
     name_of_subscript,
-    slice_dims,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.overlap import (
     OVERLAP_TEMP_PREFIX,
-    index_list,
     reads_a_stored_cell,
     staged_through_temp,
     temp_extents,
@@ -33,6 +32,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import is_
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, negative_literal_offset
 from hpcagent_bench.translators.numpyto_common.lowering.slice_scalarize import SliceToScalarRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.views import refuse_scalarising_a_contraction
+from hpcagent_bench.translators.numpyto_common.parallelism import index_exprs
 from hpcagent_bench.translators.numpyto_common.subscripts import has_slice_subscript
 
 __all__ = [
@@ -170,7 +170,7 @@ class SliceFusion(ast.NodeTransformer):
         lhs_name = name_of_subscript(target)
         if lhs_name is None:
             return None
-        lhs_dims = slice_dims(target)
+        lhs_dims = slice_axes(target)
         # Compute the per-axis iteration range = LHS slice bounds.
         # Negative-index slice bounds ``A[1:-1]`` (or any int < 0) are
         # numpy-style ``axis_length + K``; resolve here so downstream
@@ -212,7 +212,7 @@ class SliceFusion(ast.NodeTransformer):
         # nest has already stored (``a[1:] = a[:-1] + 1``, ``x[:] = x[::-1]``, ``x[:] = x[perm]``)
         # goes through a temp the RHS is evaluated into first.
         nest = [(ivar.id, ranges[axis][0], ranges[axis][1]) for axis, ivar in enumerate(iter_vars) if ivar is not None]
-        if reads_a_stored_cell(lhs_name, index_list(new_lhs), new_rhs, nest):
+        if reads_a_stored_cell(lhs_name, index_exprs(new_lhs), new_rhs, nest):
             temp = f"{OVERLAP_TEMP_PREFIX}{len(self.overlap_temps) + 1}"
             self.overlap_temps[temp] = (temp_extents(nest), lhs_name)
             return [*hoister.staged, *staged_through_temp(new_lhs, new_rhs, aug_op, nest, temp)]
@@ -247,7 +247,8 @@ class SliceFusion(ast.NodeTransformer):
     def resolve_bound(
         self, bound: ast.expr | None, array_name: str, axis: int, default: ast.expr | Callable[[], ast.expr]
     ) -> ast.expr:
-        """Resolve a slice bound, expanding numpy's negative-index form.
+        """Resolve a slice bound or scalar index, expanding numpy's negative-index form: C has no
+        wrap-around, so a literal ``y[:, -1]`` would index out of bounds.
 
         A bound of ``None`` -> ``default`` (typically 0 for start,
         axis length for stop). A bound of ``-K`` (integer constant or
@@ -294,21 +295,10 @@ class SliceFusion(ast.NodeTransformer):
                     else binop(slice_start, ast.Add(), scaled)
                 )
             else:
-                idx_nodes.append(self.resolve_scalar_index(d, name, axis))
+                idx_nodes.append(self.resolve_bound(d, name, axis, default=d))
         if len(idx_nodes) == 1:
             return idx_nodes[0]
         return ast.Tuple(elts=idx_nodes, ctx=ast.Load())
-
-    def resolve_scalar_index(self, idx: ast.expr, name: str, axis: int) -> ast.expr:
-        """A negative constant scalar index ``-K`` (e.g. ``y[:, -1]``)
-        wraps to ``axis_length - K`` -- numpy semantics. C has no
-        wrap-around, so leaving it literal indexes ``arr[... + (-1)]``
-        out of bounds (the deriche heap corruption). Other indices pass
-        through unchanged so ``N - 1`` etc. survive."""
-        k = negative_literal_offset(idx)
-        if k is not None:
-            return binop(self.axis_length(name, axis), ast.Sub(), const_(k))
-        return idx
 
 
 #: Prefix of the temps :class:`HoistInvariantSelfReads` stages ahead of a fused loop nest.
@@ -376,7 +366,7 @@ class HoistInvariantSelfReads(ast.NodeTransformer):
             if isinstance(dim, ast.Attribute) and dim.attr == "newaxis":
                 return False
             # An index ARRAY makes the read a gather, whose result is not one element.
-            if any(isinstance(n, ast.Name) and n.id in self.array_shapes for n in ast.walk(dim)):
+            if reads_any(dim, self.array_shapes):
                 return False
         return True
 
@@ -470,7 +460,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         # a deferred-malloc emitter from reallocating a buffer the RHS still reads.
         marker_args: list[ast.expr] = []
         if rebind:
-            self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in ast.walk(node.value))
+            self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in walk_nodes(node.value))
             marker_args = [ast.Constant(value="__reassign__"), ast.Constant(value=self_ref)]
         marker = ast.Assign(
             targets=[store_(target.id)],
@@ -501,7 +491,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         """
         if not isinstance(expr, (ast.BinOp, ast.UnaryOp)):
             return False
-        for sub in ast.walk(expr):
+        for sub in walk_nodes(expr):
             if isinstance(sub, ast.Name):
                 s = self.shapes.get(sub.id)
                 if s:

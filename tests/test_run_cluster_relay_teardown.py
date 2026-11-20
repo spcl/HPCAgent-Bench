@@ -8,7 +8,7 @@ once that shell is gone. ``cleanup_steps_on_exit`` / ``cleanup_steps_on_signal``
 on each other and the job idles to its time limit (2.5-5 h).
 
 The script cannot be sourced, so the relay start block and both cleanup handlers are lifted from its
-shipped text and run against the real relay, the way ``test_run_cluster_job_env_trap.py`` does.
+shipped text and run against the real relay.
 """
 
 import os

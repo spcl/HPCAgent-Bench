@@ -78,15 +78,23 @@ _BACKENDS = {
 }
 
 
-def _kernel_ir(d: pathlib.Path, fn: str, nargs: int) -> KernelIR:
-    arr = ["a", "out"] if nargs == 1 else ["a", "b", "out"]
-    body = f"out[:] = np.{fn}(a)" if nargs == 1 else f"out[:] = np.{fn}(a, b)"
-    (d / "k_numpy.py").write_text(f"import numpy as np\ndef k({', '.join(arr[:-1])}, out):\n    {body}\n")
+#: Every ufunc, with its arity, as one output each of ONE kernel: a backend compiles and calls it once.
+FUNCS: list[tuple[str, int]] = [(fn, 1) for fn in UNARY] + [(fn, 2) for fn in BINARY]
+OUTS = [f"out_{fn}" for fn, _ in FUNCS]
+
+
+def _kernel_ir(d: pathlib.Path) -> KernelIR:
+    arr = ["a", "b", *OUTS]
+    body = "".join(
+        f"    {out}[:] = np.{fn}(a)\n" if nargs == 1 else f"    {out}[:] = np.{fn}(a, b)\n"
+        for out, (fn, nargs) in zip(OUTS, FUNCS, strict=True)
+    )
+    (d / "k_numpy.py").write_text(f"import numpy as np\ndef k({', '.join(arr)}):\n{body}")
     (d / "k.json").write_text(
         json.dumps(
             {
                 "benchmark": {
-                    "name": fn,
+                    "name": "k",
                     "short_name": "k",
                     "relative_path": ".",
                     "module_name": "k",
@@ -102,7 +110,7 @@ def _kernel_ir(d: pathlib.Path, fn: str, nargs: int) -> KernelIR:
                     },
                     "input_args": arr,
                     "array_args": arr,
-                    "output_args": ["out"],
+                    "output_args": OUTS,
                 }
             }
         )
@@ -110,21 +118,14 @@ def _kernel_ir(d: pathlib.Path, fn: str, nargs: int) -> KernelIR:
     return lower(parse_kernel(d / "k_numpy.py", d / "k.json"))
 
 
-def _numpy_ref(fn: str, nargs: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    out = np.empty_like(a)
-    g = {"np": np}
-    exec(f"def k({'a, out' if nargs == 1 else 'a, b, out'}):\n    out[:] = np.{fn}({'a' if nargs == 1 else 'a, b'})", g)  # noqa: S102 -- runs the emitted kernel source
-    (g["k"](a.copy(), out) if nargs == 1 else g["k"](a.copy(), b.copy(), out))
-    return out
-
-
-def _run_backend(backend: str, fn: str, nargs: int) -> None:
+@pytest.mark.parametrize("backend", list(_BACKENDS))
+def test_every_ufunc_matches_numpy(backend: str) -> None:
     emit, sym_key, fname, compile_cmd, exe = _BACKENDS[backend]
     if shutil.which(exe) is None:
         pytest.skip(f"{exe} not available")
     with tempfile.TemporaryDirectory() as td:
         d = pathlib.Path(td)
-        kir = _kernel_ir(d, fn, nargs)
+        kir = _kernel_ir(d)
         ext = {"c": "c", "cpp": "cpp", "fortran": "f90"}[backend]
         src = d / f"k.{ext}"
         src.write_text(emit(kir, fn_name=fname))
@@ -136,9 +137,7 @@ def _run_backend(backend: str, fn: str, nargs: int) -> None:
         rng = np.random.default_rng(0)
         a = rng.uniform(0.1, 0.9, 32)
         b = rng.uniform(0.1, 0.9, 32)
-        expected = _numpy_ref(fn, nargs, a, b)
-        got = np.zeros(32)
-        data = {"a": a.copy(), "b": b.copy(), "out": got, "N": 32}
+        data: dict[str, object] = {"a": a.copy(), "b": b.copy(), "N": 32, **{out: np.zeros(32) for out in OUTS}}
         lib = ctypes.CDLL(str(so))
         cfn = lib[binding["symbols"][sym_key]]
         cargs, keep = [], []
@@ -154,18 +153,9 @@ def _run_backend(backend: str, fn: str, nargs: int) -> None:
                 keep.append(buf)
                 cargs.append(buf.ctypes.data_as(ctypes.c_void_p))
         cfn(*cargs)
-        assert np.allclose(got, expected, rtol=1e-9, atol=1e-9), (
-            f"{backend}/{fn}: max diff {np.abs(got - expected).max():.2e}"
-        )
-
-
-@pytest.mark.parametrize("backend", list(_BACKENDS))
-@pytest.mark.parametrize("fn", UNARY)
-def test_unary_transcendental(backend: str, fn: str) -> None:
-    _run_backend(backend, fn, 1)
-
-
-@pytest.mark.parametrize("backend", list(_BACKENDS))
-@pytest.mark.parametrize("fn", BINARY)
-def test_binary_transcendental(backend: str, fn: str) -> None:
-    _run_backend(backend, fn, 2)
+        wrong = []
+        for out, (fn, nargs) in zip(OUTS, FUNCS, strict=True):
+            expected = getattr(np, fn)(a) if nargs == 1 else getattr(np, fn)(a, b)
+            if not np.allclose(data[out], expected, rtol=1e-9, atol=1e-9):
+                wrong.append(f"{fn}: max diff {np.abs(data[out] - expected).max():.2e}")
+        assert not wrong, f"{backend}: {wrong}"

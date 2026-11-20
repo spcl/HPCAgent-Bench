@@ -45,6 +45,14 @@ runs:
         fi
         echo "apparmor_restrict_unprivileged_userns: $(cat "$knob" 2>/dev/null || echo absent)"
 
+    - name: Coverage data outside the checkout
+      shell: bash
+      run: |
+        # A sealed judge child sees the checkout (and /tmp) read-only or private, so coverage's per-process data file
+        # goes where every child, the sealed ones under their own user included, can write it.
+        mkdir -p -m 1777 "$RUNNER_TEMP/coverage"
+        echo "COVERAGE_FILE=$RUNNER_TEMP/coverage/.coverage" >> "$GITHUB_ENV"
+
     - name: Native toolchain + OpenBLAS + FFTW
       shell: bash
       run: |
@@ -83,31 +91,45 @@ runs:
         command -v add-apt-repository >/dev/null 2>&1 || {
           echo "::error::add-apt-repository is absent after installing software-properties-common"
           exit 1; }
+        # The cached debs are one consistent set: when the PPA is down (503 for hours on 2026-10-21), they
+        # install on their own, every other dependency coming from the Ubuntu archive.
+        from_cache() {
+          compgen -G "$HOME/gcc-ppa-debs/*.deb" > /dev/null || return 1
+          echo "::warning::the PPA is unreachable; installing GCC ${GCC_MAJOR} from the cached debs"
+          sudo apt-get update -qq || true
+          sudo apt-get install -y "$HOME"/gcc-ppa-debs/*.deb
+        }
+        # One bounded attempt, then the cached debs: Launchpad timing out per connection held this step for 35
+        # of a job's 45 minutes (2026-11-11) before the fifth attempt reached the cache.
+        installed=0
         for attempt in 1 2 3 4 5; do
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test && break
+          sudo timeout 120 add-apt-repository -y ppa:ubuntu-toolchain-r/test && break
+          from_cache && installed=1 && break
           if [ "$attempt" = 5 ]; then
             echo "::error::add-apt-repository failed 5 times; the PPA is unreachable"
             exit 1
           fi
           sleep $((attempt * 10))
         done
-        if compgen -G "$HOME/gcc-ppa-debs/*.deb" > /dev/null; then
+        if [ "$installed" = 0 ] && compgen -G "$HOME/gcc-ppa-debs/*.deb" > /dev/null; then
           sudo cp "$HOME"/gcc-ppa-debs/*.deb /var/cache/apt/archives/
         fi
         # The PPA intermittently answers 503 or times out; apt keeps the debs it already fetched,
         # so a retry only downloads the missing ones.
         for attempt in 1 2 3 4 5; do
+          [ "$installed" = 1 ] && break
           sudo apt-get update
           sudo apt-get install -y -o Acquire::Retries=5 -o APT::Keep-Downloaded-Packages=true "gcc-${GCC_MAJOR}" "g++-${GCC_MAJOR}" \
-            "gfortran-${GCC_MAJOR}" "libstdc++-${GCC_MAJOR}-dev" && break
+            "gfortran-${GCC_MAJOR}" "libstdc++-${GCC_MAJOR}-dev" && installed=1 && break
           if [ "$attempt" = 5 ]; then
+            from_cache && installed=1 && break
             echo "::error::installing GCC ${GCC_MAJOR} from the PPA failed 5 times"
             exit 1
           fi
           sleep $((attempt * 30))
         done
         mkdir -p "$HOME/gcc-ppa-debs"
-        cp /var/cache/apt/archives/*ppa*.deb "$HOME/gcc-ppa-debs/"
+        cp /var/cache/apt/archives/*ppa*.deb "$HOME/gcc-ppa-debs/" 2>/dev/null || true
         # compilers.yaml, dace and CMake all name the drivers unversioned (dace falls back to `c++`).
         for driver in gcc g++ gfortran; do
           sudo ln -sf "/usr/bin/${driver}-${GCC_MAJOR}" "/usr/local/bin/${driver}"
@@ -149,14 +171,15 @@ runs:
         for attempt in 1 2 3; do
           sudo apt-get update
           sudo apt-get install -y -o Acquire::Retries=5 "clang-${LLVM_MAJOR}" "flang-${LLVM_MAJOR}" \
-            "libomp-${LLVM_MAJOR}-dev" && break
+            "libomp-${LLVM_MAJOR}-dev" "llvm-${LLVM_MAJOR}" && break
           if [ "$attempt" = 3 ]; then
             echo "::error::installing LLVM ${LLVM_MAJOR} from apt.llvm.org failed 3 times"
             exit 1
           fi
           sleep $((attempt * 30))
         done
-        for driver in clang clang++ flang; do
+        # llvm-objdump, llvm-mca: on PATH for the user plugins' tools that call them.
+        for driver in clang clang++ flang llvm-objdump llvm-mca; do
           sudo ln -sf "/usr/bin/${driver}-${LLVM_MAJOR}" "/usr/local/bin/${driver}"
         done
         clang --version | head -1
@@ -190,9 +213,11 @@ runs:
         # -march=native hashes identically on every runner, so the key carries the CPU model and
         # flags: a foreign-uarch hit SIGILLs.
         set -euo pipefail
+        # Under the cache home: a sealed build's root is read-only but for its private cover of the cache home
+        # (seal.cache_home), so it compiles through a cache of its own instead of failing on a shared one.
         echo "/usr/lib/ccache" >> "$GITHUB_PATH"
-        echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
-        CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
+        echo "CCACHE_DIR=$HOME/.cache/ccache" >> "$GITHUB_ENV"
+        CCACHE_DIR="$HOME/.cache/ccache" ccache --set-config max_size=1G
         cpu_key=$(awk -F': ' '/^(model name|flags)/ {print $2}' /proc/cpuinfo | head -2 | sha256sum | cut -c1-12)
         test -n "$cpu_key" || { echo "could not derive a CPU key" >&2; exit 1; }
         echo "CPU_KEY=$cpu_key" >> "$GITHUB_ENV"
@@ -203,7 +228,7 @@ runs:
       if: ${{ inputs.ccache != '' }}
       uses: actions/cache/restore@v5
       with:
-        path: ~/.ccache
+        path: ~/.cache/ccache
         key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
         restore-keys: ${{ env.CCACHE_KEY }}-
     - name: ccache reset counters
@@ -226,16 +251,17 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # The `cpu` extra is the complete install (frameworks, judge, agent clients, dev tools), torch from
-        # PyTorch's CPU index and dace at the pinned commit, exactly as uv.lock records them.
+        # Everything the tests import: the `cpu` extra (frameworks, judge, agent clients, dev tools; torch from
+        # PyTorch's CPU index, dace at the pinned commit), the `gym` extra and the `harbor` group, exactly as uv.lock
+        # records them. A missing one turns its tests into silent skips.
         # shellcheck disable=SC2086 -- sync-args is a flag list
-        uv sync --frozen --extra cpu --python "$(command -v python)" ${{ inputs.sync-args }}
+        uv sync --frozen --extra cpu --extra gym --group harbor --all-packages --python "$(command -v python)" ${{ inputs.sync-args }}
         echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
         echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
         # dace must be the pinned commit: a dependency that caps dace would otherwise swap in a PyPI release.
         .venv/bin/python - "$(helpers/scripts/pins.sh)" <<'PY'
         import sys
-        from hpcagent_bench import cpf_canonical
+        from hpcagent_bench.cpf import canonical as cpf_canonical
         got = cpf_canonical.dace_commit()
         if got != sys.argv[1]:
             sys.exit(f"dace is {got}, not the pin {sys.argv[1]}")

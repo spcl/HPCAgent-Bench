@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Axis-reduction desugar for the numba / pythran (and dace) Python backends.
+"""Axis-reduction desugar for the numba (and dace) Python backends.
 
 These backends run the numpy body (near-)verbatim, so a reduction they cannot
 type -- ``keepdims=True`` (neither supports it), a tuple ``axis=(1, 2, 3)`` over
@@ -9,7 +9,7 @@ a >4-D array (numba cannot lower it), a negative ``axis=-1`` literal, or a
 surfaced auditing the KernelBench ML kernels: softmax's stable form is
 ``x - max(x, axis=-1, keepdims=True)`` and conv/pool reduce a broadcast product
 over a tuple axis. The AST-level tests pin the rewrite; the two numerical tests
-confirm bit-exact agreement with numpy on numba + pythran.
+confirm bit-exact agreement with numpy on numba.
 """
 
 import ast
@@ -18,12 +18,9 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     axis_list,
     desugar_for_python_backend,
-    param_body_rank_evidence,
-    reduce_axis_stmts,
 )
 from tests.translators.source_module import run_source
 
@@ -35,14 +32,6 @@ def kir_(kernel_name: str, **arrays: tuple[str, ...]) -> types.SimpleNamespace:
 
 
 # axis parsing: negative literals + tuple forms                               #
-
-
-def test_const_int_handles_negation() -> None:
-    # ``-1`` parses as UnaryOp(USub, Constant(1)), not Constant(-1).
-    assert const_int(ast.parse("-1", mode="eval").body) == -1
-    assert const_int(ast.parse("2", mode="eval").body) == 2
-    assert const_int(ast.parse("True", mode="eval").body) is None  # bool is not an axis
-    assert const_int(ast.parse("x", mode="eval").body) is None
 
 
 def test_axis_list_normalizes_negative_and_tuple() -> None:
@@ -62,7 +51,7 @@ def test_axis_list_normalizes_negative_and_tuple() -> None:
 
 
 def test_negative_axis_now_reduces() -> None:
-    # ``axis=-1`` parses as a UnaryOp, not a constant; left verbatim, numba/pythran
+    # ``axis=-1`` parses as a UnaryOp, not a constant; left verbatim, numba
     # see the unsupported axis form.
     src = "def k(x, out):\n out[:] = np.max(x, axis=-1)\n"
     kir = kir_("k", x=("M", "N"), out=("M",))
@@ -135,20 +124,7 @@ def test_non_literal_ddof_leaves_the_reduction_and_its_operand_verbatim() -> Non
     assert np.array_equal(out, expected)
 
 
-def test_reduce_axis_stmts_mean_divides_by_element_count() -> None:
-    stmts = reduce_axis_stmts("t", "s", "mean", [1, 2], rank=3, ctr=0)
-    body = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
-    assert "/ (__rd0_d1 * __rd0_d2)" in body  # divisor is the product of reduced dims
-
-
 # body-usage rank evidence (fixes the reshaped-local poisoning)               #
-
-
-def test_param_body_rank_evidence_from_shape_and_subscript() -> None:
-    fn = ast.parse("def h(x, w):\n a = x.shape[3]\n b = w[:, 0:1, 0:1, :]\n").body[0]
-    ev = param_body_rank_evidence(fn)
-    assert ev["x"] == 4  # x.shape[3] -> rank >= 4
-    assert ev["w"] == 4  # 4 non-newaxis index positions -> rank >= 4
 
 
 def test_body_evidence_overrides_poisoned_callsite_rank() -> None:

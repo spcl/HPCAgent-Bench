@@ -73,7 +73,6 @@ def test_the_scatter_form_draws_a_marker_at_each_estimate_and_its_ci_as_the_erro
     offsets = [tuple(o) for c in ax.collections if isinstance(c, PathCollection) for o in c.get_offsets()]
     assert sorted({y for unused_x, y in offsets}) == pytest.approx(values)
     assert not [patch for patch in ax.patches if isinstance(patch, Rectangle) and patch.get_width() < 1.0]
-    plt.close(ax.figure)
 
 
 def test_the_bar_form_draws_one_bar_per_estimate_and_its_ci_as_the_error_bar() -> None:
@@ -91,7 +90,6 @@ def test_the_bar_form_draws_one_bar_per_estimate_and_its_ci_as_the_error_bar() -
     )
     assert flat(bars) == pytest.approx(flat(expected))
     assert all(patch.get_y() == 0.0 for patch in ax.patches if isinstance(patch, Rectangle) and patch.get_width() < 1.0)
-    plt.close(ax.figure)
 
 
 def test_a_mark_is_spelled_only_at_the_cli_edge() -> None:
@@ -125,7 +123,6 @@ def test_a_framework_column_registered_at_runtime_gets_its_own_look_and_plots() 
             for face in coll.get_facecolors()
         }  # fmt: skip
         assert tuple(np.round(plt.matplotlib.colors.to_rgba(look.colour), 6)) in colours
-        plt.close(fig)
     finally:
         vocabulary.FRAMEWORKS.entries.pop(key)
         vocabulary.FRAMEWORKS.orders.pop(key)

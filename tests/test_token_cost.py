@@ -191,22 +191,22 @@ def test_skipping_lines_that_cannot_carry_usage_changes_no_total(
     log.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     cost = token_cost.episode_cost(log)
-    fresh, cached = 1000 + (1500 - 1000), 1000
-    assert (cost["fresh_input"], cost["cached_input"], cost["output"]) == (fresh, cached, 70)
+    uncached, cached = 1000 + (1500 - 1000), 1000
+    assert (cost["fresh_input"], cost["cached_input"], cost["output"]) == (uncached, cached, 70)
     # The thinking delta is READ and reported, and is not part of any total: the result record's 70
     # output tokens already count it (module docstring, 3).
     assert cost["thinking_estimate"] == 40
-    assert cost["effective"] == fresh + token_cost.CACHE_DISCOUNT * cached + 70
+    assert cost["effective"] == uncached + token_cost.CACHE_DISCOUNT * cached + 70
     # The three readings of ONE fold: free (cache reads at 0), provider (cache reads
     # at a tenth, what a hosted service meters) and billed (every prompt in full). 1500 + 0.1 * 1000 + 70.
-    assert cost["effective_provider"] == fresh + 0.1 * cached + 70 == 1670
+    assert cost["effective_provider"] == uncached + 0.1 * cached + 70 == 1670
     assert cost["effective"] < cost["effective_provider"] < cost["naive_total"]
     assert token_cost.accumulate_total_tokens(lines, {}) == 1000 + 1500
     totals = token_cost.episode_totals(tmp_path)
     assert (totals.tokens_effective, totals.tokens_billed) == (int(cost["effective"]), 1000 + 1500)
     # The components a cost card weights ride on the task, and they are NOT recoverable from billed:
     # billed (2500) carries no output here, so billed - effective is not the cached count.
-    assert (totals.tokens_fresh_input, totals.tokens_cached_input, totals.tokens_output) == (fresh, cached, 70)
+    assert (totals.tokens_fresh_input, totals.tokens_cached_input, totals.tokens_output) == (uncached, cached, 70)
     assert totals.tokens_billed - totals.tokens_effective != cached
 
 
@@ -440,7 +440,7 @@ def test_a_worker_dir_without_a_transcript_has_no_token_total(token_cost: Module
 def test_a_runner_harnesss_totals_come_from_its_final_attempts_usage_file(
     token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """A non-Claude harness (mini-SWE, OpenHands) leaves ``usage.jsonl`` per attempt, moved
+    """A non-Claude harness (mini-SWE, the native runners) leaves ``usage.jsonl`` per attempt, moved
     aside on a crash the same way ``claude.log`` is (harnesses.py's ``records``), and is read under
     the same rule: the final attempt is the task, the earlier ones are crashed spend."""
     (tmp_path / "usage.attempt1.jsonl").write_text(usage_line(300, 30) + "\n", encoding="utf-8")
@@ -521,6 +521,14 @@ def test_a_compaction_charges_the_rebuilt_prompt_as_fresh_and_is_counted(
 def compact_boundary_line() -> str:
     """claude-code's own system event marking that it just ran a proactive compaction."""
     return json.dumps({"type": "system", "subtype": "compact_boundary"})
+
+
+def tmp_path_log(tmp_path: pathlib.Path, lines: list[str]) -> pathlib.Path:
+    """A throwaway ``claude.log`` under ``tmp_path`` holding ``lines``, for a test that needs both
+    folds over the same transcript without redeclaring the write-and-join boilerplate."""
+    log = tmp_path / "compare.log"
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return log
 
 
 def result_line_with_model_usage(output_tokens: int, model_usage: dict[str, dict[str, int]]) -> str:
@@ -647,12 +655,115 @@ def test_modelusage_noise_without_a_compaction_is_never_mistaken_for_one(
     assert token_cost.COMPACTION_MESSAGE_ID not in total_by_message
 
 
-def tmp_path_log(tmp_path: pathlib.Path, lines: list[str]) -> pathlib.Path:
-    """A throwaway ``claude.log`` under ``tmp_path`` holding ``lines``, for a test that needs both
-    folds over the same transcript without redeclaring the write-and-join boilerplate."""
-    log = tmp_path / "compare.log"
-    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return log
+def resume_line(token_cost: ModuleType) -> str:
+    """The driver's line where it resumed the crashed session (``agent_driver.resume_marker``)."""
+    return json.dumps({"type": "system", "subtype": token_cost.RESUME_SUBTYPE, "session_id": "s1"})
+
+
+def resumed_transcript(token_cost: ModuleType, *, resumed: bool) -> list[str]:
+    """Two completed turns, a third the crash cut off (a ``message_start`` and its first block, no delta), then
+    -- when ``resumed`` -- the driver's resume line and two turns of the resumed leg in the SAME transcript."""
+    first_leg = [
+        message_start("m1"),
+        assistant_line("m1", 1000, 0),
+        message_delta(100),
+        message_start("m2"),
+        assistant_line("m2", 1200, 0),
+        message_delta(50),
+        message_start("m3"),
+        assistant_line("m3", 1300, 30),
+        json.dumps({"type": "result", "is_error": True, "usage": {"output_tokens": 150}}),
+    ]
+    if not resumed:
+        return first_leg
+    return [
+        *first_leg,
+        resume_line(token_cost),
+        message_start("m4"),
+        assistant_line("m4", 1350, 0),
+        message_delta(80),
+        message_start("m5"),
+        assistant_line("m5", 1500, 0),
+        message_delta(40),
+        result_line(120),
+    ]
+
+
+def test_a_resumed_crash_counts_both_legs_once_and_reports_the_cut_off_request_as_lost(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """A crash resumes its own session in the same transcript: the first leg's turns keep counting and the resumed
+    leg's add to them. The one request the crash cut off (m3) is lost (docs/matched_limits.md, "Limits and cost"):
+    the limit folds still count it, every limit runs on across a resume, and the cost leaves it out, reported as
+    ``tokens_effective_lost``. Exact numbers, every fold."""
+    lines = resumed_transcript(token_cost, resumed=True)
+    billed = 1000 + 1200 + 1350 + 1500
+    lost = 1300 + 30
+    assert token_cost.accumulate_total_tokens(lines, {}) == billed + lost
+    assert token_cost.accumulate_output_tokens(lines, {}) == 100 + 50 + 30 + 80 + 40
+
+    cost = token_cost.episode_cost(tmp_path_log(tmp_path, lines))
+    assert cost["turns"] == 4
+    # Prompts 1000, 1200, 1350, 1500: each turn's growth is fresh, nothing shrank, nothing is counted twice.
+    assert (cost["fresh_input"], cost["cached_input"], cost["compactions"]) == (1500, 1000 + 1200 + 1350, 0)
+    assert cost["output"] == 270
+
+    (tmp_path / "claude.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    totals = token_cost.episode_totals(tmp_path)
+    assert (totals.attempts, totals.tokens_billed, totals.tokens_billed_crashed) == (1, billed, 0)
+    assert (totals.tokens_effective, totals.tokens_effective_crashed) == (1500 + 270, 0)
+    assert totals.tokens_effective_lost == (1300 - 1200) + 30  # its fresh prompt and its partial reply
+
+
+def test_a_lost_request_after_a_compaction_is_its_whole_prompt_split_as_the_cost_is(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """The request in flight at the crash was sent after a compaction (its prompt, 400, shrank below the last kept
+    turn's 1200): like a compacted turn in the cost, it is charged whole as fresh input. The lost tokens are reported
+    as fresh, cached and output, so every cost card can price them."""
+    lines = [
+        message_start("m1"),
+        assistant_line("m1", 1000, 0),
+        message_delta(100),
+        message_start("m2"),
+        assistant_line("m2", 1200, 0),
+        message_delta(50),
+        message_start("m3"),
+        assistant_line("m3", 400, 30),
+        resume_line(token_cost),
+        message_start("m4"),
+        assistant_line("m4", 600, 0),
+        message_delta(20),
+        result_line(20),
+    ]
+    row = token_cost.episode_cost(tmp_path_log(tmp_path, lines))
+    assert (row["lost_fresh_input"], row["lost_cached_input"], row["lost_output"]) == (400, 0, 30)
+    assert row["lost_effective"] == 400 + 30
+
+
+def test_the_live_watcher_folds_a_resumed_transcript_to_the_same_totals_line_by_line(
+    token_cost: ModuleType,
+) -> None:
+    """The budget watchers fold one poll's new lines at a time, so the resume line arrives in a later call than the
+    request it cuts off; the running totals must equal the one-shot ones at every line."""
+    lines = resumed_transcript(token_cost, resumed=True)
+    billed: dict[str, int] = {}
+    output: dict[str, int] = {}
+    for count_so_far, line in enumerate(lines, start=1):
+        assert token_cost.accumulate_total_tokens([line], billed) == token_cost.accumulate_total_tokens(
+            lines[:count_so_far], {}
+        )
+        assert token_cost.accumulate_output_tokens([line], output) == token_cost.accumulate_output_tokens(
+            lines[:count_so_far], {}
+        )
+
+
+def test_without_a_resume_the_cut_off_request_still_counts(token_cost: ModuleType) -> None:
+    """Only the driver's resume line drops a request: an episode that simply ended (killed, out of clock) spent the
+    cut-off prompt and nothing re-sent it."""
+    lines = resumed_transcript(token_cost, resumed=False)
+    assert token_cost.accumulate_total_tokens(lines, {}) == 1000 + 1200 + 1300 + 30
+    assert token_cost.accumulate_output_tokens(lines, {}) == 100 + 50 + 30
 
 
 #: The third-party packages the agent runtime may import at module level: its declared dependencies

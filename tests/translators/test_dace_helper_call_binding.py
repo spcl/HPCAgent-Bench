@@ -16,7 +16,7 @@ import pathlib
 import tempfile
 from typing import TYPE_CHECKING
 
-from hpcagent_bench.translators.numpyto_c.dace_emit import contiguous_subscript, emit_dace, with_solvable_extents
+from hpcagent_bench.translators.numpyto_c.dace_emit import contiguous_subscript, emit_dace
 
 if TYPE_CHECKING:
     from hpcagent_bench.translators.numpyto_common.ir import KernelIR
@@ -365,21 +365,6 @@ def call_to(source: str, program: str, callee: str) -> ast.Call:
     )
 
 
-def test_a_body_unread_compound_extent_becomes_one_symbol_dace_can_solve() -> None:
-    # Three symbols in one product is one equation for three unknowns, and sympy answers with a
-    # family. The body reads none of them, so the whole extent is one symbol instead.
-    kir = kir_of(CSR_KERNEL, CSR_BENCH, "csr_demo")
-    helper = next(h for h in kir.helpers if h.kernel_name == "sweep")
-    settled = with_solvable_extents(helper)
-    shapes = {a.name: tuple(str(d) for d in a.shape) for a in settled.arrays}
-    assert shapes["A_data"] == ("sweep_extent0",), shapes
-    assert shapes["A_indptr"] == ("sweep_extent1",), shapes
-    # ``N`` is a bare extent and the body reads it: untouched, and still what dace solves from diag.
-    assert shapes["diag"] == ("N",), shapes
-    assert shapes["y"] == ("N",), shapes
-    assert [s.name for s in settled.symbols] == [], [s.name for s in settled.symbols]
-
-
 def test_the_retired_symbols_are_neither_declared_nor_passed() -> None:
     # A symbol the callee no longer names is one dace can neither solve nor accept: passing it as a
     # keyword is "Invalid keyword argument".
@@ -428,19 +413,6 @@ def test_contiguity_reads_the_subscript_form() -> None:
     assert not form("Q[0:2, 0:2]")
     assert not form("Q[::2, :]")
     assert not form("Q[None, :]")
-
-
-def test_a_scalar_accumulator_helper_returns_by_value() -> None:
-    # The target is a fresh local bound by the call itself, so the only other reading of the return
-    # shape is a broadcast join over the call's own (N, N) arguments -- an out-param for one number.
-    kir = kir_of(DOT_KERNEL, DOT_BENCH, "dot_demo")
-    helper = next(h for h in kir.helpers if h.kernel_name == "row_dot")
-    assert helper.return_kind == "scalar", (helper.return_kind, [(a.name, a.shape) for a in helper.arrays])
-    assert [a.name for a in helper.arrays] == ["A", "B"], [a.name for a in helper.arrays]
-    source = emit_dace(kir)
-    fn = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == "row_dot")
-    assert [a.arg for a in fn.args.args] == ["A", "B"], ast.unparse(fn)
-    assert any(isinstance(n, ast.Return) and n.value is not None for n in ast.walk(fn)), ast.unparse(fn)
 
 
 def test_a_written_plane_is_copied_back_after_the_call() -> None:

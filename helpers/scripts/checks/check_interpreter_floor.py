@@ -167,6 +167,22 @@ def scope_faults(body: list[ast.stmt], bound: set[str], starred: bool, aliases: 
             faults.extend(annotation_faults(annotation, bound | params, starred, aliases))
         if isinstance(stmt, ast.ClassDef):
             faults.extend(scope_faults(stmt.body, bound | params, starred, aliases))
+        if isinstance(stmt, (ast.Try, ast.TryStar)):
+            # `else` runs only after the body has completed and `finally` after the body and the
+            # handlers have: both see the names those blocks bind, so a fault reported against the
+            # pre-statement view is a false one. The body and the handlers KEEP that view -- a
+            # handler runs on a PARTLY executed body, so trusting its bindings would hide a fault.
+            ran = set(bound)
+            for inner in stmt.body:
+                ran |= bindings(inner)
+            for block in blocks(stmt):
+                seed = set(ran) if block is stmt.orelse or block is stmt.finalbody else set(bound)
+                if block is stmt.finalbody:
+                    for handler in stmt.handlers:
+                        seed |= bindings(handler)
+                faults.extend(scope_faults(block, seed, starred, aliases))
+            bound.update(bindings(stmt))
+            continue
         for block in blocks(stmt):
             faults.extend(scope_faults(block, set(bound), starred, aliases))
         bound.update(bindings(stmt))
@@ -222,13 +238,18 @@ def main(argv: list[str]) -> int:
         *(string_aliases(path.read_text()) for path in tracked if "TypeAlias" in path.read_text())
     )
     package = set(package_sources())
-    faults = []
+    faults = [f"{path}: not a tracked module, not checked" for path in sorted(wanted - set(texts))]
     for path, text in texts.items():
         rel = path.relative_to(REPO)
         if path in package:
             faults += [f"{rel}:{fault}" for fault in package_faults(path, text)]
         faults += [f"{rel}:{fault}" for fault in eager_annotation_faults(text, aliases)]
-        if any(isinstance(n, ast.ImportFrom) and n.module == "__future__" for n in ast.parse(text).body):
+        if any(
+            isinstance(n, ast.ImportFrom)
+            and n.module == "__future__"
+            and any(alias.name == "annotations" for alias in n.names)
+            for n in ast.parse(text).body
+        ):
             faults.append(f"{rel}: postpones annotations (from __future__ import annotations)")
     print("\n".join(faults))
     return 1 if faults else 0

@@ -5,7 +5,12 @@ import copy
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
-from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import axis_kwarg, const_axis, kwarg_or_pos
+from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
+    axis_kwarg,
+    const_axis,
+    const_permutation,
+    kwarg_or_pos,
+)
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
@@ -55,8 +60,8 @@ def expand_transpose(
     if perm_arg is not None:
         if not isinstance(perm_arg, (ast.Tuple, ast.List)):
             raise NotImplementedError("np.transpose: perm must be Tuple/List")
-        perm = [e.value for e in perm_arg.elts if isinstance(e, ast.Constant) and isinstance(e.value, int)]
-        if len(perm) != n_dim:
+        perm = const_permutation(perm_arg, n_dim)
+        if perm is None:
             raise NotImplementedError("np.transpose: perm size != ndim")
     else:
         perm = list(reversed(range(n_dim)))

@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from types import ModuleType
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.numba import NonePlaceholderDrop
@@ -657,3 +658,21 @@ def test_a_kernel_with_no_sparse_dispatch_is_emitted_with_its_comments() -> None
     so its cached numba build is not invalidated."""
     src = "import numpy as np\n\n\ndef twice(x, out):\n    # keep me\n    out[:] = 2 * x\n"
     assert "# keep me" in emit_numba(src)
+
+
+@isolated
+def test_numba_keeps_a_data_guard_and_drops_a_shape_guard(tmp_path: pathlib.Path) -> None:
+    """numpy raises on a breakdown, so numba must too, rather than write ``inf``; its message cannot stay formatted."""
+    src = (
+        "import numpy as np\n\n\ndef f(a, out):\n    if a.ndim != 1:\n        raise ValueError(f'rank {a.ndim}')\n"
+        "    d = a.sum()\n    if d <= 0.0:\n        raise FloatingPointError(f'breakdown {d}')\n    out[:] = a / d\n"
+    )
+    arrays = [ArrayDesc(name=n, dtype="float64", shape=("N",)) for n in ("a", "out")]
+    kir = KernelIR(tree=ast.parse(src).body[1], kernel_name="f", input_args=["a", "out"], arrays=arrays)
+    emitted, module = emit_and_load(tmp_path, src, kir)
+    assert "ValueError" not in emitted
+    with pytest.raises(FloatingPointError):
+        module.f(np.array([1.0, -1.0]), np.zeros(2))
+    out = np.zeros(2)
+    module.f(np.array([1.0, 3.0]), out)
+    np.testing.assert_array_equal(out, [0.25, 0.75])

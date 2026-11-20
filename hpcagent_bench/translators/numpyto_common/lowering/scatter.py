@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from typing import ClassVar
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, range_for, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import broadcast_extents, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
@@ -141,7 +141,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         return expr if base is None else base
 
     def refuse_boolean_index(self, idx: ast.expr, op: str) -> None:
-        for n in ast.walk(idx):
+        for n in walk_nodes(idx):
             if isinstance(n, ast.Name) and n.id in self.bool_names:
                 raise NotImplementedError(
                     f"np.{op}.at index {ast.unparse(idx)!r} reads boolean {n.id!r} -- "

@@ -4,6 +4,7 @@ import ast
 import copy
 from collections.abc import Iterable, Iterator, Sequence
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import substitute_names
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import collect_assigned_names
@@ -28,21 +29,21 @@ __all__ = [
 
 
 def value_names(node: ast.AST) -> set[str]:
-    """Every name an expression reads as a VALUE -- a call's callee is not one of them.
+    """Every name an expression reads as a VALUE.
 
-    ``int`` in ``(height - 1) // int(conv_stride) + 1`` is the builtin, not an extent the caller
-    has to hold; counting it made an otherwise fully-resolved shape look unresolvable.
+    A call's own Name callee and the numpy module are spellings, not operands: ``int`` in ``(height - 1) //
+    int(conv_stride) + 1`` is the builtin, not an extent the caller has to hold, and counting it made an otherwise
+    fully-resolved shape look unresolvable. A method receiver is a real operand.
     """
-    names: set[str] = set()
-    for child in ast.iter_child_nodes(node):
-        if isinstance(child, ast.Name):
-            names.add(child.id)
-        elif isinstance(child, ast.Call):
-            for arg in list(child.args) + [kw.value for kw in child.keywords]:
-                names |= value_names(ast.Expression(body=arg)) | ({arg.id} if isinstance(arg, ast.Name) else set())
-        else:
-            names |= value_names(child)
-    return names
+    callees = {id(n.func) for n in walk_nodes(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    return {
+        n.id
+        for n in walk_nodes(node)
+        if isinstance(n, ast.Name)
+        and isinstance(n.ctx, ast.Load)
+        and id(n) not in callees
+        and n.id not in ("np", "numpy", "math")
+    }
 
 
 def held_before_table(owner_fn: ast.FunctionDef) -> dict[int | None, set[str]]:
@@ -50,7 +51,7 @@ def held_before_table(owner_fn: ast.FunctionDef) -> dict[int | None, set[str]]:
     table: dict[int | None, set[str]] = {}
     held: set[str] = set()
     for stmt in owner_fn.body:
-        for node in ast.walk(stmt):
+        for node in walk_nodes(stmt):
             table.setdefault(id(node), held)
         held = held | set(collect_assigned_names([stmt]))
     table[None] = held
@@ -64,7 +65,7 @@ def shape_symbols(arrays: Iterable[ArrayDesc]) -> set[str]:
     for a in arrays:
         for tok in a.shape:
             try:
-                for node in ast.walk(ast.parse(str(tok), mode="eval")):
+                for node in walk_nodes(ast.parse(str(tok), mode="eval")):
                     if isinstance(node, ast.Name):
                         syms.add(node.id)
             except SyntaxError:
@@ -91,6 +92,9 @@ def sole_local_binding(hfn: ast.FunctionDef, name: str) -> ast.expr | None:
     ``hfn``'s OWN scope only. A nested def is a separate scope that may reuse the name -- resnet101
     binds ``oh`` in ``_conv2d`` and again in the 1x1 helper nested inside it -- and an ``ast.walk``
     counts both, calls the name ambiguous, and refuses a call the caller could make.
+
+    A tuple unpack of a tuple binds each name to its own element (``kd, kh, kw = k, k, k`` in
+    convt3d_bn_avgpool_avgpool's pool); any other unpack binds it to nothing the caller can name.
     """
     found: list[ast.expr] = []
     for node in scope_nodes(hfn):
@@ -98,6 +102,14 @@ def sole_local_binding(hfn: ast.FunctionDef, name: str) -> ast.expr | None:
             target = node.targets[0]
             if isinstance(target, ast.Name) and target.id == name:
                 found.append(node.value)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                at = [i for i, elt in enumerate(target.elts) if isinstance(elt, ast.Name) and elt.id == name]
+                if not at:
+                    continue
+                value = node.value
+                if not (isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts)):
+                    return None
+                found.extend(value.elts[i] for i in at)
         elif isinstance(node, (ast.AugAssign, ast.For)):
             bound = node.target
             if isinstance(bound, ast.Name) and bound.id == name:
@@ -204,7 +216,7 @@ def caller_side_symbol(
     # Whatever is still a helper-local after that substitution is another link in the same chain.
     locals_bound = collect_assigned_names(hfn.body)
     leftover = sorted(
-        {n.id for n in ast.walk(expr) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)} & set(locals_bound)
+        {n.id for n in walk_nodes(expr) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)} & set(locals_bound)
     )
     if leftover:
         nested = {
@@ -262,12 +274,12 @@ def caller_side_shape(
         # ``(height - 1) // int(conv_stride) + 1`` is the builtin, and asking
         # :func:`caller_side_symbol` to respell it refused the whole call ("needs shape symbol
         # 'int'"). :func:`value_names` already draws that line for the free-name check below.
-        operands = value_names(ast.Expression(body=expr))
+        operands = value_names(expr)
         subst = {
             n.id: ast.parse(
                 caller_side_symbol(n.id, held, decl_pnames, site_args, hfn, hname, 0, arr_by), mode="eval"
             ).body
-            for n in ast.walk(expr)
+            for n in walk_nodes(expr)
             if isinstance(n, ast.Name) and n.id not in held and n.id in operands
         }
         respelled = ast.unparse(substitute_names(ast.Expression(body=expr), subst).body) if subst else str(token)
@@ -275,6 +287,17 @@ def caller_side_shape(
         # earlier site and carried here through the caller's own descriptor table.
         out.append(fold_caller_shape_reads(respelled, arr_by))
     return out
+
+
+#: A float64 (complex128) helper parameter follows the run's precision: the dace emitter declares it ``dc_float``.
+#: Its call temporaries are spelled with the precision aliases, which every emitter resolves; ``np.float64``
+#: in a bf16 or fp32 dace program is a float64 buffer that the helper refuses.
+PRECISION_ALLOC_DTYPE = {"float64": "np_float", "complex128": "np_complex"}
+
+
+def alloc_dtype(dtype: str) -> str:
+    """The ``dtype=`` spelling of a call temporary of ``dtype``."""
+    return PRECISION_ALLOC_DTYPE.get(dtype, f"np.{dtype}")
 
 
 def build_callsite_stmts(
@@ -321,7 +344,7 @@ def build_callsite_stmts(
         if info is not None and not isinstance(arg, ast.Name):
             shp, dt = info
             atmp = f"__harg_{hidx}_{k}"
-            pre.append(f"{atmp} = np.empty(({', '.join(shp)},), dtype=np.{dt})")
+            pre.append(f"{atmp} = np.empty(({', '.join(shp)},), dtype={alloc_dtype(dt)})")
             pre.append(f"{atmp}[:] = {ast.unparse(arg)}")
             call_srcs.append(atmp)
         else:
@@ -340,13 +363,13 @@ def build_callsite_stmts(
             reads = {ident for src in call_srcs for ident in IDENT_RE.findall(src)}
             call_srcs.append(lhs.id)
             if lhs.id not in live_buffers and lhs.id not in reads:
-                pre.append(f"{lhs.id} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})")
+                pre.append(f"{lhs.id} = np.empty(({', '.join(hret_shape)},), dtype={alloc_dtype(hret_dtype)})")
         return ast.parse("\n".join([*pre, f"{name}({', '.join(call_srcs)})"])).body
     tmp = f"__hret_tmp_{hidx}"
     call_srcs.append(tmp)
     lines = [
         *pre,
-        f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})",
+        f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype={alloc_dtype(hret_dtype)})",
         f"{name}({', '.join(call_srcs)})",
         f"{ast.unparse(lhs)} = {tmp}",
     ]
@@ -378,7 +401,7 @@ def reorder_helper_call_args(trees: list[ast.AST], helpers: list[KernelIR]) -> N
     if not perms:
         return
     for tree in trees:
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
                 continue
             perm = perms.get(node.func.id)

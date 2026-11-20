@@ -25,7 +25,7 @@ control_color: "#4d4d4d"
 
 # A filled circle, square, triangle and diamond stay apart at 4pt where a pentagon and a hexagon do
 # not, so identity survives a column-width figure and a greyscale print.
-markers: ["o", "s", "^", "D", "v", "P", "X", "*"]
+markers: ["o", "s", "^", "D", "v", "h", "P", "X", "*"]
 
 # The SHAPE POOL of treatments. Its free shapes split in two: the first `harness_shapes` are the harnesses',
 # the rest the packets', each kind taking its part in slot order unless a packet names its own `marker`, so
@@ -75,6 +75,11 @@ shapes:
   - [3, 1, 180]
   - [6, 0, 30]
   - [4, 2, 45]
+  - [11, 1, 0]
+  - [11, 2, 0]
+  - [11, 0, 0]
+  - [12, 1, 0]
+  - [12, 2, 0]
 
 # How much lighter each packet BEYOND the lead makes the colour, so `cpf-src` and
 # `cpf-src+lang-skills` read as one treatment family at two strengths. Large enough to read as a

@@ -12,7 +12,7 @@ Every change keeps these properties. `tests/test_serve_private.py` covers the la
 | Property | Code | Test |
 |---|---|---|
 | Binds `127.0.0.1` (`tunnel`) or the node's `hsn0` IPv4 (`alps`) as the last argument; the file has no `0.0.0.0` literal, comments included | `use_access`, `server_argv` | `test_every_leg_of_each_preset_binds_loopback_last_on_the_command_line`, `test_alps_access_binds_every_leg_to_this_nodes_hsn0_address_last` |
-| Key file mode 600, owned by the user, 32+ characters; key reaches SGLang only via the `--config` YAML; `API_KEY` is never exported, so `srun --export=ALL` cannot carry it | `read_key_file`, `write_secret` | `test_each_preset_passes_the_key_only_through_a_config_file_in_a_mode_700_run_dir` |
+| Key file mode 600, owned by the user, 32+ characters; key reaches SGLang only via the `--config` YAML and vLLM only via `VLLM_API_KEY` set inside the server step from `api.key`; `API_KEY` is never exported, so `srun --export=ALL` cannot carry it | `read_key_file`, `write_secret`, `vllm_argv` | `test_each_preset_passes_the_key_only_through_a_file_in_a_mode_700_run_dir` |
 | SGLang leaves `/health*` and `/metrics*` open and checks the key only with one tokenizer worker, so `EXTRA_ARGS` may not set host, port, key, config, tokenizer workers or metrics, and metrics run only on loopback | `validate_extra_args`, `use_access` | `test_the_launcher_refuses_extra_args_that_name_the_host_port_key_config_tokenizer_workers_or_metrics`, `test_alps_access_serves_no_metrics` |
 | Every refusal happens before a file is written or weights load | call order at the end of the launcher | `assert_untouched` in each refusal test |
 | Run dir mode 700, ACLs removed; cleanup deletes `endpoint.json` first, then the three secret files | `make_private_dir`, `cleanup` | `test_alps_serve_mode_deletes_endpoint_json_with_the_secrets_when_the_job_exits` |
@@ -24,7 +24,7 @@ Every change keeps these properties. `tests/test_serve_private.py` covers the la
 1. `use_preset` sets `PRESET_*`; key file, Triton cache and run root are named after the preset.
 2. Checks in order: `read_key_file`, `validate_extra_args`, `use_access`, `LEGS` parsing, weights under
    `$HF_HOME/hub`, `gpu_arch_check.sh` (skipped under `DRY_RUN`).
-3. `make_private_dir`, then `write_secret` for `sglang-auth.yaml`, `api.key`, `auth.header`.
+3. `make_private_dir`, then `write_secret` for `sglang-auth.yaml` (SGLang presets only), `api.key`, `auth.header`.
 4. `MODE=smoke`: `run_leg` per entry: `start_leg` (one `srun --environment=<EDF>` step), `wait_ready`,
    `record_memory`, `auth_checks`, `tools_gate`, `load_probe`, `stop_server`.
 5. `MODE=serve`: `serve_leg` runs the first entry through `auth_checks`, then prints `tunnel_help`, or
@@ -34,16 +34,16 @@ Every change keeps these properties. `tests/test_serve_private.py` covers the la
 
 A preset is one partition + image + weights combination.
 
-1. Add a `use_preset` case: `PRESET_PARTITION`, `PRESET_GPUS`, `PRESET_EDF`, `PRESET_MODEL`,
-   `PRESET_LEGS`, `PRESET_AITER`, `PRESET_FLAGS`.
-2. `server_argv` hard-codes Qwen3.8 flags for every preset (chat template, `--reasoning-parser qwen3`,
-   `--tool-call-parser qwen3_coder`, `--mamba-full-memory-ratio 0.5`, `--context-length 262144`,
-   `--language-only`). Another model family moves these into `PRESET_FLAGS`; the mi300 test against
+1. Add a `use_preset` case: `PRESET_PARTITION`, `PRESET_GPUS`, `PRESET_ENGINE`, `PRESET_EDF`, `PRESET_MODEL`,
+   `PRESET_LEGS`, `PRESET_FLAGS`, `PRESET_ENV`.
+2. `server_argv` calls `<engine>_argv`. `sglang_argv` and `vllm_argv` hard-code Qwen3.8 flags for every preset of
+   their engine (chat template, `--reasoning-parser qwen3`, `--tool-call-parser qwen3_coder`, a 262144-token
+   context; SGLang also `--mamba-full-memory-ratio 0.5` and `--language-only`). Another model family moves these into `PRESET_FLAGS`; the mi300 test against
    `llrbase-c:qwen38` must still pass.
 3. A new AMD partition needs `GPU_ARCH_<partition>` in `containers/images/gpu_arch.env`, an arch
    the images already carry (`AMD_GPU_TARGETS`; add it there and rebuild otherwise), and its EDF
    rows in `images.env`.
-4. Fetch weights with `MODELS=<repo> sbatch containers/inference/fetch_weights.sbatch`
+4. Fetch weights with `MODELS=<repo> EDF=<preset EDF> sbatch containers/inference/fetch_weights.sbatch`
    and check the Lustre striping it reports.
 5. Tests: add the preset to `PRESETS`, `OTHER_PARTITION`, `DEFAULT_LEG_COUNT`, its weights repo to the
    loop in `launch()`, and a flags test modeled on the mi300 one.
@@ -74,19 +74,19 @@ Rejected designs:
 
 The `alps` URL uses the IP address because Daint resolving Beverin node names is untested.
 
-## 5. Adding an engine: vLLM
+## 5. Engines: SGLang and vLLM
 
-Facts from the vLLM 0.28.0 image:
+The `mi200` preset runs vLLM. Facts from the vLLM 0.28.0 image:
 
-- The key comes from `--api-key` or `VLLM_API_KEY` (`vllm/entrypoints/openai/api_server.py`). Set the
-  variable inside the server step, e.g. `bash -c 'VLLM_API_KEY="$(cat <file>)" exec vllm serve ...'`;
+- The key comes from `--api-key` or `VLLM_API_KEY` (`vllm/entrypoints/openai/api_server.py`). `vllm_argv` sets
+  the variable inside the server step from `api.key` (`bash -c 'VLLM_API_KEY="$(cat "$1")"; ...; exec "$@"'`);
   `srun ... env VLLM_API_KEY=<key>` would put it on argv.
 - Auth covers only paths under `/v1`, `/v2`, `/inference`, `/cohere` (`GUARDED_PREFIX` in
   `vllm/entrypoints/serve/utils/server_utils.py`); `/health` and every other route are open. A vLLM
-  preset stays `tunnel`-only until those routes are listed and judged.
+  preset stays `tunnel`-only (`ACCESS=alps` refuses it) until those routes are listed and judged.
 
-Engine-specific launcher parts: `server_argv`, the key writer (the YAML `--config` is SGLang's),
-`record_memory` (greps SGLang log lines), and the `SGLANG_*` env in `start_leg`. `wait_ready`,
+Engine-specific launcher parts: `sglang_argv` / `vllm_argv`, the key writer (the YAML `--config` is SGLang's),
+`record_memory` (greps both engines' allocator lines), and the preset's `PRESET_ENV` in `start_leg`. `wait_ready`,
 `auth_checks`, `tools_gate` (`verify-tools-reasoning.py`) and `load_probe` use the OpenAI API and work
 for both.
 

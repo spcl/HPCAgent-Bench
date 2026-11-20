@@ -39,3 +39,5 @@ args:
   y: {shape: "(NLEV, NPROMA)", out: true}
 chain_length:
   s: NLEV * nsteps
+  # y adds a pointwise term to s, so it carries s's chain
+  y: NLEV * nsteps

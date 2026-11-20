@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import extent_is_scalar, iter_extent_of
@@ -13,7 +13,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or
 __all__ = [
     "ResolveArrShape",
     "ShapeMidExpressionRewriter",
-    "const_int_index",
     "fold_shape_reads_in_table",
     "is_newaxis",
     "is_newaxis_result_axis",
@@ -28,13 +27,6 @@ def negative_literal_offset(node: ast.expr) -> int | None:
     form numpy source parses to -- else None. Numpy counts such an index from the end of its axis."""
     k = const_int(node)
     return -k if k is not None and k < 0 else None
-
-
-def const_int_index(node: ast.expr) -> int | None:
-    """Return the integer value of a constant subscript index (``arr[3]`` /
-    ``arr[-1]``), or ``None`` for a non-constant one. Numpy spells a negative
-    literal index as ``UnaryOp(USub, Constant)``, not a signed ``Constant``."""
-    return const_int(node)
 
 
 def is_newaxis_result_axis(sub: ast.Subscript, k: int) -> bool:
@@ -108,7 +100,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
             and node.value.attr == "shape"
             and isinstance(node.value.value, (ast.Subscript, ast.Call))
         ):
-            k = const_int_index(node.slice)
+            k = const_int(node.slice)
             if k is not None:
                 ext = iter_extent_of(node.value.value, self.arrays_shapes)
                 if ext is not None and -len(ext) <= k < len(ext):
@@ -475,14 +467,4 @@ class ResolveArrShape(ast.NodeTransformer):
         if not src or node.slice.value >= len(src):
             return node
         tok = src[node.slice.value]
-        # Plain literal int / identifier shortcut.
-        try:
-            return ast.Constant(value=int(tok))
-        except (TypeError, ValueError):
-            pass
-        # Try parsing as a pure expression -- ``H - K + 1`` / ``N`` /
-        # ``(N + 1)``. Strip any surrounding parens for cleanliness.
-        try:
-            return ast.parse(str(tok), mode="eval").body
-        except (SyntaxError, ValueError):
-            return name_(str(tok))
+        return const_or_name(tok)

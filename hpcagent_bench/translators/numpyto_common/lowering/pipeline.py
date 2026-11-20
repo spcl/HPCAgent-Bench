@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable, Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.frontend import (
     collect_inlined_scalar_defs,
     resolve_shape_attr_tokens,
@@ -15,6 +16,7 @@ from hpcagent_bench.translators.numpyto_common.frontend import (
 )
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, descs, stamp_symbol_assumptions
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ArrayMethodRewriter
+from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_GEMM_MARKER, BLAS_GEMM_STRIDED_MARKER
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import DIM_IDENT_RE
 from hpcagent_bench.translators.numpyto_common.lib_nodes.fft import FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
@@ -53,7 +55,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.constructors import (
     MgridLowering,
     ZerosRewriter,
 )
-from hpcagent_bench.translators.numpyto_common.lowering.fft_grid import FftGridReshapeRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.forward_subst import (
     ForwardSubstituteInvariantScalars,
     SelfAssignDropper,
@@ -65,7 +66,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.masks import (
     collect_bool_names,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MathRewriter
-from hpcagent_bench.translators.numpyto_common.lowering.reshape_attr import ShapeAttrToReshape
+from hpcagent_bench.translators.numpyto_common.lowering.nonzero_rows import NonzeroRowsToGuardedLoop
 from hpcagent_bench.translators.numpyto_common.lowering.scatter import ScatterAtRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import collect_dim_aliases, harvest_local_shapes
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import (
@@ -84,7 +85,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.signature import (
 from hpcagent_bench.translators.numpyto_common.lowering.slice_fusion import LiftFreshArrayFromSlices, SliceFusion
 from hpcagent_bench.translators.numpyto_common.lowering.ssa import ssa_rename_reassigned
 from hpcagent_bench.translators.numpyto_common.lowering.sugar import (
-    DaceMapRewriter,
     MembershipToComparisons,
     UnrollConstRangeComprehension,
 )
@@ -98,6 +98,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.views import (
     PadImplicitTrailingSlices,
     fold_slice_view_aliases,
     fold_subarray_aliases,
+    write_back_views,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.whole_array import WholeArrayAssignRewriter
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
@@ -113,6 +114,7 @@ __all__ = [
     "elementwise_store",
     "fix_real_scalar_dtypes",
     "fold_local_shape_attr_tokens",
+    "kernel_float_dtype",
     "lower",
     "lp_forward_substitute_invariant_scalars",
     "lp_libnode_expand",
@@ -154,6 +156,7 @@ class LoweringContext:
     __slots__ = (
         "arrays_shapes",
         "blas",
+        "blas_complex",
         "bool_names",
         "dim_aliases",
         "fft_library",
@@ -171,6 +174,7 @@ class LoweringContext:
         "scalar_temps",
         "shapes",
         "sibling_scalar_helpers",
+        "sort_library",
         "tree",
         "wa_rewriter",
         "zeros",
@@ -186,10 +190,14 @@ class LoweringContext:
         ) = None
         #: Target renders a dense 2-D float GEMM as a BLAS call; see :func:`lower`.
         self.blas: bool = False
+        #: The target's gemm also takes complex operands; see :func:`lower`.
+        self.blas_complex: bool = False
         #: Target renders a whole-array 1-D np.fft.* as an FFT_LIBRARY_MARKER call; see :func:`lower`.
         self.fft_library: bool = False
         #: Target renders a batched / N-D np.fft.* as FFTN_LIBRARY_MARKER; see :func:`lower`.
         self.fft_library_nd: bool = False
+        #: Target renders np.sort / np.argsort as SORT_LIBRARY_MARKER; see :func:`lower`.
+        self.sort_library: bool = False
         #: By-value scalar helpers this IR can call but does not itself list -- a HELPER body's
         #: own IR carries no helper list, so its siblings are handed down by :func:`lower`.
         self.sibling_scalar_helpers: set[str] = set()
@@ -233,21 +241,27 @@ def required[T](value: T | None, what: str) -> T:
 
 def signature_float_dtype(kir: KernelIR) -> str:
     """The float the C emitter computes this kernel in, before any run precision is applied: the
-    compute dtype of a storage-only ABI format, float32 when every real float in the signature is,
-    else float64 -- the rule ``numpyto_c.emit.default_float_dtype`` applies at emit, and the width
-    its gemm call is chosen for."""
+    compute dtype of a storage-only ABI format, float32 when every real float in the signature is
+    float32 or float16 (a half kernel's temporaries and accumulators are float32, as numpy's and
+    PyTorch's half loops accumulate; before, an fp16 ABI fell to float64 temporaries), else float64
+    -- the width its gemm call is chosen for."""
     storage = {dtypes.compute_dtype(a.dtype) for a in kir.arrays if a.dtype and dtypes.is_storage_only(a.dtype)}
     if len(storage) == 1:
         return storage.pop()
     reals = {dtypes.c_type(dtypes.compute_dtype(d.dtype)) for d in descs(kir.arrays, kir.scalars) if d.dtype}
-    reals &= {"float", "double"}
-    return "float32" if reals == {"float"} else "float64"
+    reals &= {"_Float16", "float", "double"}
+    return "float32" if reals and reals <= {"_Float16", "float"} else "float64"
+
+
+def kernel_float_dtype(kir: KernelIR) -> str:
+    """The float a kernel computes and types an untyped literal or temp in: the run precision, else its signature's."""
+    return kir.float_precision or signature_float_dtype(kir)
 
 
 def user_functions(ctx: LoweringContext) -> set[str]:
     """Names of the functions the kernel module defines: its emitted helpers and any def left in the tree."""
     names = {h.kernel_name for h in ctx.kir.helpers}
-    names |= {n.name for n in ast.walk(ctx.tree) if isinstance(n, ast.FunctionDef)}
+    names |= {n.name for n in walk_nodes(ctx.tree) if isinstance(n, ast.FunctionDef)}
     return names
 
 
@@ -285,6 +299,10 @@ def lp_normalize_calls(ctx: LoweringContext) -> None:
     # as a loop (np.concatenate's im2col taps), and no later pass can see through one.
     UnrollConstRangeComprehension().visit(tree)
     MembershipToComparisons().visit(tree)
+    # Before any pass sizes a local: a data-dependent np.nonzero selection has no extent, its row loop does.
+    seed_ranks = {name: len(shape) for name, shape in ash.items()}
+    seed_ranks.update((desc.name, 0) for desc in descs(ctx.kir.scalars, ctx.kir.symbols))
+    NonzeroRowsToGuardedLoop(tree, seed_ranks).run()
     # ``X = alloc(...) if cond else None`` -> ``X = alloc(...)`` before the zeros
     # harvester runs, so the conditionally-allocated buffer is seen as a plain local
     # (the backends have no ``None``; reads are guarded by the same ``cond``).
@@ -337,7 +355,6 @@ def lp_normalize_calls(ctx: LoweringContext) -> None:
     MathRewriter(
         set(ash.keys()) | set(ctx.lib_shape_table.keys()), defer_array_capable=True, user_functions=user_functions(ctx)
     ).visit(tree)
-    DaceMapRewriter().visit(tree)
     # ``a = b = v``: ``v`` once -- a temp for a scalar, one name for an array's one buffer.
     chain_ranks = {name: len(shape) for name, shape in ash.items()}
     chain_ranks.update((desc.name, 0) for desc in descs(ctx.kir.scalars, ctx.kir.symbols))
@@ -389,10 +406,6 @@ def lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
     # fresh arrays get their shape registered like any other local.
     MgridLowering().visit(tree)
     ast.fix_missing_locations(tree)
-    # Pre-pass: rewrite ``x.shape = expr`` -> ``x = np.reshape(x, expr)``. Handles
-    # chained ``Xi.shape = Yi.shape = expr`` too. Mandelbrot2 canonical uses this.
-    ShapeAttrToReshape().visit(tree)
-    ast.fix_missing_locations(tree)
     # Forward-substitute a shape-tuple local (``shp = (Lb, Lb, Lb, nstate)`` --
     # the seed-time fold of a declared-array-based ``shp = Y.shape``) into its uses
     # BEFORE the harvest, so ``np.reshape(x, shp)`` is sized from the concrete tuple
@@ -436,7 +449,7 @@ def lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     # dtype=np.bool_)`` constructors (ICON cfl_clip / levmask) so a derived
     # ``mask = cfl_clip & owner`` is recognised as boolean (and declared bool /
     # logical) before the whole-array rewriter runs.
-    for s_ in ast.walk(tree):
+    for s_ in walk_nodes(tree):
         if (
             isinstance(s_, ast.Assign)
             and len(s_.targets) == 1
@@ -599,18 +612,14 @@ def lp_normalize_index_access(ctx: LoweringContext) -> None:
 
 
 def lp_libnode_expand(ctx: LoweringContext) -> None:
-    """FFT-grid + reshape normalisation, then the LibNode expander (reductions /
+    """Reshape normalisation, then the LibNode expander (reductions /
     matmul / linalg); a second free-name promotion for structural scalars."""
     tree = ctx.tree
-    # Flat-grid FFT idiom (vexx invfft/fwfft: reshape-to-grid -> fftn over the
-    # grid axes -> reshape-back) -> materialised reshape + fft temps, so the
-    # reshape/DFT expanders below see bare Names with known shapes.
-    FftGridReshapeRewriter(ctx.lib_shape_table, ctx.local_dtypes, [0]).visit(tree)
-    ast.fix_missing_locations(tree)
-    # Normalize ``X.reshape(a, b)`` method form to ``np.reshape(X, (a, b))``
-    # AFTER the FFT idiom match (which consumes its own reshape chains) so the
+    # Normalize ``X.reshape(a, b)`` method form to ``np.reshape(X, (a, b))`` so the
     # single expand_reshape path serves lulesh's varargs spelling.
     ReshapeMethodRewriter().visit(tree)
+    # A reshape or a slice view is lowered as a copy; a store through the view must still reach the array it views.
+    write_back_views(tree, ctx.lib_shape_table)
     # ... and the reduction methods, for the same reason: one function-form path per op instead of
     # a receiver-shape special case in every expander.
     ArrayMethodRewriter(set(ctx.original_kir.sparse or {})).visit(tree)
@@ -642,8 +651,16 @@ def lp_libnode_expand(ctx: LoweringContext) -> None:
         native_dtypes={**{arr.name: arr.dtype for arr in ctx.kir.arrays}, **ctx.local_dtypes},
         blas=ctx.blas,
         blas_float=signature_float_dtype(ctx.kir),
+        blas_complex=ctx.blas_complex,
+        opmath=ctx.kir.opmath,
         fft_library=ctx.fft_library,
         fft_library_nd=ctx.fft_library_nd,
+        sort_library=ctx.sort_library,
+        extent_values={
+            name: value
+            for name, value in {**ctx.kir.pinned_consts, **ctx.kir.shape_only_consts}.items()
+            if isinstance(value, int) and not isinstance(value, bool)
+        },
     )
     ctx.lib_rewriter.visit(tree)
     # Second math rename: an intrinsic whose argument only becomes a SCALAR once the library
@@ -716,18 +733,28 @@ def fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
     # library call's output is complex by construction, never a narrowing candidate.
     candidates -= {
         call.args[0].id
-        for call in ast.walk(tree)
+        for call in walk_nodes(tree)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name)
         and call.func.id in (FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER)
         and call.args
         and isinstance(call.args[0], ast.Name)
     }
+    # Same for a gemm marker's output (its third argument): MATMUL of complex operands is complex.
+    candidates -= {
+        call.args[2].id
+        for call in walk_nodes(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id in (BLAS_GEMM_MARKER, BLAS_GEMM_STRIDED_MARKER)
+        and len(call.args) > 2
+        and isinstance(call.args[2], ast.Name)
+    }
     # Every value WRITTEN to a candidate -- a whole-name ``x = e`` / ``x += e`` or
     # a per-element ``x[i] = e`` / ``x[i] += e`` (an array is written elementwise).
     # A candidate is real only if EVERY write is real.
     writes: dict[str, list[ast.expr]] = {}
-    for stmt in ast.walk(tree):
+    for stmt in walk_nodes(tree):
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
             tgt: ast.expr = stmt.targets[0]
         elif isinstance(stmt, ast.AugAssign):
@@ -792,7 +819,7 @@ def lp_scatter_at(ctx: LoweringContext) -> None:
     # collect them so ``ScatterAtRewriter`` can look through the alias to the
     # wrapped operand exactly as it does for a wrapper call spelled inline.
     wrapper_defs: dict[str, ast.expr] = {}
-    for stmt in ast.walk(ctx.tree):
+    for stmt in walk_nodes(ctx.tree):
         if (
             isinstance(stmt, ast.Assign)
             and len(stmt.targets) == 1
@@ -807,7 +834,7 @@ def lp_scatter_at(ctx: LoweringContext) -> None:
     # ``np.broadcast_to``/``.reshape(-1)`` definition is now dead code the
     # emitter has no lowering for (nothing left reads the wrapped result).
     # Drop it rather than leave an orphaned unsupported call.
-    still_read = {n.id for n in ast.walk(ctx.tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    still_read = {n.id for n in walk_nodes(ctx.tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     dead = set(wrapper_defs) - still_read
     if dead:
 
@@ -1047,7 +1074,7 @@ def lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
     # Ordered: the loop below inserts into ``ctx.local_dtypes``, and that dict's order is what
     # the fp8 prelude and the Fortran declaration block iterate.
     idx_locals: OrderedSet[str] = OrderedSet()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Subscript):
             sl = node.slice
             elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
@@ -1286,7 +1313,7 @@ def tag_complex_locals(
     pinned_real = {n for n, lit in dtype_literal.items() if dtype_verdict(lit) == "real"}
     seed.update(dict.fromkeys(pinned_real, "float"))
 
-    stores = [store for store in map(elementwise_store, ast.walk(kir.tree)) if store is not None]
+    stores = [store for store in map(elementwise_store, walk_nodes(kir.tree)) if store is not None]
     for unused in range(FIXPOINT_ROUNDS):
         # The WHOLE mapping, not its size: after the first pass propagation stops adding names and
         # only flips a name real -> complex, so a size comparison calls a fixpoint that has not been
@@ -1319,6 +1346,8 @@ def lower(
     fft_library: bool = False,
     scalar_helpers: set[str] | None = None,
     fft_library_nd: bool = False,
+    blas_complex: bool = False,
+    sort_library: bool = False,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
 
@@ -1340,8 +1369,10 @@ def lower(
     :class:`MatmulCallRewriter`) is loop-lowered for every target EXCEPT a dense 2-D float
     contraction under ``blas``, which becomes a :data:`lib_nodes.BLAS_GEMM_MARKER` call the
     target's emitter renders as its own gemm. Every other shape -- batched, transposed, matvec,
-    sparse, non-float -- keeps the loop nest on every target. The Fortran ``MATMUL`` intrinsic is
-    reserved for the rare unresolved-shape case the loop hoister cannot lower (Fortran emitter).
+    sparse, non-float -- keeps the loop nest on every target. A pairwise einsum contraction becomes
+    the strided :data:`lib_nodes.BLAS_GEMM_STRIDED_MARKER` under ``blas`` (``lib_nodes.contractions``).
+    ``blas_complex``: the target's gemm also takes complex operands (Fortran's ``MATMUL``; CBLAS here
+    is real only).
 
     ``fft_library`` is the same "render a real library call instead of a loop nest" signal, for a
     whole-array 1-D ``np.fft.fft``/``ifft``/``fftn``/``ifftn`` (rank == 1 only -- a batched/N-D
@@ -1351,6 +1382,9 @@ def lower(
     with no BLAS_GEMM_MARKER renderer (Fortran, numba) can still opt into this one.
     ``fft_library_nd`` (numpyto_c only) also renders a batched / N-D transform as
     :data:`lib_nodes.FFTN_LIBRARY_MARKER` -- one ``fftw_plan_many_dft`` -- instead of the naive loop.
+    ``sort_library`` renders ``np.sort`` / ``np.argsort`` along the last axis as
+    :data:`lib_nodes.SORT_LIBRARY_MARKER` (qsort / std::sort / Fortran qsort); without it only a 1-D
+    ``np.sort`` lowers (DaCe).
 
     Set :data:`INVARIANT_ENV` in the environment to run
     :func:`assert_lowering_invariants` after every phase.
@@ -1362,8 +1396,10 @@ def lower(
     ctx = LoweringContext(kir, copy.deepcopy(kir))
     ctx.native_call = native_call
     ctx.blas = blas
+    ctx.blas_complex = blas_complex
     ctx.fft_library = fft_library
     ctx.fft_library_nd = fft_library_nd
+    ctx.sort_library = sort_library
     ctx.sibling_scalar_helpers = set(scalar_helpers or ())
     for name_, phase in LOWER_PHASES:
         phase(ctx)

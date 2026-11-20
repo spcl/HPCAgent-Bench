@@ -13,3 +13,6 @@ parameters:
     N: 3855
 args:
   path: {shape: "(N, N)", dtype: int32, out: true}
+chain_length:
+  # integer output, compared exactly: no floating-point accumulation
+  path: 1

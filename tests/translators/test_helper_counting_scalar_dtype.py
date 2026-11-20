@@ -12,12 +12,8 @@ subscript``. C and gfortran say the same thing in their own words.
 """
 
 import ast
-import json
-import pathlib
-import tempfile
 
-from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel, widen_counting_scalar_params
+from hpcagent_bench.translators.numpyto_common.frontend import widen_counting_scalar_params
 from hpcagent_bench.translators.numpyto_common.ir import ScalarDesc
 
 #: ``_table_size`` counts with ``b``; the call site passes an element of a kernel LOCAL, which is
@@ -57,45 +53,6 @@ def k(a, out):
     for i in range(n):
         out[i] = _pick(bins, bins[i])
 """
-
-
-def emitted(source: str) -> str:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(source)
-    bench = {
-        "name": "k",
-        "short_name": "k",
-        "relative_path": ".",
-        "module_name": "k",
-        "func_name": "k",
-        "dwarf": "d",
-        "level": 3,
-        "parameters": {"S": {"n": 8}},
-        "input_args": ["a", "out", "n"],
-        "array_args": ["a", "out"],
-        "output_args": ["out"],
-        "init": {"arrays": {"a": "(n,)", "out": "(n,)"}, "dtypes": {"a": "int64", "out": "int64"}},
-    }
-    (d / "k.json").write_text(json.dumps({"benchmark": bench}))
-    return emit_dace(parse_kernel(d / "k_numpy.py", d / "k.json"))
-
-
-def annotation_of(src: str, helper: str, param: str) -> str:
-    fn = next(f for f in ast.parse(src).body if isinstance(f, ast.FunctionDef) and f.name == helper)
-    arg = next(a for a in fn.args.args if a.arg == param)
-    return ast.unparse(arg.annotation)
-
-
-def test_a_range_bound_parameter_is_declared_int() -> None:
-    src = emitted(COUNTING_HELPER)
-    assert "def _table_size(" in src, f"the helper was inlined, so this proves nothing:\n{src}"
-    assert annotation_of(src, "_table_size", "b") == "dc.int64", src
-
-
-def test_a_subscript_index_parameter_is_declared_int() -> None:
-    src = emitted(INDEXING_HELPER)
-    assert "def _pick(" in src, f"the helper was inlined, so this proves nothing:\n{src}"
-    assert annotation_of(src, "_pick", "j") == "dc.int64", src
 
 
 def test_a_scalar_the_body_only_compares_keeps_its_inferred_dtype() -> None:

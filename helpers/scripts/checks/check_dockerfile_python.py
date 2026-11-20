@@ -67,6 +67,13 @@ def offenders(paths: list[pathlib.Path]) -> list[str]:
                     # A clean run still prints "All checks passed!" on stdout, so the exit status is
                     # what says whether there is anything to read.
                     continue
+                if run.returncode != 1:
+                    # Exit 2 is a FAILED RUN -- a ruff too old for --isolated/--output-format, an
+                    # unreadable extracted file -- not a finding: stdout carries nothing readable,
+                    # so parsing it yields nothing and the gate would pass silently. Report it.
+                    detail = run.stderr.strip() or run.stdout.strip() or "no output"
+                    reports.append(f"  {path}: ruff failed (exit {run.returncode}): {detail}")
+                    continue
                 for line in run.stdout.splitlines():
                     # concise output is `<file>:<line>:<col>: <code> <message>`; the line number is
                     # the BLOCK's, so shift it back onto the Dockerfile the reader has open.
@@ -97,12 +104,13 @@ def main() -> int:
 
     if not found:
         return 0
-    print(f"error: {len(found)} unbound name(s) in embedded Dockerfile python:\n", file=sys.stderr)
+    print(f"error: {len(found)} problem(s) in embedded Dockerfile python:\n", file=sys.stderr)
     for report in found:
         print(report, file=sys.stderr)
     print(
-        "\nThese blocks run at the END of a multi-hour image build, so a NameError here costs the "
-        "whole build. Bind the name where it is computed.",
+        "\nThese blocks run at the END of a multi-hour image build, so a failure here costs the "
+        "whole build: bind the name a finding points at, or fix the ruff run so the gate can "
+        "judge the block.",
         file=sys.stderr,
     )
     return 1

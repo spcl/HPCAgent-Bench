@@ -103,7 +103,7 @@ many aiter builds that boot ran and the cache size, and ends the job. On a warm 
 - vLLM refuses it too: `is_aiter_found_and_supported()` requires `get_cdna_version() > 2`
   (`vllm/_aiter_ops.py`), and MI250X is CDNA2.
 
-mi200 serves Qwen3.8 on the AMD vLLM image (`layers/hardware-mi200-qwen38.env`): BF16,
+mi200 serves Qwen3.8 on the AMD vLLM image (`[hardware.mi200.models.qwen38]`): BF16,
 `--attention-backend TRITON_ATTN`, `VLLM_ROCM_USE_AITER=0`. The SGLang image carries gfx942 kernels only
 and does not run there.
 
@@ -112,6 +112,11 @@ and does not run there.
 Do not set `--enable-hierarchical-cache` or `--hicache-ratio`. On an APU the "host" tier is the pool
 the KV cache already lives in, so it allocates a second KV copy in the same memory and the server
 dies to the OOM killer with no traceback. No `experiments/` env sets it.
+
+`--hicache-size 32` (an explicit host tier instead of a ratio) starts, and is slower: Kimi K2.7 at 20 agents
+gave 0.62 output tok/s per agent and a 464 s median time to first token, against 1.9 tok/s and 152 s
+without it on the same pool (jobs 747589 and 747586, 2026-11-17). Moving KV between the two tiers of one
+memory costs more than the extra hits save. Do not measure it again.
 
 ## Both parsers, always
 
@@ -153,7 +158,7 @@ call returned as prose instead of `tool_calls`. Nothing in the log says "parser"
 | `SGLANG_WARMUP_TIMEOUT` | `1800` (`run_cluster.sh`) | the warmup request's read timeout, 600 s unset; a cold aiter cache compiles on that request |
 | `TRITON_CACHE_DIR` | persistent (`run_cluster.sh` derives it from `JIT_CACHE_ROOT`) | unset, every job re-JITs kernels during inference and generation stalls in bursts |
 | `HF_HOME` | on `iopsstor` (`$FAST_SCRATCH`, default from `helpers/scripts/cache_env.sh`) | 11x faster than general scratch at 16 concurrent readers; `run_cluster.sh` stripes `$HF_HOME/hub` wide |
-| `NCCL_NET_GDR_LEVEL` | `LOC` (`pp.env`, applied on the server command by `run_cluster.sh`) | multi-node only; GPU-direct RDMA off |
+| `NCCL_NET_GDR_LEVEL` | `LOC` (`[layer.pp]`, applied on the server command by `run_cluster.sh`) | multi-node only; GPU-direct RDMA off |
 | `TOKENIZERS_PARALLELISM` | `false` | silences a fork warning |
 
 ## Cheap flags worth setting everywhere (SGLang)

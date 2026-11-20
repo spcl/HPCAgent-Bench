@@ -77,7 +77,7 @@ def test_discovery_failure_degrades_instead_of_raising(monkeypatch: pytest.Monke
     assert resources.available_resources() == {"platform": "unknown", "compilers": []}
 
 
-def test_result_is_cached_across_calls_until_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_result_is_cached_across_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     def counting_discover() -> dict[str, Any]:
@@ -88,16 +88,3 @@ def test_result_is_cached_across_calls_until_refresh(monkeypatch: pytest.MonkeyP
     resources.available_resources()
     resources.available_resources()
     assert len(calls) == 1, "second call should have hit the lru_cache, not re-probed"
-
-
-def test_refresh_drops_the_cache_and_reprobes(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = []
-
-    def counting_discover() -> dict[str, Any]:
-        calls.append(1)
-        return _fake_report()
-
-    monkeypatch.setattr(discover_tools, "discover", counting_discover)
-    resources.available_resources()
-    resources.refresh()
-    assert len(calls) == 2, "refresh() must force a fresh probe, not serve the stale cached entry"

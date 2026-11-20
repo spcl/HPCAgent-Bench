@@ -43,7 +43,8 @@ buys a second copy -- pass the device pointer, and spend the effort on overlap i
   buffer and before `MPI_Isend`/`MPI_Allreduce`; a missing sync is a silent race that often passes
   at small sizes. A receive buffer is valid only after `MPI_Wait`.
 - **MPICH has no bf16 datatype.** `MPI_BYTE` moves bf16 -- count in BYTES, not elements -- and
-  takes no `MPI_Op`, so it cannot reduce it; reduce in an fp32 buffer (`MPI_FLOAT`) or use RCCL
-  (`ncclBfloat16`).
+  takes no `MPI_Op`, so it cannot reduce it. Reduce device data with RCCL (`ncclBfloat16`): a
+  COLLECTIVE on a device buffer larger than 1 MiB aborts in this MPICH build, so `MPI_FLOAT`
+  staging buys nothing on the sizes that matter. Point-to-point takes device pointers at every size.
 - **Overlap = the `mpi-c` split one level up**: fill + sync the send buffer, post `Irecv`/`Isend`,
   launch the kernel that needs no remote data, `Waitall`, launch the rest.

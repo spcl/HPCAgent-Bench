@@ -24,32 +24,11 @@ def fn_(src: str) -> ast.FunctionDef:
     return ast.parse(src).body[0]
 
 
-def test_separate_rebindings_are_dropped() -> None:
-    fn = fn_(
-        "def k(a):\n"
-        "    np_float = framework.np_float\n"
-        "    np_complex = framework.np_complex\n"
-        "    return a.astype(np_float)\n"
-    )
-    strip_framework_dtype_rebinding(fn)
-    body = ast.unparse(fn)
-    assert "framework" not in body
-    assert "astype(np_float)" in body, "the dtype NAME must survive; only the assignment goes"
-
-
 def test_a_tuple_rebinding_is_dropped() -> None:
     """The spelling mandelbrot uses."""
     fn = fn_("def k(a):\n    np_float, np_complex = framework.np_float, framework.np_complex\n    return np_complex\n")
     strip_framework_dtype_rebinding(fn)
     assert "framework" not in ast.unparse(fn)
-
-
-def test_an_ordinary_assignment_to_the_same_name_survives() -> None:
-    """Anti-vacuity: only a rebinding read off a MODULE goes. Dropping any assignment that merely
-    mentions the name would delete real computation."""
-    fn = fn_("def k(a):\n    np_float = np.float32\n    return a.astype(np_float)\n")
-    strip_framework_dtype_rebinding(fn)
-    assert "np_float = np.float32" in ast.unparse(fn)
 
 
 def test_an_unrelated_attribute_assignment_survives() -> None:

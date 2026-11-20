@@ -46,7 +46,7 @@ AUDIT_ONLY="${AUDIT_ONLY:-0}"
 
 # Every model the experiment serves. Weights are ~1.5 TB in total, so the default is the full set
 # only because a partial one is the thing that bites six hours into an experiment.
-MODELS="${MODELS:-moonshotai/Kimi-K2.7-Code zai-org/GLM-5.3 Qwen/Qwen3.8-27B-FP8 openai/gpt-oss-120b}"
+MODELS="${MODELS:-moonshotai/Kimi-K2.7-Code zai-org/GLM-5.3 Qwen/Qwen3.8-27B openai/gpt-oss-120b}"
 
 STRIPE_COUNT="${STRIPE_COUNT:-16}"
 STRIPE_SIZE="${STRIPE_SIZE:-4M}"
@@ -123,7 +123,9 @@ for repo in ${MODELS}; do
         sc2="$(lfs getstripe -c "${blob}" </dev/null 2>/dev/null | head -1)"
         case "${sc2}" in ''|*[!0-9]*) sc2=0 ;; esac
         if [ "${sc2}" -ge "${STRIPE_COUNT}" ]; then fixed=$((fixed + 1)); else still=$((still + 1)); fi
-    done < <(find "${dir}" -type f -size +"${MIN_BLOB_BYTES}"c 2>/dev/null)
+    # -L + readlink -f: a blob may be a link into a shared content store (hub/blobs/<xx>/), which
+    # -type f alone never lists; the store file is what gets audited and restriped.
+    done < <(find -L "${dir}/snapshots" -type f -size +"${MIN_BLOB_BYTES}"c -exec readlink -f {} + 2>/dev/null | sort -u)
 
     printf '  blobs>1G=%s  narrow=%s  restriped=%s  STILL NARROW=%s\n' \
            "${total}" "${narrow}" "${fixed}" "${still}"

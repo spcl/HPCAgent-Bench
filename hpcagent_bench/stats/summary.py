@@ -15,7 +15,6 @@ import numpy as np
 import numpy.typing as npt
 
 __all__ = [
-    "DEFAULT_ALPHA",
     "DEFAULT_CI_METHOD",
     "DEFAULT_CONFIDENCE",
     "DEFAULT_MAD_Z",
@@ -33,6 +32,7 @@ __all__ = [
     "Statistic",
     "Unusable",
     "bootstrap_ci",
+    "default_alpha",
     "drop_outliers",
     "geomean",
     "geomean_ci",
@@ -142,10 +142,14 @@ def median_ci(
     return interval.point, interval.low, interval.high, n_dropped
 
 
-#: Two-sided error rate every interval and test here defaults to.
-DEFAULT_ALPHA: float = 0.05
+def default_alpha() -> float:
+    """``statistics.alpha``: the two-sided error rate every interval and test here defaults to."""
+    from hpcagent_bench import config
 
-#: Below this a two-sided sign-flip test cannot reach ``DEFAULT_ALPHA`` whatever the data says
+    return config.current().statistics.alpha
+
+
+#: Below this a two-sided sign-flip test cannot reach alpha = 0.05 whatever the data says
 #: (its smallest attainable p at n = 5 is 0.0625), so an interval would be decoration.
 MIN_PAIRS_FOR_INTERVAL: int = 6
 
@@ -286,19 +290,21 @@ def geomean(values: Samples, unusable: Unusable = Unusable.RAISE) -> float:
     return float(np.exp(math.fsum(np.log(x).tolist()) / x.size))
 
 
-def geomean_ci(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
+def geomean_ci(values: Samples, confidence: float | None = None) -> Interval:
     """Geometric mean and its BCa bootstrap interval, resampled in LOG space (ends asymmetric about the point);
     fewer than 3 values or no spread is the point alone."""
+    confidence = 1.0 - default_alpha() if confidence is None else confidence
     x: FloatArray = np.asarray(values, dtype=np.float64)
     point = geomean(x)
     logs = bootstrap_ci(np.log(x), np.mean, name="geomean", confidence=confidence)
     return Interval("geomean", point, math.exp(logs.low), math.exp(logs.high), confidence, logs.method, int(x.size))
 
 
-def geomean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
+def geomean_interval(values: Samples, confidence: float | None = None) -> Interval:
     """The geometric mean and the interval every figure and table draws for it: :func:`geomean_ci`'s
     bootstrap interval, withheld (NaN ends, ``method`` ``"underpowered"``) below
     :data:`MIN_PAIRS_FOR_INTERVAL` values. An empty set is all NaN."""
+    confidence = 1.0 - default_alpha() if confidence is None else confidence
     x: FloatArray = np.asarray(values, dtype=np.float64)
     if x.size == 0:
         return Interval("geomean", math.nan, math.nan, math.nan, confidence, "underpowered", 0)
@@ -307,15 +313,17 @@ def geomean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -
     return geomean_ci(x, confidence=confidence)
 
 
-def mean_ci(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
+def mean_ci(values: Samples, confidence: float | None = None) -> Interval:
     """Arithmetic mean and its BCa bootstrap interval (a COST summary, SC15 Rule 3); fewer than 3 values or no spread
     is the point alone."""
+    confidence = 1.0 - default_alpha() if confidence is None else confidence
     return bootstrap_ci(np.asarray(values, dtype=np.float64), np.mean, name="mean", confidence=confidence)
 
 
-def mean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
+def mean_interval(values: Samples, confidence: float | None = None) -> Interval:
     """:func:`mean_ci`, withheld below :data:`MIN_PAIRS_FOR_INTERVAL` values exactly as
     :func:`geomean_interval` is. An empty set is all NaN."""
+    confidence = 1.0 - default_alpha() if confidence is None else confidence
     x: FloatArray = np.asarray(values, dtype=np.float64)
     if x.size == 0:
         return Interval("mean", math.nan, math.nan, math.nan, confidence, "underpowered", 0)
@@ -382,18 +390,29 @@ def sign_flip_pvalue(differences: Samples, flips: FloatArray) -> float:
     return float(np.mean(flipped >= observed - 1e-12 * max(observed, 1.0)))
 
 
-def sign_flip_interval(differences: Samples, flips: FloatArray, alpha: float = DEFAULT_ALPHA) -> tuple[float, float]:
-    """The shifts ``delta`` the sign-flip test does NOT reject at ``alpha`` on ``differences - delta`` (the interval
-    that inverts :func:`sign_flip_pvalue`), found by bisection; ends hold within the p comparison's 1e-12 tolerance."""
+def sign_flip_interval(differences: Samples, flips: FloatArray, alpha: float | None = None) -> tuple[float, float]:
+    """The shifts ``delta`` the sign-flip test does NOT reject at ``alpha`` on ``differences - delta``, those with a p
+    of at least ``alpha`` (the interval that inverts :func:`sign_flip_pvalue`, so it excludes 0 exactly when that p is
+    below ``alpha``), found by bisection; ends hold within the p comparison's 1e-12 tolerance. Every sign vector's
+    indicator is monotone in ``delta`` on each side of the mean, so the shifts not rejected form one interval."""
+    alpha = default_alpha() if alpha is None else alpha
     x: FloatArray = np.asarray(differences, dtype=np.float64)
     centre = float(np.mean(x))
     span = float(np.ptp(x))
+    # flips @ (x - d) == flips @ x - d * row sums: one matmul, then O(draws) per bisection step.
+    sums: FloatArray = flips @ x
+    weights: FloatArray = flips.sum(axis=1)
+
+    def pvalue(shift: float) -> float:
+        observed = abs(centre - shift)
+        flipped = np.abs(sums - shift * weights) / x.size
+        return float(np.mean(flipped >= observed - 1e-12 * max(observed, 1.0)))
 
     def edge(outer: float) -> float:
         inner = centre
         for _ in range(60):
             middle = (inner + outer) / 2.0
-            if sign_flip_pvalue(x - middle, flips) > alpha:
+            if pvalue(middle) >= alpha:
                 inner = middle
             else:
                 outer = middle

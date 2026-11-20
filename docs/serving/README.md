@@ -9,9 +9,12 @@ carry to MI300X.
 |---|---|
 | [`qwen38.md`](qwen38.md), [`kimi27sglang.md`](kimi27sglang.md), [`glm53.md`](glm53.md), [`oss120b.md`](oss120b.md) | one model each: configuration, DO / DO NOT, the numbers behind them |
 | [`known-issues.md`](known-issues.md) | problems we hit on Beverin (RCCL pipeline crash, fuse-overlayfs freeze, garbled output), with evidence and status |
+| [`old-cuda-driver.md`](old-cuda-driver.md) | serving a CUDA 13 image on a node with an older driver (570, CUDA 12.8) through CUDA forward compatibility |
 | [`knobs.md`](knobs.md) | cross-model: APU memory model, KV pool threshold, aiter derate, HiCache, fabric, Slurm shape |
 | [`private-endpoint.md`](private-endpoint.md) | a keyed Qwen3.8 server only you can use, from your laptop or your own Daint jobs |
 | [`mi200-endpoint.md`](mi200-endpoint.md) | the same server in BF16 on an mi200 node, and the one-command ping test that checks it from anywhere |
+| [`mi200-experiments.md`](mi200-experiments.md) | a whole setup on mi200 (inference, agents, judge) for qwen38 and oss120b: `submit.sh --system beverin-mi200` |
+| [`cross-partition.md`](cross-partition.md) | an experiment's serving on mi300, keyed (`serve-only.sbatch ACCESS=alps`), for a setup whose agents and judge run on mi200 |
 | [`extending-private-inference.md`](extending-private-inference.md) | contributors: the private launcher's security contract, new presets, access paths, engines |
 
 The authoritative launch line per model is the render of `experiment:<model>`
@@ -35,7 +38,7 @@ Then:
 S=hpcagent_bench/cluster/serve-only.sbatch
 SUBMIT=0 $S                  # print what would be submitted
 $S                           # Qwen3.8 (default MODEL)
-MODEL=kimi27sglang $S        # any experiments/layers/model-<MODEL>.env: qwen38, kimi27sglang, glm53, oss120b
+MODEL=kimi27sglang $S        # any [model.<MODEL>]: qwen38, kimi27sglang, glm53, oss120b
 SERVE_TIME=08:00:00 $S       # longer than the 4 h default (SBATCH_TIMELIMIT is overridden)
 ```
 
@@ -73,7 +76,11 @@ layer alone ([known issue 5](known-issues.md#5-8-fabric-and-memory)).
 |---|---|---|---|
 | `hpcagent-bench-sglang-mi300-latest` | SGLang 0.5.20 | Qwen3.8, Kimi K2.7, GLM-5.3 | yes |
 | `hpcagent-bench-vllm-mi300-latest` | vLLM 0.28.0 | gpt-oss-120b | yes |
-| `hpcagent-bench-vllm-mi200-latest` | vLLM 0.28.0 (same image) | Qwen3.8 on mi200 | yes |
+| `hpcagent-bench-vllm-mi200-latest` | vLLM 0.28.0 (same image) | Qwen3.8 and gpt-oss-120b on mi200 | yes |
+
+The mi200 setups (`--system beverin-mi200`) name `hpcagent-bench-agent-mi200-latest`,
+`hpcagent-bench-judge-mi200-latest` (`hpcagent-bench-judge-mi200-mlscale-latest` for mlscale) and the serving EDF
+above; `CE_IMAGE_RELEASE=v<N>` names the frozen `<edf>-v<N>` of each ([`containers/README.md`](../../containers/README.md#a-frozen-release)).
 
 ## 3. Slurm shape
 
@@ -116,23 +123,23 @@ The served name is `hpcagent-bench-vllm` for every model, not the HuggingFace id
 
 | Model | `MODEL=` | Engine | Nodes | Page |
 |---|---|---|---|---|
-| `Qwen/Qwen3.8-27B-FP8` | `qwen38` | SGLang | 1 | [`qwen38.md`](qwen38.md) |
+| `Qwen/Qwen3.8-27B` | `qwen38` | SGLang | 1 | [`qwen38.md`](qwen38.md) |
 | `moonshotai/Kimi-K2.7-Code` | `kimi27sglang` | SGLang | 4 (`pp=4`) | [`kimi27sglang.md`](kimi27sglang.md) |
 | `zai-org/GLM-5.3` | `glm53` | SGLang | 4 (`pp=4`) | [`glm53.md`](glm53.md) |
 | `openai/gpt-oss-120b` | `oss120b` | vLLM | 1 | [`oss120b.md`](oss120b.md) |
 
 The engine is per model and partition: on mi300, Qwen3.8 on vLLM (`ROCM_AITER_FA`) garbles its output under
 agent load and Kimi K2.7 on vLLM collapses above concurrency 1. On mi200 (MI250X, BF16) the SGLang base has no
-kernels, and Qwen3.8 serves on the AMD vLLM image (`layers/hardware-mi200-qwen38.env`, 421 tok/s at
+kernels, and Qwen3.8 serves on the AMD vLLM image (`[hardware.mi200.models.qwen38]`, 421 tok/s at
 16 concurrent requests).
 
 ## 5. Healthy or sick
 
 **Readiness.** `serve-only.sbatch` waits `AGENT_READY_TIMEOUT_SECONDS`, else
 `VLLM_READY_TIMEOUT_SECONDS`, else 7200 s, the precedence the experiment's agent driver uses. Each model's layer
-chain sets `AGENT_READY_TIMEOUT_SECONDS` (`layers/replicas.env`: 2400 s, with `VLLM_READY_TIMEOUT_SECONDS` 2400 s;
-`model-kimi27sglang.env`: 7200 s; `model-glm53.env`: 10800 s). The rendered layers are sourced after the command
-line, so a value on the command line is overwritten. To override, copy `experiments/serve-only.env`, add the key,
+chain sets `AGENT_READY_TIMEOUT_SECONDS` (`[layer.replicas]`: 2400 s, with `VLLM_READY_TIMEOUT_SECONDS` 2400 s;
+`[model.kimi27sglang]`: 7200 s; `[model.glm53]`: 10800 s). The rendered layers are sourced after the command
+line, so a value on the command line is overwritten. To override, copy `[serve] of experiments/experiments.toml`, add the key,
 and pass `SERVE_ENV_FILE=<copy>` (sourced last, so it wins). The same applies to
 `VLLM_SERVED_MODEL`.
 
@@ -179,10 +186,10 @@ colon-dash):
 Deleting a key turns the default **on**. To omit a flag, assign it empty (GLM-5.3 does this). When
 templating a flag, use the dash form.
 
-**Layers, last assignment wins.** `layers/common.env` < `setups.yaml` experiment < `layers/model-<m>.env` < `setups.yaml` `models.<m>`
+**Layers, last assignment wins.** `[common]` < `experiments.toml` experiment < `[model.<m>]` < `experiments.toml` `models.<m>`
 ([Env layers](../../experiments/README.md#env-layers)); a layer can override a key, never unset it.
 Render one with `hpcagent_bench/cluster/env_layers.sh render experiment:<m>`. `serve-only.sbatch` sources the render, then
-`serve-only.env` (zero judge and agent nodes, `RUN_ROOT`), under `set -a`.
+`[serve]` (zero judge and agent nodes, `RUN_ROOT`) and an optional `SERVE_ENV_FILE`, under `set -a`.
 
 **Setup `.env.<setup>` files are renders.** Fix the layer that owns a key, never the render.
 
@@ -191,8 +198,36 @@ registered EDF as-is. A model that serves here and fails in an experiment run: s
 
 ## 7. Where the numbers live
 
-- `hpcagent_bench/cluster/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
-- `experiments/layers/model-<m>.env`, `experiments/setups.yaml`: per-model launch lines with inline reasons.
+- `hpcagent_bench/cluster/serve-only.sbatch`, `[serve] of experiments/experiments.toml`: the launcher on this page.
+- `[model.<m>]`, `experiments/experiments.toml`: per-model launch lines with inline reasons.
 - `containers/inference/`: `accuracy-gate.py`, `verify-tools-reasoning.py` (gates against a live server).
 
 Node-to-node spread is about 30%. Re-measure a flag change **on one node, back to back**.
+
+## 8. Benchmarking a configuration, and the guards
+
+A serving configuration is measured, not guessed. `[bench.<name>]` of `experiments/experiments.toml` is one candidate: the
+`model` whose `SGLANG_EXTRA_ARGS` it edits, flags to `set` (a bare flag is `""`) or `drop`, and other env keys in `env`.
+
+```bash
+hpcagent-bench serve-bench submit kimi27sglang --config kimi-base --config kimi-ep4-triton   # 1 to 3 serve-only jobs
+hpcagent-bench serve-bench report $SCRATCH/inference-server/<job>...                          # the rows of a tuning record
+```
+
+Each job is `serve-only.sbatch` under `SERVE_BENCH=<name>` (`BENCH_CONCURRENCY`, `BENCH_SECONDS`; defaults `20 40`, 900 s
+each): it applies the overlay, boots, runs an agent-shaped load (`hpcagent_bench/cluster/serve_bench.py`: per agent a
+30k-token prefix, then turns of 1.5k new and 400 output tokens, the shape that makes the radix cache matter) and writes
+`bench-<name>.json` into its run directory (server arguments as run, API-up seconds, KV pool, TTFT p50/p90, tokens per
+second per agent and in total, cache hit rate, every request), then ends. It runs under the same rules as a launch.
+
+**Rules** (`hpcagent_bench/cluster/serve_args.py`, `RULES`): refused at submit (`env_spec.py check-staged`, so before a
+setup queues) and by `serve-only.sbatch` and the bench (`BENCH_FORCE_RULES=1` skips them, for a crash hunt). A model states
+what a rule keys on in its table, never a model name: `MOE_CHECKPOINT = 'int4-wna16'` (Kimi) means `--ep-size` above 1 needs
+`--moe-runner-backend triton`.
+
+**KV guard** (`hpcagent_bench/cluster/serve_guard.py`): a model that sets `KV_TOKENS_PER_AGENT` is held to a KV pool of
+`AGENTS_PER_PIPELINE` x that many tokens. The smallest `max_total_num_tokens` / `KV Cache is allocated` any pipeline
+logs is compared with it as soon as it is stated: below the floor the job fails (an experiment job is cancelled from its batch
+shell, `serve-only.sbatch` ends after the API is up), `KV_GUARD=warn` only reports. The verdict is `kv-guard.json` in the
+run directory. A bench always warns: a starved pool is one of its results.
+

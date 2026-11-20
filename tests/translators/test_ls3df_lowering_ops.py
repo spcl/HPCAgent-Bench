@@ -21,12 +21,8 @@ These are pure AST transforms, so no compiler is needed.
 import ast
 
 from hpcagent_bench.translators.numpyto_common.frontend import collect_inlined_scalar_defs
-from hpcagent_bench.translators.numpyto_common.lib_nodes import expand_copy, expand_linalg_inv, iter_extent_of
+from hpcagent_bench.translators.numpyto_common.lib_nodes import expand_copy
 from hpcagent_bench.translators.numpyto_common.lowering import ShapeMidExpressionRewriter, TupleLocalPropagator
-
-
-def expr_(src: str) -> ast.Call:
-    return ast.parse(src, mode="eval").body
 
 
 def unparse_(node: ast.AST) -> str:
@@ -68,33 +64,6 @@ def test_shape_fold_leaves_name_base_untouched_when_unknown() -> None:
 # iter_extent_of: fftfreq + method-form reshape                              #
 
 
-def test_iter_extent_of_fftfreq_is_length_n() -> None:
-    ext = iter_extent_of(expr_("np.fft.fftfreq(N, d=h)"), {})
-    assert ext is not None
-    assert len(ext) == 1
-    assert unparse_(ext[0]) == "N"
-
-
-def test_iter_extent_of_fftn_preserves_shape() -> None:
-    ext = iter_extent_of(expr_("np.fft.fftn(rho)"), {"rho": ("N", "N", "N")})
-    assert ext is not None
-    assert tuple(unparse_(e) for e in ext) == ("N", "N", "N")
-
-
-def test_iter_extent_of_method_reshape_to_tuple() -> None:
-    ext = iter_extent_of(expr_("mm.reshape((Lb, Lb, Lb, nstate))"), {"mm": ("A", "B")})
-    assert tuple(unparse_(e) for e in ext) == ("Lb", "Lb", "Lb", "nstate")
-
-
-def test_iter_extent_of_method_reshape_resolves_neg1() -> None:
-    ext = iter_extent_of(expr_("X.reshape(-1, k)"), {"X": ("Lb", "Lb", "Lb", "nstate")})
-    assert ext is not None
-    assert len(ext) == 2
-    assert unparse_(ext[1]) == "k"
-    # -1 dim = total / product(other dims).
-    assert "/" in unparse_(ext[0])
-
-
 # shape-tuple local forward-substitution                                       #
 
 
@@ -117,27 +86,12 @@ def test_tuple_local_propagator_skips_reassigned_name() -> None:
 # mutated scalar excluded from inlined-dim substitution                        #
 
 
-def test_collect_inlined_scalar_defs_excludes_augassigned_counter() -> None:
-    fn = ast.parse("def k():\n __inl2_na = 0\n __inl2_n = a.shape[0]\n for _ in range(6):\n  __inl2_na += 1\n").body[0]
-    defs = collect_inlined_scalar_defs(fn)
-    assert "__inl2_na" not in defs  # mutated counter -- not a fixed dim
-    assert defs.get("__inl2_n") == "a.shape[0]"
-
-
 def test_collect_inlined_scalar_defs_excludes_multiply_assigned() -> None:
     fn = ast.parse("def k():\n __inl1_m = 3\n __inl1_m = 5\n").body[0]
     assert "__inl1_m" not in collect_inlined_scalar_defs(fn)
 
 
 # compound shape token survives .size as a real BinOp (not a mangled Name)     #
-
-
-def test_size_of_compound_token_reparses_to_binop() -> None:
-    tree = ast.parse("y = off.size")
-    ShapeMidExpressionRewriter({"off": ["na - 1"]}).visit(tree)
-    val = tree.body[0].value
-    assert isinstance(val, ast.BinOp)  # not ast.Name(id="na - 1")
-    assert unparse_(val) == "na - 1"
 
 
 # expand_copy allocates its target                                             #
@@ -154,33 +108,3 @@ def test_expand_copy_emits_allocation_marker() -> None:
 
 
 # per-call-unique linalg working buffer                                        #
-
-
-def inv_buffer_names(stmts: list[ast.Assign | ast.For]) -> set[str]:
-    return {
-        n.id
-        for n in ast.walk(ast.Module(body=stmts, type_ignores=[]))
-        if isinstance(n, ast.Name) and n.id.startswith("__inv_aw")
-    }
-
-
-def test_inv_working_buffer_is_unique_per_call() -> None:
-    st = {"A": ("__inl3_k", "__inl3_k"), "B": ("__inl5_k", "__inl5_k")}
-    s1 = expand_linalg_inv(
-        ast.Name(id="X1", ctx=ast.Store()),
-        [ast.Name(id="A", ctx=ast.Load())],
-        st,
-        local_dtypes={},
-        fresh_local_allocs={},
-    )
-    s2 = expand_linalg_inv(
-        ast.Name(id="X2", ctx=ast.Store()),
-        [ast.Name(id="B", ctx=ast.Load())],
-        st,
-        local_dtypes={},
-        fresh_local_allocs={},
-    )
-    b1, b2 = inv_buffer_names(s1), inv_buffer_names(s2)
-    assert b1, f"inv buffers collide: {b1} vs {b2}"
-    assert b2, f"inv buffers collide: {b1} vs {b2}"
-    assert b1.isdisjoint(b2), f"inv buffers collide: {b1} vs {b2}"

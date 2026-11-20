@@ -6,7 +6,6 @@ import matplotlib as mpl
 
 mpl.use("Agg")
 
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pytest
 
@@ -57,49 +56,37 @@ def test_a_box_never_reaches_its_neighbours(n_series: int, want: float) -> None:
 def test_every_run_is_one_dot_spread_across_its_box_in_run_order() -> None:
     cell = cell_of(*([RunState.SOLVED] * 4 + [RunState.UNSOLVED] * 3))
     fig, ax = plt.subplots()
-    try:
-        pk.draw_box(ax, pk.Series("s", (cell,), "#1155cc"), {"k1": 0}, offset=0.2, width=0.3)
-        xs = [float(mark.get_offsets()[0][0]) for mark in drawn_marks(ax)]
-        assert len(xs) == len(cell.runs)
-        assert xs == sorted(xs)
-        assert min(xs) >= 0.2 - 0.15, xs
-        assert max(xs) <= 0.2 + 0.15, xs
-        assert len(ax.patches) == 1, "seven graded runs get a box"
-    finally:
-        plt.close(fig)
+    pk.draw_box(ax, pk.Series("s", (cell,), "#1155cc"), {"k1": 0}, offset=0.2, width=0.3)
+    xs = [float(mark.get_offsets()[0][0]) for mark in drawn_marks(ax)]
+    assert len(xs) == len(cell.runs)
+    assert xs == sorted(xs)
+    assert min(xs) >= 0.2 - 0.15, xs
+    assert max(xs) <= 0.2 + 0.15, xs
+    assert len(ax.patches) == 1, "seven graded runs get a box"
 
 
 def test_an_unsolved_run_is_hollow_at_one_x() -> None:
     fig, ax = plt.subplots()
-    try:
-        pk.draw_box(ax, pk.Series("s", (cell_of(RunState.UNSOLVED),), "#1155cc"), {"k1": 0})
-        (mark,) = drawn_marks(ax)
-        assert float(mark.get_offsets()[0][1]) == population.NOT_DELIVERED
-        assert mark.get_facecolor().size == 0, "an unsolved run's mark has no fill"
-    finally:
-        plt.close(fig)
+    pk.draw_box(ax, pk.Series("s", (cell_of(RunState.UNSOLVED),), "#1155cc"), {"k1": 0})
+    (mark,) = drawn_marks(ax)
+    assert float(mark.get_offsets()[0][1]) == population.NOT_DELIVERED
+    assert mark.get_facecolor().size == 0, "an unsolved run's mark has no fill"
 
 
 def test_an_owed_run_is_a_question_mark_not_a_dot() -> None:
     fig, ax = plt.subplots()
-    try:
-        cell = cell_of(RunState.SOLVED, RunState.OWED, RunState.OWED)
-        pk.draw_box(ax, pk.Series("s", (cell,), "#1155cc"), {"k1": 0})
-        pending = [artist for artist in ax.collections if artist.get_gid() == plotstyle.PENDING_GID]
-        assert len(pending) == 2
-        assert len(drawn_marks(ax)) == 3, "two '?' plus the one solved dot"
-    finally:
-        plt.close(fig)
+    cell = cell_of(RunState.SOLVED, RunState.OWED, RunState.OWED)
+    pk.draw_box(ax, pk.Series("s", (cell,), "#1155cc"), {"k1": 0})
+    pending = [artist for artist in ax.collections if artist.get_gid() == plotstyle.PENDING_GID]
+    assert len(pending) == 2
+    assert len(drawn_marks(ax)) == 3, "two '?' plus the one solved dot"
 
 
 def test_the_count_is_printed_over_its_cell() -> None:
     fig, ax = plt.subplots()
-    try:
-        cell = cell_of(RunState.SOLVED, RunState.UNSOLVED, RunState.UNSOLVED)
-        pk.draw_box(ax, pk.Series("s", (cell,), "#1155cc"), {"k1": 0})
-        assert [text.get_text() for text in ax.texts] == ["1/3"]
-    finally:
-        plt.close(fig)
+    cell = cell_of(RunState.SOLVED, RunState.UNSOLVED, RunState.UNSOLVED)
+    pk.draw_box(ax, pk.Series("s", (cell,), "#1155cc"), {"k1": 0})
+    assert [text.get_text() for text in ax.texts] == ["1/3"]
 
 
 def test_several_series_box_side_by_side_rather_than_falling_back_to_points() -> None:
@@ -107,12 +94,9 @@ def test_several_series_box_side_by_side_rather_than_falling_back_to_points() ->
     series = [pk.Series(name, tuple(cells), color) for name, color in (("a", "#1155cc"), ("b", "#cc5511"))]
     metric = pk.speedup_series_metric(series, "Speedup")
     fig = pk.figure_panels([metric], ["k1"], pk.Style.BOX, False, "")
-    try:
-        centres = sorted(patch.get_path().get_extents().x0 for patch in fig.axes[0].patches)
-        assert len(centres) == 2
-        assert centres[0] < centres[1]
-    finally:
-        plt.close(fig)
+    centres = sorted(patch.get_path().get_extents().x0 for patch in fig.axes[0].patches)
+    assert len(centres) == 2
+    assert centres[0] < centres[1]
 
 
 if __name__ == "__main__":

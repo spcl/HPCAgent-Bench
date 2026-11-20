@@ -7,7 +7,7 @@ literal ``len(a)`` fails to compile) and Fortran's ``len`` is the CHARACTER-leng
 intrinsic, so a native kernel that reads ``len(a)`` -- e.g. the GROMACS NBNxM
 kernel's ``len(coulomb_table_f)`` bound -- would not compile. ``_ShapeMidExpression
 Rewriter`` maps it to the first-dim shape symbol, alongside ``a.shape[k]`` /
-``a.size`` / ``a.ndim``. The python backends (numba / pythran / jax) run the body
+``a.size`` / ``a.ndim``. The python backends (numba) run the body
 verbatim and keep the builtin, so they are unaffected.
 """
 
@@ -15,7 +15,7 @@ import numpy as np
 
 from tests.translators.op_oracle import all_ok, run_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 
 def test_len_of_1d_array_all_backends() -> None:

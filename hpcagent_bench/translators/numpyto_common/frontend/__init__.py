@@ -5,6 +5,7 @@ array shapes and dtypes, presets and sparse layouts. Entry point: :func:`parse_k
 """
 
 import contextlib
+import contextvars
 import pathlib
 from collections.abc import Callable, Iterator
 
@@ -107,8 +108,9 @@ __all__ = [
 ]
 
 
-#: Set while a driver retries with helpers inlined (:func:`without_kept_helpers`).
-HELPERS_KEPT_DISABLED = False
+#: Set while a driver retries with helpers inlined (:func:`without_kept_helpers`). A context variable, not a module
+#: global: two emits on two threads each see their own setting.
+HELPERS_KEPT_DISABLED: contextvars.ContextVar[bool] = contextvars.ContextVar("helpers_kept_disabled", default=False)
 
 
 def parse_kernel(
@@ -117,6 +119,7 @@ def parse_kernel(
     config: str | None = None,
     precision: str | None = None,
     open_mesh_grids: bool = True,
+    library_eigh: bool = False,
 ) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
@@ -124,25 +127,23 @@ def parse_kernel(
     A kernel whose kept-helper form refuses (``NotImplementedError``: a tuple return, a ``None``
     sentinel, ...) is rebuilt with its helpers inlined; any other error propagates.
     """
-    if not HELPERS_KEPT_DISABLED:
+    if not HELPERS_KEPT_DISABLED.get():
         try:
-            return build_kernel_ir(numpy_py, bench_info, config, precision, True, open_mesh_grids)
+            return build_kernel_ir(numpy_py, bench_info, config, precision, True, open_mesh_grids, library_eigh)
         except NotImplementedError:
             pass
-    return build_kernel_ir(numpy_py, bench_info, config, precision, False, open_mesh_grids)
+    return build_kernel_ir(numpy_py, bench_info, config, precision, False, open_mesh_grids, library_eigh)
 
 
 @contextlib.contextmanager
 def without_kept_helpers() -> Iterator[None]:
     """Force the inlined form for the duration of the block. A kept helper can also fail later, in
     an emitter, where :func:`parse_kernel` cannot retry; drivers wrap the whole run in this."""
-    global HELPERS_KEPT_DISABLED
-    previous = HELPERS_KEPT_DISABLED
-    HELPERS_KEPT_DISABLED = True
+    token = HELPERS_KEPT_DISABLED.set(True)
     try:
         yield
     finally:
-        HELPERS_KEPT_DISABLED = previous
+        HELPERS_KEPT_DISABLED.reset(token)
 
 
 def emit_with_inline_fallback[Emitted](run: Callable[[], Emitted]) -> Emitted:
@@ -151,7 +152,7 @@ def emit_with_inline_fallback[Emitted](run: Callable[[], Emitted]) -> Emitted:
     try:
         return run()
     except Exception:
-        if HELPERS_KEPT_DISABLED:
+        if HELPERS_KEPT_DISABLED.get():
             raise
-    with without_kept_helpers():
-        return run()
+        with without_kept_helpers():
+            return run()

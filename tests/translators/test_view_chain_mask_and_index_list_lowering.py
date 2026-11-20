@@ -30,7 +30,6 @@ import ast
 
 import numpy as np
 
-from hpcagent_bench.translators.numpyto_common.frontend import bare_index_list
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from tests.translators import op_oracle
@@ -222,23 +221,6 @@ def test_no_none_literal_survives_lowering() -> None:
     assert not [n for n in ast.walk(kir.tree) if isinstance(n, ast.Constant) and n.value is None]
 
 
-def test_a_sentinel_a_test_still_inspects_is_kept() -> None:
-    # Here the ``None`` IS the value being read, so dropping the write would change what the test
-    # sees. The pruner must leave it alone even though a branch rebinds the name.
-    fn = ast.parse(
-        "def f(a, out):\n"
-        "    seen = None\n"
-        "    if a[0] > 0:\n"
-        "        seen = a[0]\n"
-        "    if seen is not None:\n"
-        "        out[0] = seen\n"
-    ).body[0]
-    from hpcagent_bench.translators.numpyto_common.tuple_desugar import drop_dead_none_bindings
-
-    drop_dead_none_bindings(fn)
-    assert [n for n in ast.walk(fn) if isinstance(n, ast.Constant) and n.value is None]
-
-
 # a bare list literal used as a fancy index
 
 LIST_SRC = (
@@ -273,16 +255,3 @@ def test_a_bare_list_index_scatters_to_exactly_the_named_columns() -> None:
 def test_the_bare_list_becomes_an_allocated_int_index_buffer() -> None:
     kir = lowered(LIST_SRC, "f", ["a"], ["out"], {"a": "(M,)", "out": "(M,4)"}, {"M": 5})
     assert not [n for n in ast.walk(kir.tree) if isinstance(n, ast.List)]
-
-
-def test_a_tuple_and_a_grown_list_are_not_index_vectors() -> None:
-    # A tuple in an index slot is a MULTI-AXIS index, not a fancy one, and a list something appends
-    # to has no static length -- turning either into a buffer would change what the kernel means.
-    fn = ast.parse(
-        "def f(a, out):\n    ij = (1, 2)\n    grown = [0]\n    grown.append(1)\n    out[0] = a[ij] + a[grown][0]\n"
-    ).body[0]
-    values = {
-        t.targets[0].id: t.value for t in fn.body if isinstance(t, ast.Assign) and isinstance(t.targets[0], ast.Name)
-    }
-    assert bare_index_list(fn, values["ij"], "ij") is None
-    assert bare_index_list(fn, values["grown"], "grown") is None

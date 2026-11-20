@@ -99,6 +99,7 @@ __all__ = [
     "clear_labels",
     "clear_place",
     "count_minor_values",
+    "crowded_at",
     "crowded_ticks",
     "decade_label",
     "despine",
@@ -170,7 +171,50 @@ MINOR_TICK_WIDTH: float = 0.6
 
 
 # Every label uses Title Case, except articles/conjunctions/prepositions inside it; identifiers
-# and mathtext keep their own spelling. Not enforced in code.
+# and mathtext keep their own spelling (:func:`title_case`).
+
+#: Articles, conjunctions and short prepositions a Title Case label keeps lower case inside it.
+MINOR_WORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "as",
+        "at",
+        "but",
+        "by",
+        "for",
+        "in",
+        "nor",
+        "of",
+        "on",
+        "or",
+        "per",
+        "the",
+        "to",
+        "vs",
+        "via",
+        "with",
+    }
+)
+
+
+def title_case(text: str) -> str:
+    """``text`` in Title Case: each word capitalized, a minor word lower case unless it opens the label or follows a
+    colon; a word already holding a capital, a digit, ``_``, ``$`` or ``.`` (an identifier, a size, mathtext) keeps
+    its spelling."""
+    words = text.split(" ")
+    out: list[str] = []
+    for index, word in enumerate(words):
+        starts = index == 0 or out[-1].endswith(":")
+        if not word or any(c.isupper() or c.isdigit() or c in "_$." for c in word):
+            out.append(word)
+        elif word.lower() in MINOR_WORDS and not starts:
+            out.append(word.lower())
+        else:
+            out.append(word[0].upper() + word[1:])
+    return " ".join(out)
+
 
 #: Type scale, in points, sized for print: a paper reproduces a figure at about half width, so
 #: 13pt ticks reach the page around 6.5pt.
@@ -292,15 +336,15 @@ TITLE_GAP_IN: float = 0.30
 TITLE_BAND_IN: float = TITLE_TOP_IN + TITLE_GAP_IN
 
 
-def title(fig: Figure, text: str) -> float:
-    """Centred title; returns the top of the plot area for ``tight_layout(rect=...)``."""
+def title(fig: Figure, text: str, size_pt: float = TITLE_PT) -> float:
+    """Centred title at ``size_pt``; returns the top of the plot area for ``tight_layout(rect=...)``."""
     width, height = (float(value) for value in fig.get_size_inches())
     # Work in inches, then convert: a figure fraction is a different gap at every figure height.
     top = 1.0 - (TITLE_TOP_IN / height)
-    artist = fig.text(0.5, top, text, fontsize=TITLE_PT, color=INK, ha="center", va="top")  # pyright: ignore[reportUnknownMemberType]
+    artist = fig.text(0.5, top, text, fontsize=size_pt, color=INK, ha="center", va="top")  # pyright: ignore[reportUnknownMemberType]
     # A title wider than the canvas is clipped at both ends: shrink it to fit.
-    size = TITLE_PT
-    while size > MIN_TITLE_PT:
+    size = size_pt
+    while size > min(MIN_TITLE_PT, size_pt):
         box = artist.get_window_extent(renderer_of(fig)).transformed(fig.dpi_scale_trans.inverted())
         if box.width <= width:
             break
@@ -560,8 +604,9 @@ FILL_Z: float = 3.0
 CONNECTOR_Z: float = 4.0
 MARK_Z: float = 5.0
 
-#: Fraction of a mark's area the not-delivered cross covers; the model shape still reads first.
-CROSS_SCALE: float = 0.45
+#: The not-delivered cross's area over its mark's: past the shape, so the arms show outside a shape of any size
+#: (a small hollow star swallowed a cross drawn inside it and read as solved at 1x).
+CROSS_SCALE: float = 1.6
 
 #: What the cross means, wherever a figure draws one: a 1x placeholder, not a measurement.
 NOT_DELIVERED_LABEL: str = "No Verified Answer (Drawn at 1x)"
@@ -773,22 +818,26 @@ def crowded_ticks(ax: Axes, renderer: RendererBase, gap: float) -> bool:
     )
 
 
+def crowded_at(fig: Figure, axes: Sequence[Axes], size: float) -> bool:
+    """Whether the X tick labels of ``axes``, all set to ``size`` points, crowd on some printed line
+    (:func:`crowded_ticks`, a third of the size apart)."""
+    for ax in axes:
+        for label in ax.get_xticklabels():
+            label.set_fontsize(size)
+    gap = size / 3.0 * fig.dpi / POINTS_PER_INCH
+    return any(crowded_ticks(ax, renderer_of(fig), gap) for ax in axes)
+
+
 def shrink_crowded_ticks(fig: Figure, axes: Sequence[Axes], start_pt: float, floor_pt: float) -> float:
     """Step the X tick labels of ``axes`` down from ``start_pt``, all to one size, until no printed line is
-    crowded (:func:`crowded_ticks`); returns the size. Labels still crowded at ``floor_pt`` stay there, reported."""
-    renderer = renderer_of(fig)
+    crowded (:func:`crowded_at`); returns the size. Labels still crowded at ``floor_pt`` stay there, reported."""
     size = start_pt
-    while True:
-        for ax in axes:
-            for label in ax.get_xticklabels():
-                label.set_fontsize(size)
-        gap = size / 3.0 * fig.dpi / POINTS_PER_INCH
-        if not any(crowded_ticks(ax, renderer, gap) for ax in axes):
-            return size
+    while crowded_at(fig, axes, size):
         if size <= floor_pt:
             LOG.warning("style: tick labels still overlap at the %.2fpt floor; the axis needs more width", floor_pt)
-            return size
+            break
         size = max(floor_pt, size - 0.25)
+    return size
 
 
 def mark_boxes(ax: Axes) -> list[Bbox]:
