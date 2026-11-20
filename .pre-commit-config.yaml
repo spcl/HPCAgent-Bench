@@ -49,6 +49,22 @@ repos:
         require_serial: true
         files: '^(hpcagent_bench|agent)/.*\.py$'
         exclude: '^hpcagent_bench/benchmarks/'
+      # The kernels are task text, so no formatter or fixer touches them; this hook only fails on rules that are
+      # always a bug (undefined or redefined names, mutable defaults, useless expressions) and never rewrites.
+      - id: hpcagent_bench-kernel-lint
+        name: ruff real-bug rules on the benchmark kernels (no fixes)
+        entry: ruff check --isolated --no-fix --no-cache --select F821,F811,F632,F822,F823,B006,B008,B015,B018
+        language: system
+        files: '^hpcagent_bench/benchmarks/.*\.py$'
+      # clang-tidy under .clang-tidy on the repo's own C/C++ (not the kernels' original sources). Manual stage, not
+      # CI: `pre-commit run --hook-stage manual hpcagent_bench-clang-tidy --all-files`. signed-bitwise is off: the
+      # OpenMP probe's `failed |= (cond) << CHECK_X` is its idiom.
+      - id: hpcagent_bench-clang-tidy
+        name: clang-tidy (repo C/C++, manual)
+        entry: bash -c 'uvx --from clang-tidy==23.1.4 clang-tidy --quiet --checks=-*-signed-bitwise "$@" -- -fopenmp' --
+        language: system
+        stages: [manual]
+        files: '^(containers/images/lib|tests/ports)/.*\.(c|cc|cpp|h|hpp)$'
       # The gate at the end of an image Dockerfile is python in a heredoc, so no python hook sees
       # it and a name typed once and never bound costs the whole build.
       - id: hpcagent_bench-dockerfile-python
