@@ -10,5 +10,5 @@ folder = "plugin/nestforge"
 
 [plugins.alloy]
 repository = "https://github.com/ThrudPrimrose/alloy.git"
-commit = "ecc3a3f1b30360e7018eeb339fc0565b06aa2de1"
+commit = "b3750c63d648fe8e9ca5674ce8668f86cc9600fa"
 folder = "alloy/hb_plugin"
