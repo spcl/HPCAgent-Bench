@@ -47,7 +47,9 @@ render() {
             return 1
         fi
     fi
-    ce_render_edf "${template}" "${image}" "${partition}" "${preload}" > "${target}.tmp"
+    # Called as `render ... || failed=...`, where set -e is off: a failed render must not install an empty EDF.
+    ce_render_edf "${template}" "${image}" "${partition}" "${preload}" > "${target}.tmp" \
+        || { rm -f "${target}.tmp"; echo "cannot render ${name}" >&2; return 1; }
     mv -f "${target}.tmp" "${target}"
     printf '  %-40s -> %s\n' "${name}" "${image}"
 }

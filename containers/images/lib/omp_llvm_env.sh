@@ -104,7 +104,8 @@ requires() {
             petsc="+rocm amdgpu_target=${gpu}"
         else
             superlu_dist="+cuda cuda_arch=${CUDA_ARCHS}"
-            strumpack="~rocm +cuda cuda_arch=${CUDA_ARCHS}"
+            # ~slate, as the gnu env: gcc 16 emits assembly for slate that its assembler rejects on aarch64.
+            strumpack="~rocm ~slate +cuda cuda_arch=${CUDA_ARCHS}"
             magma="~rocm +cuda cuda_arch=${CUDA_ARCHS}"
             sundials="~rocm +cuda cuda_arch=${CUDA_ARCHS}"
             petsc="+cuda cuda_arch=${CUDA_ARCHS}"
