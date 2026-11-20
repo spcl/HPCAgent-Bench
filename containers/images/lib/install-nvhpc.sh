@@ -71,6 +71,12 @@ else
     NVHPC_SILENT=true NVHPC_INSTALL_DIR="${PREFIX}" NVHPC_INSTALL_TYPE=single "${work}/${name}/install"
 fi
 [[ -x ${root}/bin/nvc && -f ${root}/bin/localrc ]] || { echo "no nvc or localrc under ${root}/bin" >&2; exit 1; }
+# makelocalrc writes gcc's resolved spack prefix, whose hash changes with every image rebuild, and nvc then fails
+# with "Error in path .../gcc-16.2.0-<old hash>". The images link that prefix as /opt/gcc: name it instead.
+gcc_prefix=$(readlink -f /opt/gcc 2>/dev/null || true)
+if [[ -n ${gcc_prefix} && ${gcc_prefix} != /opt/gcc ]]; then
+    sed -i "s|${gcc_prefix}|/opt/gcc|g" "${root}/bin/localrc"
+fi
 "${root}/bin/nvc" --version | grep -m 1 nvc
 # The nvhpc OpenMP context an nvc -mp grade runs in, inside the install (nvhpc_context.sh).
 bash "$(dirname -- "${BASH_SOURCE[0]}")/nvhpc_context.sh" "${root}"
