@@ -9,14 +9,13 @@ registry a system rather than a second place to be wrong.
 
 import pathlib
 import re
+import subprocess
 
 import pytest
 
 from hpcagent_bench import paths, spec, study_tags
 from hpcagent_bench.stats import palette
 from tests.env_render import BASES, rendered
-
-ENVS = paths.ROOT / "experiments"
 
 #: `HPCAGENT_BENCH_OPTIMIZER=<checkpoint>` in a generated setup .env -- the ground truth for which model an
 #: setup served, because the runner passes exactly this string to the inference endpoint.
@@ -27,9 +26,12 @@ OPTIMIZER = re.compile(r"^HPCAGENT_BENCH_OPTIMIZER=(.+)$", re.MULTILINE)
 RECORD_MODEL = re.compile(r"^HPCAGENT_BENCH_RECORD_MODEL=(.+)$", re.MULTILINE)
 
 
-def setup_envs() -> list[pathlib.Path]:
-    """The setup envs submitters have staged in this checkout (none in a fresh clone)."""
-    return sorted(p for p in ENVS.glob(".env.*") if p.is_file() and not p.name.endswith(".example"))
+def setup_envs() -> dict[str, str]:
+    """Every tracked setup (``<experiment>:<model>`` of ``experiments.toml``) rendered, as the submit stages it.
+
+    Untracked ``experiments/.env.*`` files a past submit left on disk are not read: a test checks the repository,
+    and a clean clone has none of them."""
+    return {base: rendered(base) for base in BASES}
 
 
 def test_the_registry_parses_and_every_section_a_figure_reads_is_populated() -> None:
@@ -61,23 +63,17 @@ def test_the_registered_checkpoint_is_what_the_setups_served() -> None:
     generated .env files, which is what the runner actually hands the endpoint.
     """
     served: dict[str, set[str]] = {}
-    # the sources: every setup of model <m> is rendered from some <experiment>:<m>
-    # (a hosted model the registry does not list yet has served no setup)
+    # every setup of model <m> is rendered from some <experiment>:<m>; one that records its model tag is filed under
+    # the tag it records (a hosted model the registry does not list yet has served no setup)
     registered = set(study_tags.registry().models)
-    for base in BASES:
-        optimizer = OPTIMIZER.search(rendered(base))
-        if optimizer:
-            model = base.split(":", 1)[1]
-            if model in registered:
-                served.setdefault(model, set()).add(optimizer.group(1).strip())
-    for env in setup_envs():
-        text = env.read_text(encoding="utf-8", errors="replace")
+    for base, text in setup_envs().items():
         optimizer = OPTIMIZER.search(text)
-        model = RECORD_MODEL.search(text)
-        if optimizer and model:
-            served.setdefault(model.group(1).strip(), set()).add(optimizer.group(1).strip())
+        recorded = RECORD_MODEL.search(text)
+        model = recorded.group(1).strip() if recorded else base.split(":", 1)[1]
+        if optimizer and (recorded or model in registered):
+            served.setdefault(model, set()).add(optimizer.group(1).strip())
 
-    assert served, f"no setup .env under {ENVS} carried both HPCAGENT_BENCH_OPTIMIZER and HPCAGENT_BENCH_RECORD_MODEL"
+    assert served, "no tracked setup renders an HPCAGENT_BENCH_OPTIMIZER"
     problems = []
     for model, checkpoints in sorted(served.items()):
         expected = study_tags.model_checkpoint(model)
@@ -115,14 +111,10 @@ def recorded_identity(text: str) -> dict[str, str]:
     return {key: value.strip() for key, value in found if key != "ENABLED"}
 
 
-def stamped_setup_envs() -> list[pathlib.Path]:
-    """Setup envs that stamp an identity; one that stamps nothing predates the identity columns."""
-    return [p for p in setup_envs() if recorded_identity(p.read_text(encoding="utf-8", errors="replace"))]
-
-
-def unregistered_values(env: pathlib.Path) -> list[str]:
-    """Every identity value ``env`` records that the vocabulary cannot colour or label."""
-    identity = recorded_identity(env.read_text(encoding="utf-8", errors="replace"))
+def unregistered_values(name: str, text: str) -> list[str]:
+    """Every identity value the setup ``name`` (rendered as ``text``) records that the vocabulary cannot colour or
+    label."""
+    identity = recorded_identity(text)
 
     unknown = []
     for key, kind in RECORDED.items():
@@ -130,42 +122,48 @@ def unregistered_values(env: pathlib.Path) -> list[str]:
         if not value:
             continue
         if study_tags.canonical(kind, value.lower()) not in study_tags.names(kind):
-            unknown.append(f"{env.name}: {key}={value!r} is registered under no `{kind}` key")
+            unknown.append(f"{name}: {key}={value!r} is registered under no `{kind}` key")
 
     # The packet is a '+'-joined SET, and '' is the control rather than a missing value, so it is
     # checked part by part instead of as one string.
     unknown.extend(
-        f"{env.name}: packet {part!r} is not a registered packet"
+        f"{name}: packet {part!r} is not a registered packet"
         for part in study_tags.packet_parts(identity.get("PACKET", ""))
         if part not in study_tags.names("packets")
     )
     return unknown
 
 
-def test_every_value_a_setup_records_is_registered() -> None:
-    """Every identity value that reaches the database can be coloured and labelled.
-
-    Setup envs are rendered at submit time and untracked, so this checks whichever sit on disk; each
-    failure line names the file to fix."""
-    unknown = [line for env in stamped_setup_envs() for line in unregistered_values(env)]
-    assert not unknown, "\n  ".join(unknown)
+def stamp(**identity: str) -> str:
+    """The identity lines ``record_identity`` appends to a setup .env, for ``identity``."""
+    return "".join(f"HPCAGENT_BENCH_RECORD_{key}={value}\n" for key, value in identity.items())
 
 
-def test_a_setup_that_records_a_study_records_the_whole_tuple() -> None:
+def test_a_registered_identity_draws_and_an_unregistered_value_is_named() -> None:
+    """Every identity value that reaches the database can be coloured and labelled: the check names each value the
+    vocabulary cannot, and passes a registered tuple."""
+    registered = stamp(STUDY="llr40", MODEL="qwen38", LANGUAGE="c", DEVICE="cpu", PACKET="caveman", ENABLED="true")
+    assert unregistered_values("ok", registered) == []
+    wrong = stamp(STUDY="gradesmoke", MODEL="qwen38", LANGUAGE="c", DEVICE="cpu", PACKET="caveman+no-such-packet")
+    assert unregistered_values("bad", wrong) == [
+        "bad: STUDY='gradesmoke' is registered under no `studies` key",
+        "bad: packet 'no-such-packet' is not a registered packet",
+    ]
+
+
+def test_record_identity_refuses_a_half_stamped_setup(tmp_path: pathlib.Path) -> None:
     """A half-stamped setup is worse than an unstamped one: its rows join on study and then
     group into a NULL model, which reads as a fifth model in every per-model figure.
 
     This is what the `llr-focus40` and `gpu-llr-focus40` envs did -- a study stamp and
-    nothing else, under a study name that was really a device and a packet."""
-    partial = []
-    for env in setup_envs():
-        identity = recorded_identity(env.read_text(encoding="utf-8", errors="replace"))
-        if not identity:
-            continue
-        missing = [k for k in ("STUDY", "MODEL", "LANGUAGE", "DEVICE", "SETUP") if not identity.get(k)]
-        if missing:
-            partial.append(f"{env.name}: stamps {sorted(identity)} but not {missing}")
-    assert not partial, "half-stamped setup envs:\n  " + "\n  ".join(partial)
+    nothing else, under a study name that was really a device and a packet. The submit's stamp refuses it."""
+    env = tmp_path / ".env.setup"
+    script = paths.ROOT / "hpcagent_bench/cluster/record_identity.sh"
+    call = f'source "{script}" && record_identity "{env}" llr40 "" c cpu "" setup'
+    done = subprocess.run(["bash", "-c", call], capture_output=True, text=True, check=False)
+    assert done.returncode == 2, done.stderr
+    assert "study, model, language and setup are all required" in done.stderr
+    assert not env.exists() or "RECORD_" not in env.read_text()
 
 
 def test_a_kernel_tick_carries_the_manifest_name_and_falls_back_to_the_identifier() -> None:
@@ -242,14 +240,17 @@ def test_llms_and_standalone_optimizers_never_share_a_shape() -> None:
 
 
 if __name__ == "__main__":
+    import tempfile
+
     test_the_registry_parses_and_every_section_a_figure_reads_is_populated()
     for registered in sorted(study_tags.registry().models):
         test_every_registered_model_has_a_name_and_a_checkpoint(registered)
     test_the_registered_checkpoint_is_what_the_setups_served()
     test_every_model_the_palette_colours_also_has_a_name()
     test_an_unknown_tag_falls_back_instead_of_raising()
-    test_every_value_a_setup_records_is_registered()
-    test_a_setup_that_records_a_study_records_the_whole_tuple()
+    test_a_registered_identity_draws_and_an_unregistered_value_is_named()
+    with tempfile.TemporaryDirectory() as tmp:
+        test_record_identity_refuses_a_half_stamped_setup(pathlib.Path(tmp))
     test_a_kernel_tick_carries_the_manifest_name_and_falls_back_to_the_identifier()
     test_no_two_benchmarks_share_a_display_name()
     test_every_short_name_fits_and_no_two_benchmarks_share_one()
