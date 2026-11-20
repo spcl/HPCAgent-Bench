@@ -14,8 +14,14 @@
 # of them, so a missing EDF annotation shows up as an unresolvable libmpi.so, not silence.
 #
 # Exits non-zero on the first hard failure. GPU checks degrade to SKIP with no visible device
-# (runnable on a build node); inside an mi300 batch job a missing GPU is a FAILURE (broken EDF).
+# (runnable on a build node); inside a batch job a missing GPU is a FAILURE (broken EDF).
+#
+#   mpi_gpu_check.sh [amd|cuda|cpu]   (default amd)
+# Every platform runs the wrapper path and the multi-rank check; amd adds the ROCm MPICH, the HIP device
+# allreduce, libfabric provenance, RCCL and PETSc; cuda adds the CUDA device allreduce.
 set -Eeuo pipefail
+platform="${1:-amd}"
+[[ "${platform}" =~ ^(amd|cuda|cpu)$ ]] || { echo "usage: mpi_gpu_check.sh [amd|cuda|cpu]" >&2; exit 2; }
 
 ulimit -c 0
 work="$(mktemp -d)"
@@ -44,6 +50,19 @@ launch_failure() {
     fi
 }
 
+finish() {
+    echo
+    if (( ${#skipped[@]} )); then
+        printf 'NOT TESTED HERE: %s\n' "${skipped[*]}"
+    fi
+    if (( fail )); then
+        echo "MPI/GPU CHECK: FAILED"
+        exit 1
+    fi
+    echo "MPI/GPU CHECK: PASSED"
+    exit 0
+}
+
 # ---------------------------------------------------------------- 0. which MPI is this, really
 if ! command -v mpicc >/dev/null 2>&1; then
     say mpi FAIL "mpicc not on PATH"
@@ -58,7 +77,9 @@ esac
 # binary or a dynamic-linker failure as the reason for an empty match.
 mpichversion_path="$(command -v mpichversion || true)"
 mpichversion_out="$(mpichversion 2>"${work}/mpichversion.err" || true)"
-if [[ "${mpichversion_out}" == *[Rr][Oo][Cc][Mm]* || "${mpichversion_out}" == *[Hh][Ii][Pp]* ]]; then
+if [[ "${platform}" != amd ]]; then
+    :   # the gh200 and cpu builds gate their MPICH's configure line themselves
+elif [[ "${mpichversion_out}" == *[Rr][Oo][Cc][Mm]* || "${mpichversion_out}" == *[Hh][Ii][Pp]* ]]; then
     say mpichversion OK "ROCm in configure line (${mpichversion_path})"
 else
     say mpichversion FAIL "no ROCm/HIP in mpichversion output from ${mpichversion_path:-<not on PATH>}"
@@ -101,6 +122,7 @@ else
     say multirank FAIL "expected 'size=4 allreduce=4', got '${out}' -- wrapper/launcher mismatch"
     fail=1
 fi
+[[ "${platform}" != cpu ]] || finish
 
 # ------------------------------------------------- 1b. WHICH libfabric, and WHICH provider
 # Reads what the LIVE process mapped, not what ldd predicts: MPICH binds libfabric by RPATH
@@ -131,45 +153,68 @@ int main(int argc, char **argv) {
     return 0;
 }
 C
-if mpicc -O0 -o "${work}/prov" "${work}/prov.c" 2>"${work}/prov.log"; then
+if [[ "${platform}" != amd ]]; then
+    :   # the netstack provenance below is held for the AMD images only
+elif mpicc -O0 -o "${work}/prov" "${work}/prov.c" 2>"${work}/prov.log"; then
     # MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG prints the chosen provider; FI_LOG_LEVEL is the
     # fallback for a build with that CVAR compiled out.
     # A failed launch is reported, not judged: what it mapped (nothing) is no evidence about libfabric.
     rc=0
-    MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG=1 FI_LOG_LEVEL=warn FI_LOG_PROV=core \
+    MPIR_CVAR_DEBUG_SUMMARY=1 MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG=1 FI_LOG_LEVEL=warn FI_LOG_PROV=core \
         mpiexec_here -n 1 "${work}/prov" >"${work}/prov.out" 2>&1 || rc=$?
     (( rc == 0 )) || say prov-run FAIL "mpiexec $(launch_failure "${rc}" "${work}/prov.out")"
     (( rc == 0 )) || fail=1
+    # A Slingshot node is told by the host's cxi driver (/sys is the host's inside a CE container), not by
+    # /dev/cxi*, which only the EDF's cxi hook passes in: a node whose hook did not run must FAIL, not pass as a
+    # laptop. Off Slingshot (CI, a workstation) nothing can select cxi, and the verdicts below stay INCONCL.
+    slingshot=0
+    compgen -G '/sys/class/cxi/cxi*' >/dev/null 2>&1 && slingshot=1
+    compgen -G '/dev/cxi*' >/dev/null 2>&1 && slingshot=1
+    # inconclusive <check> <why>: INCONCL off Slingshot, FAIL on it.
+    inconclusive() {
+        if (( slingshot )); then
+            say "$1" FAIL "$2 -- on a Slingshot node"
+            fail=1
+        else
+            say "$1" INCONCL "$2 -- not a Slingshot node"
+            skipped+=("$1")
+        fi
+    }
+    # 89-libfabric-cxi.sh bind-mounts the netstack artifact's libfabric over the image's ldconfig entry, so the
+    # process maps it under the image's own path: it is recognised by identity (-ef), not by name.
+    netstack_lf=""
+    for cand in /opt/cscs/netstack/libfabric.so.1 /opt/cscs/netstack/lib/libfabric.so.1 /opt/cscs/netstack/lib64/libfabric.so.1; do
+        [[ -e "${cand}" ]] && { netstack_lf="${cand}"; break; }
+    done
     lf="$(grep -m1 '^libfabric=' "${work}/prov.out" | cut -d= -f2- || true)"
     case "${lf}" in
-        "")                    say libfabric INCONCL "MPI mapped no libfabric at all -- see ${work}/prov.out"
-                               skipped+=("libfabric provenance") ;;
+        "")                    inconclusive libfabric "MPI mapped no libfabric at all, see ${work}/prov.out" ;;
         /opt/ofi-sdk/*)        say libfabric FAIL "${lf} -- the compile-only link stub; it was not deleted from the shipped image"
                                fail=1 ;;
         /opt/spack-install/*)  say libfabric FAIL "${lf} -- SPACK built its own; the packages.yaml external did not take, so it has no cxi provider"
                                fail=1 ;;
         /opt/cscs/*)           say libfabric OK "${lf} -> $(readlink -f "${lf}" 2>/dev/null || echo "${lf}")" ;;
-        *)                     say libfabric INCONCL "${lf} -- not the netstack artifact and not a known stub" ;;
+        *)                     if [[ -n "${netstack_lf}" && "${lf}" -ef "${netstack_lf}" ]]; then
+                                   say libfabric OK "${lf} is ${netstack_lf} (bind-mounted)"
+                               else
+                                   inconclusive libfabric "${lf} is not the netstack artifact's libfabric${netstack_lf:+ ${netstack_lf}}"
+                               fi ;;
     esac
-    # cxi is the Cassini provider; OFI is only the API around it, so "we have OFI" is not enough.
-    prov="$(grep -oiE 'provider: *[a-z0-9_;()]+' "${work}/prov.out" | head -1 || true)"
-    [[ -z "${prov}" ]] && prov="$(grep -oiE '\b(cxi|verbs|tcp|sockets|shm|psm3)\b' "${work}/prov.out" | sort -u | tr '\n' ' ' || true)"
-    # Non-cxi fails only where cxi was actually available (no /dev/cxi* means nothing to select).
-    # One-node probe only: proves MPI initialised the provider, not that a cross-node transfer
-    # rode it.
-    have_cxi=0
-    compgen -G '/dev/cxi*' >/dev/null 2>&1 && have_cxi=1
+    # cxi is the Cassini provider; OFI is only the API around it, so "we have OFI" is not enough. MPICH takes the
+    # first provider libfabric offers, so a cxi that failed to open falls through to tcp with no error. One-node
+    # probe: it proves which provider MPI initialised, not that a cross-node transfer rode it.
+    prov="$(sed -nE 's/^libfabric provider: *([A-Za-z0-9_;+-]+).*/\1/p' "${work}/prov.out" | head -1)"
+    [[ -n "${prov}" ]] || prov="$(grep -m1 -oiE 'provider: *[a-z0-9_;+-]+' "${work}/prov.out" | sed 's/.*: *//' || true)"
     case "${prov}" in
-        "")            say provider INCONCL "MPICH printed no provider line; see ${work}/prov.out"
-                       skipped+=("MPI provider selection") ;;
-        *cxi*|*CXI*)   say provider OK "${prov}" ;;
-        *)             if (( have_cxi )); then
-                           say provider FAIL "${prov} -- /dev/cxi* exists but MPI did not select cxi"
-                           fail=1
-                       else
-                           say provider INCONCL "${prov} -- no /dev/cxi* on this node, nothing to select"
-                           skipped+=("MPI provider selection (no cxi device)")
-                       fi ;;
+        cxi)    say provider OK "$(grep -m1 -iE 'provider: *cxi' "${work}/prov.out")" ;;
+        "")     (( rc != 0 )) || inconclusive provider "MPICH printed no provider line, see ${work}/prov.out" ;;
+        *)      if (( slingshot )); then
+                    say provider FAIL "${prov} -- MPI fell back off cxi on a Slingshot node$(compgen -G '/dev/cxi*' >/dev/null || echo ' (no /dev/cxi* in the container: the cxi hook did not run)')"
+                    fail=1
+                else
+                    say provider INCONCL "${prov} -- not a Slingshot node, nothing to select"
+                    skipped+=("MPI provider selection (no cxi device)")
+                fi ;;
     esac
     # ${work} is deleted on exit; keep the raw evidence only when the caller asks for it.
     [[ -n "${MPI_CHECK_EVIDENCE:-}" ]] && cp -f "${work}/prov.out" "${MPI_CHECK_EVIDENCE}" 2>/dev/null
@@ -181,21 +226,34 @@ fi
 
 # ---------------------------------------------------------------- 2. GPU-aware, claim + evidence
 have_gpu=0
-if command -v rocm-smi >/dev/null 2>&1 && rocm-smi --showid >/dev/null 2>&1; then
-    have_gpu=1
+if [[ "${platform}" == amd ]]; then
+    command -v rocm-smi >/dev/null 2>&1 && rocm-smi --showid >/dev/null 2>&1 && have_gpu=1
+else
+    command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1 && have_gpu=1
 fi
-# No GPU: SKIP on a build node, but a broken EDF/--gres inside an mi300 allocation.
+# No GPU: SKIP on a build node, but a broken EDF/--gres inside a GPU allocation.
 if (( ! have_gpu )) && [[ -n "${SLURM_JOB_ID:-}" ]]; then
-    say gpu FAIL "no visible GPU inside job ${SLURM_JOB_ID} on mi300 -- broken EDF or missing gres"
+    say gpu FAIL "no visible GPU inside job ${SLURM_JOB_ID} -- broken EDF or missing gres"
     fail=1
 fi
+# One source for both vendors: GPU(x) is hipX or cudaX.
 cat >"${work}/gpu.c" <<'C'
 #include <mpi.h>
 #include <stdio.h>
+#ifdef USE_CUDA
+#include <cuda_runtime.h>
+#define GPU(x) cuda##x
+#define GPU_SUPPORT MPIX_GPU_SUPPORT_CUDA
+#define GPU_NAME "CUDA"
+#else
 #include <hip/hip_runtime.h>
+#define GPU(x) hip##x
+#define GPU_SUPPORT MPIX_GPU_SUPPORT_HIP
+#define GPU_NAME "HIP"
+#endif
 
-#define HIP_OK(call) do { hipError_t e = (call); if (e != hipSuccess) { \
-    fprintf(stderr, "hip error %s at %d\n", hipGetErrorString(e), __LINE__); return 2; } } while (0)
+#define HIP_OK(call) do { GPU(Error_t) e = (call); if (e != GPU(Success)) { \
+    fprintf(stderr, "gpu error %s at %d\n", GPU(GetErrorString)(e), __LINE__); return 2; } } while (0)
 
 int main(int argc, char **argv) {
     int rank = 0, size = 0, host = 0;
@@ -206,8 +264,8 @@ int main(int argc, char **argv) {
 
     /* The MPICH spelling, declared in mpi.h. There is no mpi-ext.h on this stack, and the
        OpenMPI spelling (MPIX_Query_rocm_support) reports a false NO here. */
-    if (MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP, &host) != MPI_SUCCESS || !host) {
-        if (rank == 0) fprintf(stderr, "MPIX_GPU_query_support(HIP) says NO\n");
+    if (MPIX_GPU_query_support(GPU_SUPPORT, &host) != MPI_SUCCESS || !host) {
+        if (rank == 0) fprintf(stderr, "MPIX_GPU_query_support(" GPU_NAME ") says NO\n");
         MPI_Finalize();
         return 3;
     }
@@ -217,26 +275,29 @@ int main(int argc, char **argv) {
     /* One device per rank where there are enough, so the allreduce crosses GPUs rather than
        looping back through one. Both ranks on device 0 would still verify and prove less. */
     int ndev = 0;
-    HIP_OK(hipGetDeviceCount(&ndev));
-    if (ndev < 1) { if (rank == 0) fprintf(stderr, "no HIP device visible\n"); MPI_Finalize(); return 5; }
-    HIP_OK(hipSetDevice(rank % ndev));
-    HIP_OK(hipMalloc((void **)&dsend, sizeof(int)));
-    HIP_OK(hipMalloc((void **)&drecv, sizeof(int)));
+    HIP_OK(GPU(GetDeviceCount)(&ndev));
+    if (ndev < 1) { if (rank == 0) fprintf(stderr, "no " GPU_NAME " device visible\n"); MPI_Finalize(); return 5; }
+    HIP_OK(GPU(SetDevice)(rank % ndev));
+    HIP_OK(GPU(Malloc)((void **)&dsend, sizeof(int)));
+    HIP_OK(GPU(Malloc)((void **)&drecv, sizeof(int)));
     int one = 1, got = 0;
-    HIP_OK(hipMemcpy(dsend, &one, sizeof(int), hipMemcpyHostToDevice));
+    HIP_OK(GPU(Memcpy)(dsend, &one, sizeof(int), GPU(MemcpyHostToDevice)));
     MPI_Allreduce(dsend, drecv, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-    HIP_OK(hipMemcpy(&got, drecv, sizeof(int), hipMemcpyDeviceToHost));
+    HIP_OK(GPU(Memcpy)(&got, drecv, sizeof(int), GPU(MemcpyDeviceToHost)));
     if (rank == 0) printf("gpu_query=yes device_allreduce=%d expected=%d\n", got, size);
-    HIP_OK(hipFree(dsend));
-    HIP_OK(hipFree(drecv));
+    HIP_OK(GPU(Free)(dsend));
+    HIP_OK(GPU(Free)(drecv));
     MPI_Finalize();
     return (got == size) ? 0 : 4;
 }
 C
-if mpicc -O0 -o "${work}/gpu" "${work}/gpu.c" \
-        -I/opt/rocm/include -D__HIP_PLATFORM_AMD__ -L/opt/rocm/lib -lamdhip64 \
-        2>"${work}/gpu.log"; then
-    say gpu-aware-cc OK "compiled against hip + mpi"
+if [[ "${platform}" == amd ]]; then
+    gpu_flags=(-I/opt/rocm/include -D__HIP_PLATFORM_AMD__ -L/opt/rocm/lib -lamdhip64)
+else
+    gpu_flags=(-DUSE_CUDA -I/usr/local/cuda/include -L/usr/local/cuda/lib64 -lcudart)
+fi
+if mpicc -O0 -o "${work}/gpu" "${work}/gpu.c" "${gpu_flags[@]}" 2>"${work}/gpu.log"; then
+    say gpu-aware-cc OK "compiled against ${platform} gpu runtime + mpi"
     if (( have_gpu )); then
         rc=0
         out="$(mpiexec_here -n 2 "${work}/gpu" 2>"${work}/gpurun.log")" || rc=$?
@@ -254,6 +315,7 @@ else
     say gpu-aware-cc FAIL "$(tail -1 "${work}/gpu.log")"
     fail=1
 fi
+[[ "${platform}" == amd ]] || finish
 
 # ---------------------------------------------------------------- 3. RCCL network plugin
 # The plugin must come from the netstack artifact, not a self-built copy shipped in the image
@@ -419,12 +481,4 @@ else
     fail=1
 fi
 
-echo
-if (( ${#skipped[@]} )); then
-    printf 'NOT TESTED HERE: %s\n' "${skipped[*]}"
-fi
-if (( fail )); then
-    echo "MPI/GPU CHECK: FAILED"
-    exit 1
-fi
-echo "MPI/GPU CHECK: PASSED"
+finish
