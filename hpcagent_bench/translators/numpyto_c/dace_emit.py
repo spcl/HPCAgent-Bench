@@ -3609,9 +3609,13 @@ def scan_size_assigns(
                 if nm not in first_rhs:
                     first_rhs[nm] = node.value
                     order.append(nm)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in targets:
-            if id(node) not in plain:
-                mutated.add(node.id)
+        elif (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node.id in targets
+            and id(node) not in plain
+        ):
+            mutated.add(node.id)
     order = [nm for nm in order if nm not in mutated]
     first_rhs = {nm: first_rhs[nm] for nm in order}
     # Ordered: the caller PREPENDS one ``<nm>_iter = <nm>`` statement per reassigned name to the

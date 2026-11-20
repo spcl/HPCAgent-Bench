@@ -386,11 +386,8 @@ def rename_reads(stmt: ast.stmt, rename_map: dict[str, str]) -> None:
         apply_renames(stmt.test, rename_map)
     elif isinstance(stmt, ast.For):
         apply_renames(stmt.iter, rename_map)
-    elif isinstance(stmt, ast.Expr):
+    elif isinstance(stmt, (ast.Expr, ast.Return)) and stmt.value is not None:
         apply_renames(stmt.value, rename_map)
-    elif isinstance(stmt, ast.Return):
-        if stmt.value is not None:
-            apply_renames(stmt.value, rename_map)
 
 
 def apply_renames(node: ast.expr, rename_map: dict[str, str]) -> None:
