@@ -20,7 +20,7 @@
 #          library of <llvm view>, the spack variants of the OpenMP-linking libraries built with clang
 #          (same versions, variants and sonames as the gnu ones), so libopenblas.so.0 resolves to the
 #          llvm build for numpy and scipy.
-#   nvhpc  (only when NVHPC is installed) lib/libnvomp.so and NVHPC's BUNDLED BLAS/LAPACK, with a
+#   nvhpc  (only when NVHPC is installed) every library of NVHPC's lib/, libgomp.so.1 among them libnvomp, with a
 #          libopenblas.so.0 that pulls in libblas.so and liblapack.so so numpy and scipy find a BLAS under
 #          the soname they were built for; view/lib/pkgconfig/openblas.pc names it for catalog builds.
 #
@@ -162,16 +162,18 @@ if [ -n "${nvc}" ]; then
     nvomp="$(ls "${nvlib}"/libnvomp.so* 2>/dev/null | head -1 || true)"
     [ -n "${nvomp}" ] || { echo "omp_contexts: NVHPC at ${nvlib} ships no libnvomp.so" >&2; exit 1; }
     mkdir -p "${root}/nvhpc/lib" "${root}/nvhpc/view/lib/pkgconfig"
+    # Every library of NVHPC's lib/ by name, as nvhpc_context.sh writes a site install's: they link each other
+    # through $ORIGIN, which is this directory when the loader finds them here (libblas -> libblas_lp64 -> libnvf).
+    for file in "${nvlib}"/*.so "${nvlib}"/*.so.*; do
+        if [ -e "${file}" ]; then link "${file}" "${root}/nvhpc/lib/$(basename "${file}")"; fi
+    done
     link "${nvomp}" "${root}/nvhpc/lib/libnvomp.so"
+    # libnvomp defines the GOMP ABI: a client that names libgomp.so.1 runs on the one runtime here, never on gcc's.
+    link "${nvomp}" "${root}/nvhpc/lib/libgomp.so.1"
     for stem in blas lapack; do
         found="$(ls "${nvlib}/lib${stem}.so" "${nvlib}/lib${stem}.so."* 2>/dev/null | head -1 || true)"
         [ -n "${found}" ] || { echo "omp_contexts: NVHPC at ${nvlib} ships no lib${stem}.so" >&2; exit 1; }
         link "${found}" "${root}/nvhpc/lib/lib${stem}.so"
-        # Newer NVHPC splits each into a dispatch library DT_NEEDED on lib${stem}_lp64.so.0 / _ilp64: link the
-        # siblings too, or the shim below fails to load (numpy: libblas_lp64.so.0: cannot open shared object file).
-        for sibling in "${nvlib}/lib${stem}"_*.so*; do
-            if [ -e "${sibling}" ]; then link "${sibling}" "${root}/nvhpc/lib/$(basename "${sibling}")"; fi
-        done
     done
     # numpy and scipy were built against libopenblas.so.0: one soname that carries BLAS and LAPACK, here the two
     # libraries NVHPC ships (a library with no code of its own, DT_NEEDED on both).

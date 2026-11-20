@@ -415,10 +415,13 @@ RUN set -eux; \
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     llvm_host="$(uname -m | sed 's/x86_64/x86/')"; \
-    "${spack}" install --fail-fast "gcc@${GCC_VERSION} +graphite +binutils"; \
-    "${spack}" compiler find --scope site "$("${spack}" location -i "gcc@${GCC_VERSION}")"; \
-    ln -sfn "$("${spack}" location -i "gcc@${GCC_VERSION}")" /opt/gcc; \
-    spack-cache-push "gcc@${GCC_VERSION}"; \
+    gcc_spec="gcc@${GCC_VERSION} +graphite +binutils"; \
+    "${spack}" install --fail-fast "${gcc_spec}"; \
+    gcc_prefix="$("${spack}" location -i "${gcc_spec}")"; \
+    test -x "${gcc_prefix}/bin/gcc"; \
+    "${spack}" compiler find --scope site "${gcc_prefix}"; \
+    ln -sfn "${gcc_prefix}" /opt/gcc; \
+    spack-cache-push "${gcc_spec}"; \
     mkdir -p "${SPACK_ENV_DIR}"; \
     printf '%s\n' \
       'spack:' \
@@ -466,7 +469,9 @@ RUN set -eux; \
       '  - superlu' \
       "  - superlu-dist +openmp +parmetis +cuda cuda_arch=${CUDA_ARCHS}" \
       '  - mumps +mpi +metis +parmetis +scotch +ptscotch +openmp +shared' \
-      "  - strumpack +mpi +openmp +parmetis +scotch ~rocm +cuda cuda_arch=${CUDA_ARCHS}" \
+      '  # strumpack ~slate, as on judge-agent-amd: gcc 16 emits assembly for slate that its assembler rejects on' \
+      '  # aarch64 (5396873: "junk at end of line", ".size expression ... does not evaluate to a constant").' \
+      "  - strumpack +mpi +openmp +parmetis +scotch ~rocm ~slate +cuda cuda_arch=${CUDA_ARCHS}" \
       '  # hypre stays host-only, as on judge-agent-amd: hypre@3 GPU builds require umpire.' \
       '  - hypre +mpi +openmp' \
       '  - arpack-ng +mpi +shared' \
