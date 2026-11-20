@@ -415,10 +415,12 @@ RUN set -eux; \
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     llvm_host="$(uname -m | sed 's/x86_64/x86/')"; \
-    "${spack}" install --fail-fast "gcc@${GCC_VERSION} +graphite +binutils"; \
-    "${spack}" compiler find --scope site "$("${spack}" location -i "gcc@${GCC_VERSION}")"; \
-    ln -sfn "$("${spack}" location -i "gcc@${GCC_VERSION}")" /opt/gcc; \
-    spack-cache-push "gcc@${GCC_VERSION}"; \
+    gcc_spec="gcc@${GCC_VERSION} +graphite +binutils"; \
+    "${spack}" install --fail-fast "${gcc_spec}"; \
+    gcc_prefix="$("${spack}" location -i "${gcc_spec}")"; \
+    "${spack}" compiler find --scope site "${gcc_prefix}"; \
+    ln -sfn "${gcc_prefix}" /opt/gcc; \
+    spack-cache-push "${gcc_spec}"; \
     mkdir -p "${SPACK_ENV_DIR}"; \
     printf '%s\n' \
       'spack:' \
@@ -1017,7 +1019,7 @@ RUN set -eux; \
 # CUDA major (read off nvcc, so a base that moves to another major fails here and not in a job), every framework
 # adapter's module, dace's solver gates, DaCe's OpenBLAS environment maps only OpenBLAS, the pinned judge proxy,
 # chromium's system libraries; then one OpenMP runtime file and the gnu, llvm and nvhpc contexts.
-COPY containers/images/lib/openmp_gate.py containers/images/lib/omp_contexts.sh \
+COPY containers/images/lib/openmp_gate.py containers/images/lib/omp_contexts.sh containers/images/lib/nvhpc_context.sh \
      containers/images/lib/openmp_probe.c containers/images/lib/openmp_probe.f90 containers/images/lib/judge_proxy_gate.py /tmp/one-openmp/
 # The gate's venv installs hpcagent-agent editable, and uv_build needs its module root; an agent step binds the
 # real agent/ over /opt/hpcagent-bench-agent, so the stub lives only for this step.
@@ -1059,6 +1061,7 @@ RUN --mount=type=bind,source=hpcagent_bench,target=/hb-src/hpcagent_bench \
     playwright install-deps chromium; \
     ONE_OPENMP_ROOTS="/usr /lib /lib64 /opt /root /home" sh /opt/launch/one_openmp.sh /opt/view; \
     OMP_REQUIRE_NVHPC=1 sh /tmp/one-openmp/omp_contexts.sh /opt/view /opt/omp/llvm/view; \
+    bash /tmp/one-openmp/nvhpc_context.sh "$(dirname "$(dirname "$(readlink -f "$(command -v nvc)")")")" /opt/omp/nvhpc; \
     python3 /tmp/one-openmp/openmp_gate.py scan; \
     python3 /tmp/one-openmp/openmp_gate.py context --context gnu --wheels --torch; \
     python3 /tmp/one-openmp/openmp_gate.py context --context llvm --blas-in-context; \

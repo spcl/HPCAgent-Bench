@@ -17,16 +17,17 @@
 # Run it inside the image (its gcc links the shim). It rewrites the whole context each time, so it is safe to run
 # again, and install-nvhpc.sh and site_compilers.sbatch both do.
 #
-#   nvhpc_context.sh ROOT          ROOT: the directory holding bin/nvc (HPCAGENT_BENCH_NVHPC_ROOT)
+#   nvhpc_context.sh ROOT [DEST]   ROOT: the directory holding bin/nvc (HPCAGENT_BENCH_NVHPC_ROOT); DEST: where
+#                                  the context goes (default ROOT/omp-context; the CUDA image: /opt/omp/nvhpc)
 set -euo pipefail
 ulimit -c 0
-if [[ $# -ne 1 ]]; then
-    echo "usage: $0 ROOT (the NVHPC directory holding bin/nvc)" >&2
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "usage: $0 ROOT [DEST] (ROOT: the NVHPC directory holding bin/nvc)" >&2
     exit 2
 fi
 root=$(cd "$1" && pwd -P)
 nvlib=${root}/lib
-context=${root}/omp-context
+context=${2:-${root}/omp-context}
 [[ -x ${root}/bin/nvc ]] || { echo "nvhpc_context: no nvc under ${root}/bin" >&2; exit 1; }
 [[ -e ${nvlib}/libnvomp.so ]] || { echo "nvhpc_context: NVHPC at ${nvlib} ships no libnvomp.so" >&2; exit 1; }
 
