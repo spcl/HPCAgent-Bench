@@ -18,7 +18,7 @@ import pytest
 from hpcagent_bench import paths
 from hpcagent_bench.frameworks import forked
 
-__all__ = ["fresh_interpreter", "isolated"]
+__all__ = ["checkout_env", "fresh_interpreter", "isolated"]
 
 REPO = paths.ROOT
 
@@ -27,6 +27,17 @@ ISOLATED_ENV = "HPCAGENT_BENCH_OPENMP_ISOLATED"
 #: Ceiling on one child, under the smallest ``--timeout`` over these tests (600 s): the helper fires first, so the
 #: worker survives, the child's process tree dies with it and the failure names the test.
 CHILD_TIMEOUT_S = 540
+
+
+def checkout_env(*drop: str) -> dict[str, str]:
+    """``os.environ`` without ``drop``, for a child interpreter that imports ``tests.*`` from :data:`REPO` as its CWD
+    (``-m tests.<module>``, ``-c "import tests..."``, ``-p tests.<plugin>``).
+
+    Without ``PYTHONSAFEPATH`` too: the judge image sets it to keep the CWD off ``sys.path``, and then ``tests`` does
+    not import. :data:`REPO` holds no directory that shadows an installed package, the hazard it guards the image's
+    workdir against.
+    """
+    return {key: value for key, value in os.environ.items() if key not in {"PYTHONSAFEPATH", *drop}}
 
 
 def isolated(test: Callable[..., None]) -> Callable[..., None]:

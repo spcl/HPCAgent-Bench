@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The gate of the CI steps that must not skip: an allowed reason passes, any other skip fails the run."""
 
-import os
 import pathlib
 import subprocess
 import sys
@@ -10,6 +9,7 @@ import sys
 import pytest
 
 from hpcagent_bench import paths
+from tests.own_process import checkout_env
 
 ALLOWED = 'import pytest\n\n\ndef test_gated() -> None:\n    pytest.skip("no CUDA device / cupy")\n'
 PASSING = "def test_passing() -> None:\n    pass\n"
@@ -17,7 +17,7 @@ PASSING = "def test_passing() -> None:\n    pass\n"
 
 def gate(folder: pathlib.Path) -> subprocess.CompletedProcess[str]:
     """Run from the checkout, where ``-m pytest`` imports the plugin; the job's ``--cov`` stays out."""
-    env = {**os.environ, "PYTEST_ADDOPTS": ""}
+    env = {**checkout_env(), "PYTEST_ADDOPTS": ""}
     command = [
         sys.executable,
         "-m",

@@ -9,7 +9,6 @@ from ``pytest_runtest_logreport`` instead; these pin that it lands EARLY rather 
 lands, which is the whole property.
 """
 
-import os
 import pathlib
 import subprocess
 import sys
@@ -17,6 +16,7 @@ import sys
 import pytest
 
 from hpcagent_bench import paths
+from tests.own_process import checkout_env
 
 REPO_ROOT = paths.ROOT
 
@@ -39,7 +39,7 @@ def run_probe(tmp_path: pathlib.Path, *extra: str) -> str:
     """
     probe = tmp_path / "test_probe.py"
     probe.write_text(FAILING_TEST)
-    env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
+    env = checkout_env("PYTEST_ADDOPTS")
     finished = subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-p", "tests.conftest", "-rfEs", str(probe), *extra],
         cwd=REPO_ROOT,
