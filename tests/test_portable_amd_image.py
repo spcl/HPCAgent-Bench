@@ -241,14 +241,15 @@ def test_a_release_freezes_every_edf_on_an_image_no_promote_moves(tmp_path: path
     assert frozen.read_bytes() == b"old"
 
 
-def test_the_mlscale_edf_is_the_judge_edf_plus_the_hwloc_preload(tmp_path: pathlib.Path) -> None:
+def test_the_mlscale_edf_is_the_judge_edf_and_both_preload_the_hwloc(tmp_path: pathlib.Path) -> None:
+    """Every AMD judge EDF preloads the distro hwloc (the image's spack hwloc is ~pci, so a cross-node MPI_Init
+    asserts on the NIC lookup); the mlscale view is the judge EDF itself."""
     done, edf_dir = install_edfs(tmp_path, images_env(*AMD_ROLES))
     assert done.returncode == 0, done.stderr
-    judge = (edf_dir / "hpcagent-bench-judge-mi200-latest.toml").read_text(encoding="utf-8").splitlines()
-    mlscale = (edf_dir / "hpcagent-bench-judge-mi200-mlscale-latest.toml").read_text(encoding="utf-8").splitlines()
-    differ = [(a, b) for a, b in zip(judge, mlscale, strict=True) if a != b]
-    preload = str(edf(edf_dir, "hpcagent-bench-judge-mi200-latest")["env"]["LD_PRELOAD"])
-    assert differ == [(f'LD_PRELOAD = "{preload}"', f'LD_PRELOAD = "{preload}:{HWLOC}"')], differ
+    judge = (edf_dir / "hpcagent-bench-judge-mi200-latest.toml").read_text(encoding="utf-8")
+    mlscale = (edf_dir / "hpcagent-bench-judge-mi200-mlscale-latest.toml").read_text(encoding="utf-8")
+    assert judge == mlscale
+    assert str(edf(edf_dir, "hpcagent-bench-judge-mi200-latest")["env"]["LD_PRELOAD"]).endswith(f":{HWLOC}")
 
 
 @pytest.mark.parametrize(("role", "target"), [("judge-agent-amd", "agent"), ("judge", "judge")])
@@ -470,7 +471,7 @@ if __name__ == "__main__":
     test_the_pip_wheel_cache_is_keyed_by_the_target_list()
     test_images_env_points_every_amd_partition_edf_at_the_one_image()
     test_install_edfs_renders_each_partition_edf_with_its_own_arch(pathlib.Path(tempfile.mkdtemp()))
-    test_the_mlscale_edf_is_the_judge_edf_plus_the_hwloc_preload(pathlib.Path(tempfile.mkdtemp()))
+    test_the_mlscale_edf_is_the_judge_edf_and_both_preload_the_hwloc(pathlib.Path(tempfile.mkdtemp()))
     for role, target in [("judge-agent-amd", "agent"), ("judge", "judge")]:
         test_promote_moves_each_candidate_over_its_live_name(pathlib.Path(tempfile.mkdtemp()), role, target)
     test_promote_refuses_a_candidate_rebuilt_after_it_was_verified(pathlib.Path(tempfile.mkdtemp()))

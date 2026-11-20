@@ -87,7 +87,9 @@ OPENBLAS_DIR = "/opt/view"
 PMIX_MCA_psec = "native"
 # The hwloc GPU probe hangs a containerized MPI launcher; harmless on a bare cluster.
 HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
-LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
+# hwloc preloaded with MPI: the spack hwloc MPICH links is ~pci, so the cxi NIC has no io_device and a
+# cross-node MPI_Init asserts (mpir_hwtopo.c); the distro one sees PCI (756270). Until the +pci image rebuild.
+LD_PRELOAD = "/usr/local/lib/libmimalloc.so:/usr/lib/x86_64-linux-gnu/libhwloc.so.15"
 
 [annotations]
 # source="artifact" is required here: host mode's bind-mount does not land on this cluster (the
