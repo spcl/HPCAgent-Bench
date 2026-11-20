@@ -211,7 +211,7 @@ RUN set -eux; \
     printf '%s\n' 'spack:' \
       '  concretizer:' '    unify: true' \
       '  specs:' \
-      '  - mpich@4 +fortran +hwloc ~slurm device=ch4 netmod=ofi' \
+      '  - mpich@4 +fortran +hwloc ~slurm device=ch4 netmod=ofi ^hwloc +pci' \
       '  - openblas@0.3.30 threads=openmp +fortran +dynamic_dispatch' \
       '  - netlib-scalapack' \
       '  - hdf5 +mpi +fortran +hl' \

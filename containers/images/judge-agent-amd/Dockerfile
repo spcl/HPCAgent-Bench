@@ -498,6 +498,10 @@ RUN set -eux; \
       '      require: ["precision=float,double,long_double +mpi +openmp ldflags=-L/opt/gcc/lib64"]' \
       '    yaksa:' \
       "      require: [\"amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")\"]" \
+      '    # hwloc +pci: MPICH finds the cxi NIC by its PCI bus id; a ~pci hwloc (a cached build was reused, as' \
+      '    # for libfabric below) asserts in MPI_Init at mpir_hwtopo.c io_device on every cross-node launch.' \
+      '    hwloc:' \
+      '      require: ["+pci"]' \
       '    # libfabric: OURS. Two separate mechanisms had to be closed to make that stick, and' \
       '    # each one silently produced an MPI that could not reach Slingshot.' \
       '    #' \
@@ -776,6 +780,10 @@ RUN set -eux; \
       esac; \
     done; \
     mpichversion | tee /tmp/mpichversion.txt; \
+    # The hwloc MPI links must see PCI devices, or MPI_Init asserts on the NIC lookup across nodes.
+    hw="$(ldd /opt/view/lib/libmpi.so | awk '/libhwloc/ {print $3}')"; \
+    { ldd "${hw}" | grep -q libpciaccess || ls "$(dirname "${hw}")"/hwloc/hwloc_pci.so >/dev/null 2>&1; } \
+      || { echo "MPI links ${hw:-no hwloc}, built without PCI support: cross-node MPI_Init would assert" >&2; exit 1; }; \
     # WHICH libfabric does this MPI actually link? Without this check cross-node MPI can run on
     # sockets undetected: a libfabric with providers
     # `psm3 sockets verbs` satisfies every check about MPICH itself. RPATH is what decides, so
