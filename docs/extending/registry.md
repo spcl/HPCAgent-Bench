@@ -32,24 +32,24 @@ Closed categories inside an entry are enums (`vocabulary.Arch`, `DaceStage`, `Tr
 
 ## The slot
 
-An entry's slot is its registration position within its kind: the colour and marker it is drawn with, the position
+An entry's slot is its registration position within its kind: the color and marker it is drawn with, the position
 a column is listed at. Nobody states one. A new entry is added last (a plugin's after every shipped one), so it never
 repaints another; `slotted=False` is the one entry with no slot, the no-packet control.
 
-What a slot decides (`hpcagent_bench/stats/palette.py` reads it; nothing else carries a colour):
+What a slot decides (`hpcagent_bench/stats/palette.py` reads it; nothing else carries a color):
 
 | Kind | Slot decides |
 |---|---|
-| model | marker `slot` of the marker pool; hue `slot` of the tab20 ramp where a figure colours models |
+| model | marker `slot` of the marker pool; hue `slot` of the tab20 ramp where a figure colors models |
 | optimizer | marker `slot` counted from the END of the pool, so a new model never repaints it; hue `slot` |
 | harness | the clearest shapes of the treatment pool, in slot order, ahead of every packet; hue `slot` |
 | packet | hue `slot` (a combination wears its lead part's hue, lightened one step per extra part, and the lead is the part with the lowest slot) and the shape: the next free one of the treatment pool unless the packet names a `marker` |
 | language, device | hue `slot` |
 | framework | hue `slot` |
 
-The colour ramp, the marker pools and the lightness step are the only data left in
+The color ramp, the marker pools and the lightness step are the only data left in
 `hpcagent_bench/envs/registry.yaml`. `tests/test_vocabulary.py` pins each kind's order and
-`tests/test_palette.py` pins the resolved colours, so a change that would repaint a published figure fails naming
+`tests/test_palette.py` pins the resolved colors, so a change that would repaint a published figure fails naming
 the entity.
 
 ## The kinds
@@ -68,7 +68,7 @@ the entity.
 | `@paired_test(name, version=)`, `@proportion_test`, `@paired_proportion_test`, `@correction`, `@timing_test` | `hpcagent_bench/stats/significance.py` | a FUNCTION returning a `significance.Result` (a correction: the adjusted p values); no slot | a statistical test: a reporting one the configuration picks by name (`statistics.*`), a timing test a grading protocol names (`timing_test`); see [the test registry](../measurement_statistics.md#the-test-registry) |
 
 An alias resolves to the entity it names, takes no slot, and shares the key namespace: a spelling never gets its
-own colour or its own legend entry. A registered packet's definition is immutable once a results database has
+own color or its own legend entry. A registered packet's definition is immutable once a results database has
 recorded it; a changed meaning goes under a new key.
 
 ## Adding one

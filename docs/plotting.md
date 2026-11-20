@@ -18,7 +18,7 @@ A figure that breaks one of these is wrong.
    (`summary.MIN_PAIRS_FOR_INTERVAL`). No trend lines; the table carries raw milliseconds and tokens; speedup and
    tokens never share an axis.
 4. **Colour = model, shape = treatment**, by name, never by list position:
-   - colour is the LLM (`palette.model_color`); several marks of one model wear its shades
+   - color is the LLM (`palette.model_color`); several marks of one model wear its shades
      (`palette.model_shade`), its control `palette.CONTROL_SHADE` lighter; compilers take `palette.framework_color`;
    - shape is the treatment from the registry's `shapes:` pool (`palette.harness_marker`, `palette.packet_marker`),
      a packet may pin one with `marker:`; two treatments never share a shape;

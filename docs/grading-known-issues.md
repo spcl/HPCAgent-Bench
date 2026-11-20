@@ -146,7 +146,7 @@ before it keep their recorded `incorrect`.
 
 **Ruled out before the cause was found.** All of these ran the RCCL-hint library (see above), at 16 ranks on four
 nodes with the same judge EDF: bare RCCL through torch.distributed (all-reduce and all-to-all at 4, 8 and 16 ranks);
-RCCL with mpi4py initialised first; the library called directly at the failing shape, with and without the 64 MB
+RCCL with mpi4py initialized first; the library called directly at the failing shape, with and without the 64 MB
 workspace, and with several shapes in one process; the grader's own driver (`mpi_shard_driver`) on the failing
 launch's plan under the grade's environment and the relay's srun flags; a node swap; `NCCL_NET_GDR_LEVEL=LOC`;
 `FI_CXI_DISABLE_HOST_REGISTER=1` with `NCCL_DEBUG=WARN`. Draw reuse is ruled out as well: the failing launch's plan

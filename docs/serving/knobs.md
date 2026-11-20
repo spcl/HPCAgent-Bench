@@ -83,7 +83,7 @@ build inside the container dies with it. `run_cluster.sh` keeps one cache per ai
 arch on scratch, `$JIT_CACHE_ROOT/.aiter/aiter-<version>-<gfx>` (`AITER_JIT_DIR`, and `AITER_ROOT_DIR`
 for template ops such as `pa_ragged`), seeded once from the image prebuild of the same arch. The first
 server compiles, every later server and node loads the `.so`: aiter installs a module by atomic copy
-and serialises builders on the lock. A lock older than an hour is removed at launch, because aiter
+and serializes builders on the lock. A lock older than an hour is removed at launch, because aiter
 never breaks a lock held by another host. `GPU_ARCHS` is the node's arch, so a serve-time build
 compiles one arch.
 

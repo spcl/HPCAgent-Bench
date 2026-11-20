@@ -212,7 +212,7 @@ and `_VERBOSE`), and every srun that does not name its own `--cpu-bind` applies 
 **Fix.** A launcher started as a step unsets `SLURM_CPU_BIND*` before starting its runs, next to its existing
 `SLURM_CPUS_ON_NODE` correction. Test: `tests/test_cluster_launch_scripts.py::test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps`.
 
-## Model behaviour that is not infrastructure
+## Model behavior that is not infrastructure
 
 At sampling temperature 1.5 both Qwen3.8 and gpt-oss-120b degrade: Qwen3.8 emits long runs of random tokens
 inside otherwise valid tool calls, and gpt-oss-120b emits malformed harmony tool headers, so its episodes end after
