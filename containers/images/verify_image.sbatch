@@ -55,6 +55,9 @@ case "${PROFILE}" in
     *)       agent_mount=() ;;
 esac
 
+# Every step names its CPUs: srun inherits no --cpus-per-task (nor SRUN_CPUS_PER_TASK on this site), so a step of
+# an exclusive build_and_verify job would get one core and every threading check would fail.
+step=(srun "--cpus-per-task=${SLURM_CPUS_PER_TASK:-${SLURM_CPUS_ON_NODE:-1}}")
 EDF="${SCRATCH}/.tmp/verify-${SLURM_JOB_ID:-$$}-${ROLE}.toml"
 mkdir -p "$(dirname "${EDF}")"
 # Probes run from `/`, so a `dace` directory in a CWD cannot shadow the image's own.
@@ -70,7 +73,7 @@ fi
 
 echo "=== verifying ${IMAGE} as role=${ROLE} profile=${PROFILE} ==="
 rc=0
-srun --environment="${EDF}" python3 "${REPO}/containers/images/verify_image.py" --profile "${PROFILE}" --verbose \
+"${step[@]}" --environment="${EDF}" python3 "${REPO}/containers/images/verify_image.py" --profile "${PROFILE}" --verbose \
     || rc=$?
 
 # An image reaching a host directory for a library it "has" is not reproducible.
@@ -81,7 +84,7 @@ case "${PROFILE}" in
     *)       sc_modules="" ;;   # the checker's own default list
 esac
 sc=0
-srun --environment="${EDF}" python3 -P "${REPO}/containers/images/selfcontained_check.py" \
+"${step[@]}" --environment="${EDF}" python3 -P "${REPO}/containers/images/selfcontained_check.py" \
     ${sc_modules:+--modules "${sc_modules}"} || sc=$?
 
 # MPI presence is not capability: running it catches a wrapper/launcher mismatch, and proves the
@@ -89,7 +92,7 @@ srun --environment="${EDF}" python3 -P "${REPO}/containers/images/selfcontained_
 mpi_rc=0
 if [[ "${PLATFORM}" == amd && ${#agent_mount[@]} -gt 0 ]]; then
     echo "=== MPI: multi-rank, GPU-aware, RCCL plugin, PETSc GPU ==="
-    srun --environment="${EDF}" "${REPO}/containers/images/mpi_gpu_check.sh" || mpi_rc=$?
+    "${step[@]}" --environment="${EDF}" "${REPO}/containers/images/mpi_gpu_check.sh" || mpi_rc=$?
 fi
 
 # What a driverless build cannot show: devices visible to cupy/jax/torch and PAPI's cuda component enumerating
@@ -107,7 +110,7 @@ case "${PLATFORM}" in
 esac
 if [[ "${nvidia_probe}" == 1 && ${#agent_mount[@]} -gt 0 ]]; then
     echo "=== GPU probe: cupy/jax/torch devices, PAPI cuda events, Nsight ==="
-    srun --ntasks=1 --environment="${EDF}" bash -c '
+    "${step[@]}" --ntasks=1 --environment="${EDF}" bash -c '
         set -eu
         ulimit -c 0
         nvidia-smi -L
@@ -124,7 +127,7 @@ fi
 tools_rc=0
 if [[ ${#agent_mount[@]} -gt 0 ]]; then
     echo "=== tools: the checkout's agent and judge tools load in this image ==="
-    srun --environment="${EDF}" python3 "${REPO}/containers/images/tools_launch_check.py" \
+    "${step[@]}" --environment="${EDF}" python3 "${REPO}/containers/images/tools_launch_check.py" \
         --agent-dir /opt/hpcagent-bench-agent \
         --judge-web-search "${REPO}/hpcagent_bench/harness/judge_web_search.py" || tools_rc=$?
 fi
@@ -132,7 +135,7 @@ fi
 # An import loads device code without launching it: this launches sgl_kernel/triton ops on the GPU.
 if [[ "${PROFILE}" == sglang ]]; then
     launch_rc=0
-    srun --environment="${EDF}" python3 "${REPO}/containers/inference/sglang_kernel_launch_check.py" \
+    "${step[@]}" --environment="${EDF}" python3 "${REPO}/containers/inference/sglang_kernel_launch_check.py" \
         || launch_rc=$?
     echo "=== sglang: launch check rc=${launch_rc} reported, not counted ==="
 fi
