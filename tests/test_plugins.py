@@ -163,6 +163,27 @@ def test_a_plugin_packet_named_like_a_registered_alias_is_refused_and_adds_nothi
     assert "aaa" not in kind.entries
 
 
+def test_a_plugin_found_again_keeps_its_packets_and_a_changed_one_is_refused(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The judge registers its plugins when its service module imports; a caller that clears register_once to read
+    another plugin list finds the same plugins again (NestForge's test fixture, with an editable bench's shipped
+    plugins), which once raised "already registered". Only a different definition under a taken key is a clash."""
+    folder = write_plugin(tmp_path, "aaa")
+    kind = Kind[PacketDef]("packets")
+    monkeypatch.setattr(plugins, "PACKETS", kind)
+    plugins.register_packets(agent_plugins.find([folder]))
+    registered = dict(kind.entries)
+
+    plugins.register_packets(agent_plugins.find([folder]))
+
+    assert kind.entries == registered
+    manifest = folder / "plugin.toml"
+    manifest.write_text(manifest.read_text().replace('name = "Probe"', 'name = "Changed"'))
+    with pytest.raises(ValueError, match="is already registered"):
+        plugins.register_packets(agent_plugins.find([folder]))
+
+
 def test_packets_composing_each_other_are_refused_and_add_nothing(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
