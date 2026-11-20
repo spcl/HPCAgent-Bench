@@ -122,6 +122,42 @@ else
     say multirank FAIL "expected 'size=4 allreduce=4', got '${out}' -- wrapper/launcher mismatch"
     fail=1
 fi
+# ---------------------------------------------------------------- 1a. hwloc with PCI under MPI_Init
+# MPICH places ranks and picks its NIC from the hwloc topology. An hwloc without PCI support (Ubuntu's libhwloc15
+# keeps it in the hwloc_pci plugin of libhwloc-plugins, a mere Recommends) leaves no io_device for the NIC, and a
+# cross-node MPI_Init aborts. Both PCI-capable paths map libpciaccess: spack's hwloc +pci links it, Ubuntu's
+# plugin pulls it in; the EDF preloads the image's libhwloc next to mimalloc so MPICH resolves that one.
+cat >"${work}/pci.c" <<'C'
+#include <mpi.h>
+#include <stdio.h>
+#include <string.h>
+int main(int argc, char **argv) {
+    char line[4096];
+    int pci = 0;
+    MPI_Init(&argc, &argv);
+    FILE *maps = fopen("/proc/self/maps", "r");
+    while (maps && fgets(line, sizeof line, maps)) {
+        if (strstr(line, "libpciaccess")) pci = 1;
+        if (strstr(line, "hwloc")) printf("hwloc=%s", strrchr(line, ' ') + 1);
+    }
+    printf("pci=%d\n", pci);
+    MPI_Finalize();
+    return 0;
+}
+C
+rc=0
+if ! mpicc -O0 -o "${work}/pci" "${work}/pci.c" 2>"${work}/pci.log"; then
+    say hwloc-pci FAIL "compile failed, see ${work}/pci.log"
+    fail=1
+elif ! mpiexec_here -n 1 "${work}/pci" >"${work}/pci.out" 2>&1; then
+    say hwloc-pci FAIL "mpiexec failed, see ${work}/pci.out"
+    fail=1
+elif grep -q '^pci=1' "${work}/pci.out"; then
+    say hwloc-pci OK "$(grep -m1 '^hwloc=' "${work}/pci.out" | cut -d= -f2-)"
+else
+    say hwloc-pci FAIL "MPI_Init mapped no libpciaccess: $(grep '^hwloc=' "${work}/pci.out" | cut -d= -f2- | paste -sd' ')"
+    fail=1
+fi
 [[ "${platform}" != cpu ]] || finish
 
 # ------------------------------------------------- 1b. WHICH libfabric, and WHICH provider

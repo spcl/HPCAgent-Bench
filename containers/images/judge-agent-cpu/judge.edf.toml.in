@@ -43,4 +43,5 @@ FC = "/usr/bin/gfortran-16"
 DACE_compiler_cpu_executable = "/usr/bin/g++-16"
 # The hwloc GPU probe hangs a containerized MPI launcher.
 HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
-LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
+# hwloc preloaded with MPI: MPICH resolves libhwloc.so.15 to this PCI-capable one (mpi_gpu_check.sh 1a).
+LD_PRELOAD = "/usr/local/lib/libmimalloc.so:/usr/lib/${MULTIARCH}/libhwloc.so.15"
