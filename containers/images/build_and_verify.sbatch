@@ -44,6 +44,10 @@ IMAGE="${1:?usage: build_and_verify.sbatch <image directory under containers/ima
     || { echo "FATAL: ${REPO} is not the checkout root: submit from it or set REPO" >&2; exit 2; }
 [[ "${VERIFY_ONLY:-0}" == 1 ]] || command -v uv >/dev/null \
     || { echo "FATAL: uv is not on PATH in the batch job: export PATH before sbatch" >&2; exit 2; }
+# A judge verifies through the checkout's KernelBench (launch_venv.sh refuses an empty one), so an
+# uninitialised submodule would fail verification only after the whole build.
+[[ "${IMAGE}" != judge-agent-* || -d "${REPO}/third_party/KernelBench/KernelBench" ]] \
+    || { echo "FATAL: third_party/KernelBench is empty: git submodule update --init third_party/KernelBench" >&2; exit 2; }
 # No flavor asked for: the portable image, pulled only when the published tag's build inputs equal this
 # checkout's (CE_PULL=1; CE_PULL=only would pull a stale image for a branch that changes the Dockerfile), and only
 # when that fails the native flavor for this machine (an image whose names carry no flavor, the serving

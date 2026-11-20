@@ -46,5 +46,8 @@ ce_image_inputs() {
     ce_cache_base_image
     # One spack cache per image: the cuda llvm context reused the cpu image's apt-llvm OpenBLAS.
     ce_cache_args "spack-buildcache-$(uname -m)-cuda" uv-cache
-    INPUT_ARGS=("${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}")
+    # The solver steps' compiler temp files on the node's tmpfs itself, not the build's overlay upper layer: the
+    # overlay handed gas truncated .s files under ~100 parallel compiles (slate 11-19, magma 11-20).
+    mkdir -p "${CE_TMPFS:?}/build-tmp"
+    INPUT_ARGS=("${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}" -v "${CE_TMPFS}/build-tmp:/build-tmp:rw")
 }
