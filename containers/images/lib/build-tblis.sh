@@ -11,8 +11,6 @@
 #
 # Requires: git, make, a C++ compiler (g++). Override TBLIS_REPO / TBLIS_REF / CXX via env.
 set -eu
-# A failed fetch must fail, not prompt: under `if clone_pinned` set -e is off, so the clone steps
-# are chained with && and the retry loop sees the failure.
 export GIT_TERMINAL_PROMPT=0
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
@@ -39,42 +37,18 @@ CXX="${CXX:-g++}"
 # /usr/bin/cc, which reports "cc (Ubuntu ...)" -- no gcc token, so the vendor check fails and the
 # BLIS sub-build stops before it links.
 CC="${CC:-gcc}"
-# Same throttling story as HPTT: an anonymous clone from a CI runner gets 403, not 429, so the
-# failure reads as "repo is gone" while the repo is public and answering.
-TBLIS_CLONE_TRIES="${TBLIS_CLONE_TRIES:-4}"
-TBLIS_CLONE_BACKOFF="${TBLIS_CLONE_BACKOFF:-5}"
 
+# gitretry (git_mirror.sh setup) inside an image build retries GitHub's throttling of anonymous clones (a 403 or
+# 401 that reads as a missing repo); plain git elsewhere. `--branch` takes a branch or tag, never a SHA, so the
+# pinned commit is fetched explicitly.
+git_net="$(command -v gitretry || command -v git)"
 SRC="$(mktemp -d)"
-clone_pinned() {
-    git init -q "$SRC" &&
-    git -C "$SRC" fetch -q --depth 1 "$REPO" "$REF" &&
-    git -C "$SRC" checkout -q FETCH_HEAD &&
-    # A no-op at v1.3.0, which has no .gitmodules -- kept for an overridden TBLIS_REF, where the
-    # 2.x line vendors MArray, TCI and stl_ext and aborts on the first with "MArray not found".
-    # Inside the retry loop, not after it: those are three more anonymous fetches and throttling
-    # hits them the same way it hits the one above.
-    git -C "$SRC" submodule update --init --recursive --depth 1
-}
-
-attempt=1
-delay="$TBLIS_CLONE_BACKOFF"
-while : ; do
-    if clone_pinned; then
-        break
-    fi
-    if [ "$attempt" -ge "$TBLIS_CLONE_TRIES" ]; then
-        echo "build-tblis.sh: could not fetch TBLIS ($REPO @ $REF) after $attempt attempts." >&2
-        echo "build-tblis.sh: a 403 here is usually GitHub throttling anonymous CI egress, not a" >&2
-        echo "build-tblis.sh: missing repository -- check with: git ls-remote $REPO HEAD" >&2
-        exit 1
-    fi
-    echo "build-tblis.sh: fetch attempt $attempt failed, retrying in ${delay}s" >&2
-    sleep "$delay"
-    delay=$((delay * 2))
-    attempt=$((attempt + 1))
-    rm -rf "$SRC"
-    SRC="$(mktemp -d)"
-done
+git init -q "$SRC"
+"$git_net" -C "$SRC" fetch -q --depth 1 "$REPO" "$REF"
+git -C "$SRC" checkout -q FETCH_HEAD
+# A no-op at v1.3.0, which has no .gitmodules; an overridden TBLIS_REF on the 2.x line vendors MArray, TCI and
+# stl_ext and aborts on the first with "MArray not found".
+"$git_net" -C "$SRC" submodule update --init --recursive --depth 1
 cd "$SRC"
 
 # NAMED configs, not `auto`. `auto` builds EVERY x86 config and dispatches at run time, and one of
