@@ -204,9 +204,10 @@ RUN set -eux; \
       bison flex texinfo diffutils findutils gawk tar gzip bzip2 xz zlib || true; \
     "${spack}" compiler find --scope site; \
     "${spack}" compiler list; \
-    # Even when still empty: step 2b reads what this step pushes.
+    # Even when still empty: step 2b reads what this step pushes. --autopush pushes each package as it
+    # installs, so a job cut off by its time limit resumes from the last finished package.
     if [ -d /spack-buildcache ]; then \
-      "${spack}" mirror add --scope site --unsigned localcache /spack-buildcache; \
+      "${spack}" mirror add --scope site --unsigned --autopush localcache /spack-buildcache; \
     fi; \
     printf '%s\n' 'spack:' \
       '  concretizer:' '    unify: true' \
@@ -229,6 +230,8 @@ RUN set -eux; \
 bad = sorted({n['name'] for n in specs if n['name'] in ('armpl-gcc', 'curl', 'perl', 'cmake') \
 and not n.get('external')}); sys.exit(f'spack would build {bad}: a second BLAS or a tool apt provides' if bad else 0)" \
       "${SPACK_ENV_DIR}/spack.lock"; \
+    # autopush writes no index and install finds binaries only by index: index what a cut-off job pushed.
+    [ ! -d /spack-buildcache ] || "${spack}" buildcache update-index /spack-buildcache || true; \
     "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast; \
     if [ -d /spack-buildcache ]; then \
       "${spack}" -e "${SPACK_ENV_DIR}" buildcache push --unsigned --update-index /spack-buildcache || true; \

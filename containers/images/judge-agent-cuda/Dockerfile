@@ -400,9 +400,12 @@ RUN set -eux; \
 # Binary buildcache on scratch, so a rebuild downloads gcc/llvm instead of compiling them again.
 # Both halves no-op when build.sh mounted nothing. The mirror is added even when the cache is still empty:
 # this layer is reused by later builds, and one cached without the mirror would make every later install compile.
+# --autopush pushes each package as it installs, so a job cut off by its time limit resumes from the last
+# finished package (sbatch --time=04:00:00, chained with --dependency=afternotok); the last spack step removes
+# the mirror.
 RUN set -eux; \
     if [ -d /spack-buildcache ]; then \
-      "${SPACK_ROOT}/bin/spack" mirror add --scope site --unsigned localcache /spack-buildcache; \
+      "${SPACK_ROOT}/bin/spack" mirror add --scope site --unsigned --autopush localcache /spack-buildcache; \
     fi; \
     printf '%s\n' \
       '#!/bin/sh' \
@@ -417,6 +420,14 @@ RUN set -eux; \
       'fi' \
       > /usr/local/bin/spack-cache-push; \
     chmod 0755 /usr/local/bin/spack-cache-push; \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      '# Index what --autopush pushed: autopush writes no index, and spack install looks binaries up only by index,' \
+      '# so without this a job resumed after its time limit compiles again what the cut-off job already pushed.' \
+      '[ -d /spack-buildcache ] || exit 0' \
+      '"${SPACK_ROOT}/bin/spack" buildcache update-index /spack-buildcache || true' \
+      > /usr/local/bin/spack-cache-index; \
+    chmod 0755 /usr/local/bin/spack-cache-index; \
     printf '%s\n' \
       '#!/bin/sh' \
       '# Give the next environment install a view directory no lower layer holds, behind the /opt/view symlink.' \
@@ -444,6 +455,7 @@ RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     llvm_host="$(uname -m | sed 's/x86_64/x86/')"; \
     gcc_spec="gcc@${GCC_VERSION} +graphite +binutils"; \
+    spack-cache-index; \
     "${spack}" install --fail-fast "${gcc_spec}"; \
     gcc_prefix="$("${spack}" location -i "${gcc_spec}")"; \
     test -x "${gcc_prefix}/bin/gcc"; \
@@ -545,6 +557,7 @@ RUN set -eux; \
     # Through the compiler wrapper's own override variables, not as `cflags=-pipe cxxflags=-pipe` on the \
     # spec: llvm then fails in python's build hook with KeyError: no compiler-wrapper in the llvm spec. \
     spack-view-next; \
+    spack-cache-index; \
     SPACK_ALWAYS_CFLAGS=-pipe SPACK_ALWAYS_CXXFLAGS=-pipe \
       "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast "llvm@${LLVM_VERSION}"; \
     spack-cache-push; \
@@ -648,6 +661,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 6. MPI and the core HPC libraries DaCe codegen can emit a call to. judge-agent-amd step 5.
 RUN set -eux; \
+    spack-cache-index; \
     spack-view-next; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
       mpich openblas netlib-scalapack fftw hdf5 blaze metis parmetis scotch suite-sparse superlu; \
@@ -700,6 +714,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 7. Sparse-direct solvers, iterative kernels and MAGMA (CUDA backend). judge-agent-amd step 6.
 RUN set -eux; \
+    spack-cache-index; \
     spack-view-next; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
       superlu-dist mumps strumpack hypre arpack-ng magma sundials; \
@@ -710,6 +725,7 @@ RUN set -eux; \
 
 # 8. PETSc and SLEPc -- their OWN layer, the expensive node. judge-agent-amd step 7.
 RUN set -eux; \
+    spack-cache-index; \
     spack-view-next; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast petsc slepc; \
     spack-cache-push; \
@@ -752,10 +768,13 @@ COPY containers/images/lib/build-hptt.sh /build-hptt.sh
 COPY containers/images/lib/build-tblis.sh /build-tblis.sh
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
+    spack-cache-index; \
     "${spack}" install --fail-fast \
       "openmpi@5 +cuda cuda_arch=${CUDA_ARCHS} +openshmem fabrics=ucx %gcc@${GCC_VERSION} ^ucx +cuda cuda_arch=${CUDA_ARCHS}"; \
     spack-cache-push openmpi; \
     "${spack}" clean --stage; \
+    # The last spack step: the shipped image keeps no autopush mirror to a path it does not have.
+    "${spack}" mirror remove --scope site localcache 2>/dev/null || true; \
     if [ -n "${SPACK_TARGET}" ]; then \
       stray="$(ls /opt/spack-install | grep -vx -e bin -e "linux-${SPACK_TARGET}" || true)"; \
       [ -z "${stray}" ] || { echo "spack built outside target ${SPACK_TARGET}: ${stray}" >&2; exit 2; }; \
