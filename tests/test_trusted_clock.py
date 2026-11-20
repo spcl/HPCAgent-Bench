@@ -107,7 +107,7 @@ def measure(source: str, *, parent: bool = True, reps: int = 5) -> tuple[native_
             py_meta=PY_META,
             reps=reps,
             warmup=1,
-            rep_data=draw,
+            rep_data=native_call.RepDraw(draw),
             checks=checks,
         )
     shutil.rmtree(path.parent)
@@ -217,7 +217,7 @@ def test_a_library_that_patches_libpython_from_its_constructor_gains_nothing(tmp
                 timeout=60.0,
                 reps=5,
                 warmup=1,
-                rep_data=native_draw,
+                rep_data=native_call.RepDraw(native_draw),
                 checks=checks,
             )
 
@@ -258,7 +258,7 @@ def measure_device(
             py_meta=PY_META,
             reps=5,
             warmup=1,
-            rep_data=rep_data,
+            rep_data=native_call.RepDraw(rep_data),
             checks=checks,
         )
     shutil.rmtree(path.parent)

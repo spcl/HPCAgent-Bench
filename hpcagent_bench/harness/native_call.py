@@ -139,6 +139,7 @@ __all__ = [
     "OpenMPLaunchEnvError",
     "OutputMap",
     "PythonMeta",
+    "RepDraw",
     "RepTiming",
     "SpillFailed",
     "SpilledArray",
@@ -997,23 +998,26 @@ KERNEL_CAP: tuple[int, int] | None = None
 #: The guillotine inside the measurement child (0 = per-rep ``rep_timeout`` only); followups keep ``rep_timeout``.
 TIMED_REP_S: float = 0.0
 
-#: Seconds one input draw of the grade took; a measurement whose reps draw their own inputs gets this much per rep
-#: on top of the batch budget, so a slow initializer is not charged to the kernel.
-REP_DRAW_S: contextvars.ContextVar[float] = contextvars.ContextVar("REP_DRAW_S", default=0.0)
-
-
-#: Headroom on :data:`REP_DRAW_S` per rep: a child's draw runs on the slot's cores beside other grades.
+#: Headroom on :attr:`RepDraw.seconds` per rep: a child's draw runs on the slot's cores beside other grades.
 REP_DRAW_GRACE = 2.0
 
 
-@contextlib.contextmanager
-def rep_draw_scope() -> Generator[None]:
-    """One grade's :data:`REP_DRAW_S`: whatever the grade sets inside is gone when it returns."""
-    token = REP_DRAW_S.set(0.0)
-    try:
-        yield
-    finally:
-        REP_DRAW_S.reset(token)
+@dataclass(frozen=True, slots=True)
+class RepDraw:
+    """A measurement's per-call inputs: call ``index`` runs on ``draw(index)``. ``seconds`` is what one draw costs
+    (the grade times its own base draw): the child draws each call's inputs outside that call's alarm, so
+    :func:`call_isolated` grants this much per call on top of its batch budget, and a slow initializer is never
+    charged to the kernel. Picklable when ``draw`` is (a ``functools.partial`` of a module-level function)."""
+
+    draw: Callable[[int], KernelData]
+    seconds: float = 0.0
+
+    def __call__(self, index: int) -> KernelData:
+        return self.draw(index)
+
+    def wrapped(self, draw: Callable[[int], KernelData]) -> "RepDraw":
+        """``draw`` (a conversion or shift of this one) at this draw's cost."""
+        return RepDraw(draw, self.seconds)
 
 
 #: The first call's alarm in the measurement child (0 = the other reps'): an early-stop cut's cold call gets the
@@ -3088,7 +3092,7 @@ def call_isolated(
     guillotine_s: float = 0.0,
     followups: Sequence["Followup"] = (),
     threads: int | None = None,
-    rep_data: Callable[[int], KernelData] | None = None,
+    rep_data: RepDraw | None = None,
     omp_context_name: str = "",
     casts: CastPlan | None = None,
     cold_rep_s: float = 0.0,
@@ -3149,7 +3153,7 @@ def call_isolated(
             # Each timed rep's alarm also grants its argument copies, unknown here: one rep timeout bounds them.
             batch_timeout += timeout
         if rep_data is not None:
-            batch_timeout += REP_DRAW_GRACE * REP_DRAW_S.get() * timed_reps
+            batch_timeout += REP_DRAW_GRACE * rep_data.seconds * timed_reps
         # A host OOM is contention (concurrent grades), so back off and retry.
         retries = max(OOM_RETRIES, GUILLOTINE_RETRIES)
         run: RunResult[ChildPayload | None] = RunResult(ok=False, error="the native call was not attempted")

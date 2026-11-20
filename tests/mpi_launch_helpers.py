@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -59,6 +60,54 @@ SUM_PY_KERNEL = (
     "    y[...] = comm.allreduce(local, op=MPI.SUM)\n"
 )
 BLOCK0 = ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK),))
+
+
+class FakeCart:
+    """A single-rank Cartesian communicator: every collective is the identity on rank 0; each Barrier is noted in
+    ``events``."""
+
+    rank = 0
+    size = 1
+
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def Barrier(self) -> None:
+        self._events.append("barrier")
+
+    def bcast(self, value: object, root: int = 0) -> object:
+        return value
+
+    def scatter(self, value: list[object], root: int = 0) -> object:
+        return value[0]
+
+    def gather(self, value: object, root: int = 0) -> list[object]:
+        return [value]
+
+    def reduce(self, value: object, op: object = None, root: int = 0) -> object:
+        return value
+
+    def Create_cart(self, dims: object, periods: object = None, reorder: bool = False) -> "FakeCart":
+        return self
+
+
+def fake_mpi4py(monkeypatch: pytest.MonkeyPatch, events: list[str]) -> None:
+    """A single-rank stand-in for ``from mpi4py import MPI`` (each ``Wtime`` noted in ``events``), so a driver's
+    ``run`` needs no launcher; the real-launcher variants are in test_mpi_driver_matrix_and_timing.py."""
+    mpi = types.SimpleNamespace(
+        COMM_WORLD=FakeCart(events),
+        Is_initialized=lambda: True,
+        Init=lambda: None,
+        Finalize=lambda: None,
+        Wtime=lambda: events.append("wtime") or 0.0,
+        MAX="max",
+    )
+    mpi4py_pkg = types.ModuleType("mpi4py")
+    mpi4py_pkg.MPI = mpi  # pyright: ignore[reportAttributeAccessIssue] -- a stand-in module
+    mpi_module = types.ModuleType("mpi4py.MPI")
+    mpi_module.__dict__.update(vars(mpi))
+    monkeypatch.setitem(sys.modules, "mpi4py", mpi4py_pkg)
+    monkeypatch.setitem(sys.modules, "mpi4py.MPI", mpi_module)
 
 
 def local_exchange(blocks: list[np.ndarray]) -> list[np.ndarray]:

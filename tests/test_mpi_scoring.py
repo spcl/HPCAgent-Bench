@@ -499,6 +499,7 @@ def test_score_scaling_strong_times_anchor_once_and_notes_failures(monkeypatch: 
         cfg: scoring.MpiLaunch,
         *,
         k_repeats: int | None = None,
+        rep_data: object = None,
     ) -> mpi_call.MpiRun:
         p = descriptor.nranks
         if p == 4:
@@ -574,6 +575,7 @@ def gang_strong_sweep(
         cfg: scoring.MpiLaunch,
         *,
         k_repeats: int | None = None,
+        rep_data: object = None,
     ) -> mpi_call.MpiRun:
         p = descriptor.nranks
         if p == fails_at:
@@ -706,6 +708,7 @@ def weak_jacobi_2d_sweep(monkeypatch: pytest.MonkeyPatch, rank_counts: tuple[int
         cfg: scoring.MpiLaunch,
         *,
         k_repeats: int | None = None,
+        rep_data: object = None,
     ) -> mpi_call.MpiRun:
         p = descriptor.nranks
         return launched([1000 * p])
@@ -884,6 +887,7 @@ def mock_mpi_runners(monkeypatch: pytest.MonkeyPatch, *, native: list[int], base
         *,
         k_repeats: int | None = None,
         diagnostics: scoring.Diagnostics | None = None,
+        rep_data: object = None,
     ) -> mpi_call.MpiRun:
         n = k_repeats if k_repeats is not None else cfg.k_repeats
         return launched((native * n)[:n] if native else [])
@@ -892,7 +896,7 @@ def mock_mpi_runners(monkeypatch: pytest.MonkeyPatch, *, native: list[int], base
     monkeypatch.setattr(
         S,
         "single_node_samples",
-        lambda spec, task, binding, data, preset, datatype, repeat, seed: (
+        lambda spec, task, binding, data, preset, datatype, repeat, seed, memos: (
             (Baseline.NUMBA,),
             Baseline.NUMBA,
             {Baseline.NUMBA: (baseline * repeat)[:repeat]},

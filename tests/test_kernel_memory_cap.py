@@ -719,7 +719,7 @@ def test_a_reps_input_draw_does_not_take_the_kernels_headroom(tmp_path: pathlib.
         Language.PYTHON,
         memory_gb=memory_gb,
         reps=2,
-        rep_data=functools.partial(drawn_input, LARGE_INPUT_ELEMENTS),
+        rep_data=native_call.RepDraw(functools.partial(drawn_input, LARGE_INPUT_ELEMENTS)),
         **common,
     )
     assert len(samples) == 2
