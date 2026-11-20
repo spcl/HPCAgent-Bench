@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, cast
 if TYPE_CHECKING:
     import numpy as np
 
-from hpcagent_bench import osinfo
+from hpcagent_bench import config, osinfo
 from hpcagent_bench.openmp.isolation import pause_openmp_pools
 from hpcagent_bench.seal import SealPlan, enter
 
@@ -57,6 +57,7 @@ __all__ = [
     "ErrorReader",
     "ErrorWriter",
     "Message",
+    "ParentState",
     "ProcessContext",
     "ProgressQueue",
     "ResultMessage",
@@ -399,8 +400,32 @@ def die_with_parent() -> None:
 
 
 #: Serializes every child start in :func:`run_forked` with :func:`child_environment`: a child (and a forkserver
-#: started on first use) copies ``os.environ`` at ``p.start()``, and the judge runs grades on several threads.
+#: started on first use) copies ``os.environ`` at ``p.start()``, and so does :meth:`ParentState.now`; the judge runs
+#: grades on several threads.
 CHILD_ENV_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True, slots=True)
+class ParentState:
+    """What a fork child inherits from this process and a spawned or forkserver child does not: the environment
+    (:func:`config.environment`, a request's scoped values applied) and the runtime config overrides, both as they are
+    at the child's start. A forkserver child otherwise sees the environment of the server's first start and no
+    override at all; :func:`child_main` restores this state before anything else, so every start method grades under
+    the configuration a fork would."""
+
+    environ: dict[str, str]
+    overrides: dict[str, object]
+
+    @classmethod
+    def now(cls) -> "ParentState":
+        """This process's state; read under :data:`CHILD_ENV_LOCK`, which another thread's
+        :func:`child_environment` holds while its values are in ``os.environ``."""
+        return cls(config.environment(), config.OVERRIDES.snapshot())
+
+    def restore(self) -> None:
+        os.environ.clear()
+        os.environ.update(self.environ)
+        config.OVERRIDES.replace(self.overrides)
 
 
 @contextlib.contextmanager
@@ -475,7 +500,10 @@ def child_main[ResultT](
     seal: SealPlan | None,
     err_w: ErrorWriter,
     tag: str = "",
+    parent_state: ParentState | None = None,
 ) -> None:
+    if parent_state is not None:  # a spawned or forkserver child: the parent's state at the start, before any work
+        parent_state.restore()
     fn, args, kwargs = call
     die_with_parent()
     try:
@@ -642,10 +670,11 @@ def run_forked[ResultT](
         # another slot's start never waits on this write under the lock below.
         if not isinstance(ctx, multiprocessing.context.ForkContext):
             call = ShmArgs(fn, args, call_kwargs)
-        p = ctx.Process(target=child_main, args=(call, q, seal, err_w, tag))
         # Every start holds the lock: a fork, or a forkserver started on first use, copies ``os.environ`` too, and
         # another thread's context environment (an llvm ``LD_LIBRARY_PATH``) would otherwise stick to it.
         with child_environment(env) if env else CHILD_ENV_LOCK:
+            state = None if isinstance(ctx, multiprocessing.context.ForkContext) else ParentState.now()
+            p = ctx.Process(target=child_main, args=(call, q, seal, err_w, tag, state))
             p.start()
     except BaseException:
         # No child: its pipe and queues go now (the finally below unlinks staged arrays only after a start).
