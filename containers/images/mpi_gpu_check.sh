@@ -156,11 +156,13 @@ C
 if [[ "${platform}" != amd ]]; then
     :   # the netstack provenance below is held for the AMD images only
 elif mpicc -O0 -o "${work}/prov" "${work}/prov.c" 2>"${work}/prov.log"; then
-    # MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG prints the chosen provider; FI_LOG_LEVEL is the
-    # fallback for a build with that CVAR compiled out.
+    # MPIR_CVAR_DEBUG_SUMMARY makes rank 0 print the provider MPICH opened ("libfabric provider: cxi - cxi0") after
+    # a list of every candidate ("provider: cxi, score = 5"), so only the first line names the choice. MPICH 4.3
+    # skips cxi when all ranks share one host (MPIR_CVAR_SINGLE_HOST_ENABLED, measured: sockets, job 755924), so
+    # this one-node probe turns that off to select the way a cross-node launch does.
     # A failed launch is reported, not judged: what it mapped (nothing) is no evidence about libfabric.
     rc=0
-    MPIR_CVAR_DEBUG_SUMMARY=1 MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG=1 FI_LOG_LEVEL=warn FI_LOG_PROV=core \
+    MPIR_CVAR_DEBUG_SUMMARY=1 MPIR_CVAR_SINGLE_HOST_ENABLED=0 FI_LOG_LEVEL=warn FI_LOG_PROV=core \
         mpiexec_here -n 1 "${work}/prov" >"${work}/prov.out" 2>&1 || rc=$?
     (( rc == 0 )) || say prov-run FAIL "mpiexec $(launch_failure "${rc}" "${work}/prov.out")"
     (( rc == 0 )) || fail=1
@@ -204,10 +206,9 @@ elif mpicc -O0 -o "${work}/prov" "${work}/prov.c" 2>"${work}/prov.log"; then
     # first provider libfabric offers, so a cxi that failed to open falls through to tcp with no error. One-node
     # probe: it proves which provider MPI initialised, not that a cross-node transfer rode it.
     prov="$(sed -nE 's/^libfabric provider: *([A-Za-z0-9_;+-]+).*/\1/p' "${work}/prov.out" | head -1)"
-    [[ -n "${prov}" ]] || prov="$(grep -m1 -oiE 'provider: *[a-z0-9_;+-]+' "${work}/prov.out" | sed 's/.*: *//' || true)"
     case "${prov}" in
-        cxi)    say provider OK "$(grep -m1 -iE 'provider: *cxi' "${work}/prov.out")" ;;
-        "")     (( rc != 0 )) || inconclusive provider "MPICH printed no provider line, see ${work}/prov.out" ;;
+        cxi)    say provider OK "$(grep -m1 '^libfabric provider:' "${work}/prov.out")" ;;
+        "")     (( rc != 0 )) || inconclusive provider "MPICH printed no 'libfabric provider:' line, see ${work}/prov.out" ;;
         *)      if (( slingshot )); then
                     say provider FAIL "${prov} -- MPI fell back off cxi on a Slingshot node$(compgen -G '/dev/cxi*' >/dev/null || echo ' (no /dev/cxi* in the container: the cxi hook did not run)')"
                     fail=1
