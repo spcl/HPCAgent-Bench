@@ -4,22 +4,31 @@
 
 Each entry of :data:`DEPRECATED` maps a short name the tree read before the env cleanup to the
 ``HPCAGENT_BENCH_<SECTION>_<KEY>`` name its configuration key resolves from today (``agent.effort``,
-``timeouts.judge_s``, ...). The old names keep working for one release: :func:`value` prefers the
-current name, falls back to the deprecated one with ONE :class:`DeprecationWarning` per name, and
-:func:`resolve` adds the reader's default. Setting the current name is silent in both states.
+``timeouts.judge_s``, ...). Every reader reads the current name only. The old names keep working for one release
+through ONE translation at process entry, :func:`translate`: each deprecated name the environment sets, whose current
+name it does not, is copied to the current name with a :class:`FutureWarning`. It warns once per name: after the copy
+the current name is set, so a second call in the same process, and the same call in every child that inherits the
+environment, has nothing left to translate. Setting the current name is silent, and it wins when both are set.
+
+Where it runs: ``hpcagent_agent/__init__.py`` and ``hpcagent_bench/__init__.py`` call it when imported, so every
+Python process of either package translates before any of its modules reads a knob; ``run_cluster.sh`` evaluates
+``python -m hpcagent_agent.env_aliases`` (:func:`exports`) after it sources the setup ``.env``, so the batch shell and
+every step it starts hold the current names too.
 
 Standard library only: the agent image carries no hpcagent_bench, and the driver, its harnesses and
 the judge tools run there (hpcagent_bench imports this module for its own table, never the reverse).
 """
 
 import os
+import shlex
+import sys
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 
-__all__ = ["DEPRECATED", "WARNED", "resolve", "value", "warn_once"]
+__all__ = ["DEPRECATED", "exports", "main", "translate"]
 
 #: Deprecated name -> the current ``HPCAGENT_BENCH_*`` name of the configuration key it used to set.
-DEPRECATED: dict[str, str] = {
+DEPRECATED: Mapping[str, str] = {
     "AGENT_EFFORT": "HPCAGENT_BENCH_AGENT_EFFORT",
     "AGENT_EFFORT_POLICY": "HPCAGENT_BENCH_AGENT_EFFORT_POLICY",
     "EFFORT_LADDER": "HPCAGENT_BENCH_AGENT_EFFORT_LADDER",
@@ -31,35 +40,39 @@ DEPRECATED: dict[str, str] = {
     "JUDGE_INPUT_MODE": "HPCAGENT_BENCH_SERVICE_INPUT_MODE",
 }
 
-#: Deprecated names already warned about, so ``value`` warns ONCE per name and process.
-WARNED: set[str] = set()
+
+def translate(environ: MutableMapping[str, str] = os.environ) -> dict[str, str]:
+    """Copy every deprecated name ``environ`` sets to its current name where that is unset, warning once per name;
+    returns the current names it set, with their values. An empty value is copied as it is: the short names spell
+    "unset" as absence, and an empty effort rung is a real value."""
+    copied: dict[str, str] = {}
+    for old, current in DEPRECATED.items():
+        if old in environ and current not in environ:
+            environ[current] = copied[current] = environ[old]
+            warnings.warn(
+                f"{old} is deprecated; set {current} (the environment name of its configuration key)",
+                FutureWarning,
+                stacklevel=2,
+            )
+    return copied
 
 
-def warn_once(old: str, current: str) -> None:
-    """Emit the deprecation of ``old`` the first time this process reads it; silent on every later read."""
-    if old not in WARNED:
-        WARNED.add(old)
-        warnings.warn(
-            f"{old} is deprecated; set {current} (the environment name of its configuration key)",
-            DeprecationWarning,
-            stacklevel=3,
-        )
+def exports(environ: MutableMapping[str, str]) -> list[str]:
+    """``export`` lines that give a shell the current name of every deprecated name ``environ`` sets, at the value
+    :func:`translate` leaves it (a current name the shell set already is exported unchanged)."""
+    translate(environ)
+    return [
+        f"export {current}={shlex.quote(environ[current])}" for old, current in DEPRECATED.items() if old in environ
+    ]
 
 
-def value(old: str, environ: Mapping[str, str] = os.environ) -> str | None:
-    """The knob ``old`` used to set: its current name when the environment names it (silently), else
-    ``old`` with the one-time warning, else None. A value set but empty is returned as ``""``: the
-    short names spell "unset" as absence, and an empty effort rung is a real value."""
-    current = DEPRECATED.get(old, old)
-    if environ.get(current) is not None:
-        return environ[current]
-    if old != current and old in environ:
-        warn_once(old, current)
-        return environ[old]
-    return None
+def main() -> int:
+    """Print :func:`exports` of this process's environment, for a shell to ``eval``; warnings go to stderr."""
+    lines = exports(os.environ)
+    if lines:
+        print("\n".join(lines))
+    return 0
 
 
-def resolve(old: str, default: str, environ: Mapping[str, str] = os.environ) -> str:
-    """:func:`value` with the reader's default: what ``environ.get(old, default)`` read before the rename."""
-    text = value(old, environ)
-    return default if text is None else text
+if __name__ == "__main__":
+    sys.exit(main())

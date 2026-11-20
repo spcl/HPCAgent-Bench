@@ -681,7 +681,7 @@ class Timeouts(Section):
     guillotine_floor_s: Seconds
     cpf_render_s: Seconds
     #: One judge call's wait (was ``$JUDGE_TIMEOUT_SECONDS``); null = the tools' own default. Read by the agent
-    #: image through the alias layer (agent/hpcagent_agent/env_aliases.py), which carries no hpcagent_bench.
+    #: image from ``$HPCAGENT_BENCH_TIMEOUTS_JUDGE_S`` directly: it carries no hpcagent_bench.
     judge_s: Seconds | None
 
 

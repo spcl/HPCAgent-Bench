@@ -165,8 +165,8 @@ def frozen_argv(driver: ModuleType, monkeypatch: pytest.MonkeyPatch, mcp_config:
     monkeypatch.setattr(driver, "agent_tools", lambda: ("score", "submit"))
     monkeypatch.delenv("CLAUDE_BARE", raising=False)
     monkeypatch.delenv("CLAUDE_BIN", raising=False)
-    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
-    monkeypatch.delenv("CLAUDE_MAX_TURNS", raising=False)
+    monkeypatch.delenv("HPCAGENT_BENCH_AGENT_CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("HPCAGENT_BENCH_AGENT_CLAUDE_MAX_TURNS", raising=False)
     return driver.claude_command(fake_context(mcp_config))
 
 
@@ -315,11 +315,11 @@ def launch_non_bare(
         ("AGENT_BUILD_FILE", "build-c.md"),
         ("AGENT_SUBMISSION_MODE", "multi"),
         ("VLLM_REPLICA_URLS", "http://n0:8000/v1"),
-        ("CLAUDE_MODEL", "qwen38"),
+        ("HPCAGENT_BENCH_AGENT_CLAUDE_MODEL", "qwen38"),
         ("CLAUDE_BARE", "0"),
     ):
         monkeypatch.setenv(key, value)
-    monkeypatch.setenv("HARNESS", harness)
+    monkeypatch.setenv("HPCAGENT_BENCH_AGENT_HARNESS", harness)
     monkeypatch.delenv("HPCAGENT_BENCH_AGENT_DIR", raising=False)
     driver = fresh("agent_driver")
     transcript = (GOLDEN / "logs" / "success.jsonl").read_text(encoding="utf-8")
