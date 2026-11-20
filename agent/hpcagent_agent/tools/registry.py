@@ -192,7 +192,7 @@ class InputSchema(pydantic.json_schema.GenerateJsonSchema):
 def wire_form(schema: Any) -> Any:  # noqa: ANN401
     """``schema`` in :data:`KEY_ORDER` without pydantic's ``title`` keys (they only repeat the field names)."""
     if isinstance(schema, list):
-        return [wire_form(value) for value in cast("list[Any]", schema)]
+        return [wire_form(value) for value in schema]
     if not isinstance(schema, dict):
         return schema
     node = cast("dict[str, Any]", schema)

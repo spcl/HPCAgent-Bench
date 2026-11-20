@@ -420,6 +420,17 @@ pythonVersion = "3.12"
 # agent/ is a workspace member installed editable, which pyright cannot follow through the import hook.
 extraPaths = ["agent"]
 exclude = ["hpcagent_bench/benchmarks", "third_party", "**/node_modules", "**/__pycache__", "**/.*", "**/*_generated.py"]
+# Beyond the standard mode: the checks the tree satisfies, as errors (ruff ANN already requires every annotation;
+# these keep a parameter, decorator or cast from hiding an untyped value).
+reportMissingParameterType = "error"
+reportUntypedFunctionDecorator = "error"
+reportUntypedClassDecorator = "error"
+reportUnnecessaryCast = "error"
+reportUnnecessaryContains = "error"
+reportUnusedClass = "error"
+reportUnusedFunction = "error"
+reportTypeCommentUsage = "error"
+reportInvalidStringEscapeSequence = "error"
 
 [tool.mypy]
 python_version = "3.12"
@@ -428,3 +439,11 @@ follow_imports = "silent"
 mypy_path = "agent"
 ignore_missing_imports = true
 exclude = ["^hpcagent_bench/benchmarks/", "^third_party/", "_generated\\.py$"]
+# The --strict members the tree satisfies (ruff ANN is the annotation gate; mypy re-checks it on every body).
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_equality = true
+extra_checks = true
