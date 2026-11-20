@@ -21,7 +21,7 @@ from hpcagent_bench import paths, plugins
 from hpcagent_bench import study_tags as tags
 from hpcagent_bench.config import RequestCapability
 from hpcagent_bench.skill_frontmatter import Applies, SkillFrontmatter, split_frontmatter
-from hpcagent_bench.vocabulary import PacketDevice
+from hpcagent_bench.vocabulary import PacketDef, PacketDevice
 
 __all__ = [
     "CPF_ENV_KEYS",
@@ -244,7 +244,7 @@ def expand_token(
     token: str,
     language: str,
     environ: Mapping[str, str],
-    definitions: Mapping[str, tags.PacketDef],
+    definitions: Mapping[str, PacketDef],
     skills: dict[str, None],
     env: dict[str, str],
     seen: set[str],
@@ -287,7 +287,7 @@ def device_fault(key: str, device: PacketDevice, language: str) -> str:
     return ""
 
 
-def reached_keys(token: str, definitions: Mapping[str, tags.PacketDef]) -> tuple[str, ...]:
+def reached_keys(token: str, definitions: Mapping[str, PacketDef]) -> tuple[str, ...]:
     """``token`` and every registered key it composes, depth first; () for a bare skill page."""
     definition = definitions.get(token)
     if definition is None:
@@ -295,7 +295,7 @@ def reached_keys(token: str, definitions: Mapping[str, tags.PacketDef]) -> tuple
     return (token, *(key for sub in definition.packets for key in reached_keys(sub, definitions)))
 
 
-def reached(spec: str) -> list[tuple[str, tags.PacketDef]]:
+def reached(spec: str) -> list[tuple[str, PacketDef]]:
     """The ``(key, definition)`` of every packet ``spec`` reaches, in spec and composition order."""
     definitions = tags.registry().packet_defs
     return [(key, definitions[key]) for token in spec_parts(spec) for key in reached_keys(token, definitions)]
@@ -319,7 +319,7 @@ def refuse_frozen(spec: str) -> None:
         raise ValueError(f"packet spec {spec!r} takes no new submissions ({reasons})")
 
 
-def leaves(token: str, definitions: Mapping[str, tags.PacketDef]) -> frozenset[str]:
+def leaves(token: str, definitions: Mapping[str, PacketDef]) -> frozenset[str]:
     """What ``token`` stages: its page tokens, plus the key when it changes anything beyond its pages (env, a tool, a
     subagent, the prompt's overlays)."""
     definition = definitions.get(token)

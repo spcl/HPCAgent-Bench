@@ -17,7 +17,6 @@ import matplotlib.artist
 import matplotlib.axes
 import matplotlib.figure
 import matplotlib.lines
-import matplotlib.patches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
