@@ -1181,12 +1181,14 @@ RUN /opt/ofi-sdk/bin/fi_info -l | grep -q '^tcp' \
 
 # LD_PRELOAD and PYTHONSAFEPATH last, after every RUN, for the reasons judge-agent-amd gives: the
 # first would preload mimalloc into the build's own steps, the second changes python's import path.
-# The image's default tuning for whatever is compiled in it, matching the libraries (MARCH above).
-# No FFLAGS: nvfortran reads -march as its -tp, whose aarch64 keywords are CPU names (neoverse-v2, grace),
-# so the published aarch64 baseline armv8.2-a fails every nvfortran build that takes FFLAGS. nvc and nvc++
-# reject it the same way through CFLAGS/CXXFLAGS; x86-64-v3 and native are valid -tp keywords.
-ENV CFLAGS="-march=${MARCH}" \
-    CXXFLAGS="-march=${MARCH}"
+# The image's default tuning for whatever is compiled in it, matching the libraries (MARCH above), in a spelling
+# gcc, clang AND nvc/nvc++ accept: NVHPC reads -march as its -tp, whose aarch64 keywords are CPU names, and refuses
+# armv8.2-a ("unknown keyword", tested in the GH200 image). On aarch64 image.sh passes -mcpu=neoverse-n1 (the
+# armv8.2-a core of Graviton2 and Altra; Grace is a superset). x86-64-v3 and native are valid -tp keywords.
+# No FFLAGS: nvfortran takes -march the same way, and a Fortran build has no portable spelling to inherit.
+ARG CPU_FLAGS="-march=${MARCH}"
+ENV CFLAGS="${CPU_FLAGS}" \
+    CXXFLAGS="${CPU_FLAGS}"
 ENV LD_PRELOAD=/usr/local/lib/libmimalloc.so
 ENV PYTHONSAFEPATH=1
 
