@@ -25,6 +25,25 @@ skipped=()
 
 say() { printf '%-14s %-8s %s\n' "$1" "$2" "${3:-}"; }
 
+# Ranks on THIS node, inside this container. -launcher fork alone is not enough: Hydra still reads its host
+# list from the Slurm allocation (SLURM_JOB_NODELIST, SLURM_TASKS_PER_NODE), and a one-node step of a
+# multi-node job hands it the job's nodes with the step's task count -- it then dies of SIGFPE before
+# printing anything. -hosts localhost is the host list, so Hydra asks Slurm nothing.
+mpiexec_here() { mpiexec -launcher fork -hosts localhost "$@"; }
+
+# launch_failure <rc> <stderr log>: why a launch failed, on one line, then the whole stderr indented. A launcher
+# killed by a signal prints nothing itself (the shell names the signal, on ITS stderr), so the rc is decoded.
+launch_failure() {
+    local rc="$1" log="$2" why="rc=$1"
+    (( rc > 128 )) && why+=" (killed by SIG$(kill -l $((rc - 128)) 2>/dev/null || echo "$((rc - 128))"))"
+    if [[ -s "${log}" ]]; then
+        printf '%s, stderr:\n' "${why}"
+        sed 's/^/    /' "${log}"
+    else
+        printf '%s, no stderr\n' "${why}"
+    fi
+}
+
 # ---------------------------------------------------------------- 0. which MPI is this, really
 if ! command -v mpicc >/dev/null 2>&1; then
     say mpi FAIL "mpicc not on PATH"
@@ -71,15 +90,15 @@ if ! mpicc -O0 -o "${work}/world" "${work}/world.c" 2>"${work}/world.log"; then
 fi
 # -launcher fork keeps the ranks INSIDE this container: hydra's default ssh launcher would leave
 # it, and on a CE node that is a hang rather than an error.
-if out="$(mpiexec -launcher fork -n 4 "${work}/world" 2>"${work}/run.log")"; then
-    if [[ "${out}" == *"size=4 allreduce=4"* ]]; then
-        say multirank OK "${out}"
-    else
-        say multirank FAIL "expected 'size=4 allreduce=4', got '${out}' -- wrapper/launcher mismatch"
-        fail=1
-    fi
+rc=0
+out="$(mpiexec_here -n 4 "${work}/world" 2>"${work}/run.log")" || rc=$?
+if (( rc != 0 )); then
+    say multirank FAIL "mpiexec $(launch_failure "${rc}" "${work}/run.log")"
+    fail=1
+elif [[ "${out}" == *"size=4 allreduce=4"* ]]; then
+    say multirank OK "${out}"
 else
-    say multirank FAIL "mpiexec failed: $(tail -1 "${work}/run.log")"
+    say multirank FAIL "expected 'size=4 allreduce=4', got '${out}' -- wrapper/launcher mismatch"
     fail=1
 fi
 
@@ -115,8 +134,12 @@ C
 if mpicc -O0 -o "${work}/prov" "${work}/prov.c" 2>"${work}/prov.log"; then
     # MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG prints the chosen provider; FI_LOG_LEVEL is the
     # fallback for a build with that CVAR compiled out.
+    # A failed launch is reported, not judged: what it mapped (nothing) is no evidence about libfabric.
+    rc=0
     MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG=1 FI_LOG_LEVEL=warn FI_LOG_PROV=core \
-        mpiexec -launcher fork -n 1 "${work}/prov" >"${work}/prov.out" 2>&1 || true
+        mpiexec_here -n 1 "${work}/prov" >"${work}/prov.out" 2>&1 || rc=$?
+    (( rc == 0 )) || say prov-run FAIL "mpiexec $(launch_failure "${rc}" "${work}/prov.out")"
+    (( rc == 0 )) || fail=1
     lf="$(grep -m1 '^libfabric=' "${work}/prov.out" | cut -d= -f2- || true)"
     case "${lf}" in
         "")                    say libfabric INCONCL "MPI mapped no libfabric at all -- see ${work}/prov.out"
@@ -215,10 +238,12 @@ if mpicc -O0 -o "${work}/gpu" "${work}/gpu.c" \
         2>"${work}/gpu.log"; then
     say gpu-aware-cc OK "compiled against hip + mpi"
     if (( have_gpu )); then
-        if out="$(mpiexec -launcher fork -n 2 "${work}/gpu" 2>"${work}/gpurun.log")"; then
+        rc=0
+        out="$(mpiexec_here -n 2 "${work}/gpu" 2>"${work}/gpurun.log")" || rc=$?
+        if (( rc == 0 )); then
             say gpu-aware OK "${out}"
         else
-            say gpu-aware FAIL "device allreduce failed: $(tail -2 "${work}/gpurun.log" | tr '\n' ' ')"
+            say gpu-aware FAIL "device allreduce: mpiexec $(launch_failure "${rc}" "${work}/gpurun.log")"
             fail=1
         fi
     else
