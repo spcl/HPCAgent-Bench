@@ -93,6 +93,11 @@ for role in ${roles}; do
         failed=$((failed + 1))
     fi
 done
-[[ "${failed}" -eq 0 ]] || { echo "${failed} role(s) FAILED verification; nothing to promote" >&2; exit 1; }
+if [[ "${failed}" -gt 0 ]]; then
+    # The roles ship together: a passing sibling of a failed role must not promote on its own.
+    for role in ${roles}; do rm -f "${CE_IMAGES}/$(ce_image "${role}" candidate).verified"; done
+    echo "${failed} role(s) FAILED verification; nothing to promote" >&2
+    exit 1
+fi
 echo "BUILT AND VERIFIED: ${roles//$'\n'/ }. They keep their candidate names; promote with"
 echo "  CE_IMAGE_FLAVOR=${CE_IMAGE_FLAVOR} containers/images/registry.sh promote ${roles//$'\n'/ }"

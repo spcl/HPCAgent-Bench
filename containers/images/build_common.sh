@@ -369,8 +369,9 @@ ce_registry_label() {
     command -v jq >/dev/null && command -v curl >/dev/null || return 1
     if [[ "${host}" == docker.io ]]; then
         host=registry-1.docker.io
-        [[ -z "${REGISTRY_USER:-}" || -z "${REGISTRY_TOKEN:-}" ]] || login=(-u "${REGISTRY_USER}:${REGISTRY_TOKEN}")
-        token="$(curl -fsS "${login[@]}" \
+        # The credentials go through a config on stdin: argv is readable by every user of the node (ps).
+        [[ -z "${REGISTRY_USER:-}" || -z "${REGISTRY_TOKEN:-}" ]] || login=(-K -)
+        token="$(printf 'user = "%s:%s"\n' "${REGISTRY_USER:-}" "${REGISTRY_TOKEN:-}" | curl -fsS "${login[@]}" \
             "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${path}:pull" \
             | jq -r .token)" || return 1
         auth=(-H "Authorization: Bearer ${token}")
@@ -560,6 +561,8 @@ ce_squash_image() {
 # After a successful `podman build`: digest sidecar, squashfs, OCI archive, optional push.
 ce_export_image() {
     local image_tag="$1" output_sqsh="$2"
+    # A pass belongs to the image it verified: a promote must never take a candidate this export is rewriting.
+    rm -f -- "${output_sqsh}.verified"
 
     # The digest is the build's identity; results tables cite it, never a tag.
     podman image inspect --format '{{.Digest}}' "${image_tag}" > "${output_sqsh}.digest"
