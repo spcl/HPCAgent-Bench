@@ -759,22 +759,22 @@ def toolchain_checks(platform: str) -> list[Check]:
             Check("rocm", "rocPRIM header", "header", "rocprim/device/device_scan.hpp"),
             Check("rocm", "rocThrust header", "header", "thrust/device_vector.h"),
         ]
-    found.append(Check("profiler", "PAPI", "exe", "papi_avail"))
+    found.append(Check("profiler", "PAPI", "profiler", "papi_avail"))
     if amd:
         found += [
-            Check("profiler", "PAPI rocm component", "papi-rocm", "rocm"),
-            Check("profiler", "rocprofv3", "exe", "rocprofv3"),
-            Check("profiler", "likwid", "exe", "likwid-perfctr"),
-            Check("profiler", "rocprof-sys", "exe", "rocprof-sys-sample", required=False),
-            Check("profiler", "rocprof-compute", "exe", "rocprof-compute", required=False),
+            Check("profiler", "PAPI rocm component", "papi-component", "rocm"),
+            Check("profiler", "rocprofv3", "profiler", "rocprofv3"),
+            Check("profiler", "likwid", "profiler", "likwid-perfctr"),
+            Check("profiler", "rocprof-sys", "profiler", "rocprof-sys-sample", required=False),
+            Check("profiler", "rocprof-compute", "profiler", "rocprof-compute", required=False),
         ]
     if cuda:
         found += [
             Check("profiler", "PAPI cuda component", "papi-component", "cuda"),
-            Check("profiler", "Nsight Compute", "exe", "ncu"),
-            Check("profiler", "Nsight Systems", "exe", "nsys"),
+            Check("profiler", "Nsight Compute", "profiler", "ncu"),
+            Check("profiler", "Nsight Systems", "profiler", "nsys"),
         ]
-    found.append(Check("profiler", "perf", "exe", "perf"))
+    found.append(Check("profiler", "perf", "profiler", "perf"))
     # Everything a framework or translator EXECS. Absent, a whole column declines silently
     # instead of a kernel failing loudly. ppcg is GPU-only.
     found.append(Check("tool", "polycc (pluto)", "exe", "polycc"))
@@ -906,16 +906,60 @@ def dace_solver_gate(gate: str) -> tuple[bool, str]:
     return out.strip().endswith("open"), out.strip()[:40]
 
 
+#: The arguments each profiler runs with: no arguments makes papi_avail initialise PAPI and list its events; the others
+#: answer their version or help. A zero exit is required, so a wrapper that cannot find its binary (Ubuntu's perf
+#: names the host kernel) or a profiler missing a library fails here.
+PROFILER_ARGS: dict[str, tuple[str, ...]] = {
+    "papi_avail": (),
+    "rocprofv3": ("--help",),
+    "likwid-perfctr": ("-v",),
+    "rocprof-sys-sample": ("--help",),
+    "rocprof-compute": ("--help",),
+    "ncu": ("--version",),
+    "nsys": ("--version",),
+    "perf": ("--version",),
+}
+
+
+def profiler_runs(name: str) -> tuple[bool, str]:
+    """The profiler executes and exits 0 (:data:`PROFILER_ARGS`); presence alone proves nothing."""
+    path = shutil.which(name)
+    if path is None:
+        return False, "not on PATH"
+    code, out = run([path, *PROFILER_ARGS[name]], timeout=120.0)
+    first = out.splitlines()[0][:60] if out else "no output"
+    return code == 0, first if code == 0 else f"rc={code}: {first}"
+
+
+#: The device node a GPU component needs to come up; without one PAPI disables it, which says nothing of the image.
+GPU_DEVICE = {"cuda": "/dev/nvidiactl", "rocm": "/dev/kfd"}
+
+
 def papi_has_component(component: str) -> tuple[bool, str]:
-    """PAPI's own inventory, not a guess from the build flags."""
+    """PAPI's own inventory, not a guess from the build flags: the component by its exact name (``rocm``, not
+    ``rocm_smi``) among the ACTIVE ones. Compiled in but disabled passes only on a node without the GPU device."""
     exe = shutil.which("papi_component_avail")
     if exe is None:
         return False, "papi_component_avail not on PATH"
     code, out = run([exe], timeout=120.0)
-    if code != 0 and not out:
-        return False, "papi_component_avail failed"
-    active = [ln for ln in out.splitlines() if component in ln.lower()]
-    return (bool(active), active[0].strip()[:60] if active else f"no {component} component")
+    if code != 0:
+        return False, f"papi_component_avail rc={code}: {(out.splitlines() or ['no output'])[-1][:60]}"
+    section = ""
+    names: dict[str, set[str]] = {"compiled": set(), "active": set()}
+    for line in out.splitlines():
+        if line.startswith("Compiled-in components"):
+            section = "compiled"
+        elif line.startswith("Active components"):
+            section = "active"
+        elif section and line.startswith("Name:") and len(line.split()) > 1:
+            names[section].add(line.split()[1])
+    if component in names["active"]:
+        return True, f"{component} active"
+    if component in names["compiled"] and not os.path.exists(GPU_DEVICE[component]):
+        return True, f"{component} compiled in; inactive, no {GPU_DEVICE[component]} on this node"
+    if component in names["compiled"]:
+        return False, f"{component} compiled in but disabled"
+    return False, f"no {component} component"
 
 
 DISPATCH = {
@@ -923,8 +967,8 @@ DISPATCH = {
     "header": have_header,
     "exe": have_exe,
     "py": have_module,
-    "papi-rocm": papi_has_component,
     "papi-component": papi_has_component,
+    "profiler": profiler_runs,
     "tilelang": have_tilelang,
     "dace-gate": dace_solver_gate,
     "blas-link": blas_link_closure,
@@ -969,7 +1013,11 @@ def main() -> int:
     for check in failures:
         print(f"  MISSING (required): {check.group}/{check.name} [{check.kind} {check.target}]")
     for check in missing_optional:
-        print(f"  absent (optional):  {check.group}/{check.name}")
+        if check.kind == "library-registry":
+            # No record means nothing was checked: say so, rather than let it read as a pass.
+            print(f"  WARN: no libraries.yaml library record for platform {check.target}; the registry is unchecked")
+        else:
+            print(f"  absent (optional):  {check.group}/{check.name}")
     return len(failures)
 
 

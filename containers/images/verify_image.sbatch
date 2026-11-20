@@ -24,9 +24,10 @@
 # checked-in EDF pointing at a candidate is how a candidate goes live by accident. Judge and agent
 # roles also get the checkout's agent/ tree bound where run_cluster.sh binds it (images carry no
 # tool scripts). Checks: verify_image.py (required libraries), selfcontained_check.py (nothing
-# resolves outside the image), the tools launch check (judge/agent roles), on AMD the GPU-arch
-# agreement and a multi-rank GPU-aware MPI/RCCL/PETSc run, on GH200 a device probe (judge/agent
-# roles); sglang's kernel launch check is reported, not counted.
+# resolves outside the image), the tools launch check (judge/agent roles), a multi-rank MPI run on
+# every platform (judge/agent roles), on AMD the GPU-arch agreement and the GPU-aware MPI/RCCL/PETSc
+# legs, on GH200 the CUDA device allreduce and a device and profiler probe (judge/agent roles);
+# sglang's kernel launch check is reported, not counted.
 set -euo pipefail
 ulimit -c 0
 : "${SCRATCH:?set SCRATCH}"
@@ -87,14 +88,6 @@ sc=0
 "${step[@]}" --environment="${EDF}" python3 -P "${REPO}/containers/images/selfcontained_check.py" \
     ${sc_modules:+--modules "${sc_modules}"} || sc=$?
 
-# MPI presence is not capability: running it catches a wrapper/launcher mismatch, and proves the
-# device-pointer path, the RCCL net plugin and PETSc's HIP support.
-mpi_rc=0
-if [[ "${PLATFORM}" == amd && ${#agent_mount[@]} -gt 0 ]]; then
-    echo "=== MPI: multi-rank, GPU-aware, RCCL plugin, PETSc GPU ==="
-    "${step[@]}" --environment="${EDF}" "${REPO}/containers/images/mpi_gpu_check.sh" || mpi_rc=$?
-fi
-
 # What a driverless build cannot show: devices visible to cupy/jax/torch and PAPI's cuda component enumerating
 # events. An x86_64 NVIDIA image is built wherever there is room, so a node without its GPUs says it proved nothing.
 nvidia_probe=0
@@ -108,6 +101,18 @@ case "${PLATFORM}" in
         fi
         ;;
 esac
+
+# MPI presence is not capability: running it catches a wrapper/launcher mismatch on every platform, and proves the
+# device-pointer path where there are GPUs (and on AMD the RCCL net plugin and PETSc's HIP support).
+mpi_rc=0
+mpi_platform=cpu
+[[ "${PLATFORM}" != amd ]] || mpi_platform=amd
+[[ "${nvidia_probe}" != 1 ]] || mpi_platform=cuda
+if [[ ${#agent_mount[@]} -gt 0 ]]; then
+    echo "=== MPI (${mpi_platform}): multi-rank$([[ "${mpi_platform}" == cpu ]] || echo ", GPU-aware") ==="
+    "${step[@]}" --environment="${EDF}" "${REPO}/containers/images/mpi_gpu_check.sh" "${mpi_platform}" || mpi_rc=$?
+fi
+
 if [[ "${nvidia_probe}" == 1 && ${#agent_mount[@]} -gt 0 ]]; then
     echo "=== GPU probe: cupy/jax/torch devices, PAPI cuda events, Nsight ==="
     "${step[@]}" --ntasks=1 --environment="${EDF}" bash -c '
@@ -118,8 +123,9 @@ if [[ "${nvidia_probe}" == 1 && ${#agent_mount[@]} -gt 0 ]]; then
         python3 -c "import jax; d = jax.devices(); print(\"jax devices\", d); assert d[0].platform == \"gpu\""
         python3 -c "import torch; assert torch.cuda.is_available(); print(\"torch\", torch.cuda.get_device_name(0))"
         papi_native_avail 2>/dev/null | grep -c "cuda:::" || { echo "PAPI cuda component enumerated no events" >&2; exit 1; }
-        ncu --version | head -1
-        nsys --version | head -1
+        # tail, not head: head exiting early would SIGPIPE the profiler and pipefail would count that.
+        ncu --version | tail -1
+        nsys --version | tail -1
     ' || mpi_rc=$((mpi_rc + 1))
 fi
 

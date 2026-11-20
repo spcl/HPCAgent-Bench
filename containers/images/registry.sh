@@ -26,7 +26,8 @@ MAX_IMAGE_GB="${MAX_IMAGE_GB:-100}"
 
 usage() { sed -n '4,8p' "${BASH_SOURCE[0]}" >&2; exit 2; }
 
-# roles_for <column> <args>: the roles named, or with --all every CE_PLATFORM role with that column.
+# roles_for <column> <args>: the roles named, or with --all every CE_PLATFORM role with that column. Call it as
+# `roles="$(roles_for ...)" || exit 2`: in a `for ... in $(...)` its usage exit and an unknown role are lost.
 roles_for() {
     local column="$1" role
     shift
@@ -36,6 +37,8 @@ roles_for() {
         done
     else
         [[ $# -gt 0 ]] || usage
+        # A mistyped role must fail here: the actions below would read it as "nothing to do".
+        for role in "$@"; do ce_image "${role}" role >/dev/null || return 2; done
         printf '%s\n' "$@"
     fi
 }
@@ -55,13 +58,14 @@ scan_archive() {
     fi
 }
 
-# push_one <role> <check 0|1>: load the role's archive into a private store, check it, push it.
+# push_one <role> <check 0|1>: load the role's archive into a private store, check it, push it. Every step checks
+# its own status: a caller's `push_one || ...` turns set -e off in here.
 push_one() {
     local role="$1" check="$2" tag archive marker root local_tag total biggest target digest
     : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
     tag="$(ce_image "${role}" tag)" || { echo "${role}: images.env gives it no registry tag" >&2; return 1; }
     [[ "${tag}" == *-latest ]] || { echo "${role}: a published tag is <thing>-latest, got ${tag}" >&2; return 1; }
-    archive="${CE_IMAGES}/$(ce_image "${role}" sqsh)"
+    archive="${CE_IMAGES}/$(ce_image "${role}" sqsh)" || return 1
     archive="${archive%.sqsh}.oci.tar"
     if [[ ! -f "${archive}" ]]; then
         marker="${archive%.oci.tar}.pushed"
@@ -94,7 +98,8 @@ push_one() {
         podman unshare rm -rf "${root}" 2>/dev/null || rm -rf "${root}"
         return 1
     fi
-    total="$("${pm[@]}" image inspect --format '{{.Size}}' "${local_tag}")"
+    local rc=0 cpu_target
+    total="$("${pm[@]}" image inspect --format '{{.Size}}' "${local_tag}")" || total=""
     # The largest layer as the registry sees it: compressed, from the archive's own manifest.
     biggest="$(python3 - "${archive}" <<'PY'
 import json, sys, tarfile
@@ -104,19 +109,25 @@ with tarfile.open(sys.argv[1]) as tar:
     manifest = json.load(tar.extractfile(f"blobs/sha256/{digest}"))
     print(max((layer["size"] for layer in manifest.get("layers", [])), default=0))
 PY
-)"
-    digest="$("${pm[@]}" image inspect --format '{{.Digest}}' "${local_tag}")"
+)" || biggest=""
+    digest="$("${pm[@]}" image inspect --format '{{.Digest}}' "${local_tag}")" || digest=""
+    cpu_target="$("${pm[@]}" image inspect --format '{{ index .Labels "org.hpcagent-bench.cpu-target" }}' \
+        "${local_tag}")" || cpu_target="<unread>"
     printf '%s -> %s:%s\n  image %s GB (limit %s), largest layer %s GB (limit %s), digest %s\n' "${role}" \
         "${REGISTRY_REPO}" "${tag}" "$(gb "${total}")" "${MAX_IMAGE_GB}" "$(gb "${biggest}")" "${MAX_LAYER_GB}" "${digest}"
     scan_archive "${archive}" "${digest}"
-    local rc=0
+    # Empty values would pass every limit below.
+    if [[ ! "${total}" =~ ^[0-9]+$ || ! "${biggest}" =~ ^[0-9]+$ || "${digest}" != sha256:* \
+          || "${cpu_target}" == "<unread>" ]]; then
+        echo "  refusing: could not read the image's size, largest layer, digest or cpu-target label" >&2; rc=1
+    fi
     if awk -v b="${total}" -v m="${MAX_IMAGE_GB}" 'BEGIN { exit !(b > m * 1073741824) }'; then
         echo "  refusing: the image exceeds ${MAX_IMAGE_GB} GB" >&2; rc=1
     fi
     if awk -v b="${biggest}" -v m="${MAX_LAYER_GB}" 'BEGIN { exit !(b > m * 1073741824) }'; then
         echo "  refusing: a layer exceeds ${MAX_LAYER_GB} GB, which the registry rejects mid-upload" >&2; rc=1
     fi
-    if [[ "$("${pm[@]}" image inspect --format '{{ index .Labels "org.hpcagent-bench.cpu-target" }}' "${local_tag}")" == native ]]; then
+    if [[ "${cpu_target}" == native ]]; then
         echo "  refusing: a native build; publish only the portable baseline" >&2; rc=1
     fi
     if [[ "${rc}" -eq 0 && "${check}" == 0 ]]; then
@@ -125,9 +136,8 @@ PY
             printf '%s' "${REGISTRY_TOKEN}" | "${pm[@]}" login --username "${REGISTRY_USER}" --password-stdin \
                 "${REGISTRY_REPO%%/*}"
         fi
-        "${pm[@]}" tag "${local_tag}" "${target}"
         # OCI manifests, forced: podman would otherwise keep the source's docker v2s2 type.
-        "${pm[@]}" push --format oci "${target}" || rc=1
+        { "${pm[@]}" tag "${local_tag}" "${target}" && "${pm[@]}" push --format oci "${target}"; } || rc=1
         if [[ "${rc}" -eq 0 ]]; then
             echo "  PUSHED ${target}"
             printf '%s %s\n' "${target}" "${digest}" > "${archive%.oci.tar}.pushed"
@@ -139,6 +149,7 @@ PY
 }
 
 # pull_one <role> [digest]: podman-pull the role's registry image and squash it into its live squashfs (or OUT).
+# Its sidecars follow the pulled image: its digest, and no archive, push marker, scan or pass of the old one.
 pull_one() {
     local role="$1" ref out store rc=0
     [[ "${CE_IMAGE_FLAVOR}" == latest ]] || { echo "the registry has latest images only; build a native one" >&2; return 2; }
@@ -149,15 +160,20 @@ pull_one() {
     else
         ref="${REGISTRY_REPO}:$(ce_image "${role}" tag)" || { echo "${role} has no published tag" >&2; return 2; }
     fi
-    out="${OUT:-${CE_IMAGES}/$(ce_image "${role}" sqsh)}"
+    out="${OUT:-${CE_IMAGES}/$(ce_image "${role}" sqsh)}" || return 2
     mkdir -p "${CE_IMAGES}"
-    ce_refuse_mounted "${out}"
+    # Explicit: the caller's `pull_one || ...` turns set -e off, and a mounted sqsh is rewritten in place below.
+    ce_refuse_mounted "${out}" || return 2
     store="${CE_TMPFS}/registry-$$-pull"
     ce_private_podman_store "${store}"
     export TMPDIR="${store}/tmp" XDG_RUNTIME_DIR="${store}/xdg"
     mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
     echo "pulling ${ref} -> ${out}"
-    { podman pull "${ref}" >/dev/null && ce_squash_image "${ref}" "${out}"; } || rc=1
+    { podman pull "${ref}" >/dev/null \
+        && rm -f -- "${out}.digest" "${out}.sha256" "${out}.verified" \
+            "${out%.sqsh}.oci.tar" "${out%.sqsh}.pushed" "${out%.sqsh}.scan.txt" \
+        && ce_squash_image "${ref}" "${out}" \
+        && podman image inspect --format '{{.Digest}}' "${ref}" > "${out}.digest"; } || rc=1
     ce_remove_podman_store "${store}"
     [[ "${rc}" -eq 0 ]] || return 1
     sha256sum "${out}" | tee "${out}.sha256"
@@ -169,8 +185,8 @@ pull_one() {
 promote_one() {
     local role="$1" cand live marker ext
     : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
-    cand="${CE_IMAGES}/$(ce_image "${role}" candidate)"
-    live="${CE_IMAGES}/$(ce_image "${role}" sqsh)"
+    cand="${CE_IMAGES}/$(ce_image "${role}" candidate)" || return 1
+    live="${CE_IMAGES}/$(ce_image "${role}" sqsh)" || return 1
     [[ -f "${cand}" ]] || { echo "${role}: no candidate at ${cand}"; return 0; }
     marker="${cand}.verified"
     if [[ ! -f "${marker}" ]]; then
@@ -201,9 +217,9 @@ promote_one() {
 prune_candidate() {
     local cand
     : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
-    cand="${CE_IMAGES}/$(ce_image "$1" candidate)"
+    cand="${CE_IMAGES}/$(ce_image "$1" candidate)" || return 1
     [[ ! -e "${cand}.verified" ]] || return 0
-    ce_refuse_mounted "${cand}"
+    ce_refuse_mounted "${cand}" || return 1
     find "${CE_IMAGES}" -maxdepth 1 -type f -mtime +"$2" \( -name "${cand##*/}" -o -name "${cand##*/}.digest" \
         -o -name "${cand##*/}.sha256" -o -name "$(basename "${cand%.sqsh}").oci.tar" \) -print -delete
 }
@@ -228,7 +244,8 @@ failed=0
 case "${action}" in
     promote)
         PROMOTED=()
-        for role in $(roles_for candidate "$@"); do promote_one "${role}" || failed=$((failed + 1)); done
+        roles="$(roles_for candidate "$@")" || exit 2
+        for role in ${roles}; do promote_one "${role}" || failed=$((failed + 1)); done
         # Re-render the EDFs of every row that mounts a promoted image (EDF-only views share its sqsh).
         edf_roles=()
         for role in $(ce_roles); do
@@ -243,7 +260,8 @@ case "${action}" in
     push)
         check=0
         [[ "${1:-}" != --check ]] || { check=1; shift; }
-        for role in $(roles_for tag "$@"); do push_one "${role}" "${check}" || failed=$((failed + 1)); done
+        roles="$(roles_for tag "$@")" || exit 2
+        for role in ${roles}; do push_one "${role}" "${check}" || failed=$((failed + 1)); done
         ;;
     pull)
         pull_one "${1:?usage: registry.sh pull <role> [sha256:<digest>]}" "${2:-}" || failed=1
@@ -251,7 +269,8 @@ case "${action}" in
     prune)
         days=7
         [[ "${1:-}" != --days ]] || { days="$2"; shift 2; }
-        for role in $(roles_for candidate "$@"); do prune_candidate "${role}" "${days}" || failed=$((failed + 1)); done
+        roles="$(roles_for candidate "$@")" || exit 2
+        for role in ${roles}; do prune_candidate "${role}" "${days}" || failed=$((failed + 1)); done
         prune_base_images "${days}"
         ;;
     *) usage ;;

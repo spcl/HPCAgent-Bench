@@ -100,16 +100,19 @@ RUN set -eux; \
       libtbb-dev libeigen3-dev libmimalloc-dev \
       papi-tools libpapi-dev; \
     case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-      amd64) apt-get install -y --no-install-recommends likwid msr-tools ;; \
+      amd64) apt-get install -y --no-install-recommends likwid msr-tools; likwid-perfctr --version ;; \
     esac; \
     if ! apt-get install -y --no-install-recommends linux-perf; then \
-      apt-get install -y --no-install-recommends linux-tools-common linux-tools-generic || true; \
+      apt-get install -y --no-install-recommends linux-tools-common linux-tools-generic; \
     fi; \
     for tool_bin in /usr/lib/linux-tools*/*/perf /usr/lib/linux-tools*/perf; do \
       if [ -x "${tool_bin}" ]; then ln -sf "${tool_bin}" /usr/local/bin/perf; fi; \
     done; \
     rm -rf /var/lib/apt/lists/*; \
     command -v perf; \
+    perf --version; \
+    papi_component_avail | grep -qE 'Name: +perf_event( |$)' \
+      || { echo "the distro PAPI has no perf_event component" >&2; exit 1; }; \
     if dpkg -l | grep -qE '^ii +(libopenmpi|openmpi-bin|mpich|libmpich)'; then \
       echo "apt pulled in an MPI; find the package that did it (step 1c owns MPI)" >&2; exit 1; \
     fi
@@ -201,7 +204,8 @@ RUN set -eux; \
       bison flex texinfo diffutils findutils gawk tar gzip bzip2 xz zlib || true; \
     "${spack}" compiler find --scope site; \
     "${spack}" compiler list; \
-    if [ -d /spack-buildcache ] && [ -n "$(ls -A /spack-buildcache 2>/dev/null)" ]; then \
+    # Even when still empty: step 2b reads what this step pushes.
+    if [ -d /spack-buildcache ]; then \
       "${spack}" mirror add --scope site --unsigned localcache /spack-buildcache; \
     fi; \
     printf '%s\n' 'spack:' \
@@ -229,8 +233,8 @@ and not n.get('external')}); sys.exit(f'spack would build {bad}: a second BLAS o
     if [ -d /spack-buildcache ]; then \
       "${spack}" -e "${SPACK_ENV_DIR}" buildcache push --unsigned --update-index /spack-buildcache || true; \
     fi; \
-    "${spack}" clean -a; \
-    "${spack}" mirror remove --scope site localcache 2>/dev/null || true; \
+    # Stage and downloads only: step 2b reuses the bootstrapped clingo, the misc cache and the localcache mirror.
+    "${spack}" clean -s -d; \
     for wrapper in mpicc mpicxx mpifort mpiexec; do \
       test -x "/opt/view/bin/${wrapper}"; \
       ln -sf "/opt/view/bin/${wrapper}" "/usr/local/bin/${wrapper}.mpich"; \
@@ -323,7 +327,8 @@ RUN set -eux; \
 # cpu package list).
 ENV OMP_LLVM_ENV_DIR=/opt/omp/llvm/env
 COPY containers/images/lib/omp_llvm_env.sh /omp_llvm_env.sh
-RUN sh /omp_llvm_env.sh cpu && rm /omp_llvm_env.sh
+RUN sh /omp_llvm_env.sh cpu && rm /omp_llvm_env.sh \
+    && { "${SPACK_ROOT}/bin/spack" mirror remove --scope site localcache 2>/dev/null || true; }
 
 # ---------------------------------------------------------------------------------------------
 # 3. The source-built pieces: tblis, HPTT and Pluto (polycc) from the repo's scripts. clang 17 is
@@ -514,6 +519,8 @@ COPY containers/images/lib/openmp_gate.py containers/images/lib/omp_contexts.sh 
 # The OpenMP catalog (hpcagent_bench/openmp/catalog.py) is measured here, once per image, into /opt/omp/catalog.json
 # where every job reads it. hpcagent_bench and the agent package are bind-mounted for this step only: no layer
 # carries them.
+# The bound trees' git hashes: a layer's cache key holds no bind mount's contents, so this step reruns when they move.
+ARG HB_SRC_TREE=
 RUN --mount=type=bind,source=hpcagent_bench,target=/hb-src/hpcagent_bench \
     --mount=type=bind,source=agent/hpcagent_agent,target=/hb-src/hpcagent_agent \
     mkdir -p /opt/hpcagent-bench-agent/hpcagent_agent && touch /opt/hpcagent-bench-agent/hpcagent_agent/__init__.py \

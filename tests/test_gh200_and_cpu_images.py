@@ -151,6 +151,16 @@ def test_promotion_moves_exactly_the_candidates_the_builds_write(tmp_path: pathl
         assert (ce / image).is_file(), image
 
 
+@pytest.mark.parametrize("argv", [["promote"], ["promote", "judge-agnet-amd"], ["prune", "no-such-role"]])
+def test_a_registry_action_with_no_or_an_unknown_role_fails(tmp_path: pathlib.Path, argv: list[str]) -> None:
+    """A mistyped role read as "no candidate" and exited 0: the operator saw success and nothing moved."""
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "SCRATCH": str(tmp_path), "CE_IMAGES": str(tmp_path)}
+    done = subprocess.run(
+        ["bash", str(CE / "registry.sh"), *argv], capture_output=True, text=True, check=False, env=env
+    )
+    assert done.returncode == 2, done.stdout + done.stderr
+
+
 def load(path: pathlib.Path, name: str) -> ModuleType:
     return module_at(path, name)
 
@@ -190,8 +200,51 @@ def test_the_amd_judge_holds_likwid_and_the_gh200_judge_does_not_ask_for_it(
 ) -> None:
     """likwid is part of the AMD image's profiler set (Ubuntu packages it for amd64 only, so the aarch64 GH200 image
     has none): the AMD judge's verify fails without likwid-perfctr, the GH200 judge's never asks for it."""
-    targets = {check.target for check in verify.checks(profile) if check.kind == "exe"}
+    targets = {check.target for check in verify.checks(profile) if check.kind == "profiler"}
     assert ("likwid-perfctr" in targets) is checked, targets
+
+
+PAPI_COMPONENTS = """\
+Available components and hardware information.
+Compiled-in components:
+Name:   perf_event              Linux perf_event CPU counters
+Name:   rocm_smi                AMD GPU System Management Interface via rocm_smi_lib
+Name:   rocm                    GPU events and metrics via AMD ROCm-PL API
+   \\-> Disabled: no device
+Name:   cuda                    CUDA events and metrics via NVIDIA CUpti interfaces
+   \\-> Disabled: no device
+
+Active components:
+Name:   perf_event              Linux perf_event CPU counters
+Name:   rocm_smi                AMD GPU System Management Interface via rocm_smi_lib
+"""
+
+
+@pytest.mark.parametrize(
+    ("component", "device", "ok"), [("rocm", True, False), ("rocm", False, True), ("cuda", True, False)]
+)
+def test_a_papi_component_counts_only_when_active_and_by_its_exact_name(
+    verify: ModuleType, monkeypatch: pytest.MonkeyPatch, component: str, device: bool, ok: bool
+) -> None:
+    """``rocm_smi`` active is not ``rocm`` active, and a disabled component fails where its GPU is present."""
+    monkeypatch.setattr(verify.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(verify, "run", lambda cmd, timeout: (0, PAPI_COMPONENTS))
+    monkeypatch.setattr(verify.os.path, "exists", lambda path: device)
+    assert verify.papi_has_component(component)[0] is ok
+
+
+@pytest.mark.parametrize("profile", ["judge", "judge-cuda", "judge-cpu"])
+def test_every_profiler_check_runs_the_tool(verify: ModuleType, profile: str) -> None:
+    """A profiler on PATH that exits non-zero (a wrapper missing its binary) fails its check."""
+    profilers = [check for check in verify.checks(profile) if check.group == "profiler"]
+    assert profilers and all(check.kind in ("profiler", "papi-component") for check in profilers), profilers
+    assert all(check.target in verify.PROFILER_ARGS for check in profilers if check.kind == "profiler")
+
+
+def test_a_profiler_that_exits_non_zero_fails(verify: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(verify, "run", lambda cmd, timeout: (1, "perf not found for kernel 6.6"))
+    assert verify.profiler_runs("perf") == (False, "rc=1: perf not found for kernel 6.6")
 
 
 def test_the_gh200_serving_profile_checks_the_engine_and_the_hook_fabric(verify: ModuleType) -> None:

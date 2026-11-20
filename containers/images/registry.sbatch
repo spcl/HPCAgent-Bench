@@ -10,6 +10,8 @@
 #SBATCH --job-name=registry
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+# The whole node: without it the job gets one CPU, and mksquashfs and podman's layer compression crawl.
+#SBATCH --exclusive
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
 #SBATCH --output=%x-%j.out

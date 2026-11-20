@@ -157,6 +157,32 @@ def test_a_source_on_a_copy_continuation_line_is_a_build_input(repo: pathlib.Pat
     assert fingerprint(repo, "agent") != before
 
 
+def test_an_untracked_file_under_a_copied_path_makes_the_inputs_unknown(repo: pathlib.Path) -> None:
+    """The judge stage copies pkg/: a new file there is built in but sits in no git blob."""
+    (repo / "pkg" / "new.py").write_text("Y = 1\n", encoding="utf-8")
+    done = bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" judge', repo)
+    assert done.returncode == 1, done.stdout
+    assert "no pull" in done.stderr
+    assert bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" agent', repo).returncode == 0
+
+
+def test_a_bind_mounted_source_is_a_build_input(repo: pathlib.Path) -> None:
+    """A RUN step that binds pkg/ bakes what it reads into its layer (the OpenMP catalog), as a COPY would."""
+    dockerfile = repo / "containers" / "images" / "Dockerfile"
+    dockerfile.write_text(
+        "FROM ${BASE_IMAGE} AS agent\nRUN --mount=type=bind,source=pkg,target=/src \\\n    cp -r /src /opt/pkg\n",
+        encoding="utf-8",
+    )
+    git(repo, "commit", "-qam", "bind")
+    before = fingerprint(repo, "agent")
+    (repo / "pkg" / "mod.py").write_text("X = 2\n", encoding="utf-8")
+    done = bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" agent', repo)
+    assert done.returncode == 1, done.stdout
+    assert "pkg" in done.stderr
+    git(repo, "commit", "-qam", "edit")
+    assert fingerprint(repo, "agent") != before
+
+
 def move_locked(lock: pathlib.Path, package: str) -> None:
     """Change one hash of the package's lock entry, which is what any new release of it does."""
     text, moved = re.subn(
@@ -335,3 +361,14 @@ def test_the_spack_job_budget_does_not_move_the_fingerprint(repo: pathlib.Path) 
     assert fingerprint(repo, "agent", "--build-arg", "SPACK_BUILD_JOBS=64") == fingerprint(
         repo, "agent", "--build-arg", "SPACK_BUILD_JOBS=108"
     )
+
+
+def test_a_dockerfile_libfabric_pin_is_the_commit_the_build_passes(repo: pathlib.Path) -> None:
+    """The tag is mutable: with a pinned Dockerfile the build must pass the pin, never what the tag resolves to now."""
+    images = repo / "containers" / "images"
+    # No commit of v2.6.0: a resolution against the remote could not return it.
+    pin = "0123456789abcdef0123456789abcdef01234567"
+    (images / "Dockerfile").write_text(f"FROM x AS agent\nARG LIBFABRIC_COMMIT={pin}\n", encoding="utf-8")
+    done = bash('ce_libfabric_commit >/dev/null && echo "$LIBFABRIC_COMMIT"', repo, {"IMAGE_DIR": str(images)})
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == pin

@@ -93,11 +93,19 @@ ce_layer_registry() {
         mkdir -p "${tools}" && mv -f "${staging}/registry" "${tools}/registry" && rm -rf "${staging}"
     fi
     mkdir -p "${store}"
+    # Every build sharing the store holds a shared lock on this fd for its life (the shell and its registry keep it
+    # open), so the wipe takes the lock exclusively and skips when another build is using the store.
+    exec {CE_LAYER_LOCK_FD}>>"${store}.lock"
     if (( $(du -sm "${store}" | cut -f1) > CE_LAYER_CACHE_GB * 1024 )); then
-        echo "layer registry ${store} is past ${CE_LAYER_CACHE_GB} GB: starting it empty" >&2
-        mv "${store}" "${store}.old.$$" && rm -rf "${store}.old.$$"
-        mkdir -p "${store}"
+        if flock -xn "${CE_LAYER_LOCK_FD}"; then
+            echo "layer registry ${store} is past ${CE_LAYER_CACHE_GB} GB: starting it empty" >&2
+            mv "${store}" "${store}.old.$$" && rm -rf "${store}.old.$$"
+            mkdir -p "${store}"
+        else
+            echo "layer registry ${store} is past ${CE_LAYER_CACHE_GB} GB, but another build uses it: not wiping" >&2
+        fi
     fi
+    flock -s "${CE_LAYER_LOCK_FD}"
     printf 'version: 0.1\nlog:\n  level: warn\nstorage:\n  filesystem:\n    rootdirectory: %s\nhttp:\n  addr: 127.0.0.1:%s\n' \
         "${store}" "${CE_LAYER_PORT}" > "${conf}"
     "${tools}/registry" serve "${conf}" > "${CE_TMPFS}/layer-registry.log" 2>&1 &
@@ -286,7 +294,7 @@ ce_spack_target() {
 }
 
 # Caches the base image on scratch as a `dir:` tree (plain files; the podman layer store cannot live
-# on scratch, which rejects user xattrs) and rewrites BASE_IMAGE to it on a hit. A miss pulls and
+# on scratch, which rejects user xattrs) and rewrites BASE_IMAGE to it once it exists. A miss pulls and
 # copies out through a staging dir, so racing builds never leave a half-written cache entry.
 # ce_dockerfile_base <Dockerfile>: the Dockerfile's own `ARG BASE_IMAGE=` default (a tag@digest that may
 # continue on the next line), so a build script never restates it.
@@ -308,11 +316,15 @@ ce_cache_base_image() {
         mkdir -p "${BASE_CACHE}"
         rm -rf "${staging}"
         if podman push -q "${BASE_IMAGE}" "dir:${staging}"; then
+            # This build reads the copy too: BASE_IMAGE is a build arg in every RUN step's cache key, so a first
+            # build from the registry name and a second from dir: would share no layer.
             if [[ -f "${base_dir}/manifest.json" ]]; then
                 rm -rf "${staging}"
                 printf 'base image was cached by a concurrent build\n'
+                BASE_IMAGE="dir:${base_dir}"
             elif mv -T "${staging}" "${base_dir}"; then
                 printf 'base image cached to %s\n' "${base_dir}"
+                BASE_IMAGE="dir:${base_dir}"
             else
                 rm -rf "${staging}"
                 printf 'base image could not be published; this build is unaffected\n'
@@ -325,11 +337,12 @@ ce_cache_base_image() {
 }
 
 # The build's identity before it runs: sha256 over the Dockerfile through the target's stage, the
-# build args, the base image reference and the git blobs of every path those stages COPY from the
-# context. A path COPY reads that differs from git makes the inputs unknown (exit 1): no pull.
+# build args, the base image reference and the git blobs of every path those stages COPY or RUN
+# --mount=type=bind from the context. A path they read that differs from git, an untracked file
+# under one included, makes the inputs unknown (exit 1): no pull.
 #   ce_build_fingerprint <dockerfile> <target|""> <podman build args>   (only --build-arg values count)
 ce_build_fingerprint() {
-    local dockerfile="$1" target="$2" context prefix
+    local dockerfile="$1" target="$2" context prefix dirty
     shift 2
     context="${CE_REPO_DIR}"
     # Instructions are matched uppercase at the line start: heredoc Python has `from` lines too.
@@ -337,12 +350,25 @@ ce_build_fingerprint() {
         {print}
         /^FROM[[:space:]]/ && t != "" && toupper($(NF-1)) == "AS" && $NF == t {done = 1}' "${dockerfile}")"
     local -a srcs
-    mapfile -t srcs < <(awk '/^COPY[[:space:]]/ {
+    # A bind mount's source (default: the context root) is read like a COPY's, but the pins (pyproject.toml,
+    # uv.lock, agent/pyproject.toml) are keyed by IMAGE_PYTHON_LOCK (ce_lock_keys), which moves only with what
+    # the image builds from them. A bind from= another stage or image reads nothing from the context.
+    mapfile -t srcs < <(awk '/^(COPY|RUN)[[:space:]]/ {
         while (/\\[[:space:]]*$/ && (getline more) > 0) { sub(/\\[[:space:]]*$/, ""); $0 = $0 " " more }
-        if ($0 !~ /--from=/) for (i = 2; i < NF; i++) if ($i !~ /^--/) print $i }' <<<"${prefix}")
-    if (( ${#srcs[@]} )) && ! git -C "${context}" diff --quiet HEAD -- "${srcs[@]}" 2>/dev/null; then
-        echo "build inputs differ from git (uncommitted edits under: ${srcs[*]}); no pull" >&2
-        return 1
+        if ($1 == "COPY") { if ($0 !~ /--from=/) for (i = 2; i < NF; i++) if ($i !~ /^--/) print $i; next }
+        for (i = 2; i <= NF; i++) {
+            if ($i !~ /^--mount=/ || $i !~ /type=bind/ || $i ~ /[=,]from=/) continue
+            n = split(substr($i, 9), kv, ","); src = "."
+            for (j = 1; j <= n; j++) if (kv[j] ~ /^(source|src)=/) src = substr(kv[j], index(kv[j], "=") + 1)
+            if (src != "pyproject.toml" && src != "uv.lock" && src != "agent/pyproject.toml") print src
+        } }' <<<"${prefix}")
+    # status, not diff: an untracked file under a source is built in and in no git blob.
+    if (( ${#srcs[@]} )); then
+        dirty="$(git -C "${context}" status --porcelain -- "${srcs[@]}" 2>/dev/null)" || dirty="git status failed"
+        if [[ -n "${dirty}" ]]; then
+            echo "build inputs differ from git (uncommitted or untracked under: ${srcs[*]}); no pull" >&2
+            return 1
+        fi
     fi
     {
         printf '%s\n' "${prefix}"
@@ -627,12 +653,17 @@ ce_lock_keys() {
     printf 'image python lock %s\n' "${IMAGE_PYTHON_LOCK}"
 }
 
-# Exports LIBFABRIC_REF (default v2.6.0) and LIBFABRIC_COMMIT, the tag resolved to its commit here so
-# the sha is the cache key and the Dockerfile asserts it: a git tag is mutable. libfabric is only
-# spack MPICH's compile-time link target; the netstack hook supplies the runtime one.
+# Exports LIBFABRIC_REF (default v2.6.0) and LIBFABRIC_COMMIT: the environment's, else the image's Dockerfile pin
+# (`ARG LIBFABRIC_COMMIT=<sha>` in build.sh's IMAGE_DIR), else the tag resolved to its commit here. The sha is the
+# cache key and the Dockerfile asserts it: a git tag is mutable, so a pinned Dockerfile is never overridden by
+# whatever the tag points at today. libfabric is only spack MPICH's compile-time link target; the netstack hook
+# supplies the runtime one.
 ce_libfabric_commit() {
     local url=https://github.com/ofiwg/libfabric.git
     LIBFABRIC_REF="${LIBFABRIC_REF:-v2.6.0}"
+    if [[ -z "${LIBFABRIC_COMMIT:-}" && -f "${IMAGE_DIR:-}/Dockerfile" ]]; then
+        LIBFABRIC_COMMIT="$(sed -n 's/^ARG LIBFABRIC_COMMIT=\([0-9a-f]\{40\}\)[[:space:]]*$/\1/p' "${IMAGE_DIR}/Dockerfile" | head -1)"
+    fi
     if [[ -z "${LIBFABRIC_COMMIT:-}" ]]; then
         # ^{} dereferences an annotated tag to its commit.
         LIBFABRIC_COMMIT="$(git ls-remote "${url}" "refs/tags/${LIBFABRIC_REF}^{}" | cut -f1)"

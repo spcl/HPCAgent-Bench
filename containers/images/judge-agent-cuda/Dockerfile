@@ -33,7 +33,7 @@ FROM ${BASE_IMAGE} AS ofi-builder
 ARG BASE_IMAGE
 ARG LIBFABRIC_REF=v2.6.0
 # The commit the tag resolved to, passed in by build.sh; a moved tag fails the build.
-ARG LIBFABRIC_COMMIT=
+ARG LIBFABRIC_COMMIT=5de2d6a2df83595bcc38531cb91bf59495559495
 USER root
 
 # gitretry and the /git-mirrors rewrite for every clone below (git_mirror.sh says why).
@@ -78,6 +78,29 @@ RUN { \
       printf 'libfabric_soname='; basename "$(cat /tmp/libfabric.soname)"; \
       echo 'runtime_libfabric=the node libfabric, injected by the CE cxi hook'; \
     } > /opt/ofi-sdk/BUILD-MANIFEST.txt
+
+# The same libfabric source with the providers a host without the CE hook has: verbs (InfiniBand, RoCE),
+# shm and tcp/sockets; efa where rdma-core carries it. It ships as /opt/ofi-fallback (the final RUN of the
+# agent stage says when it loads); the stub above stays providerless because RPATH binds to it.
+FROM ofi-builder AS ofi-fallback
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libibverbs-dev librdmacm-dev \
+ && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    cd /tmp/build/libfabric; \
+    git clean -fdxq; \
+    ./autogen.sh; \
+    ./configure --prefix=/opt/ofi-fallback --without-curl \
+        --enable-verbs --enable-shm --enable-tcp --enable-sockets \
+        --disable-psm3 --disable-usnic --disable-opx \
+        --with-cuda=/usr/local/cuda --enable-cuda-dlopen; \
+    for have in HAVE_VERBS HAVE_SHM HAVE_TCP HAVE_CUDA; do \
+      grep -q "^#define ${have} 1" config.h || { echo "fallback libfabric configure dropped ${have}" >&2; exit 1; }; \
+    done; \
+    grep -q '^#define HAVE_EFA 1' config.h && echo "fallback libfabric has efa" || echo "fallback libfabric has no efa"; \
+    make -j"$(nproc)"; \
+    make install; \
+    test -e /opt/ofi-fallback/lib/libfabric.so.1
 
 FROM ${BASE_IMAGE} AS agent
 
@@ -127,6 +150,8 @@ ARG SPACK_BUILD_JOBS=64
 ARG NVHPC_APT_VERSION=26-9
 ARG CUTENSOR_VERSION=2.7.0.5-1
 ARG NSIGHT_COMPUTE_PKG=nsight-compute-2026.3.0
+# The NCCL the base ships (header above), installed from the CUDA repo only if a base lacks nccl.h.
+ARG NCCL_VERSION=2.31.2
 # Spack keeps ALL its state inside the image (a runtime $HOME must not change what it knows).
 # nvcc's host compiler is the bare gcc, which is spack's gcc 16 (PATH below): CUDA 13.4 supports it,
 # so no compiler waiver or -ccbin override is set anywhere. nvc/nvfortran use the CUDA the SDK
@@ -172,7 +197,7 @@ RUN set -eux; \
       libfabric1 libfabric-bin libblis-openmp-dev \
       make cmake ninja-build pkg-config; \
     if ! apt-get install -y --no-install-recommends linux-perf; then \
-      apt-get install -y --no-install-recommends linux-tools-common linux-tools-generic || true; \
+      apt-get install -y --no-install-recommends linux-tools-common linux-tools-generic; \
     fi; \
     for tool_bin in /usr/lib/linux-tools*/*/perf /usr/lib/linux-tools*/perf; do \
       if [ -x "${tool_bin}" ]; then ln -sf "${tool_bin}" /usr/local/bin/perf; fi; \
@@ -181,6 +206,7 @@ RUN set -eux; \
       if [ -x "${tool_bin}" ]; then ln -sf "${tool_bin}" /usr/local/bin/cpupower; fi; \
     done; \
     command -v perf; \
+    perf --version; \
     multiarch="$(uname -m)-linux-gnu"; \
     test -f "/usr/include/${multiarch}/blis.h"; \
     test -e "/usr/lib/${multiarch}/libblis.so"; \
@@ -215,8 +241,9 @@ RUN set -eux; \
       "libcutensor2-dev-cuda-${cuda_major}=${CUTENSOR_VERSION}" \
       "${NSIGHT_COMPUTE_PKG}"; \
     if [ ! -f /usr/include/nccl.h ]; then \
-      nccl_version="$(apt-cache madison libnccl2 | awk -v m="+cuda${cuda_major}." 'index($3, m) {print $3; exit}')"; \
-      test -n "${nccl_version}" || { echo "no libnccl2 build for CUDA ${cuda_major}" >&2; exit 1; }; \
+      nccl_version="$(apt-cache madison libnccl2 \
+        | awk -v v="${NCCL_VERSION}-" -v m="+cuda${cuda_major}." 'index($3, v) == 1 && index($3, m) {print $3; exit}')"; \
+      test -n "${nccl_version}" || { echo "no libnccl2 ${NCCL_VERSION} build for CUDA ${cuda_major}" >&2; exit 1; }; \
       apt-get install -y --no-install-recommends "libnccl2=${nccl_version}" "libnccl-dev=${nccl_version}"; \
     fi; \
     ncu_bin="/opt/nvidia/nsight-compute/${NSIGHT_COMPUTE_PKG#nsight-compute-}/ncu"; \
@@ -371,9 +398,10 @@ RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" compiler list
 
 # Binary buildcache on scratch, so a rebuild downloads gcc/llvm instead of compiling them again.
-# Both halves no-op when build.sh mounted nothing. judge-agent-amd step 3, unchanged.
+# Both halves no-op when build.sh mounted nothing. The mirror is added even when the cache is still empty:
+# this layer is reused by later builds, and one cached without the mirror would make every later install compile.
 RUN set -eux; \
-    if [ -d /spack-buildcache ] && [ -n "$(ls -A /spack-buildcache 2>/dev/null)" ]; then \
+    if [ -d /spack-buildcache ]; then \
       "${SPACK_ROOT}/bin/spack" mirror add --scope site --unsigned localcache /spack-buildcache; \
     fi; \
     printf '%s\n' \
@@ -595,8 +623,11 @@ RUN set -eux; \
       '#pragma acc parallel loop copyout(a[0:256])' \
       '  for (int i = 0; i < 256; i++) a[i] = (double)i;' \
       '  return a[255] == 255.0 ? 0 : 1; }' > "${work}/acc.c"; \
-    nvc -acc=gpu -gpu="cc$(echo "${CUDA_ARCHS}" | sed 's/,/,cc/g')" -Minfo=accel -O2 "${work}/acc.c" -o "${work}/acc" 2>&1 \
-      | tee "${work}/acc.log"; \
+    # To a file, not through a pipe: sh has no pipefail, and tee's status would hide a failing nvc.
+    nvc -acc=gpu -gpu="cc$(echo "${CUDA_ARCHS}" | sed 's/,/,cc/g')" -Minfo=accel -O2 "${work}/acc.c" -o "${work}/acc" \
+      > "${work}/acc.log" 2>&1 \
+      || { cat "${work}/acc.log" >&2; echo "nvc -acc failed to build the OpenACC probe" >&2; exit 1; }; \
+    cat "${work}/acc.log"; \
     grep -q 'Generating NVIDIA GPU code' "${work}/acc.log" \
       || { echo "nvc -acc generated no GPU code: OpenACC offload is not working" >&2; exit 1; }; \
     gcc -fopenacc -c "${work}/acc.c" -o "${work}/acc.o"; \
@@ -691,6 +722,13 @@ RUN set -eux; \
       && { echo "petsc built against MPIUNI -- that is the SERIAL STUB, not MPI" >&2; exit 1; }; \
     true
 
+# gcc builds run on libgomp alone: a view library from steps 6-8 that NEEDS libomp maps a second runtime
+# (judge-agent-amd step 5).
+RUN set -eux; \
+    bad="$(for f in /opt/view/lib/*.so*; do if readelf -d "$(readlink -f "${f}")" 2>/dev/null \
+      | grep -qE 'NEEDED.*\[(libomp|libiomp5)'; then echo "${f}"; fi; done)"; \
+    [ -z "${bad}" ] || { echo "gnu view libraries NEED LLVM libomp: ${bad}" >&2; exit 1; }
+
 # ---------------------------------------------------------------------------------------------
 # 9b. The llvm OpenMP context's library variants (hpcagent_bench/openmp/context.py), built by the one script
 # every judge-agent image runs (containers/images/lib/omp_llvm_env.sh, which documents the environment and its
@@ -749,11 +787,15 @@ RUN set -eux; \
 # --with-tests=no: the cuda component's tests call the CUDA 12 three-argument cuCtxCreate, which CUDA 13
 # no longer has; the image runs none of PAPI's tests.
 ARG PAPI_REF=papi-7-2-0-t
+# The commit the tag peels to (git ls-remote ... 'refs/tags/papi-7-2-0-t^{}'); a moved tag fails the build.
+ARG PAPI_COMMIT=72a3124d048dc5c89eb3f00c9f2866f4492b5383
 RUN set -eux; \
     git init -q /tmp/papi; \
     git -C /tmp/papi remote add origin https://github.com/icl-utk-edu/papi.git; \
     gitretry -C /tmp/papi fetch -q --depth 1 origin "refs/tags/${PAPI_REF}"; \
     git -C /tmp/papi checkout -q FETCH_HEAD; \
+    [ "$(git -C /tmp/papi rev-parse HEAD)" = "${PAPI_COMMIT}" ] \
+      || { echo "PAPI ${PAPI_REF} is $(git -C /tmp/papi rev-parse HEAD), expected ${PAPI_COMMIT}: the tag MOVED" >&2; exit 1; }; \
     cd /tmp/papi/src; \
     PAPI_NVML_ROOT=/usr/local/cuda ./configure --prefix=/opt/papi \
       --with-components="perf_event perf_event_uncore sysdetect cuda nvml" --with-tests=no \
@@ -766,8 +808,9 @@ RUN set -eux; \
     test -f /opt/papi/lib/libpapi.so; \
     avail="$(/opt/papi/bin/papi_component_avail 2>&1 || true)"; \
     printf '%s\n' "${avail}"; \
+    # The component's own "Name:" row: a bare grep also matched an error message naming cuda.
     for component in perf_event cuda nvml; do \
-      printf '%s\n' "${avail}" | grep -q "${component}" \
+      printf '%s\n' "${avail}" | grep -qE "Name: +${component}( |\$)" \
         || { echo "PAPI was built without the ${component} component" >&2; exit 1; }; \
     done
 
@@ -1037,6 +1080,8 @@ COPY containers/images/lib/openmp_gate.py containers/images/lib/omp_contexts.sh 
 # The scan sees /opt/ofi-sdk's libfabric and the CUDA stub drivers, as a job sees the node's: MPICH needs FABRIC_1.9
 # and petsc needs libnvidia-ml.so.1, and without them petsc and slepc are recorded unlinkable while a job links them
 # (verify omp-catalog). The stubs live under their runtime sonames in /tmp/drv-stubs for this step only.
+# The bound trees' git hashes: a layer's cache key holds no bind mount's contents, so this step reruns when they move.
+ARG HB_SRC_TREE=
 RUN --mount=type=bind,source=hpcagent_bench,target=/hb-src/hpcagent_bench \
     --mount=type=bind,source=agent/hpcagent_agent,target=/hb-src/hpcagent_agent \
     mkdir -p /opt/hpcagent-bench-agent/hpcagent_agent && touch /opt/hpcagent-bench-agent/hpcagent_agent/__init__.py \
@@ -1050,18 +1095,21 @@ RUN --mount=type=bind,source=hpcagent_bench,target=/hb-src/hpcagent_bench \
       mods = (\"numpy\", \"scipy\", \"pandas\", \"astunparse\", \"cupy\", \"dace\", \"jax\", \"numba\", \
               \"pythran\", \"triton\", \"tvm\", \"torch\", \"mpi4py\", \"islpy\", \"z3\", \"sympy\", \"h5py\", \"einops\"); \
       [importlib.import_module(m) for m in mods]; print(\"imported:\", \" \".join(mods))"; \
+    python3 -c "import numpy, scipy, mpi4py, sys; \
+      assert all(m.__file__.startswith(sys.base_prefix + \"/\") for m in (numpy, scipy, mpi4py)), \"a wheel shadows an image build\""; \
     python3 -c "import dace, pathlib; \
       p = pathlib.Path(dace.__file__).parent / \"runtime\" / \"include\" / \"dace\" / \"ska_sort.hpp\"; assert p.is_file(), p"; \
     python3 -c "import dace.sdfg.analysis.polyhedral_isl; \
       from dace.transformation.passes.analysis import smt_dependence; \
       assert smt_dependence.has_z3(), \"z3 gate closed\""; \
-    python3 -c "import ctypes, sys; \
+    python3 -c "import ctypes, os, sys; \
       from dace.libraries.blas.environments.openblas import OpenBLAS; \
       libs = [str(x) for x in OpenBLAS.cmake_libraries()]; [ctypes.CDLL(lib) for lib in libs]; \
       lines = open(\"/proc/self/maps\").read().splitlines(); \
-      mapped = sorted({ln.rsplit(\" \", 1)[-1] for ln in lines if \".so\" in ln and (\"blas\" in ln or \"blis\" in ln)}); \
-      bad = [m for m in mapped if \"openblas\" not in m]; \
-      sys.exit(\"DaCe would link a BLAS that is not OpenBLAS: %s\" % (bad or \"nothing at all\")) if (bad or not libs or not mapped) else None"; \
+      mapped = sorted({os.path.realpath(ln.rsplit(\" \", 1)[-1]) for ln in lines if \".so\" in ln and (\"blas\" in ln or \"blis\" in ln or \"lapack\" in ln)}); \
+      bad = [m for m in mapped if \"openblas\" not in m and \"liblapacke\" not in os.path.basename(m)]; \
+      sys.exit(\"DaCe would link a BLAS that is not OpenBLAS: %s\" % (bad or \"nothing at all\")) \
+        if (bad or not libs or not any(\"openblas\" in m for m in mapped)) else None"; \
     python3 /tmp/one-openmp/judge_proxy_gate.py; \
     python3 -W error -c "import httpx2, starlette.testclient as tc; assert tc.httpx is httpx2, tc.httpx"; \
     python3 -c "import crawl4ai, crawl4ai.content_filter_strategy, crawl4ai.markdown_generation_strategy, fastapi, httpx, pydantic, uvicorn"; \
@@ -1100,7 +1148,24 @@ WORKDIR /work
 
 # THE STUB MUST NOT SHIP, and no fabric library may sit in a prefix this recipe controls: RPATH would
 # bind to it ahead of the node's libfabric the cxi hook injects.
+# A portable fallback does ship where RPATH cannot see it, as on judge-agent-amd: the ofi-fallback stage's
+# libfabric (same commit, with verbs, shm and tcp), last on the image's LD_LIBRARY_PATH. Which libfabric and
+# provider MPI gets, fastest first:
+#   1. Alps: the EDF's [env] LD_LIBRARY_PATH replaces the image's and never names the fallback, so the loader
+#      takes the CE hook's libfabric (bound onto /usr/lib/<multiarch>/libfabric.so.1) and, FI_PROVIDER unset,
+#      libfabric ranks cxi first.
+#   2. Elsewhere: a site libfabric earlier on LD_LIBRARY_PATH wins; otherwise the fallback, where libfabric
+#      ranks verbs (and efa) above tcp and sockets, so tcp is picked only on a host with no RDMA device.
+# Within a node MPICH's ch4 shm (posix) carries the traffic whichever libfabric loads. Nothing here sets
+# FI_PROVIDER or MPIR_CVAR_OFI_USE_PROVIDER, so no provider is forced.
+COPY --from=ofi-fallback /opt/ofi-fallback/lib /opt/ofi-fallback/lib
+# ibverbs-providers: the device drivers (mlx5, efa, ...) without which verbs finds no device and tcp wins.
 RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ibverbs-providers; \
+    rm -rf /var/lib/apt/lists/*; \
+    ! ldd /opt/ofi-fallback/lib/libfabric.so.1 | grep 'not found' \
+      || { echo "the fallback libfabric misses a runtime library" >&2; exit 1; }; \
     rm -f /opt/ofi-sdk/lib/libfabric.so*; \
     found="$(find /opt/ofi-sdk /opt/ofi /opt/aws-ofi-nccl \
                   \( -name 'libfabric.so*' -o -name 'libcxi.so*' -o -name 'libnccl-net*.so*' \) \
@@ -1109,13 +1174,19 @@ RUN set -eux; \
       || { echo "this image ships a fabric library in a prefix it controls:" >&2; \
            echo "${found}" >&2; exit 1; }; \
     echo "no fabric library in /opt/ofi-sdk, /opt/ofi or /opt/aws-ofi-nccl -- the node supplies them"
+ENV LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/opt/ofi-fallback/lib
+# MPI's libfabric resolves to the fallback without any hook, and tcp at least is there (verbs needs a device).
+RUN /opt/ofi-sdk/bin/fi_info -l | grep -q '^tcp' \
+    && ldd /opt/view/lib/libmpi.so | grep -q '/opt/ofi-fallback/lib/libfabric\.so\.1'
 
 # LD_PRELOAD and PYTHONSAFEPATH last, after every RUN, for the reasons judge-agent-amd gives: the
 # first would preload mimalloc into the build's own steps, the second changes python's import path.
 # The image's default tuning for whatever is compiled in it, matching the libraries (MARCH above).
+# No FFLAGS: nvfortran reads -march as its -tp, whose aarch64 keywords are CPU names (neoverse-v2, grace),
+# so the published aarch64 baseline armv8.2-a fails every nvfortran build that takes FFLAGS. nvc and nvc++
+# reject it the same way through CFLAGS/CXXFLAGS; x86-64-v3 and native are valid -tp keywords.
 ENV CFLAGS="-march=${MARCH}" \
-    CXXFLAGS="-march=${MARCH}" \
-    FFLAGS="-march=${MARCH}"
+    CXXFLAGS="-march=${MARCH}"
 ENV LD_PRELOAD=/usr/local/lib/libmimalloc.so
 ENV PYTHONSAFEPATH=1
 
