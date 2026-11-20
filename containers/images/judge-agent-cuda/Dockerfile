@@ -658,6 +658,21 @@ RUN set -eux; \
     cat /usr/local/share/toolchain-provenance; \
     rm -rf "${work}"
 
+# MPICH's embedded MPL builds its CUDA backend only when it can LINK -lcuda (src/mpl/configure.ac, "also require
+# -lcuda"). Without one it falls back to no GPU support in silence: libmpi still links cudart, and
+# MPIX_GPU_query_support says NO on the node (daint 5407962). The build has no driver, so the toolkit stub stands in
+# for libcuda.so and libcuda.so.1 in the multiarch libdir until the step before WORKDIR /work removes it: MPL links
+# it, and every later link and load of libmpi (which then NEEDs libcuda.so.1) resolves. MPI_Init would fail its GPU
+# init on the stub, so the build's own MPI runs go without GPU support; the shipped image turns it back on.
+RUN set -eux; \
+    libdir="/usr/lib/$(uname -m)-linux-gnu"; \
+    test -f /usr/local/cuda/lib64/stubs/libcuda.so; \
+    test ! -e "${libdir}/libcuda.so.1"; \
+    ln -s /usr/local/cuda/lib64/stubs/libcuda.so "${libdir}/libcuda.so"; \
+    ln -s /usr/local/cuda/lib64/stubs/libcuda.so "${libdir}/libcuda.so.1"; \
+    ldconfig
+ENV MPIR_CVAR_ENABLE_GPU=0
+
 # ---------------------------------------------------------------------------------------------
 # 6. MPI and the core HPC libraries DaCe codegen can emit a call to. judge-agent-amd step 5.
 RUN set -eux; \
@@ -709,6 +724,9 @@ RUN set -eux; \
     ldd "${libmpi}" | grep -qE 'libcudart|libcuda\.so' \
       || { echo "${libmpi} links no CUDA runtime -- GPU buffers would go through host staging at best" >&2; \
            ldd "${libmpi}" >&2; exit 1; }; \
+    readelf -d "${libmpi}" | grep -q 'NEEDED.*libcuda\.so\.1' \
+      || { echo "${libmpi} NEEDs no libcuda.so.1: MPL built without CUDA, MPIX_GPU_query_support will say NO" >&2; \
+           exit 1; }; \
     rm -f /tmp/mpichversion.txt
 
 # spack-install-retry: spack with TMPDIR on /build-tmp (image.sh mounts the node's tmpfs there) and up to three
@@ -1174,6 +1192,16 @@ ENV LIBXSMM_ROOT=/usr/local
 # Drop the build-time mirror rewrite from the SHIPPED image.
 COPY containers/images/lib/git_mirror.sh /tmp/git_mirror.sh
 RUN sh /tmp/git_mirror.sh drop && rm -f /tmp/git_mirror.sh
+
+# The build's libcuda stand-in goes (see before step 6): the node's driver supplies libcuda.so.1, and a stub the
+# loader found first would answer every CUDA call with CUDA_ERROR_STUB_LIBRARY.
+RUN set -eux; \
+    libdir="/usr/lib/$(uname -m)-linux-gnu"; \
+    rm -f "${libdir}/libcuda.so" "${libdir}/libcuda.so.1"; \
+    ldconfig; \
+    ! ldconfig -p | grep -qE '^[[:space:]]+libcuda\.so(\.1)? ' \
+      || { echo "a libcuda stays in the loader cache: the image would shadow the node's driver" >&2; exit 1; }
+ENV MPIR_CVAR_ENABLE_GPU=1
 
 WORKDIR /work
 
