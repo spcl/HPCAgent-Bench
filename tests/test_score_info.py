@@ -361,9 +361,11 @@ def test_a_graded_build_reports_its_warnings_and_the_spread_of_the_graded_run(
     itself. The grade runs the scorer as often as without ``info``, and the rest of the answer keeps its keys."""
     calls: list[bool] = []
     scorer = service.score
-    # Each scorer call of a grade, and whether it was handed the request's diagnostics.
+    # Each scorer call of a grade, and whether it was handed the request's diagnostics (a plain grade passes None).
     monkeypatch.setattr(
-        service, "score", lambda *args, **kwargs: (calls.append("diagnostics" in kwargs), scorer(*args, **kwargs))[1]
+        service,
+        "score",
+        lambda *args, **kwargs: (calls.append(kwargs.get("diagnostics") is not None), scorer(*args, **kwargs))[1],
     )
     cfg = service.ServiceConfig(baseline=Baseline.C, oracle=Oracle.AUTO, input_mode=InputMode.ANY, repeat=2)
     _server, url = make_judge(cfg)

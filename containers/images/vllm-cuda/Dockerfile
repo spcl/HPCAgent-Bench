@@ -57,7 +57,9 @@ import vllm
 want = os.environ["VLLM_VERSION"]
 assert vllm.__version__.split("+")[0] == want, f"vllm {vllm.__version__}, image declares {want}"
 assert (torch.version.cuda or "").startswith(os.environ["TORCH_CUDA"]), f"torch CUDA {torch.version.cuda}"
-assert "9.0" in os.environ.get("TORCH_CUDA_ARCH_LIST", ""), "the base was not built for sm_90 (GH200)"
+# The arch list torch was compiled with, not the env var: get_arch_list() returns [] without a GPU, the raw flags do not.
+archs = torch._C._cuda_getArchFlags().split()
+assert any(a.startswith("sm_90") for a in archs), f"torch was not built for sm_90 (GH200): {archs}"
 for mod in ("triton", "huggingface_hub", "vllm.entrypoints.anthropic.api_router"):
     importlib.import_module(mod)
 # The compiled ops load libcuda.so.1, which only the CE hook provides at run time: located, not loaded.

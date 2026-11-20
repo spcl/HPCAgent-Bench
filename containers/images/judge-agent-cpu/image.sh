@@ -16,7 +16,9 @@ ce_image_args() {
     ce_lock_keys
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
     ce_spack_jobs
-    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK SPACK_TARGET MARCH SPACK_BUILD_JOBS
+    # The OpenMP catalog step bind-mounts these trees, and a bind mount's contents are not in a layer's cache key.
+    HB_SRC_TREE="$(git -C "${CE_REPO_DIR}" rev-parse HEAD:hpcagent_bench HEAD:agent/hpcagent_agent | paste -sd:)"
+    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK SPACK_TARGET MARCH SPACK_BUILD_JOBS HB_SRC_TREE
 }
 
 # Base cache, spack buildcache and uv cache per CPU family: an x86_64 layer is no use to aarch64.
