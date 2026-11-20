@@ -738,9 +738,13 @@ end program pool_probe
 """
 
 
-def autopar_ladder(cores: int) -> tuple:
-    """Thread counts to probe: the rungs either side of the claimed 32 ceiling, topped at 2x cores."""
-    ceiling = max(2, 2 * cores)
+def autopar_ladder(limit: int) -> tuple:
+    """Thread counts to probe: the rungs either side of the claimed 32 ceiling, topped at ``limit``.
+
+    ``limit`` is the launch's ``OMP_THREAD_LIMIT`` (:func:`flags.openmp_launch_env`, set by the suite's conftest
+    as every grading launch sets it): libgomp caps each team there, so a rung above it measures that cap, not
+    gfortran's."""
+    ceiling = max(2, limit)
     rungs = {n for n in (2, 8, 32, 33, 64, 72, 128) if n <= ceiling}
     rungs.add(ceiling)
     return tuple(sorted(rungs))
@@ -785,12 +789,12 @@ def test_gcc_autopar_thread_count_has_no_ceiling(tmp_path: pathlib.Path) -> None
         pytest.skip("toolchain absent: no /proc/self/status here, so the running pool size is unreadable")
 
     graded = languages.resolve_baseline(block, Mode.SINGLE_CORE)
-    cores = flags.ncores()
-    ladder = autopar_ladder(cores)
+    limit = flags.cpus_owned()
+    ladder = autopar_ladder(limit)
     observed = {n: autopar_pool_size(exe, graded, n, tmp_path, omp_num_threads=1) for n in ladder}
 
     assert observed == {n: n for n in ladder}, (
-        f"gfortran did not honour the baked thread count on this {cores}-core host -- asked -> got: {observed}. "
+        f"gfortran did not honour the baked thread count under OMP_THREAD_LIMIT={limit} -- asked -> got: {observed}. "
         f"A rung above 32 that comes back 32 is exactly the ceiling lang-fortran/SKILL.md tells agents "
         f"does not exist, and would mean every Fortran grade above 32 cores runs narrower than it was sized for."
     )
@@ -809,7 +813,7 @@ def test_omp_num_threads_cannot_widen_a_baked_autopar_count(tmp_path: pathlib.Pa
         pytest.skip("toolchain absent: no /proc/self/status here, so the running pool size is unreadable")
 
     graded = languages.resolve_baseline(block, Mode.SINGLE_CORE)
-    ladder = autopar_ladder(flags.ncores())
+    ladder = autopar_ladder(flags.cpus_owned())
     narrow, wide = ladder[0], ladder[-1]
     if narrow == wide:
         pytest.skip(
