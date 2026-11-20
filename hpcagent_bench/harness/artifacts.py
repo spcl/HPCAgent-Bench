@@ -61,6 +61,7 @@ __all__ = [
     "WORKSPACE",
     "ZSTD_ARGS",
     "Episode",
+    "PackFailed",
     "build_parser",
     "episodes_of",
     "holds_session",
@@ -97,6 +98,9 @@ NCCL_LOGS = "nccl.*.log"
 SNIFF_BYTES = 8192
 #: The leading bytes of an ELF object: a library the agent built or submitted, which a regrade links.
 ELF_MAGIC = b"\x7fELF"
+#: Folders the workspace archive keeps whole, binary data and all: a git repository (the repo layout's clone), whose
+#: objects and index a resumed agent commits on and whose branch records how the work went.
+WHOLE_DIRS = frozenset({".git"})
 
 #: A file of an episode: on disk, or a header of the job's workspaces.tar.
 type Source = pathlib.Path | tarfile.TarInfo
@@ -272,6 +276,25 @@ def binary_data(head: bytes) -> bool:
     return b"\0" in head and not head.startswith(ELF_MAGIC)
 
 
+def omitted_data(name: str, head: bytes) -> bool:
+    """Whether the workspace file ``name`` starting with ``head`` goes in no tar: binary data (:func:`binary_data`)
+    outside the folders kept whole (:data:`WHOLE_DIRS`)."""
+    return binary_data(head) and WHOLE_DIRS.isdisjoint(pathlib.PurePosixPath(name).parts[:-1])
+
+
+def as_file(member: tarfile.TarInfo, workspaces: tarfile.TarFile) -> tarfile.TarInfo:
+    """A member of ``workspaces`` as a file of its own: a hard link (``tar --create`` writes so the second name of a
+    file, as a local git clone's objects are) becomes its target's header under its own name, so each name reads and
+    unpacks alone; any other member is itself."""
+    if not member.islnk():
+        return member
+    try:
+        target = workspaces.getmember(member.linkname)
+    except KeyError:
+        raise SystemExit(f"artifacts: {member.name} links to {member.linkname}, which workspaces.tar lacks") from None
+    return target.replace(name=member.name, deep=False)
+
+
 def head_of(source: Source, workspaces: tarfile.TarFile | None) -> bytes:
     """The first :data:`SNIFF_BYTES` of the regular file ``source``, on disk or in ``workspaces``."""
     if isinstance(source, tarfile.TarInfo):
@@ -300,8 +323,8 @@ def plan(
         (str(entry.relative_to(run_dir)), entry) for entry in loose_entries(run_dir, episode)
     ]
     held = {name for name, _ in loose}
-    archived: list[tuple[str, Source]] = [
-        (member.name.rstrip("/"), member)
+    ours = [
+        member
         for member in members
         if episode.holds(member.name.rstrip("/")) and member.name.rstrip("/") not in held and kept(member.name)
     ]
@@ -311,10 +334,13 @@ def plan(
     grouped: dict[str, list[tuple[str, Source]]] = {name: [] for name in TARS}
     omitted: list[tuple[str, Source]] = []
     with contextlib.ExitStack() as stack:
-        workspaces = stack.enter_context(tarfile.open(run_dir / run_layout.WORKSPACES_ARCHIVE)) if archived else None
+        workspaces = stack.enter_context(tarfile.open(run_dir / run_layout.WORKSPACES_ARCHIVE)) if ours else None
+        archived: list[tuple[str, Source]] = [
+            (member.name.rstrip("/"), as_file(member, workspaces)) for member in ours if workspaces is not None
+        ]
         for name, source in [*loose, *archived]:
             tar = LOGS if name in logs else WORKER if name.startswith(f"{episode.worker}/") else WORKSPACE
-            if tar == WORKSPACE and regular(source) and binary_data(head_of(source, workspaces)):
+            if tar == WORKSPACE and regular(source) and omitted_data(name, head_of(source, workspaces)):
                 omitted.append((name, source))
             else:
                 grouped[tar].append((name, source))
@@ -355,6 +381,8 @@ def write_tar(target: pathlib.Path, entries: Sequence[tuple[str, Source]], run_d
                 tar.addfile(writable(source), workspaces.extractfile(source) if source.isfile() else None)
                 continue
             info = writable(tar.gettarinfo(source, arcname=name))
+            if info.islnk():  # a second name of a file this tar holds (a local git clone): a file of its own
+                info.type, info.linkname, info.size = tarfile.REGTYPE, "", source.stat().st_size
             with source.open("rb") if info.isreg() else contextlib.nullcontext() as data:
                 tar.addfile(info, data)
 
@@ -438,7 +466,7 @@ def slim_episode(directory: pathlib.Path, threads: int = 0) -> bool:
             for member in source:
                 data = source.extractfile(member) if member.isreg() else None
                 head = data.read(SNIFF_BYTES) if data is not None else b""
-                if data is not None and binary_data(head):
+                if data is not None and omitted_data(member.name, head):
                     digest = hashlib.sha256(head)
                     while block := data.read(1 << 20):
                         digest.update(block)
@@ -641,22 +669,45 @@ def pack_episode(
         return packed(run_dir, episode, workspace_members(run_dir), remove_loose=remove_loose, threads=threads)
 
 
+class PackFailed(SystemExit):
+    """Raised by :func:`pack_run` at its end when an episode could not be packed: what it did pack, and why each other
+    failed (its loose files untouched)."""
+
+    def __init__(self, written: list[pathlib.Path], problems: list[str]) -> None:
+        super().__init__("\n".join(problems))
+        self.written = written
+        self.problems = problems
+
+
 def pack_run(run_dir: pathlib.Path, *, remove_loose: bool = False, threads: int = 0) -> list[pathlib.Path]:
     """:func:`pack_episode` over every ended episode of ``run_dir``; one that has not ended is skipped. With
-    ``remove_loose`` the job's :func:`redundant` files go after the last."""
+    ``remove_loose`` the job's :func:`redundant` files go after the last. An episode that fails (its archive does not
+    read back equal, a file cannot be read) is left as it is and stops no other: :class:`PackFailed` names each at
+    the end."""
     run_dir = data_guard.real(run_dir)
     refuse_running(run_dir)
     members = workspace_members(run_dir)
+    written: list[pathlib.Path] = []
+    problems: list[str] = []
     with data_guard.unsealed(run_dir):
         # Inside: a finished run directory is sealed read-only (data_guard.seal), so episodes/ is made unsealed too.
         (run_dir / run_layout.EPISODES_DIRNAME).mkdir(exist_ok=True)
         every = episodes_of(run_dir)
-        done = [episode for episode in every if finished(run_dir, episode)]
-        written = [packed(run_dir, one, members, remove_loose=remove_loose, threads=threads) for one in done]
+        done: list[Episode] = []
+        for episode in (one for one in every if finished(run_dir, one)):
+            try:
+                written.append(packed(run_dir, episode, members, remove_loose=remove_loose, threads=threads))
+            except (SystemExit, OSError, tarfile.TarError) as failed:
+                problems.append(f"{episode.label}: {failed}")
+                continue
+            done.append(episode)
         if remove_loose:
+            # A failed episode counts as unpacked: workspaces.tar stays while one is.
             for path in redundant(run_dir, done, len(every)):
                 path.unlink()
                 print(f"removed {path}")
+    if problems:
+        raise PackFailed(written, problems)
     return written
 
 
@@ -667,8 +718,13 @@ def unpack_episode(directory: pathlib.Path, dest: pathlib.Path) -> pathlib.Path:
     manifest = json.loads((directory / EPISODE_JSON).read_text(encoding="utf-8"))
 
     def missing(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
+        if os.path.lexists(dest / member.name):
+            return None
+        # A hard link of an archive packed before they were stored as files goes with the target it omitted.
+        if member.islnk() and not os.path.lexists(dest / member.linkname):
+            return None
         # "tar", not "data": an agent's symlink to an absolute path (its /shared folder) is part of its workspace.
-        return None if os.path.lexists(dest / member.name) else tarfile.tar_filter(member, path)
+        return tarfile.tar_filter(member, path)
 
     for name in TARS:
         if (directory / name).is_file():
@@ -812,10 +868,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not (args.local or in_job()):
                 return subprocess.run(submit_command(args), check=False).returncode
             threads = 0 if in_job() else politely()
-            return max(
-                report(pack_run(run_dir, remove_loose=args.remove_loose, threads=threads), "packed")
-                for run_dir in args.run_dir
-            )
+            status = 0
+            # Every run directory is packed whatever an earlier one did; each failure is printed, the exit is 1.
+            for run_dir in args.run_dir:
+                try:
+                    report(pack_run(run_dir, remove_loose=args.remove_loose, threads=threads), "packed")
+                except PackFailed as failed:
+                    report(failed.written, "packed")
+                    for problem in failed.problems:
+                        print(problem, file=sys.stderr)
+                    status = 1
+                except SystemExit as refused:  # a job still in squeue
+                    print(refused, file=sys.stderr)
+                    status = 1
+            return status
         case "unpack":
             return report(unpack_run(args.run_dir, args.label), "restored")
         case "stage":

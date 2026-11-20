@@ -145,6 +145,112 @@ def test_the_workspace_archive_keeps_text_and_libraries_and_lists_binary_data_it
     assert artifacts.verify_run(run) == []
 
 
+#: Git objects are zlib data: most hold a NUL byte early (binary data), some none (job 75284553's dc/5f34...).
+GIT_OBJECTS = {"objects/1c/9ce2": b"x\x01\x2b\x4a\x4d\x00\x01" * 40, "objects/dc/5f34": b"x\x01=\x8fOK\xc3@\x10\xc5"}
+
+
+def test_a_local_git_clone_in_the_workspace_is_archived_whole_with_its_hard_links_as_files(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A repo-layout agent runs ``git clone repo work``, which hard-links the clone's objects to the repo's. The tar
+    wrote the second name as a hard link, the read-back found no file under it and the pack of job 754888 stopped.
+    A resumed agent commits on in its clone, so ``.git`` is kept whole, binary objects and index included."""
+    run = run_dir(tmp_path)
+    clone: dict[str, bytes] = {}
+    for name, data in (GIT_OBJECTS | {"index": b"DIRC\0\0\0\2"}).items():
+        (run / FOLDER / "repo" / ".git" / name).parent.mkdir(parents=True, exist_ok=True)
+        (run / FOLDER / "repo" / ".git" / name).write_bytes(data)
+        (run / FOLDER / "work" / ".git" / name).parent.mkdir(parents=True, exist_ok=True)
+        os.link(run / FOLDER / "repo" / ".git" / name, run / FOLDER / "work" / ".git" / name)
+        clone |= {f"{FOLDER}/{repo}/.git/{name}": data for repo in ("repo", "work")}
+    (directory,) = artifacts.pack_run(run, remove_loose=True)
+    assert json.loads((directory / "episode.json").read_text())["omitted"] == {}
+    with artifacts.zst_tar(directory / "workspace.tar.zst", "r") as tar:
+        assert {member.name for member in tar if not member.isfile() and not member.isdir()} == set()
+    restored = tmp_path / "restored"
+    artifacts.unpack_episode(directory, restored)
+    assert tree(restored) == digests(LOOSE | ARCHIVED) | {
+        name: hashlib.sha256(data).hexdigest() for name, data in clone.items()
+    }
+
+
+def test_a_hard_link_in_workspaces_tar_is_archived_as_a_file_of_its_own(tmp_path: pathlib.Path) -> None:
+    """``tar --create`` (data_guard.archive) writes a clone's second name of an object as a hard link. The pack copied
+    the link unchecked while it omitted its target, so the episode archive could not be unpacked any more."""
+    run = run_dir(tmp_path)
+    data = GIT_OBJECTS["objects/1c/9ce2"]
+    first, second = f"{FOLDER}/repo/.git/objects/1c/9ce2", f"{FOLDER}/work/.git/objects/1c/9ce2"
+    with tarfile.open(run / run_layout.WORKSPACES_ARCHIVE, "a") as tar:
+        info = tarfile.TarInfo(first)
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+        link = tarfile.TarInfo(second)
+        link.type, link.linkname = tarfile.LNKTYPE, first
+        tar.addfile(link)
+    (directory,) = artifacts.pack_run(run)
+    restored = tmp_path / "restored"
+    artifacts.unpack_episode(directory, restored)
+    digest = hashlib.sha256(data).hexdigest()
+    assert tree(restored) == digests(LOOSE | ARCHIVED) | {first: digest, second: digest}
+
+
+def test_an_archive_with_a_hard_link_to_a_file_it_omitted_still_unpacks(tmp_path: pathlib.Path) -> None:
+    """The archives packed before hard links were stored as files (92 repo-layout episodes) hold links to git objects
+    they omitted; unpacking one raised KeyError, so it could be neither restored nor resumed. The link goes with its
+    target; every other file is restored."""
+    directory = tmp_path / "episode"
+    directory.mkdir()
+    (directory / "episode.json").write_text(json.dumps({"worker": WORKER}))
+    with artifacts.zst_tar(directory / "workspace.tar.zst", "w") as tar:
+        source = tarfile.TarInfo(f"{FOLDER}/kernel.c")
+        source.size = len(ARCHIVED[source.name])
+        tar.addfile(source, io.BytesIO(ARCHIVED[source.name].encode()))
+        link = tarfile.TarInfo(f"{FOLDER}/work/.git/objects/1c/9ce2")
+        link.type, link.linkname = tarfile.LNKTYPE, f"{FOLDER}/repo/.git/objects/1c/9ce2"
+        tar.addfile(link)
+    restored = tmp_path / "restored"
+    artifacts.unpack_episode(directory, restored)
+    assert tree(restored) == digests({source.name: ARCHIVED[source.name]})
+
+
+def ended_second_episode(run: pathlib.Path) -> str:
+    """Give the fixture's unended episode an ended attempt; returns its worker directory."""
+    worker = "agents/node-1/problem-3-worker-1"
+    write(run, {f"{worker}/tokens.json": '{"cause": "limit"}\n', f"{worker}/attempts.jsonl": '{"attempt": 1}\n'})
+    return worker
+
+
+def test_an_episode_that_does_not_read_back_equal_stops_no_other_episode(tmp_path: pathlib.Path) -> None:
+    """One episode's mismatch stopped job 754888's pack after 703 episodes: every later episode and run directory
+    stayed loose. The others are packed and their loose files go; the failing one keeps all of its; the pack still
+    fails at its end, naming it."""
+    run = run_dir(tmp_path)
+    other = ended_second_episode(run)
+    (directory, _) = artifacts.pack_run(run)
+    (directory / "worker.tar.zst").write_bytes((directory / "logs.tar.zst").read_bytes())
+    with pytest.raises(SystemExit, match=f"{LABEL}.*nothing removed"):
+        artifacts.pack_run(run, remove_loose=True)
+    assert (run / WORKER / "claude.log").is_file() and (run / WORKER / "prompt.txt").is_file()
+    assert sorted(path.name for path in (run / other).iterdir()) == ["attempts.jsonl", "tokens.json"]
+    assert set(artifacts.index(run)) == {LABEL, "exp-kimi-c.n1.p3.w1"}
+
+
+def test_the_pack_verb_packs_every_run_directory_and_exits_nonzero_after_a_failing_one(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``runs pack`` over many run directories (pack.sbatch) goes on past one that fails, prints what failed and
+    what it packed, and exits 1 at the end, so the Slurm log shows the failure and nothing stays unpacked silently."""
+    monkeypatch.setenv("SLURM_JOB_ID", "1")
+    failing, fine = run_dir(tmp_path, "failing"), run_dir(tmp_path, "fine")
+    (directory,) = artifacts.pack_run(failing)
+    (directory / "worker.tar.zst").write_bytes((directory / "logs.tar.zst").read_bytes())
+    assert artifacts.main(["pack", "--remove-loose", str(failing), str(fine)]) == 1
+    out, err = capsys.readouterr()
+    assert "nothing removed" in err and f"packed {fine / EPISODE_DIR}" in out
+    assert sorted(path.name for path in (fine / WORKER).iterdir()) == ["attempts.jsonl", "tokens.json"]
+    assert (failing / WORKER / "claude.log").is_file()
+
+
 def test_a_schema_2_archive_is_slimmed_in_place_and_indexed_again(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -409,3 +515,7 @@ if __name__ == "__main__":
         test_a_schema_2_archive_is_slimmed_in_place_and_indexed_again(scratch(), patch)
     test_a_pack_cut_off_before_it_indexed_its_folder_is_indexed_by_the_next_pack(scratch())
     test_a_torn_last_line_in_the_job_s_logs_does_not_stop_packing(scratch())
+    test_a_local_git_clone_in_the_workspace_is_archived_whole_with_its_hard_links_as_files(scratch())
+    test_a_hard_link_in_workspaces_tar_is_archived_as_a_file_of_its_own(scratch())
+    test_an_archive_with_a_hard_link_to_a_file_it_omitted_still_unpacks(scratch())
+    test_an_episode_that_does_not_read_back_equal_stops_no_other_episode(scratch())
