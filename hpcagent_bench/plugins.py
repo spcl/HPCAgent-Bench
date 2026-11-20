@@ -264,15 +264,19 @@ def register_packets(found: tuple[Plugin, ...]) -> None:
         hidden = sorted({path.parent.name for path in (plugin.root / "skills").glob("*/SKILL.md")} & shipped_pages)
         if hidden:
             raise ValueError(f"plugin {plugin.name!r}: skill pages {hidden} are shipped pages' names")
+    # A plugin found again (a caller cleared register_once to read a changed plugin list) declares the packets it
+    # registered before: an equal definition under its key is already in place, and only a different one is refused.
+    declared = [(plugin, key, block, packet_definition(plugin, key, block)) for plugin, key, block in blocks]
+    fresh = [entry for entry in declared if not (entry[1] in PACKETS and PACKETS[entry[1]] == entry[3])]
     claimed: set[str] = set()
-    for plugin, key, block in blocks:
+    for plugin, key, block, definition in fresh:
         for name in (key, *block.aliases):
             if name in shipped_pages:
                 raise ValueError(f"plugin {plugin.name!r}: packet name {name!r} is a shipped skill page's name")
             if name in PACKETS or name in claimed:
                 raise ValueError(f"plugin {plugin.name!r}: packet name {name!r} is already registered")
             claimed.add(name)
-    definitions = [(key, packet_definition(plugin, key, block), block.aliases) for plugin, key, block in blocks]
+    definitions = [(key, definition, block.aliases) for plugin, key, block, definition in fresh]
     composes = {key: PACKETS[key].packets for key in PACKETS} | {key: d.packets for key, d, _ in definitions}
     for key, _, _ in definitions:
         refuse_composition_loop(key, composes)
