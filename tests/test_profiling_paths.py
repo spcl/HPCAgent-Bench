@@ -381,7 +381,9 @@ def test_a_linuxperf_sweep_runs_each_configuration_at_its_own_thread_count(monke
     monkeypatch.setattr(flags, "ncores", lambda: len(TWELVE_CORE_SLOT))
     child_pools: list[int | None] = []
 
-    def workload(request: profiling.MeasurementRequest) -> profiling.WorkloadResult:
+    def workload(
+        request: profiling.MeasurementRequest, *, harness_blas_pinned: bool = False
+    ) -> profiling.WorkloadResult:
         child_pools.append(request["threads"])
         return {"elapsed_ns": 2_000_000, "reps": 1}
 
