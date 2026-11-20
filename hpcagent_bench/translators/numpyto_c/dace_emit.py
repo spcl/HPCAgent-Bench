@@ -30,7 +30,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     walk_nodes,
 )
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
-from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE, split_top_level
 from hpcagent_bench.translators.numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, descs, shape_dimension_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
@@ -223,7 +223,6 @@ __all__ = [
     "sole_reaching_bindings",
     "spell_aranges_with_named_lengths",
     "splice_before_rebind",
-    "split_top_level",
     "statements_touching",
     "stored_through",
     "substituted_extent",
@@ -5630,23 +5629,6 @@ def declared_extents(rendered: RenderedProgram) -> list[str]:
             continue  # a scalar parameter declares no extent
         out.extend(split_top_level(annotation[opened + 1 : annotation.rstrip().rfind("]")]))
     return out
-
-
-def split_top_level(text: str) -> list[str]:
-    """``text`` cut on the commas that are not inside brackets, which is one entry per dimension."""
-    parts: list[str] = []
-    depth = 0
-    start = 0
-    for index, char in enumerate(text):
-        if char in "([":
-            depth += 1
-        elif char in ")]":
-            depth -= 1
-        elif char == "," and depth == 0:
-            parts.append(text[start:index])
-            start = index + 1
-    parts.append(text[start:])
-    return [p.strip() for p in parts if p.strip()]
 
 
 def extent_pins(extent: str, symbol: str) -> bool:

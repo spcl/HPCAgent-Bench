@@ -26,6 +26,8 @@ subset :func:`normalize_ppcg_input`. The file on disk is the build's freshness k
 
 import re
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import split_top_level
+
 __all__ = [
     "CONSTEXPR_RE",
     "FUNC_RE",
@@ -111,10 +113,10 @@ def _index_spans(body: str) -> list[tuple[int, int]]:
 
 
 def param_names(params: str) -> list[str]:
-    """Parameter names of a one-line C parameter list (VLA extents carry no commas)."""
+    """Parameter names of a one-line C parameter list; a VLA extent may call a helper with commas of its own."""
     names: list[str] = []
-    for part in params.split(","):
-        m = re.search(r"(\w+)\s*(?:\[.*)?$", part.strip())
+    for part in split_top_level(params):
+        m = re.search(r"(\w+)\s*(?:\[.*)?$", part)
         if m is None:
             raise ValueError(f"unparseable parameter {part!r}")
         names.append(m.group(1))
