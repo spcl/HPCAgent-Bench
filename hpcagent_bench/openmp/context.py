@@ -77,6 +77,7 @@ __all__ = [
     "context_runtime",
     "context_view",
     "declared_refusal",
+    "image_contexts",
     "library_refusal",
     "numba_omp_pool_launched",
     "prepend_path",
@@ -198,6 +199,14 @@ def context_dir(context: str) -> pathlib.Path | None:
         raise KeyError(f"unknown OpenMP context {context!r}; expected one of {CONTEXTS}")
     path = context_root() / context
     return path if path.is_dir() else site_context_dir(context)
+
+
+def image_contexts() -> tuple[str, ...]:
+    """The contexts under :func:`context_root`: the image's own, which its build measures into the catalog. A site
+    compiler's context (:func:`site_context_dir`) is none of them: it is mounted after the image was built, so the
+    catalog has no record of it and a host carrying only that one has no catalog."""
+    root = context_root()
+    return tuple(context for context in CONTEXTS if (root / context).is_dir())
 
 
 def site_context_dir(context: str) -> pathlib.Path | None:
@@ -339,10 +348,11 @@ def catalog_path() -> pathlib.Path:
 
 
 def catalog_record() -> Catalog | None:
-    """The catalog record, or ``None`` on a host without OpenMP contexts (a login node, CI), which has nothing to
-    refuse. A host with contexts and no readable catalog raises :class:`CatalogMissing`: the image build writes it
-    (``python3 -m hpcagent_bench.openmp.catalog --write``), so a missing one is an image built without it."""
-    if not any(context_dir(context) for context in CONTEXTS):
+    """The catalog record, or ``None`` on a host without the image's OpenMP contexts (:func:`image_contexts`: a login
+    node, CI, also with a site compiler's context), which has nothing to refuse. A host with them and no readable
+    catalog raises :class:`CatalogMissing`: the image build writes it (``python3 -m hpcagent_bench.openmp.catalog
+    --write``), so a missing one is an image built without it."""
+    if not image_contexts():
         return None
     path = catalog_path()
     try:

@@ -329,9 +329,18 @@ def write_record(root: pathlib.Path, record: dict[str, dict[str, list[str] | Non
     omp_context.read_catalog.cache_clear()
 
 
-def test_a_host_without_contexts_has_no_catalog_and_refuses_nothing(tmp_path: pathlib.Path) -> None:
+def test_a_host_without_contexts_has_no_catalog_and_refuses_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A site compiler's context (the AMD judge's NVHPC) is no image context: the image build never measured it, so a
+    host carrying only that one has no catalog to read and none to scan."""
     config.set_override(omp_context.ROOT_KEY, str(tmp_path / "no-contexts-here"))
+    variable, below = omp_context.SITE_CONTEXT[omp_context.NVHPC]
+    monkeypatch.setenv(variable, str(tmp_path / "nvhpc"))
+    (tmp_path / "nvhpc" / below / "lib").mkdir(parents=True)
+    assert omp_context.context_dir(omp_context.NVHPC) == tmp_path / "nvhpc" / below
     assert omp_context.catalog_record() is None
+    assert omp_catalog.scan() == {}
     for context in omp_context.CONTEXTS:
         assert omp_context.library_refusal("blas", context) == ""
         assert languages.library_served("blas", context) == ""

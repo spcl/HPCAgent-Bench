@@ -82,8 +82,9 @@ def scan_entry(name: str, context: str) -> list[str] | None:
 
 
 def scan(contexts: Sequence[str] | None = None) -> omp_context.Catalog:
-    """The record for every ``contexts`` (default: those this host has), every catalog entry."""
-    names = contexts if contexts is not None else [c for c in omp_context.CONTEXTS if omp_context.context_dir(c)]
+    """The record for every ``contexts`` (default: the image's own, :func:`omp_context.image_contexts`), every catalog
+    entry."""
+    names = omp_context.image_contexts() if contexts is None else contexts
     return {context: {name: scan_entry(name, context) for name in languages.load_libraries()} for context in names}
 
 
