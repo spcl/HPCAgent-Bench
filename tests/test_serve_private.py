@@ -59,6 +59,9 @@ def launch(
     key.chmod(key_mode)
     for repo in ("Qwen--Qwen3.8-27B", "Qwen--Qwen3.8-27B-FP8"):
         (tmp_path / "hf" / "hub" / f"models--{repo}").mkdir(parents=True, exist_ok=True)
+    # An empty site layer: the checkout's own experiments/site.env, where one exists, would set the knobs under test.
+    site = tmp_path / "site.env"
+    site.write_text("", encoding="utf-8")
     env = {
         "PATH": f"{stub}:/usr/bin:/bin",
         "HOME": str(tmp_path),
@@ -71,6 +74,7 @@ def launch(
         "DRY_RUN": "1",
         "HSN0_LINE": HSN0_LINE,
         "HPCAGENT_BENCH_BIND_IFACE": "hsn0",
+        "HPCAGENT_BENCH_SITE_ENV": str(site),
         **({} if preset is None else {"PRESET": preset}),
         **extra,
     }
