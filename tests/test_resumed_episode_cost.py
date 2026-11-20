@@ -162,11 +162,11 @@ def test_the_episode_row_carries_the_cause_and_the_void_tokens_apart_from_the_co
 
 
 def test_a_database_from_before_causes_loads_and_reads_as_the_former_default(tmp_path: pathlib.Path) -> None:
-    """A user_version 24 file has no cause and no void column: read as they were then, the earlier attempts'
-    ``tokens_crashed`` counted, nothing void, the cause blank."""
+    """A user_version 24 file has no cause and no void column: read as its in-place upgrade stores it
+    (``void_effective_tokens`` 0, docs/results_db.md), the earlier attempts' ``tokens_crashed`` counted, the cause blank."""
     frame = extracted(tmp_path, schema_before_causes=True, attempts=3, tokens_effective_crashed=CRASHED_TOKENS)
     (row,) = frame[frame.row_kind == "episode"].to_dict("records")
-    assert row["tokens_void"] in ("", None) or pd.isna(row["tokens_void"])
+    assert row["tokens_void"] == 0
     assert row["episode_cause"] in ("", None) or pd.isna(row["episode_cause"])
     assert population.kernel_tokens(frame).to_dict() == {KERNEL: COUNTED_TOKENS}
     assert population.slot_tokens(frame)[population.VOID_COLUMN].tolist() == [0.0]
