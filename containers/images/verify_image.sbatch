@@ -116,7 +116,8 @@ fi
 if [[ "${nvidia_probe}" == 1 && ${#agent_mount[@]} -gt 0 ]]; then
     echo "=== GPU probe: cupy/jax/torch devices, PAPI cuda events, Nsight ==="
     "${step[@]}" --ntasks=1 --environment="${EDF}" bash -c '
-        set -eu
+        # pipefail: a profiler that fails behind `| tail` must fail the probe.
+        set -euo pipefail
         ulimit -c 0
         nvidia-smi -L
         python3 -c "import cupy; n = cupy.cuda.runtime.getDeviceCount(); print(\"cupy devices\", n); assert n > 0"
@@ -126,6 +127,30 @@ if [[ "${nvidia_probe}" == 1 && ${#agent_mount[@]} -gt 0 ]]; then
         # tail, not head: head exiting early would SIGPIPE the profiler and pipefail would count that.
         ncu --version | tail -1
         nsys --version | tail -1
+        # A version string is not a working profiler: both profile one kernel launch of a tiny program.
+        work="$(mktemp -d)"
+        printf "%s\n" "__global__ void bump(float *a, int n) { int i = blockIdx.x * blockDim.x + threadIdx.x; if (i < n) a[i] += 1.0f; }" \
+            "int main() { float *a; if (cudaMalloc(&a, 4096 * sizeof(float))) return 1; bump<<<16, 256>>>(a, 4096);" \
+            "  return cudaDeviceSynchronize() != cudaSuccess; }" > "${work}/probe.cu"
+        nvcc -arch=native -o "${work}/probe" "${work}/probe.cu"
+        "${work}/probe"
+        nsys profile --trace=cuda --sample=none --cpuctxsw=none -o "${work}/probe" "${work}/probe" > "${work}/nsys.log" 2>&1 \
+            || { cat "${work}/nsys.log" >&2; exit 1; }
+        test -s "${work}/probe.nsys-rep" || { echo "nsys wrote no report" >&2; exit 1; }
+        echo "nsys traced the probe: $(du -h "${work}/probe.nsys-rep" | cut -f1)"
+        ncu_rc=0
+        ncu --metrics gpu__time_duration.sum "${work}/probe" > "${work}/ncu.log" 2>&1 || ncu_rc=$?
+        if grep -q ERR_NVGPUCTRPERM "${work}/ncu.log"; then
+            # The host driver keeps GPU counters to admins (NVreg_RestrictProfilingToAdminUsers): a site setting.
+            echo "WARN ncu: this host restricts GPU performance counters; ncu ran, the image is not at fault"
+        elif (( ncu_rc != 0 )) || ! grep -q "gpu__time_duration.sum" "${work}/ncu.log"; then
+            cat "${work}/ncu.log" >&2
+            echo "ncu measured no kernel (rc=${ncu_rc})" >&2
+            exit 1
+        else
+            echo "ncu measured the probe: $(grep -m1 gpu__time_duration.sum "${work}/ncu.log" | tr -s " ")"
+        fi
+        rm -rf "${work}"
     ' || mpi_rc=$((mpi_rc + 1))
 fi
 
