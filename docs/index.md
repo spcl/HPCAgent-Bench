@@ -14,7 +14,7 @@ benchmarks
 prompts
 writing_an_agent
 jobs
-tutorial_sc_triton
+sample_sc_triton
 containers
 ```
 
