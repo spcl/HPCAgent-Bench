@@ -1068,7 +1068,7 @@ def test_a_hidden_file_that_vanishes_before_its_cover_is_skipped(
     def fake_mount(source: str | None, target: str, fstype: str | None, flags: int) -> None:
         if target == str(vanishing):
             vanishing.unlink()  # the database checkpoints between the listing and the bind
-            raise seal.SealError(f"mount({source!r}, {target!r}): No such file or directory")
+            raise seal_worker.SealError(f"mount({source!r}, {target!r}): No such file or directory")
         covered.append(target)
 
     monkeypatch.setattr(seal.seal_worker, "mount", fake_mount)
@@ -1083,8 +1083,8 @@ def test_a_refused_cover_over_a_file_that_still_exists_is_a_seal_fault(
     hidden.write_text("")
 
     def refuse(source: str | None, target: str, fstype: str | None, flags: int) -> None:
-        raise seal.SealError(f"mount({source!r}, {target!r}): Permission denied")
+        raise seal_worker.SealError(f"mount({source!r}, {target!r}): Permission denied")
 
     monkeypatch.setattr(seal.seal_worker, "mount", refuse)
-    with pytest.raises(seal.SealError, match="secret"):
+    with pytest.raises(seal_worker.SealError, match="secret"):
         seal.cover_files([str(hidden)])
