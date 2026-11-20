@@ -24,7 +24,6 @@ containers
 scoring
 grading-known-issues
 data_collection
-design/first-class-1117
 measurement_statistics
 token_accounting
 matched_limits
