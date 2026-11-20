@@ -137,7 +137,8 @@ def initialize(
     if uspp:
         vkb = rng.standard_normal((npwx, nkb, nks)) + 1j * rng.standard_normal((npwx, nkb, nks))
         vkb = xp.ascontiguousarray(vkb.transpose(2, 1, 0))
-        vkb /= exact_math.norm(vkb, axis=2, keepdims=True, xp=xp)  # normalise each projector
+        # normalise each projector
+        vkb = exact_math.divide_by_real(vkb, exact_math.norm(vkb, axis=2, keepdims=True, xp=xp), xp)
         vkb = vkb.astype(complex_dtype)
         # block-diagonal (one nh x nh block per atom): deeq real symmetric,
         # qq_at real symmetric positive-semidefinite (-> S positive-definite).
@@ -162,7 +163,7 @@ def initialize(
     g0 = xp.ascontiguousarray(g0.T)  # one row per band
     # QE's random start (wfcinit / init_wfc): each component damped by 1 / (1 + |k+G|^2), so the guess
     # lies near the low-kinetic subspace the lowest roots live in.
-    g0 = g0 / xp.tile(1.0 + g2kin[ck0, :npw], npol)[None, :]
+    g0 = exact_math.divide_by_real(g0, xp.tile(1.0 + g2kin[ck0, :npw], npol)[None, :], xp)
     if lrot:
         g0 = g0 * 0.05
         g0[xp.arange(nvec), xp.arange(nvec) % kdim] += 1.0
