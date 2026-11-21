@@ -3,12 +3,10 @@ name: Pages
 # The project site on GitHub Pages: the leaderboard (web/, a Vite + React app that reads
 # web/public/data/leaderboard.json; docs/leaderboard.md) at the root and the Sphinx documentation (docs/) under
 # /docs/. Needs Settings > Pages > Source = GitHub Actions. The same Sphinx build runs with warnings as errors in
-# CI's unit[0] job; this one only publishes.
+# CI's unit[0] job; this one only publishes. It runs on demand only until the site's content is checked; then
+# restore the push trigger (branches: [ main ], paths: docs/**, web/**, this file).
 
 on:
-  push:
-    branches: [ main ]
-    paths: [ 'docs/**', 'web/**', '.github/workflows/pages.yml' ]
   workflow_dispatch:
 
 permissions:
