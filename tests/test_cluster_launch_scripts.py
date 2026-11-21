@@ -179,6 +179,47 @@ def test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps
     assert (tmp_path / "logs" / "9-a.out").read_text() == "cpus=192 bind=unset list=unset\n"
 
 
+@pytest.mark.parametrize(
+    ("run_id", "nodelists"),
+    [("901", ["--nodelist=n3", "--nodelist=n[3-4]", "--nodelist=n9"]), ("", ["", "", "--nodelist=n9"])],
+)
+def test_a_fused_runs_helper_steps_stay_on_its_own_nodes(
+    tmp_path: pathlib.Path, run_id: str, nodelists: list[str]
+) -> None:
+    """srun places a step on any node of the job, so a helper step of a fused run (baseline, prepare) that names no
+    nodes could land on another run's slice: it runs on the run's own nodes, a one-task step on the first of them."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "srun").write_text(
+        '#!/bin/bash\n[[ "$1" == --help ]] && exit 0\necho "$*" | tr "\\n" " " >>"$SRUN_LOG"\necho >>"$SRUN_LOG"\n'
+    )
+    (bin_dir / "scontrol").write_text("#!/bin/bash\nprintf 'n%s\\n' 3 4\n")
+    for tool in ("srun", "scontrol"):
+        (bin_dir / tool).chmod(0o755)
+    log = tmp_path / "srun.log"
+    done = bash(
+        f". {quote(str(CLUSTER / 'job_step.sh'))}; job_step --ntasks=1 -- a; job_step --mem=0 -- b; "
+        "job_step --nodelist=n9 -- c",
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "SRUN_LOG": str(log),
+            "SLURM_JOB_NODELIST": "n[3-4]",
+            "HPCAGENT_BENCH_RUN_ID": run_id,
+        },
+    )
+    assert done.returncode == 0, done.stderr
+    steps = log.read_text().splitlines()
+    assert [next((w for w in step.split() if w.startswith("--nodelist=")), "") for step in steps] == nodelists
+
+
+def test_a_fused_runs_helper_jobs_name_their_edf_copy_by_the_run() -> None:
+    """Every run of a fused allocation shares SLURM_JOB_ID: an EDF copy named by it is one file for all of them, and
+    the first run to end removes it (job_step_judge_edf's EXIT trap) under the others."""
+    for script in ("prepare.sbatch", "baseline.sbatch"):
+        text = (CLUSTER / script).read_text()
+        assert "${HPCAGENT_BENCH_RUN_ID:-${SLURM_JOB_ID}}.edf.toml" in text, script
+
+
 @pytest.mark.parametrize(("left_s", "stopped"), [(600, True), (7200, False)])
 def test_the_job_stops_its_agents_a_reserve_before_its_end(left_s: int, stopped: bool) -> None:
     """The time limit kills every step KillWait after its TERM, before the records, grading and merge; the job's own
