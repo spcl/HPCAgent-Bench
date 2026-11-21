@@ -33,6 +33,7 @@ results_db
 requests_api
 observations
 plotting
+leaderboard
 hf_dataset_and_harbor
 ```
 
@@ -63,6 +64,7 @@ extending/gymnasium
 extending/skills-and-tools
 extending/packets
 extending/plugins
+extending/plugin-samples
 extending/inference
 ```
 

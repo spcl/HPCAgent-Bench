@@ -217,3 +217,7 @@ experiments/mwd-final-*/
 
 # Polygeist lowering artifacts a pluto build writes next to the reference
 *_pluto_input_polygeist_*
+
+# The static site (web/): npm install and vite build output.
+web/node_modules/
+web/dist/
