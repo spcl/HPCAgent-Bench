@@ -66,8 +66,17 @@ class Check:
 def run(
     cmd: list[str], timeout: float = 120.0, cwd: str | None = None, env: dict[str, str] | None = None
 ) -> tuple[int, str]:
+    """``cmd``'s exit code and output; 124 past ``timeout`` (as coreutils ``timeout``), 127 when it cannot start."""
     try:
         done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False, cwd=cwd, env=env)
+    except subprocess.TimeoutExpired as exc:
+        # The output so far is the only evidence of where the child hung; the note prints the last line.
+        partial = "".join(
+            part.decode(errors="replace") if isinstance(part, bytes) else part
+            for part in (exc.stdout, exc.stderr)
+            if part
+        )
+        return 124, f"{partial.strip()}\ntimed out after {timeout:g}s: {last_line(partial)}"
     except (OSError, subprocess.SubprocessError) as exc:
         return 127, str(exc)
     return done.returncode, (done.stdout + done.stderr).strip()
@@ -129,8 +138,9 @@ def have_exe(name: str) -> tuple[bool, str]:
         code, out = run([path, flag], timeout=60.0)
         if code == 0 and out:
             return True, out.splitlines()[0][:60]
-        # 126/127 and signals: the file could not run (wrong architecture, a missing library, a crash).
-        ran = ran or 0 <= code < 126
+        # 124 (timed out), 126/127 and signals: the file could not run (wrong architecture, a missing library, a
+        # crash, a hang).
+        ran = ran or 0 <= code < 124
     return (True, path) if ran else (False, f"{path} does not run")
 
 
