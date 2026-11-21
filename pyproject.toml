@@ -200,6 +200,11 @@ openblas-build = ["meson-python", "Cython", "pybind11", "pythran<0.19", "patchel
 # in their own venv (harbor needs rich>=14, which litellm's judge-proxy stack refuses).
 harbor = ["harbor>=0.25.0", "podman-compose>=1.6"]
 
+# cupy has no ROCm wheel: the amdgpu extra builds it from the sdist, for HIP against $ROCM_HOME (default /opt/rocm),
+# as the AMD image does. Without these a host install builds it for CUDA and fails on cublas_v2.h.
+[tool.uv.extra-build-variables]
+cupy = { CUPY_INSTALL_USE_HIP = "1" }
+
 [tool.uv.workspace]
 members = ["agent", "adapters/hpcagent_bench"]
 
