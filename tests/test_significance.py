@@ -265,6 +265,7 @@ def test_every_table_states_the_settings_it_was_made_with(tmp_path: pathlib.Path
     assert written["statistics"]["correction_family"] == "family-leg"
     assert written["budgets"]["matched_limits"] == written["budgets"]["matched_tasks"] == "strict"
     assert written["tests"]["paired"].startswith("sign-flip v")
+    assert written["tests"]["rate_equivalence"] == "tango-score v1", written["tests"]
     assert written["interval_level"] == pytest.approx(0.9)
     assert written["equivalence_interval_level"] == pytest.approx(0.8)
     assert (written["producer"], written["cost_model"]) == ("test", {"name": "billed"})
@@ -479,6 +480,9 @@ def test_solve_rates_are_equivalent_only_when_the_score_test_excludes_both_ends_
     assert math.isnan(significance.rate_equivalence(significance.Discordant(0, 0), 0, margin=0.1).pvalue)
     with pytest.raises(ValueError, match="difference of proportions"):
         significance.rate_equivalence(significance.Discordant(0, 0), 40, margin=1.2)
+    assert (agree.name, agree.version) == ("tango-score", "1"), "the result names the registered test"
+    with pytest.raises(RegistryError, match="unknown rate equivalence test 'wald'; registered: tango-score"):
+        significance.rate_equivalence(significance.Discordant(0, 0), 40, margin=0.1, test="wald")
 
 
 def test_repeated_episodes_split_a_log_ratios_spread_into_run_to_run_and_kernel_to_kernel() -> None:

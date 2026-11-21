@@ -25,9 +25,11 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CORRECTIONS",
+    "DEFAULT_RATE_EQUIVALENCE",
     "PAIRED_PROPORTION_TESTS",
     "PAIRED_TESTS",
     "PROPORTION_TESTS",
+    "RATE_EQUIVALENCE_TESTS",
     "TIMING_TESTS",
     "Conclusion",
     "Configured",
@@ -39,6 +41,7 @@ __all__ = [
     "PairedProportionTest",
     "PairedTest",
     "ProportionTest",
+    "RateEquivalenceTest",
     "Registered",
     "Result",
     "Side",
@@ -61,11 +64,13 @@ __all__ = [
     "proportion",
     "proportion_test",
     "rate_equivalence",
+    "rate_equivalence_test",
     "rate_interval",
     "rate_pvalue",
     "scoped",
     "settings",
     "settings_mismatch",
+    "tango_equivalence",
     "timing",
     "timing_test",
     "two_sample",
@@ -134,6 +139,8 @@ PairedProportionTest = Callable[[Discordant], Result]
 Correction = Callable[[Sequence[float]], list[float]]
 #: ``(first, second, side) -> Result`` on two independent samples.
 TimingTest = Callable[[Sequence[float], Sequence[float], Side], Result]
+#: ``(discordant, n, margin, alpha) -> Equivalence``: TOST on two setups' solve rates over the ``n`` kernels both ran.
+RateEquivalenceTest = Callable[[Discordant, int, float, float], "Equivalence"]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -150,6 +157,7 @@ PROPORTION_TESTS: Kind[Registered[ProportionTest]] = Kind("proportion test")
 PAIRED_PROPORTION_TESTS: Kind[Registered[PairedProportionTest]] = Kind("paired proportion test")
 CORRECTIONS: Kind[Registered[Correction]] = Kind("correction")
 TIMING_TESTS: Kind[Registered[TimingTest]] = Kind("timing test")
+RATE_EQUIVALENCE_TESTS: Kind[Registered[RateEquivalenceTest]] = Kind("rate equivalence test")
 
 
 def registrar[F](kind: Kind[Registered[F]]) -> Callable[..., Callable[[F], F]]:
@@ -170,6 +178,10 @@ proportion_test = registrar(PROPORTION_TESTS)
 paired_proportion_test = registrar(PAIRED_PROPORTION_TESTS)
 correction = registrar(CORRECTIONS)
 timing_test = registrar(TIMING_TESTS)
+rate_equivalence_test = registrar(RATE_EQUIVALENCE_TESTS)
+
+#: The solve-rate equivalence test a comparison runs unless it names another.
+DEFAULT_RATE_EQUIVALENCE = "tango-score"
 
 
 def named[F](kind: Kind[Registered[F]], name: str) -> Registered[F]:
@@ -236,6 +248,7 @@ def settings(**used: object) -> dict[str, object]:
     own: cost card, kernel policy, score rule)."""
     current = config.current()
     tests = configured()
+    rate = named(RATE_EQUIVALENCE_TESTS, DEFAULT_RATE_EQUIVALENCE)
     alpha = current.statistics.alpha
     return {
         "statistics": current.statistics.model_dump(mode="json"),
@@ -246,6 +259,7 @@ def settings(**used: object) -> dict[str, object]:
             "paired_proportion": f"{tests.paired_proportion.name} v{tests.paired_proportion.version}",
             "correction": f"{tests.correction.name} v{tests.correction.version}",
             "two_sample": f"{tests.two_sample.name} v{tests.two_sample.version}",
+            "rate_equivalence": f"{rate.name} v{rate.version}",
         },
         "interval_level": 1.0 - alpha,
         "equivalence_interval_level": 1.0 - 2.0 * alpha,
@@ -483,20 +497,30 @@ def rate_pvalue(pairs: Discordant, n: int) -> float:
     return 2.0 * (1.0 - NormalDist().cdf(abs(tango_score(pairs, n, 0.0))))
 
 
-def rate_equivalence(pairs: Discordant, n: int, *, margin: float, alpha: float | None = None) -> Equivalence:
+def rate_equivalence(
+    pairs: Discordant, n: int, *, margin: float, alpha: float | None = None, test: str = DEFAULT_RATE_EQUIVALENCE
+) -> Equivalence:
     """Is the difference of two setups' solve rates over the ``n`` kernels both ran inside ``[-margin, +margin]``?
-    TOST with :func:`tango_score` at each end (asymptotic, unlike the exact McNemar test of a difference); ``low``
-    and ``high`` are the ``1 - 2 alpha`` interval that inverts the same score (:func:`rate_interval`), inside the
-    margin exactly when ``pvalue < alpha`` (``alpha`` default ``statistics.alpha``). ``margin`` is a difference of
-    PROPORTIONS in (0, 1), fixed before the data are seen. No kernels, no test."""
+    The registered ``@rate_equivalence_test`` ``test`` decides, at ``alpha`` (default ``statistics.alpha``);
+    ``margin`` is a difference of PROPORTIONS in (0, 1), fixed before the data are seen. No kernels, no test."""
     if not 0.0 < margin < 1.0:
         raise ValueError(f"a solve-rate equivalence margin is a difference of proportions in (0, 1); got {margin!r}")
+    entry = named(RATE_EQUIVALENCE_TESTS, test)
     if n == 0:
-        return Equivalence(math.nan, math.nan, math.nan, margin, 0, "degenerate", "tango-score", "1")
+        return Equivalence(math.nan, math.nan, math.nan, margin, 0, "degenerate", entry.name, entry.version)
+    found = entry.run(pairs, n, margin, level(alpha))
+    return dataclasses.replace(found, name=entry.name, version=entry.version)
+
+
+@rate_equivalence_test("tango-score")
+def tango_equivalence(pairs: Discordant, n: int, margin: float, alpha: float) -> Equivalence:
+    """TOST with :func:`tango_score` at each end (asymptotic, unlike the exact McNemar test of a difference); ``low``
+    and ``high`` are the ``1 - 2 alpha`` interval that inverts the same score (:func:`rate_interval`), inside the
+    margin exactly when ``pvalue < alpha``."""
     above_lower = 0.5 * math.erfc(tango_score(pairs, n, -margin) / math.sqrt(2.0))
     below_upper = 0.5 * math.erfc(-tango_score(pairs, n, margin) / math.sqrt(2.0))
-    low, high = rate_interval(pairs, n, 2.0 * level(alpha))
-    return Equivalence(max(above_lower, below_upper), low, high, margin, n, "tost-tango-score", "tango-score", "1")
+    low, high = rate_interval(pairs, n, 2.0 * alpha)
+    return Equivalence(max(above_lower, below_upper), low, high, margin, n, "tost-tango-score")
 
 
 def variance_components(left: Sequence[Sequence[float]], right: Sequence[Sequence[float]]) -> tuple[float, float]:
