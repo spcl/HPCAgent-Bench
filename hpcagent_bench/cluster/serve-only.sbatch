@@ -152,7 +152,7 @@ fi
 # The cache roots (FAST_SCRATCH, JIT_CACHE_ROOT, HF_HOME, ...) every role step reads, as run_cluster.sh's
 # batch shell resolves them for an experiment job.
 . "${SCRIPT_DIR}/env.sh"
-RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID}"
+RUN_DIR="${RUN_ROOT}/${HPCAGENT_BENCH_RUN_ID:-${SLURM_JOB_ID}}"
 SERVER_PID=""
 if [[ "${ACCESS}" == alps ]]; then
     # Mode 700 before anything lands in it: the server log prints the key. On exit the endpoint goes first, so a job
@@ -220,7 +220,9 @@ container_wrap vllm-node "${INFERENCE_CE_ENV}" "" || exit 2
 
 # Without --cpus-per-task the step claims ONE core of 192 and the engine's host-side work degrades
 # with load rather than failing.
+# A run of a fused allocation (HPCAGENT_BENCH_RUN_ID) serves on its own slice of the job's nodes.
 srun --nodes="${INFERENCE_NODES}" --ntasks="${INFERENCE_NODES}" --ntasks-per-node=1 \
+    ${HPCAGENT_BENCH_RUN_ID:+--nodelist="${SLURM_JOB_NODELIST}"} \
     --cpus-per-task="${SLURM_CPUS_ON_NODE:-$(nproc)}" --exclusive --kill-on-bad-exit=1 \
     --export=ALL "${CONTAINER_SRUN_ARGS[@]}" \
     --output="${RUN_DIR}/server-%t.log" --error="${RUN_DIR}/server-%t.log" \
@@ -314,6 +316,24 @@ A setup of yours on another partition reads it (docs/serving/cross-partition.md)
 It stays up until this job ends, which deletes endpoint.json first; scancel ${SLURM_JOB_ID} to stop it.
 Only your own jobs: do not share the key, endpoint.json or these URLs with anyone, project members included.
 EOF
+    wait "${SERVER_PID}"
+    exit
+fi
+
+if [[ -n "${SERVE_POOL:-}" ]]; then
+    # A pool server (launch_fused.sbatch @serve): published once every replica answered, unpublished first on the way
+    # out, so a pool setup never stripes an episode onto a server that is gone; the launcher retires it with TERM.
+    pool_file="$(VLLM_REPLICA_URLS="$(IFS=,; printf '%s' "${endpoints[*]}")" VLLM_SERVED_MODEL="${SERVED_MODEL}" \
+        INFERENCE_CE_ENV="${INFERENCE_CE_ENV}" VLLM_MODEL="${VLLM_MODEL:-}" INFERENCE_ENGINE="${INFERENCE_ENGINE:-vllm}" \
+        "${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/inference_service.py" --write-pool "${SERVE_POOL}")" || exit 1
+    cleanup_pool() {
+        rm -f -- "${pool_file}"
+        kill "${SERVER_PID}" 2>/dev/null || true
+        wait "${SERVER_PID}" 2>/dev/null || true
+    }
+    trap cleanup_pool EXIT
+    trap 'exit 143' TERM INT
+    echo "pool server live in ${SERVE_POOL}: ${endpoints[*]}"
     wait "${SERVER_PID}"
     exit
 fi

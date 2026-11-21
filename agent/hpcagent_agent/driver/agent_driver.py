@@ -483,10 +483,39 @@ def judge_urls() -> list[str]:
     return [f"http://{node}:{port}" for node in nodes]
 
 
+def pool_urls(pool: str) -> list[str]:
+    """Every replica of the live servers of a pool setup's pool (INFERENCE_SOURCE=pool), in file-name order. The
+    launcher validated each server against the setup's checkpoint when the run started (inference_service.py); a
+    server that stopped has removed its file."""
+    urls: list[str] = []
+    for path in sorted(pathlib.Path(pool, "servers").glob("*.json")):
+        try:
+            urls.extend(str(url).rstrip("/") for url in json.loads(path.read_text(encoding="utf-8"))["replicas"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue  # stopped between the listing and the read, or half renamed
+    return urls
+
+
 def vllm_urls() -> list[str]:
-    """Every inference endpoint the run may reach: one per replica, else the single server."""
+    """Every inference endpoint the run may reach: one per replica, else the single server. A pool setup re-reads its
+    pool, so an episode that starts after the launcher added a server may land on it."""
+    pool = os.environ.get("INFERENCE_POOL_DIR", "").strip()
+    if pool and os.environ.get("INFERENCE_SOURCE", "").strip() == "pool" and (live := pool_urls(pool)):
+        return live
     replicas = [url.strip().rstrip("/") for url in os.environ.get("VLLM_REPLICA_URLS", "").split(",") if url.strip()]
     return replicas or [os.environ["VLLM_BASE_URL"].rstrip("/")]
+
+
+def write_pool_demand(node: int, unstarted: int) -> None:
+    """``RUN_DIR/pool-demand/node-<node>``: how many of this node's episodes have not started, which the fused
+    launcher reads to choose the model a freed node serves (launch_fused.sbatch FUSED_REASSIGN). A pool setup only."""
+    if os.environ.get("INFERENCE_SOURCE", "").strip() != "pool":
+        return
+    folder = pathlib.Path(os.environ["RUN_DIR"]) / "pool-demand"
+    folder.mkdir(parents=True, exist_ok=True)
+    staged = folder / f".node-{node}.{os.getpid()}"
+    staged.write_text(f"{unstarted}\n", encoding="utf-8")
+    staged.replace(folder / f"node-{node}")
 
 
 def server_root(endpoint: str) -> str:
@@ -3842,7 +3871,11 @@ def main() -> int:
             ): problem
             for worker_index, (problem_index, problem) in enumerate(local_problems)
         }
-        rcs.extend(agent_returncode(future, futures[future]) for future in concurrent.futures.as_completed(futures))
+        # The pool's demand: episodes beyond the ones running or done have not started.
+        write_pool_demand(node, max(0, len(futures) - workers))
+        for done, future in enumerate(concurrent.futures.as_completed(futures), start=1):
+            rcs.append(agent_returncode(future, futures[future]))
+            write_pool_demand(node, max(0, len(futures) - done - workers))
 
     if sampler is not None:
         stop_sampling.set()
