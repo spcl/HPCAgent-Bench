@@ -1372,8 +1372,8 @@ def ended_returncode(workdir: pathlib.Path) -> int:
     """The returncode the restored episode's last attempt ended on (its ledger's last line): the wall clock for an
     extension, whatever infrastructure did for a resumed repair."""
     ledger = token_cost.attempt_ledger(workdir)
-    returncode = ledger[-1].get("returncode") if ledger else None
-    return returncode if isinstance(returncode, int) and not isinstance(returncode, bool) else RC_TIMEOUT
+    returncode = ledger[-1].returncode if ledger else None
+    return RC_TIMEOUT if returncode is None else returncode
 
 
 def mark_resume(
@@ -1817,19 +1817,19 @@ def append_attempt(
 ) -> None:
     """Append one attempt's ledger line (``resumed``: its session continues in the next leg). Never raises:
     bookkeeping cannot fail a run."""
-    line = {
-        "attempt": attempt,
-        "start_ms": start_ms,
-        "end_ms": int(time.time() * 1000),
-        "returncode": returncode,
-        "crashed": crashed_attempt,
-        "cleared": cleared,
-        "cause": cause.text,
-        "resumed": resumed,
-    }
+    line = token_cost.AttemptLine(
+        attempt=attempt,
+        start_ms=start_ms,
+        end_ms=int(time.time() * 1000),
+        returncode=returncode,
+        crashed=crashed_attempt,
+        cleared=cleared,
+        cause=cause.text,
+        resumed=resumed,
+    )
     try:
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(line, sort_keys=True) + "\n")
+            handle.write(json.dumps(line.model_dump(), sort_keys=True) + "\n")
     except OSError:
         pass
 
@@ -1897,9 +1897,9 @@ def previous_attempt_returncode(worker_dir: pathlib.Path) -> int | None:
     Never raises."""
     try:
         ledger = token_cost.attempt_ledger(worker_dir)
-        return int(cast("int", ledger[-2]["returncode"])) if len(ledger) > 1 else None
-    except (OSError, KeyError, TypeError, ValueError):
+    except OSError:
         return None
+    return ledger[-2].returncode if len(ledger) > 1 else None
 
 
 def cost_record_fields(transcript: pathlib.Path, worker_dir: pathlib.Path) -> dict[str, float | int | str | None]:

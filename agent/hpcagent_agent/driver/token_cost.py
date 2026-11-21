@@ -35,6 +35,8 @@ import sys
 from collections.abc import Callable, Iterator
 from typing import NamedTuple, cast
 
+import pydantic
+
 __all__ = [
     "ATTEMPTS_NAME",
     "ATTEMPT_MARKER",
@@ -143,6 +145,24 @@ ATTEMPT_MARKER = re.compile(r"\.attempt(\d+)\.")
 #: The driver's attempt ledger in a worker directory, one JSON line per attempt (T5): when each
 #: attempt ran, how it ended, its cause, and whether the driver wiped the agent's state after it.
 ATTEMPTS_NAME = "attempts.jsonl"
+
+
+class AttemptLine(pydantic.BaseModel):
+    """One line of the driver's ``attempts.jsonl``: an attempt that ended, when it began and ended (epoch ms, the
+    judge's ``ts`` unit), how (``returncode``, ``crashed``, :class:`AttemptCause` ``cause``), whether its workspace was
+    cleared for a fresh relaunch, and whether its session continues in the next leg (``resumed``)."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="ignore")
+
+    attempt: int = 0
+    start_ms: int = 0
+    end_ms: int = 0
+    returncode: int | None = None
+    crashed: bool = False
+    cleared: bool = False
+    cause: str = ""
+    resumed: bool = False
+
 
 #: The ledger ``cause`` of an attempt lost to infrastructure (``agent_driver.AttemptCause.INFRA``): its tokens are
 #: void, never in the cost. Any other cause, or none (a ledger from before causes), counts.
@@ -1033,22 +1053,20 @@ def attempt_totals(log: pathlib.Path, before_last_leg: bool = False) -> AttemptT
     )
 
 
-def attempt_ledger(worker_dir: pathlib.Path) -> list[dict[str, object]]:
-    """The driver's ``attempts.jsonl`` records, in file order; empty when there is no readable one."""
+def attempt_ledger(worker_dir: pathlib.Path) -> list[AttemptLine]:
+    """The driver's ``attempts.jsonl`` lines, in file order; empty when there is no readable one."""
     path = worker_dir / ATTEMPTS_NAME
     if not path.is_file():
         return []
-    records: list[dict[str, object]] = []
+    records: list[AttemptLine] = []
     with path.open(errors="replace") as handle:
         for line in handle:
             if not line.startswith("{"):
                 continue
             try:
-                block = as_block(json.loads(line))
+                records.append(AttemptLine.model_validate_json(line))
             except ValueError:
                 continue  # a half-written tail is one lost attempt line, not an unreadable task
-            if block:
-                records.append(block)
     return records
 
 
@@ -1061,10 +1079,9 @@ def final_attempt_start(worker_dir: pathlib.Path, logs: list[pathlib.Path]) -> i
     next began. Either way the number is in the judge's own ``ts`` unit, so a grade can be told to
     belong to the final attempt or to a wiped one (X7).
     """
-    for block in reversed(attempt_ledger(worker_dir)):
-        start = block.get("start_ms")
-        if isinstance(start, int) and start > 0:
-            return start
+    for line in reversed(attempt_ledger(worker_dir)):
+        if line.start_ms > 0:
+            return line.start_ms
     renamed = [log for log in logs if ATTEMPT_MARKER.search(log.name)]
     return int(renamed[-1].stat().st_mtime * 1000) if renamed else 0
 
@@ -1082,12 +1099,12 @@ def episode_totals(worker_dir: pathlib.Path) -> EpisodeTotals:
     """
     logs = attempt_transcripts(worker_dir)
     ledger = attempt_ledger(worker_dir)
-    cause = str(ledger[-1].get("cause") or "") if ledger else ""
+    cause = ledger[-1].cause if ledger else ""
     if not logs:
         return EpisodeTotals(0, None, None, 0, 0, 0, cause=cause)
     per_attempt = [attempt_totals(log) for log in logs]
     final = per_attempt[-1]
-    cleared = [block.get("cause") for block in ledger if block.get("cleared") is True]
+    cleared = [line.cause for line in ledger if line.cleared]
     counted: list[AttemptTotals] = []
     void: list[AttemptTotals] = []
     for index, (log, attempt) in enumerate(zip(logs[:-1], per_attempt, strict=False)):
@@ -1116,7 +1133,7 @@ def episode_totals(worker_dir: pathlib.Path) -> EpisodeTotals:
         tokens_lost_fresh_input=sum(part.fresh_input for part in lost),
         tokens_lost_cached_input=sum(part.cached_input for part in lost),
         tokens_lost_output=sum(part.output for part in lost),
-        resumes=sum(block.get("resumed") is True for block in ledger),
+        resumes=sum(line.resumed for line in ledger),
         fresh_relaunches=len(cleared),
     )
 

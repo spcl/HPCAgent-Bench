@@ -407,7 +407,7 @@ def manifest_of(
         "folders": [str(folder) for folder in episode.folders],
         "harness": transcripts.harness_of(worker),
         "record": record,
-        "attempts": attempt_ledger(worker),
+        "attempts": [line.model_dump(exclude_unset=True) for line in attempt_ledger(worker)],
         "files": {name: len(entries) for name, entries in tars.items()},
         "omitted": omitted_prints(run_dir, omitted),
         "members": {

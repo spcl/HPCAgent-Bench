@@ -806,7 +806,7 @@ def packed_episodes(
         if name in folders:
             raise SystemExit(f"{folders[name]} and {run.line()} both worked in {name}: resume them in two jobs")
         folders[name] = run.line()
-        infra = sum(line.get("cause") == AttemptCause.INFRA.text for line in attempt_ledger(path.parent))
+        infra = sum(line.cause == AttemptCause.INFRA.text for line in attempt_ledger(path.parent))
         archive = artifacts.pack_episode(job_dir, record.episode_id)
         if not artifacts.holds_session(archive):
             raise SystemExit(f"{run.line()}: {archive} holds no session to continue: --mode fresh")
