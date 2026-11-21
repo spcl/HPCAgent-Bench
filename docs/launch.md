@@ -175,6 +175,25 @@ nodes the first one freed: `FUSED_NODES=<nodes> FUSED_FIRST_INDEX=<k> srun --ove
 hpcagent_bench/cluster/launch_fused.sbatch <instances>`, with `FUSED_FIRST_INDEX` past the first launcher's last run
 so that no run id repeats.
 
+#### Inference pools
+
+Setups of one model can share servers the launcher starts, so the inference nodes follow the work. A setup env with
+`INFERENCE_SOURCE=pool`, `INFERENCE_NODES=0` and `INFERENCE_POOL_DIR=<pool>` starts no server of its own; it serves
+from every live server of the pool, and its agent driver re-reads the pool for each episode. A pool server is an
+`@serve` line, which the launcher starts before every other line:
+
+```text
+@serve serve-qwen38 1 /path/to/hpcagent-bench SERVE_POOL=/path/to/pool/qwen38 MODEL=qwen38 -- \
+    bash hpcagent_bench/cluster/serve-only.sbatch
+```
+
+The server writes `<pool>/servers/<run id>.json` once every replica answers, and removes it when it stops. A setup
+refuses a pool server of another checkpoint. Once no running or queued setup serves from a pool, the launcher stops
+the pool's servers (under `FUSED_AUTO_FREE`). With `FUSED_REASSIGN=1` and nothing queued, a free node starts one more
+server for the pool whose setups report the most unstarted episodes (`RUN_DIR/pool-demand`); new episodes reach it,
+running ones stay where they are. Free nodes a server could use are held until every setup of the pool reports no
+unstarted episode, and then released.
+
 ### Alps (aarch64 GH200)
 
 The Container Engine (`ce`) is the native backend; the image is chosen by `srun --environment=<edf>`.

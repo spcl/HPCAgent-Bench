@@ -27,12 +27,15 @@ __all__ = [
     "CLAUDE_MODEL_PINS",
     "ENDPOINT_FILE_KEY",
     "FREE_ONLY_KEY",
+    "POOL_DIR_KEY",
     "RECORD_NAME",
     "REQUIRED",
     "Api",
     "Auth",
     "EndpointProvenance",
     "NodeProvenance",
+    "PoolProvenance",
+    "PoolServer",
     "PricingListing",
     "Provenance",
     "ServedEndpoint",
@@ -48,6 +51,8 @@ __all__ = [
     "launcher_env",
     "main",
     "not_free",
+    "pool_launcher_env",
+    "pool_servers",
     "pricing_url",
     "provenance",
     "record",
@@ -57,6 +62,7 @@ __all__ = [
     "shell_block",
     "source",
     "write_endpoint",
+    "write_pool_server",
 ]
 
 
@@ -71,6 +77,9 @@ class Source(Coded):
     NONE = enum.auto()
     #: The keyed endpoint another job of ours serves (:class:`ServedEndpoint`, ``INFERENCE_ENDPOINT_FILE``).
     ENDPOINT = enum.auto()
+    #: The servers of this allocation that publish to a pool directory (:class:`PoolServer`, ``INFERENCE_POOL_DIR``,
+    #: launch_fused.sbatch FUSED_REASSIGN): open, as a setup's own server is, and as many as the launcher starts.
+    POOL = enum.auto()
 
 
 class Api(Coded):
@@ -392,6 +401,82 @@ def check_network(service: Service, environ: Mapping[str, str]) -> None:
         raise SystemExit(f"{reason} Refusing to launch.")
 
 
+POOL_DIR_KEY = "INFERENCE_POOL_DIR"
+
+
+class PoolServer(pydantic.BaseModel):
+    """``<pool>/servers/<run id>.json``: one live server of a pool, written once every replica answered."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    replicas: tuple[str, ...]
+    served_model: str
+    model: str
+    engine: str
+    ce_env: str
+    run_id: str
+
+
+def write_pool_server(pool: pathlib.Path, environ: Mapping[str, str]) -> pathlib.Path:
+    """Publish the serving run's replicas into ``pool``, renamed into place so a reader never sees half of it."""
+    run_id = required_value(environ, "HPCAGENT_BENCH_RUN_ID")
+    server = PoolServer(
+        replicas=tuple(checked_url(url) for url in required_value(environ, "VLLM_REPLICA_URLS").split(",")),
+        served_model=required_value(environ, "VLLM_SERVED_MODEL"),
+        model=required_value(environ, "VLLM_MODEL"),
+        engine=environ.get("INFERENCE_ENGINE", "").strip() or "vllm",
+        ce_env=required_value(environ, "INFERENCE_CE_ENV"),
+        run_id=run_id,
+    )
+    servers = pool / "servers"
+    servers.mkdir(parents=True, exist_ok=True)
+    path = servers / f"{run_id}.json"
+    staged = servers / f".{run_id}.{os.getpid()}"
+    staged.write_text(server.model_dump_json() + "\n", encoding="utf-8")
+    staged.replace(path)
+    return path
+
+
+def pool_servers(pool: pathlib.Path, model: str) -> list[PoolServer]:
+    """The live servers of ``pool``, in file-name order; one serving another checkpoint than ``model`` is refused,
+    so a row never records one model while another answered."""
+    servers: list[PoolServer] = []
+    for path in sorted((pool / "servers").glob("*.json")):
+        try:
+            server = PoolServer.model_validate_json(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue  # its server stopped between the listing and the read
+        except ValueError as exc:
+            raise SystemExit(f"{path} is not a pool server file: {exc}") from exc
+        if model and server.model != model:
+            raise SystemExit(f"{path} serves {server.model}, but this setup is {model}: refusing to record it as such")
+        for url in server.replicas:
+            checked_url(url)
+        servers.append(server)
+    return servers
+
+
+def pool_launcher_env(environ: Mapping[str, str]) -> dict[str, str]:
+    """The endpoint values run_cluster.sh exports for a ``pool`` setup: every replica of every live server."""
+    nodes = environ.get("INFERENCE_NODES", "0").strip() or "0"
+    if nodes != "0":
+        raise SystemExit(f"a pool setup starts no server; set INFERENCE_NODES=0, not {nodes}")
+    pool = pathlib.Path(required_value(environ, POOL_DIR_KEY))
+    servers = pool_servers(pool, environ.get("VLLM_MODEL", "").strip())
+    if not servers:
+        raise SystemExit(f"no live server in the pool {pool}")
+    names = {server.served_model for server in servers}
+    if len(names) != 1:
+        raise SystemExit(f"the servers of {pool} serve under several names: {sorted(names)}")
+    replicas = [url for server in servers for url in server.replicas]
+    return {
+        "VLLM_MASTER_HOST": "",
+        "VLLM_BASE_URL": replicas[0],
+        "VLLM_REPLICA_URLS": ",".join(replicas),
+        "VLLM_SERVED_MODEL": servers[0].served_model,
+    }
+
+
 def shell_block(exported: Mapping[str, str]) -> str:
     """``exported`` as :func:`shlex.quote`-d assignments for the launcher to eval."""
     return "\n".join(f"{key}={shlex.quote(value)}" for key, value in exported.items())
@@ -437,6 +522,19 @@ class EndpointProvenance(pydantic.BaseModel):
     replicas: tuple[str, ...]
 
 
+class PoolProvenance(pydantic.BaseModel):
+    """``inference.json`` of a setup served from a pool: the checkpoint and the pool. Which server answered an episode
+    changes while the run goes on; every one serves this checkpoint (:func:`pool_servers`)."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    source: Source = Source.POOL
+    engine: str
+    ce_env: str
+    model: str
+    pool: str
+
+
 class TunerProvenance(pydantic.BaseModel):
     """``inference.json`` of a tuner setup: no model, the optimizer ``TUNER`` names."""
 
@@ -447,7 +545,7 @@ class TunerProvenance(pydantic.BaseModel):
 
 
 #: ``inference.json``, any source (told apart by ``source``).
-Provenance = NodeProvenance | ServiceProvenance | EndpointProvenance | TunerProvenance
+Provenance = NodeProvenance | ServiceProvenance | EndpointProvenance | PoolProvenance | TunerProvenance
 
 
 def provenance(environ: Mapping[str, str]) -> Provenance:
@@ -471,6 +569,15 @@ def provenance(environ: Mapping[str, str]) -> Provenance:
             job_id=endpoint.job_id,
             nodes=endpoint.nodes,
             replicas=endpoint.replicas,
+        )
+    if declared is Source.POOL:
+        pool = required_value(environ, POOL_DIR_KEY)
+        servers = pool_servers(pathlib.Path(pool), environ.get("VLLM_MODEL", "").strip())
+        return PoolProvenance(
+            engine=servers[0].engine if servers else environ.get("INFERENCE_ENGINE", "").strip() or "vllm",
+            ce_env=servers[0].ce_env if servers else environ.get("INFERENCE_CE_ENV", "").strip(),
+            model=environ.get("VLLM_MODEL", "").strip(),
+            pool=pool,
         )
     service = from_environ(environ)
     return ServiceProvenance(
@@ -508,9 +615,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--write-endpoint", type=pathlib.Path, help="publish this serving job's keyed endpoint as this endpoint.json"
     )
+    parser.add_argument("--write-pool", type=pathlib.Path, help="publish this serving run's replicas into this pool")
     args = parser.parse_args(argv)
     if args.write_endpoint is not None:
         write_endpoint(args.write_endpoint, os.environ)
+        return 0
+    if args.write_pool is not None:
+        print(write_pool_server(args.write_pool, os.environ))
         return 0
     if args.check_free and os.environ.get(FREE_ONLY_KEY, "").strip() == "1":
         check_free(from_environ(os.environ))
@@ -519,11 +630,13 @@ def main(argv: list[str]) -> int:
     if args.record is not None:
         record(args.record, os.environ)
     if args.export:
-        exported = (
-            endpoint_launcher_env(served_endpoint(os.environ))
-            if source(os.environ) is Source.ENDPOINT
-            else launcher_env(from_environ(os.environ))
-        )
+        declared = source(os.environ)
+        if declared is Source.ENDPOINT:
+            exported = endpoint_launcher_env(served_endpoint(os.environ))
+        elif declared is Source.POOL:
+            exported = pool_launcher_env(os.environ)
+        else:
+            exported = launcher_env(from_environ(os.environ))
         print(shell_block(exported))
     return 0
 
