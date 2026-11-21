@@ -52,6 +52,19 @@ if [[ -n "${SLURM_STEP_ID:-}" ]]; then
     unset SLURM_CPU_BIND SLURM_CPU_BIND_LIST SLURM_CPU_BIND_TYPE SLURM_CPU_BIND_VERBOSE
 fi
 mapfile -t queue < <(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "${INSTANCES}")
+# A line wider than the launcher's nodes can never start, and a queue it stays in never empties, so no node would ever
+# be released: it is dropped at once.
+total_nodes=${#free_nodes[@]}
+fitting=()
+for line in "${queue[@]}"; do
+    n="$(awk '{print $2}' <<<"${line}")"
+    if [[ "${n}" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= total_nodes )); then
+        fitting+=("${line}")
+    else
+        echo "$(date -Is) never started (${n} nodes, the launcher has ${total_nodes}): ${line}"
+    fi
+done
+queue=("${fitting[@]}")
 declare -A name_of nodes_of
 # FUSED_FIRST_INDEX: a second launcher inside the same job (on the nodes the first one's ended runs freed) numbers
 # its runs on from there, so no run id repeats.

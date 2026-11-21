@@ -84,6 +84,36 @@ def test_a_fused_job_runs_each_line_on_its_own_nodes_and_hands_freed_nodes_to_th
     assert starts == ["a", "b", "c"]
 
 
+def test_a_fused_line_wider_than_the_allocation_is_dropped_so_freed_nodes_still_go_back(tmp_path: pathlib.Path) -> None:
+    """A 5-node line in a 2-node allocation never starts; left in the queue, it kept every freed node in the job."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "scontrol").write_text(
+        '#!/bin/bash\n[[ "$1" == update ]] && { echo "$*" >>"$UPDATES"; exit 0; }\nprintf \'n%s\\n\' 1 2\n'
+    )
+    (bin_dir / "squeue").write_text('#!/bin/bash\n[[ "$*" == *%N* ]] && echo "n[1-2]" || echo 4102444800\n')
+    for tool in ("scontrol", "squeue"):
+        (bin_dir / tool).chmod(0o755)
+    updates = tmp_path / "updates.txt"
+    instances = tmp_path / "instances.txt"
+    instances.write_text(f"wide 5 {tmp_path} -- true\na 1 {tmp_path} -- sleep 0.3\n")
+    done = bash(
+        f"bash {quote(str(CLUSTER / 'launch_fused.sbatch'))} {quote(str(instances))}",
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "SLURM_JOB_ID": "9",
+            "SLURM_JOB_NODELIST": "n[1-2]",
+            "SLURMD_NODENAME": "n1",
+            "UPDATES": str(updates),
+            "FUSED_POLL_S": "0.1",
+        },
+    )
+    assert done.returncode == 0, done.stderr
+    assert "never started (5 nodes, the launcher has 2)" in done.stdout
+    assert " start wide " not in done.stdout
+    assert updates.read_text().strip() == "update JobId=9 NodeList=n1"
+
+
 @pytest.mark.parametrize("auto_free", ["1", "0"])
 def test_a_fused_job_releases_the_nodes_of_ended_runs_once_nothing_is_queued(
     tmp_path: pathlib.Path, auto_free: str
