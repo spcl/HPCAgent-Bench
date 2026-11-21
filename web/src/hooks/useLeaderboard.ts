@@ -56,7 +56,7 @@ export function modelsOf(board: ExportBoard): ModelEntry[] {
   }
   return [...bySetup.entries()].map(([setup, scores]) => {
     const token = scores[0].model;
-    const meta = MODELS[token] ?? { name: token, provider: "", harness: "", open_weights: true, params_label: "" };
+    const meta = MODELS[token] ?? { name: token, provider: "", harness: "", params_label: "" };
     const tracks: Record<string, TrackMetrics> = {};
     for (const track of TRACKS) {
       const score = scores.find((s) => s.track === track.track);
@@ -89,5 +89,5 @@ export function useLeaderboard() {
       active = false;
     };
   }, []);
-  return { data, loading: data === null };
+  return data;
 }

@@ -1,7 +1,7 @@
 // Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useMemo, useState } from "react";
-import { computeWeightedTokensM, type LeaderboardData, type WeightProfileId } from "../types/leaderboard";
+import { weightedTokens, type LeaderboardData, type WeightProfileId } from "../types/leaderboard";
 import { metricsOf, weightProfiles } from "./ModelPerformanceTable";
 
 interface PlotPoint {
@@ -23,14 +23,14 @@ export function ParetoChart({
   weightProfile: WeightProfileId;
 }) {
   const [hovered, setHovered] = useState<PlotPoint | null>(null);
-  const weights = weightProfiles(data.token_weights)[weightProfile].weights;
+  const weights = useMemo(() => weightProfiles(data.token_weights)[weightProfile].weights, [data.token_weights, weightProfile]);
 
   const { points, paretoLine, maxX, maxY } = useMemo(() => {
     const raw: Omit<PlotPoint, "isPareto">[] = [];
     for (const m of data.models) {
       const tm = metricsOf(m, activeTrack);
       if (tm?.geomean_speedup == null) continue;
-      const cost = computeWeightedTokensM(tm.mean_t_in_m, tm.mean_t_cache_m, tm.mean_t_out_m, weights);
+      const cost = weightedTokens(tm, weights);
       if (!Number.isFinite(cost)) continue;
       raw.push({ id: m.id, name: m.name, speedup: tm.geomean_speedup, xCost: cost, success: tm.success_rate });
     }
@@ -150,7 +150,7 @@ export function ParetoChart({
         </svg>
 
         {hovered && (
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded border border-stone-200 bg-[#FAF9F6] px-3.5 py-2 text-xs text-zinc-700">
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded border border-stone-200 bg-paper px-3.5 py-2 text-xs text-zinc-700">
             <strong className="text-zinc-950">{hovered.name}</strong>
             <span className="font-mono-num">
               Speedup <strong>{hovered.speedup.toFixed(2)}×</strong> · solved{" "}

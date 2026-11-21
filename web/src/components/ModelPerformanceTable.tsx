@@ -2,8 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { AlertCircle, ArrowDown, ArrowUp, ChevronDown, ChevronRight } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
-import type { LeaderboardData, ModelEntry, TokenWeights, TrackMetrics, WeightProfileId } from "../types/leaderboard";
-import { computeWeightedTokensM } from "../types/leaderboard";
+import {
+  formatWeights,
+  weightedTokens,
+  type LeaderboardData,
+  type ModelEntry,
+  type TokenWeights,
+  type TrackMetrics,
+  type WeightProfileId,
+} from "../types/leaderboard";
 
 type SortKey = "speedup" | "success" | "weighted_tokens";
 
@@ -11,7 +18,7 @@ type SortKey = "speedup" | "success" | "weighted_tokens";
 export function weightProfiles(exported: TokenWeights): Record<WeightProfileId, { label: string; weights: TokenWeights }> {
   return {
     export_card: {
-      label: `export card ${exported.in} : ${exported.cache} : ${exported.out}`,
+      label: `export card ${formatWeights(exported)}`,
       weights: exported,
     },
     output_5x: { label: "1 : 0.1 : 5", weights: { in: 1, cache: 0.1, out: 5 } },
@@ -37,7 +44,7 @@ export function ModelPerformanceTable({ data, activeTrack, onTrackChange, weight
   const [sortKey, setSortKey] = useState<SortKey>("speedup");
   const [sortAsc, setSortAsc] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const profiles = weightProfiles(data.token_weights);
+  const profiles = useMemo(() => weightProfiles(data.token_weights), [data.token_weights]);
   const weights = profiles[weightProfile].weights;
 
   const rows = useMemo(() => {
@@ -46,7 +53,7 @@ export function ModelPerformanceTable({ data, activeTrack, onTrackChange, weight
       if (!tm) return Number.NaN;
       if (sortKey === "speedup") return tm.geomean_speedup ?? Number.NaN;
       if (sortKey === "success") return tm.success_rate;
-      return computeWeightedTokensM(tm.mean_t_in_m, tm.mean_t_cache_m, tm.mean_t_out_m, weights);
+      return weightedTokens(tm, weights);
     };
     return [...data.models].sort((a, b) => (sortAsc ? value(a) - value(b) : value(b) - value(a)));
   }, [data.models, activeTrack, sortKey, sortAsc, weights]);
@@ -77,8 +84,8 @@ export function ModelPerformanceTable({ data, activeTrack, onTrackChange, weight
         <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50/90 px-4 py-3 text-xs leading-relaxed text-amber-950">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
           <div>
-            No scores exported yet. Write <code>data/leaderboard.json</code> with{" "}
-            <code>hpcagent-bench leaderboard</code> (docs/leaderboard.md).
+            No scores exported yet: <code>hpcagent-bench leaderboard</code> writes{" "}
+            <code>data/leaderboard.json</code> (docs/leaderboard.md).
           </div>
         </div>
       )}
@@ -162,9 +169,7 @@ export function ModelPerformanceTable({ data, activeTrack, onTrackChange, weight
             {rows.map((m) => {
               const tm = metricsOf(m, activeTrack);
               const isOpen = expandedId === m.id;
-              const weighted = tm
-                ? computeWeightedTokensM(tm.mean_t_in_m, tm.mean_t_cache_m, tm.mean_t_out_m, weights)
-                : Number.NaN;
+              const weighted = tm ? weightedTokens(tm, weights) : Number.NaN;
               return (
                 <Fragment key={m.id}>
                   <tr
@@ -211,7 +216,7 @@ export function ModelPerformanceTable({ data, activeTrack, onTrackChange, weight
                     </td>
                   </tr>
                   {isOpen && tm && (
-                    <tr className="bg-[#FAF9F6]">
+                    <tr className="bg-paper">
                       <td colSpan={columns} className="px-5 py-4">
                         <div className="text-xs text-zinc-500">
                           Setup <code>{m.setup}</code>; per-kernel speedups, fastest first.

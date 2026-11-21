@@ -41,6 +41,7 @@ export interface ExportBoard {
   scores: ExportScore[];
 }
 
+/** Token weights: fresh input : cached input : output, in units of one fresh input token. */
 export interface TokenWeights {
   in: number;
   cache: number;
@@ -54,23 +55,18 @@ export interface TrackMeta {
   short_name: string;
   name: string;
   kernel_count: number;
-  subset_count: number;
-  rank_corr_range: string;
   rank_corr_low: number;
   rank_corr_high: number;
-  agreement_label: string;
   agreement_note: string;
   baseline_rule: string;
   accent_hex: string;
   docs_href: string;
-  description: string;
 }
 
 export interface ModelMeta {
   name: string;
   provider: string;
   harness: string;
-  open_weights: boolean;
   params_label: string;
 }
 
@@ -94,6 +90,8 @@ export interface ModelEntry extends ModelMeta {
   tracks: Record<string, TrackMetrics | undefined>;
 }
 
+export type Verdict = "better" | "worse" | "equivalent" | "tradeoff" | "inconclusive";
+
 export interface AblationEntry {
   id: string;
   intervention: string;
@@ -102,9 +100,11 @@ export interface AblationEntry {
   speed_ci: string;
   solve_delta: string;
   cost_ratio: string;
-  verdict: "different_better" | "different_worse" | "equivalent" | "tradeoff_bad" | "inconclusive";
+  verdict: Verdict;
   verdict_label: string;
   takeaway: string;
+  /** What the skill gives the agent; set for the skills compared side by side. */
+  skill?: string;
 }
 
 export interface PaperMeta {
@@ -112,12 +112,10 @@ export interface PaperMeta {
   arxiv_id: string;
   arxiv_url: string;
   repo_url: string;
-  paper_repo_url?: string;
   docs_url: string;
   license: string;
-  corpus_kernels_release: number;
-  corpus_kernels_paper: number;
-  production_extracted_kernels?: number;
+  corpus_kernels: number;
+  production_kernels: number;
   bibtex: string;
 }
 
@@ -135,6 +133,9 @@ export interface LeaderboardData {
 
 export type WeightProfileId = "export_card" | "output_5x" | "uncached";
 
-export function computeWeightedTokensM(tIn: number, tCache: number, tOut: number, weights: TokenWeights): number {
-  return weights.in * tIn + weights.cache * tCache + weights.out * tOut;
+/** Weighted tokens per task (M) of one track. */
+export function weightedTokens(tm: TrackMetrics, w: TokenWeights): number {
+  return w.in * tm.mean_t_in_m + w.cache * tm.mean_t_cache_m + w.out * tm.mean_t_out_m;
 }
+
+export const formatWeights = (w: TokenWeights) => `${w.in} : ${w.cache} : ${w.out}`;

@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+@theme {
+  --color-paper: #faf9f6;
+}
+
 @layer base {
   body {
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
