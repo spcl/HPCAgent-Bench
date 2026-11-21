@@ -335,11 +335,8 @@ def run(sweep: Sweep, rank: jobs.Rank) -> int:
             f"canon {sweep.column} rank {rank.index}/{rank.size}: OMP_NUM_THREADS={env['OMP_NUM_THREADS']} "
             f"build_folder={env['DACE_default_build_folder']}"
         )
-        python = env.get("HPCAGENT_BENCH_IMAGE_PYTHON", "")
-        if not python:
-            raise SystemExit(
-                "baseline: HPCAGENT_BENCH_IMAGE_PYTHON is unset (the image's launch hook names the interpreter)"
-            )
+        # In an image its launch hook names the interpreter; a host install (docs/sample_sc_triton.md) runs its own.
+        python = env.get("HPCAGENT_BENCH_IMAGE_PYTHON") or sys.executable
         # The column's own compiler, checked once inside the container: otherwise every row would read as declined.
         preflight = [python, "-m", "hpcagent_bench.cli", "preflight", "--frameworks", sweep.column, "--tools-only"]
         if subprocess.run(preflight, env=env, cwd=sweep.opt, check=False).returncode != 0:
