@@ -1,6 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""The framework base class, its array and timer protocols, and the helpers that load and call an implementation."""
+
 import importlib
 import importlib.util
 import inspect
@@ -106,11 +108,15 @@ class ArrayLike(Protocol):
     self-copying, convertible to numpy. See :class:`SparseArray` for the non-convertible case."""
 
     @property
-    def shape(self) -> tuple[int, ...]: ...
+    def shape(self) -> tuple[int, ...]:
+        """The array's shape."""
+        ...
 
     def __array__(self) -> np.ndarray: ...
 
-    def copy(self) -> "ArrayLike": ...
+    def copy(self) -> "ArrayLike":
+        """A copy of the array."""
+        ...
 
 
 class SparseArray(Protocol):
@@ -118,9 +124,13 @@ class SparseArray(Protocol):
     object array); see :meth:`Framework.copy_func`."""
 
     @property
-    def shape(self) -> tuple[int, ...]: ...
+    def shape(self) -> tuple[int, ...]:
+        """The matrix's shape."""
+        ...
 
-    def copy(self) -> "SparseArray": ...
+    def copy(self) -> "SparseArray":
+        """A copy of the matrix."""
+        ...
 
 
 #: Either array shape a kernel argument can take.
@@ -187,30 +197,46 @@ class RetainingImpl(Protocol):
     """A kernel handle that keeps its last call's arrays alive (a compiled DaCe program);
     ``release_retained`` drops them."""
 
-    def release_retained(self) -> None: ...
+    def release_retained(self) -> None:
+        """Free what the implementation kept from its last call."""
+        ...
 
 
 class CudaEvent(Protocol):
     """A CUDA timing event pair (torch.cuda.Event, or CuPy's read through ``cupy.cuda.get_elapsed_time``)."""
 
-    def record(self) -> None: ...
+    def record(self) -> None:
+        """Record the event on the current stream."""
+        ...
 
-    def synchronize(self) -> None: ...
+    def synchronize(self) -> None:
+        """Wait for the event."""
+        ...
 
-    def elapsed_time(self, end_event: Self, /) -> float: ...
+    def elapsed_time(self, end_event: Self, /) -> float:
+        """Milliseconds from this event to ``end_event``."""
+        ...
 
 
 class DeviceStream(Protocol):
     """One device stream; ``synchronize`` blocks until its work is done."""
 
-    def synchronize(self) -> None: ...
+    def synchronize(self) -> None:
+        """Wait for the stream."""
+        ...
 
 
 class DeviceStreamApi(Protocol):
-    def get_current_stream(self) -> DeviceStream: ...
+    """The stream API of a CUDA array module."""
+
+    def get_current_stream(self) -> DeviceStream:
+        """The current stream."""
+        ...
 
 
 class DeviceCudaApi(Protocol):
+    """The ``cuda`` namespace of a CUDA array module."""
+
     stream: DeviceStreamApi
 
 
@@ -290,6 +316,7 @@ class CallPlan:
         self._call = self.f.call_args(self.bench, self.impl, self.resolved_args(), self.bdata)
 
     def resolved_args(self) -> dict[str, ArgValue]:
+        """The arguments of one call: per-run copies of the mutable ones, the bench data for the rest."""
         resolved: dict[str, ArgValue] = {
             a: (self._mutable[a] if a in self._mutable else self.bdata[a]) for a in self.input_args
         }
@@ -379,6 +406,7 @@ class TorchCudaEventTiming:
         return timer
 
     def start_timer(self, timer: Timer) -> None:
+        """Record the timer's start event."""
         start_event_timer(timer)
 
     def stop_timer(self, timer: Timer) -> TimingResult:

@@ -84,4 +84,5 @@ def __getattr__(name: str, eager_names: frozenset[str] = _EAGER_NAMES) -> Any:  
 
 
 def __dir__() -> list[str]:
+    """The module's own names plus the lazily exported names."""
     return sorted(set(globals()) | set(__getattr__("__all__")))

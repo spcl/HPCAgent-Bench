@@ -643,9 +643,13 @@ class DeviceStagingModule(DeviceArrayModule, Protocol):
 
     ndarray: type
 
-    def asarray(self, a: AnyArray, /) -> ArrayLike: ...
+    def asarray(self, a: AnyArray, /) -> ArrayLike:
+        """Copy ``a`` to the device."""
+        ...
 
-    def asnumpy(self, a: AnyArray, /) -> np.ndarray: ...
+    def asnumpy(self, a: AnyArray, /) -> np.ndarray:
+        """Copy ``a`` back to a host NumPy array."""
+        ...
 
 
 def device_staging_module() -> DeviceStagingModule:
@@ -736,6 +740,7 @@ class DaceFramework(Framework):
         return scored
 
     def copy_func(self) -> CopyFunc:
+        """The input copy: to the device for a GPU column, row-major on the host otherwise."""
         # Every GPU flavor needs the device copy, not just ``dace_gpu``.
         if self.column.arch is not Arch.GPU:
             return row_major_copy
@@ -747,6 +752,7 @@ class DaceFramework(Framework):
         return cp_copy_func
 
     def copy_back_func(self) -> CopyFunc:
+        """The output copy: device arrays back to the host for a GPU column."""
         # cupy refuses an implicit device-to-host conversion, so a GPU flavor's device output comes back
         # through ``asnumpy``; a host array is already where it belongs.
         if self.column.arch is not Arch.GPU:
@@ -757,6 +763,7 @@ class DaceFramework(Framework):
     # Pipeline assembly
 
     def autogen_targets(self) -> Sequence[str]:
+        """The auto-generated sibling targets this framework needs."""
         return ("dace",)
 
     def kernel_module(self, bench: Benchmark) -> ModuleType:
@@ -1155,6 +1162,7 @@ class DaceFramework(Framework):
         return bind_free_symbols(impl.sdfg, recipes, args, values, bound)
 
     def set_datatype(self, datatype: str | None) -> None:
+        """Bind the DaCe float and complex types of ``datatype``'s precision."""
         super().set_datatype(datatype)
         # Remember the request so verify() uses the matching tolerance band.
         self.datatype = datatype

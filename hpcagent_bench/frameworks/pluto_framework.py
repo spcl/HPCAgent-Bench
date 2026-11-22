@@ -85,6 +85,7 @@ class PlutoFramework(NativeFramework):
         return cupy_event_timer(program)
 
     def start_timer(self, timer: Timer) -> None:
+        """Start the timer: a CUDA event for the device-resident column, the host clock otherwise."""
         if self.fname != DEVICE_RESIDENT_COLUMN or timer.state is None:
             super().start_timer(timer)
             return

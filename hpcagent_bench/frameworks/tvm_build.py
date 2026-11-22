@@ -181,4 +181,5 @@ class TvmKernel:
 
     @property
     def device(self) -> "tvm.runtime.Device":
+        """The kernel's TVM device."""
         return self.device_fn()

@@ -38,6 +38,7 @@ T = TypeVar("T")
 
 
 def cdquit(fn_name: str) -> None:
+    """Report that ``fn_name`` timed out and interrupt the main thread."""
     print(f"{fn_name} took too long", file=sys.stderr)
     sys.stderr.flush()  # Python 3 stderr is likely buffered.
     thread.interrupt_main()  # raises KeyboardInterrupt

@@ -121,6 +121,7 @@ class ShmPickler(multiprocessing.reduction.ForkingPickler):
     def reducer_override(
         self, obj: object
     ) -> tuple[Callable[[str, "np.dtype", tuple[int, ...], Literal["C", "F"]], "np.ndarray"], tuple[object, ...]]:
+        """Pass a large NumPy array through shared memory instead of the pipe."""
         numpy_module = sys.modules.get("numpy")  # an array means numpy is loaded; this module never imports it
         if numpy_module is None or type(obj) not in (numpy_module.ndarray, numpy_module.memmap):
             return NotImplemented
@@ -181,6 +182,7 @@ class ShmArgs:
         return restore_call, (self.fn, self.call_pickle, self.start_kwargs)
 
     def release(self) -> None:
+        """Unlink the staged shared-memory files."""
         for path in self.staged:
             with contextlib.suppress(OSError):
                 os.unlink(path)
@@ -423,6 +425,7 @@ class ParentState:
         return cls(config.environment(), config.OVERRIDES.snapshot())
 
     def restore(self) -> None:
+        """Restore the parent's environment and config overrides in this child."""
         os.environ.clear()
         os.environ.update(self.environ)
         config.OVERRIDES.replace(self.overrides)
@@ -502,6 +505,7 @@ def child_main[ResultT](
     tag: str = "",
     parent_state: ParentState | None = None,
 ) -> None:
+    """Run ``call`` in the forked child and put its result or error on ``q``."""
     if parent_state is not None:  # a spawned or forkserver child: the parent's state at the start, before any work
         parent_state.restore()
     fn, args, kwargs = call
