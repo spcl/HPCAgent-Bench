@@ -23,9 +23,10 @@
 #                                   builds against the vendor stack, so nothing downstream of it
 #                                   may invalidate it
 #   7  OpenMPI, tblis, HPTT, PAPI, Pluto
-#   8  python frameworks            moves with pyproject.toml (the `amdgpu` extra)
-#   9  dace @ extended              moves whenever the branch moves
-#  10  final gate (harnesses install and tool scripts are bound at launch)
+#   8  the image's own Python       numpy, scipy, mpi4py and cupy, built from source against this image
+#                                   (step 11); every other locked package -- torch, triton, dace, ... -- is
+#                                   installed at job start (launch_venv.sh), so a moved pin needs no rebuild
+#   9  final gate (harnesses install and tool scripts are bound at launch)
 #
 # ROCm 7.2.0 is the GLOBAL pin: SGLang consumes a vendor prebuilt already tagged rocm720, so
 # everything else matches it. AMD tags the .0 release without a patch digit -- `rocm7.2_*` IS
