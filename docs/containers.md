@@ -26,6 +26,9 @@ not listed is built locally (`containers/images/build_and_verify.sbatch <dir>`) 
 `CE_IMAGE_FLAVOR=native` the agent and judge EDFs are the `-native` builds instead of `-latest`
 ([containers/README.md](../containers/README.md#getting-the-images-download-default-or-build-natively)).
 
+The defects we found in the AMD judge and agent images, and their fixes, are listed in
+[containers/images/judge-agent-amd/README.md](../containers/images/judge-agent-amd/README.md).
+
 Get an image and its EDF (the EDFs mount `$SCRATCH`, so run this on the cluster that will use them):
 
 ```bash

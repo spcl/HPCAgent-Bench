@@ -150,6 +150,9 @@ that worktree once the build and its verification are done.
 
 ### AMD (beverin)
 
+The problems we found in these images on the way to v1.0, with their causes, fixes and jobs, are in
+[images/judge-agent-amd/README.md](images/judge-agent-amd/README.md).
+
 Pull the published images (the default: same bytes as published), then render the EDFs:
 
 ```bash
