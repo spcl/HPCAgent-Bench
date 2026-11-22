@@ -143,11 +143,12 @@ in a prefix the Dockerfile controls (a copy in the image would be found first).
   must match the image's CUDA major.
 * `judge-agent-*` build a providerless libfabric only for MPICH to link against, and delete it
   before the image ships: bound by RPATH it would win over the node's and abort `MPI_Init`.
-* `judge-agent-cpu` EDFs: `com.hooks.cxi.enabled` and the GH200 EDFs' `FI_CXI_*` settings, which do NOT reach cxi
-  yet. Measured on Daint (job 5428698, 2 nodes x 1 rank): provider `sockets` with and without the hook, because
-  the image's `libmpi.so` RPATHs spack's own libfabric 2.6.0 (no cxi provider), which the hook cannot replace.
-  A multi-node grade on this image runs over TCP until the image links a libfabric the hook replaces, as the GPU
-  images do (their providerless build, above).
+* `judge-agent-cpu` EDFs: `com.hooks.cxi.enabled` and the GH200 EDFs' `FI_CXI_*` settings. MPICH builds against
+  a compile-only libfabric (`/opt/ofi-sdk`, fabrics `sockets,tcp`) whose library is deleted before the image ships, and
+  `/opt/ofi-fallback` (verbs, shm, tcp) sits last on `LD_LIBRARY_PATH` for a host without the hook, so the node's
+  libfabric is found first. Measured on Daint (job 5430088, 2 nodes x 1 rank, the image of build 5429444):
+  provider `cxi` and a correct host allreduce with and without the hook and the `FI_CXI_*` settings. The earlier
+  image (job 5428698) ran on `sockets`: its `libmpi.so` RPATHed spack's libfabric 2.6.0, which has no cxi provider.
 * `FI_PROVIDER=cxi` goes on inference EDFs only; MPICH inherits it and aborts.
 * A missing `aws_ofi_nccl` hook does not fail: NCCL/RCCL fall back to TCP sockets over `hsn*` and are
   merely slow. Multi-node checks assert `NET/OFI` in the log, never just a correct result.
