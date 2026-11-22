@@ -158,7 +158,7 @@ These are procedures, not image defects. Each one cost a verify or suite run on 
 - **Cause.** Nothing narrowed a worker's devices, so the in-process torch, Triton, jax and cupy calls of all sixteen
   workers ran on GPU 0. The failures start on every worker at once, which is a device-wide fault, not a context one
   test broke. The judge was not affected: each of its slots narrows its grading child to one GPU.
-- **Fix.** `tests/gpu_per_worker.py`, called from `tests/conftest.py` before any device runtime loads, narrows
+- **Fix.** `tests/worker_slot.py`, called from `tests/conftest.py` before any device runtime loads, narrows
   worker `gwN` to GPU `N mod count` (`ROCR_VISIBLE_DEVICES` on AMD), counting GPUs from sysfs, never through a
   runtime (f1ac69be7). A failed Triton reference test now shows the run's traceback, which the run printed and the
   `runtime_error` verdict dropped.
