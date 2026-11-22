@@ -16,10 +16,12 @@ CUTOFF = "np.finfo({a}.dtype).eps * max({a}.shape[0], {a}.shape[1])"
 
 
 def is_none(node: ast.expr) -> bool:
+    """Whether ``node`` is the literal None."""
     return isinstance(node, ast.Constant) and node.value is None
 
 
 def is_lstsq(func: ast.AST) -> bool:
+    """Whether ``func`` is ``<mod>.linalg.lstsq``."""
     return (
         isinstance(func, ast.Attribute)
         and func.attr == "lstsq"
@@ -29,9 +31,12 @@ def is_lstsq(func: ast.AST) -> bool:
 
 
 class LstsqRcond(ast.NodeTransformer):
+    """Give a default-cutoff ``np.linalg.lstsq`` the explicit ``rcond`` NumPy uses."""
+
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Replace a default ``rcond`` with NumPy's cutoff."""
         self.generic_visit(node)
         if not is_lstsq(node.func) or not 2 <= len(node.args) <= 3:
             return node

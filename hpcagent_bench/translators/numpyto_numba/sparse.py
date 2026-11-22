@@ -179,6 +179,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         self.pre: list[ast.stmt] = []
 
     def block(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
+        """Visit a statement list, each statement's hoisted loops before it."""
         out = []
         for stmt in stmts:
             outer, self.pre = self.pre, []
@@ -189,6 +190,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         return out
 
     def generic_visit(self, node: ast.AST) -> ast.AST:
+        """Visit the fields of ``node``, statement lists through :meth:`block`."""
         for field, value in ast.iter_fields(node):
             if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
                 set_field(node, field, self.block(value))
@@ -199,6 +201,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         return node
 
     def visit_While(self, node: ast.While) -> ast.AST:
+        """Refuse a sparse matmul in a while test."""
         # A while TEST is re-evaluated per iteration; splicing its matvec above the loop would
         # compute it once and then spin on a stale value.
         for sub in walk_nodes(node.test):
@@ -209,6 +212,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Replace a sparse matmul with a dense temporary filled by its loop nest."""
         self.generic_visit(node)
         if not isinstance(node.op, ast.MatMult):
             return node
@@ -236,6 +240,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         return name
 
     def alloc(self, temp: str, data_buffer: str, extents: tuple[str, ...]) -> ast.stmt:
+        """The zeros allocation of a matmul temporary."""
         shape = extents[0] if len(extents) == 1 else "({})".format(", ".join(extents))
         return ast.parse(f"{temp} = np.zeros({shape}, dtype={data_buffer}.dtype)").body[0]
 

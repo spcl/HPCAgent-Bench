@@ -81,6 +81,7 @@ class RouteUnsafeCalls(ast.NodeTransformer):
         self.helpers: dict[tuple[str, str, int, tuple[str, ...]], tuple[str, str]] = {}
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Route a parfor-unsafe call to the serial module function."""
         self.generic_visit(node)
         func = node.func
         if not (isinstance(func, ast.Attribute) and func.attr in PARFOR_UNSAFE_CALLS and routable_call(node)):

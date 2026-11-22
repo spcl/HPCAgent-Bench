@@ -30,12 +30,14 @@ class FftObjmodeRewriter(ast.NodeTransformer):
         self.used = False
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        """Rewrite the function with its own rank table."""
         outer, self.ranks = self.ranks, rank_table(node, self.ranks)
         self.generic_visit(node)
         self.ranks = outer
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Run an FFT assignment in object mode through a typed temporary."""
         self.generic_visit(node)
         call = node.value
         if not (

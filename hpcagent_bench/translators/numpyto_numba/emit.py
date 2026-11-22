@@ -129,6 +129,7 @@ class NarrowFloatLiterals(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Compare(self, node: ast.Compare) -> ast.expr:
+        """Narrow the float literals of a comparison's non-literal operands only."""
         kept = [
             v if operators.folded_float_constant(v) is not None else self.visit(v)
             for v in (node.left, *node.comparators)
@@ -138,6 +139,7 @@ class NarrowFloatLiterals(ast.NodeTransformer):
         return node
 
     def visit(self, node: ast.AST) -> ast.AST:
+        """Wrap a float literal in ``np.float32``."""
         if (
             isinstance(node, ast.expr)
             and not isinstance(node, ast.Compare)
