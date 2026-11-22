@@ -88,6 +88,7 @@ def setups_dir() -> pathlib.Path | None:
 
 
 def fused() -> bool:
+    """Whether this process runs in a fused job."""
     return setups_dir() is not None
 
 
@@ -105,6 +106,7 @@ def read_overlay(directory: str, setup: str) -> tuple[tuple[str, str | None], ..
 
 
 def setup_overlay(setup: str) -> dict[str, str | None]:
+    """The env overlay of ``setup`` in this fused job; refused outside one."""
     directory = setups_dir()
     if directory is None:
         raise FusedRefusal(HTTPStatus.INTERNAL_SERVER_ERROR, "not a fused job")
@@ -117,6 +119,7 @@ def judge_overlay(setup: str) -> dict[str, str | None]:
 
 
 def token_digest(token: str) -> str:
+    """The SHA-256 hex digest of ``token``."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 

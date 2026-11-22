@@ -1201,6 +1201,7 @@ class OverrideTable:
         self.version = 0
 
     def state(self) -> OverrideState:
+        """The current version and overrides."""
         with self.lock:
             return OverrideState(self.version, tuple(self.values.items()))
 
@@ -1210,22 +1211,26 @@ class OverrideTable:
             return dotted in self.values, self.values.get(dotted)
 
     def put(self, dotted: str, value: object) -> None:
+        """Set one override and bump the version."""
         with self.lock:
             self.values[dotted] = value
             self.version += 1
 
     def drop(self, dotted: str) -> None:
+        """Remove one override and bump the version."""
         with self.lock:
             if dotted in self.values:
                 del self.values[dotted]
                 self.version += 1
 
     def replace(self, snapshot: Mapping[str, object]) -> None:
+        """Replace every override and bump the version."""
         with self.lock:
             self.values = dict(snapshot)
             self.version += 1
 
     def snapshot(self) -> dict[str, object]:
+        """A copy of the overrides."""
         with self.lock:
             return dict(self.values)
 

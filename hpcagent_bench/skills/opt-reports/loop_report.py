@@ -157,6 +157,8 @@ class Remark:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Parsed:
+    """The remarks of one report and the count of lines that did not parse."""
+
     remarks: tuple[Remark, ...]
     unparsed: int
 
@@ -176,6 +178,8 @@ class VectorDetail:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Verdict:
+    """What the remarks say of one loop."""
+
     vectorized: tuple[VectorDetail, ...]
     missed: tuple[str, ...]
     notes: tuple[str, ...]
@@ -195,12 +199,16 @@ class Loop:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Nest:
+    """One loop nest and its loops."""
+
     start: int
     loops: tuple[Loop, ...]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Grouped:
+    """The verdicts grouped by file, nest and loop."""
+
     nests: dict[str, tuple[Nest, ...]]
     by_loop: dict[tuple[str, int, int], Verdict]
     outside: dict[str, Verdict]
@@ -211,6 +219,7 @@ class Grouped:
 
 
 def display_path(name: str) -> str:
+    """``name`` relative to the working directory, or its base name."""
     path = pathlib.Path(name)
     if not path.is_absolute():
         return name
@@ -219,6 +228,7 @@ def display_path(name: str) -> str:
 
 
 def clang_remark(match: re.Match | None, body: str) -> Remark:
+    """The remark a clang diagnostic's location and body make."""
     tag = CLANG_TAG.search(body)
     kind = CLANG_KINDS[tag.group("flavor")] if tag else "remark"
     pass_name = tag.group("pass") if tag else ""
@@ -236,6 +246,7 @@ def clang_remark(match: re.Match | None, body: str) -> Remark:
 
 
 def parse_clang(lines: Sequence[str]) -> Parsed:
+    """Parse clang optimization remarks."""
     remarks: list[Remark] = []
     unparsed = 0
     index = 0
@@ -262,6 +273,7 @@ def parse_clang(lines: Sequence[str]) -> Parsed:
 
 
 def parse_gcc(lines: Sequence[str]) -> Parsed:
+    """Parse GCC optimization remarks."""
     remarks: list[Remark] = []
     unparsed = 0
     for raw in lines:
@@ -292,11 +304,13 @@ def strip_roots(text: str, roots: Sequence[str]) -> str:
 
 
 def parse_report(text: str, family: str, roots: Sequence[str] = ()) -> Parsed:
+    """Parse a report of compiler ``family`` with the source roots stripped."""
     lines = strip_roots(text, (str(pathlib.Path.cwd()), *roots)).splitlines()
     return parse_clang(lines) if family == CLANG else parse_gcc(lines)
 
 
 def merge(parsed: Sequence[Parsed]) -> Parsed:
+    """Join several parsed reports."""
     return Parsed(remarks=tuple(r for p in parsed for r in p.remarks), unparsed=sum(p.unparsed for p in parsed))
 
 
@@ -304,6 +318,7 @@ def merge(parsed: Sequence[Parsed]) -> Parsed:
 
 
 def vector_detail(text: str) -> VectorDetail | None:
+    """The vector width, interleave and unroll a remark states, or None."""
     gcc = GCC_VEC.match(text)
     if gcc is not None:
         kind = " ".join(part.strip() for part in (gcc.group("epilogue"), gcc.group("masked")) if part)
@@ -331,6 +346,7 @@ def vector_detail(text: str) -> VectorDetail | None:
 
 
 def missed_reason(text: str) -> str:
+    """Why a loop was not vectorized, from its remark."""
     for prefix in MISSED_PREFIXES:
         if text.startswith(prefix):
             return text[len(prefix) :].rstrip(".")
@@ -372,11 +388,13 @@ def classify(remarks: Sequence[Remark]) -> Verdict:
 
 
 def indent_of(raw: str) -> int:
+    """The indentation width of ``raw``."""
     expanded = raw.expandtabs(TAB_WIDTH)
     return len(expanded) - len(expanded.lstrip())
 
 
 def body_end(lines: Sequence[str], header: int, indent: int) -> int:
+    """The last line of the block indented under ``header``."""
     end = header
     for number in range(header + 1, len(lines) + 1):
         raw = lines[number - 1]
@@ -433,6 +451,7 @@ def scan_nests(text: str) -> tuple[Nest, ...]:
 
 
 def owning_loop(nests: Sequence[Nest], line: int) -> tuple[int, Loop] | None:
+    """The nest start and innermost loop holding ``line``, or None."""
     best: tuple[int, Loop] | None = None
     for nest in nests:
         for loop in nest.loops:
@@ -469,6 +488,7 @@ def group(parsed: Parsed, sources: dict[str, str]) -> Grouped:
 
 
 def render_vector(detail: VectorDetail) -> str:
+    """One vectorization detail as text."""
     if not detail.parsed:
         return f"{UNPARSED_DETAIL} {detail.raw}"
     parts = [detail.kind] if detail.kind else []
@@ -485,6 +505,7 @@ def render_vector(detail: VectorDetail) -> str:
 
 
 def counted(items: Sequence[str]) -> list[str]:
+    """``items`` with repeats folded into ``item xN``."""
     tally: dict[str, int] = {}
     for item in items:
         tally[item] = tally.get(item, 0) + 1
@@ -492,6 +513,7 @@ def counted(items: Sequence[str]) -> list[str]:
 
 
 def loop_lines(prefix: str, verdict: Verdict) -> list[str]:
+    """The summary lines of one loop's verdict."""
     out: list[str] = []
     if verdict.vectorized:
         out.append(f"{prefix} vec: " + "; ".join(counted([render_vector(d) for d in verdict.vectorized])))
@@ -505,6 +527,7 @@ def loop_lines(prefix: str, verdict: Verdict) -> list[str]:
 def build_summary(
     parsed: Parsed, sources: dict[str, str], report_paths: Sequence[str], compiler: str, family: str
 ) -> str:
+    """The loop-nest summary of the parsed remarks."""
     grouped = group(parsed, sources)
     out = [f"loop-nest summary: compiler={compiler} family={family} remarks={len(parsed.remarks)}", ""]
     for name in sorted(grouped.nests):
@@ -535,12 +558,14 @@ def build_summary(
 
 @functools.lru_cache(typed=True)
 def compiler_family(compiler: str) -> str:
+    """Whether ``compiler`` is clang or GCC, from its version banner."""
     proc = subprocess.run([compiler, "--version"], capture_output=True, text=True, check=False)
     banner = (proc.stdout or proc.stderr).splitlines()
     return CLANG if banner and "clang" in banner[0].lower() else GCC
 
 
 def resolve_compiler(choice: str, sources: Sequence[pathlib.Path]) -> str:
+    """The compiler to use: ``choice``, or for ``auto`` the first of GCC and clang on ``PATH``."""
     if choice != "auto":
         if shutil.which(choice) is None:
             raise SystemExit(f"no such compiler: {choice!r} -- pass --compiler")
@@ -553,11 +578,13 @@ def resolve_compiler(choice: str, sources: Sequence[pathlib.Path]) -> str:
 
 
 def report_command(compiler: str, family: str, cflags: Sequence[str], source: pathlib.Path) -> list[str]:
+    """The compile command that writes ``source``'s optimization report."""
     report = flags.GCC_OPT_REPORT if family == GCC else flags.CLANG_OPT_REPORT
     return [compiler, *cflags, *report.split(), DEBUG_FLAG[family], "-c", str(source), "-o", os.devnull]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line: compile sources and summarize their loop optimization remarks."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("sources", nargs="+", type=pathlib.Path, help="C/C++ sources to compile and report on")
     parser.add_argument("--compiler", default="auto", help="gcc/clang/g++/clang++ or a path ('auto': first on PATH)")

@@ -245,6 +245,7 @@ def build(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line: export a study's observations."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--study",

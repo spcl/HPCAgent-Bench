@@ -55,10 +55,12 @@ type Emitter = Callable[[pathlib.Path, pathlib.Path, pathlib.Path], str]
 
 
 def file_for(module_name: str, target: str) -> str:
+    """The file name of ``module_name``'s generated ``target`` sibling."""
     return f"{module_name}_{target}.py"
 
 
 def emit_dace_sibling(numpy_py: pathlib.Path, kdir: pathlib.Path, bench_info: pathlib.Path) -> str:
+    """Emit the DaCe sibling of a NumPy kernel next to it; return the written path."""
     out = kdir / file_for(numpy_py.stem.removesuffix("_numpy"), "dace")
     from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace
     from hpcagent_bench.translators.numpyto_common.emit_io import write_generated
@@ -106,6 +108,7 @@ def emittable(spec: BenchSpec, targets: Iterable[str]) -> list[str]:
 
 
 def emit_target(target: str, numpy_py: pathlib.Path, kdir: pathlib.Path, bench_info: pathlib.Path) -> str:
+    """Emit the ``target`` sibling of a NumPy kernel; an unknown target is a ``ValueError``."""
     emitter = EMITTERS.get(target)
     if emitter is None:
         raise ValueError(f"unknown auto-gen target {target!r}; known: {tuple(EMITTERS)}")
@@ -135,6 +138,7 @@ THREAD_LOCKS_GUARD = threading.Lock()
 
 
 def thread_lock(path: pathlib.Path) -> threading.RLock:
+    """The process-wide re-entrant lock for ``path``."""
     with THREAD_LOCKS_GUARD:
         return THREAD_LOCKS.setdefault(path, threading.RLock())
 
@@ -211,6 +215,7 @@ NATIVE_PRECISIONS = ("", "float32")
 
 
 def wrapper_path(spec: BenchSpec) -> pathlib.Path:
+    """The path of the kernel's generated C++ wrapper module."""
     return spec.sibling("_cpp.py")
 
 

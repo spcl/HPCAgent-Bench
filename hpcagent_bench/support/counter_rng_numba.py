@@ -89,12 +89,14 @@ def hashed(index: np.uint64, key: np.uint64) -> np.uint64:
 def uniform_kernel(
     out: NDArray[np.floating[Any]], first: np.uint64, key: np.uint64, shift: np.uint64, scale: float
 ) -> None:
+    """Fill ``out`` with uniform draws from the counter hash."""
     for position in range(out.size):
         out[position] = (hashed(first + np.uint64(position), key) >> shift) * scale
 
 
 @numba.njit(nogil=True, cache=True)
 def normal_kernel(out: NDArray[np.floating[Any]], first: np.uint64, key: np.uint64) -> None:
+    """Fill ``out`` with approximately normal draws: a centred sum of hashed pieces."""
     for position in range(out.size):
         base = (first + np.uint64(position)) * WORDS
         total = np.uint64(0)
@@ -108,6 +110,7 @@ def normal_kernel(out: NDArray[np.floating[Any]], first: np.uint64, key: np.uint
 
 @numba.njit(nogil=True, cache=True)
 def integers_kernel(out: NDArray[np.int64], first: np.uint64, key: np.uint64, bound: np.uint64) -> None:
+    """Fill ``out`` with integers below ``bound`` from the counter hash."""
     for position in range(out.size):
         out[position] = hashed(first + np.uint64(position), key) % bound
 
@@ -124,6 +127,7 @@ POOLS: dict[tuple[int, int], concurrent.futures.ThreadPoolExecutor] = {}
 
 
 def pool(workers: int) -> concurrent.futures.ThreadPoolExecutor:
+    """This process's thread pool of ``workers`` threads."""
     key = (os.getpid(), workers)
     if key not in POOLS:
         POOLS[key] = concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="counter-rng")

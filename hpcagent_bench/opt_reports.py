@@ -105,6 +105,7 @@ MANIFEST_ADAPTER: pydantic.TypeAdapter[KernelReportManifest] = pydantic.TypeAdap
 
 
 def write_manifest(out_dir: pathlib.Path, manifest: KernelReportManifest) -> pathlib.Path:
+    """Write ``manifest`` as ``manifest.json`` under ``out_dir``; return its path."""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "manifest.json"
     path.write_text(json.dumps(MANIFEST_ADAPTER.dump_python(manifest, mode="json"), indent=2, sort_keys=True) + "\n")
@@ -114,6 +115,7 @@ def write_manifest(out_dir: pathlib.Path, manifest: KernelReportManifest) -> pat
 def declined_manifest(
     kernel: str, framework: str, compiler: str, extra_flags: str, reason: str
 ) -> KernelReportManifest:
+    """The manifest of a kernel whose report was declined for ``reason``."""
     return KernelReportManifest(
         kernel=kernel,
         framework=framework,

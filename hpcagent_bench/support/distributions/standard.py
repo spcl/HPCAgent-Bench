@@ -26,6 +26,7 @@ type Sampler = Callable[[CounterGenerator, dict[str, Any], tuple[int, ...]], np.
 
 
 def normal(rng: CounterGenerator, spec: dict[str, Any], shape: tuple[int, ...]) -> np.ndarray:
+    """Normal draws with the spec's ``loc`` and ``scale``."""
     return rng.normal(loc=float(spec.get("loc", 0.0)), scale=float(spec.get("scale", 1.0)), size=shape)
 
 
@@ -36,10 +37,12 @@ def lognormal(rng: CounterGenerator, spec: dict[str, Any], shape: tuple[int, ...
 
 
 def exponential(rng: CounterGenerator, spec: dict[str, Any], shape: tuple[int, ...]) -> np.ndarray:
+    """Exponential draws with the spec's ``scale``."""
     return rng.exponential(scale=float(spec.get("scale", 1.0)), size=shape)
 
 
 def gamma(rng: CounterGenerator, spec: dict[str, Any], shape: tuple[int, ...]) -> np.ndarray:
+    """Gamma draws with the spec's ``shape`` and ``scale``."""
     return rng.gamma(shape=float(spec.get("shape", 2.0)), scale=float(spec.get("scale", 1.0)), size=shape)
 
 
@@ -51,6 +54,7 @@ def beta(rng: CounterGenerator, spec: dict[str, Any], shape: tuple[int, ...]) ->
 
 
 def laplace(rng: CounterGenerator, spec: dict[str, Any], shape: tuple[int, ...]) -> np.ndarray:
+    """Laplace draws with the spec's ``loc`` and ``scale``."""
     return rng.laplace(loc=float(spec.get("loc", 0.0)), scale=float(spec.get("scale", 1.0)), size=shape)
 
 

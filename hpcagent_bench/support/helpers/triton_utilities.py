@@ -145,14 +145,19 @@ def chained_affine(
 
 
 class Launchable(Protocol):
+    """A Triton kernel indexed by its launch grid."""
+
     def __getitem__(self, grid: object, /) -> Callable[..., object]: ...
 
 
 class Kernel(Launchable, Protocol):
+    """A Triton kernel with its argument names."""
+
     arg_names: list[str]
 
 
 def powers_of_2(start: int, end: int | None = None) -> Iterator[int]:
+    """The powers of two from ``2**start`` to ``2**end``; one argument is the end."""
     if end is None:
         end = start
         start = 0
@@ -185,6 +190,7 @@ def complex_mul2(a: tl.tensor, b: tl.tensor) -> tl.tensor:
 def complex_div(
     a_real: tl.tensor, a_imag: tl.tensor, b_real: tl.tensor, b_imag: tl.tensor
 ) -> tuple[tl.tensor, tl.tensor]:
+    """Divide tiles of complex numbers given as real and imaginary parts."""
     num_real, num_imag = complex_mul(a_real, a_imag, b_real, -b_imag)  # pyright: ignore[reportGeneralTypeIssues]  # a jit value is iterable in a kernel; the stub says NoReturn
     denom_real, _ = complex_mul(b_real, b_imag, b_real, -b_imag)
     return num_real / denom_real, num_imag / denom_real
@@ -291,6 +297,7 @@ def get_6d_tile_offsets(
 def get_4d_tile_offsets(
     c0: tl.tensor, c1: tl.tensor, c2: tl.tensor, c3: tl.tensor, tile_dims: tl.constexpr, matrix_dims: tl.constexpr
 ) -> tuple[tl.tensor, tl.tensor]:
+    """The offsets and mask of a 4-D tile."""
     n0: tl.constexpr = tile_dims[0]
     n1: tl.constexpr = tile_dims[1]
     n2: tl.constexpr = tile_dims[2]
@@ -458,6 +465,7 @@ def get_1d_tile_offsets(x: tl.tensor, tile_width: tl.tensor, vector_width: tl.te
 
 
 def get_mean_sumsq_configs() -> list[triton.Config]:
+    """The autotune configs of the mean and sum-of-squares kernel."""
     return [
         triton.Config({"BLOCK_SIZE_M": m, "BLOCK_SIZE_N": n}, num_warps=w)
         for m, n, w in itertools.product([16, 32, 64, 128], [32, 64, 128, 256], [1, 2, 4, 8])
@@ -517,6 +525,7 @@ def kernel_mean_and_sumsq(
 
 
 def get_stddev_configs() -> list[triton.Config]:
+    """The autotune configs of the standard-deviation kernel."""
     return [
         triton.Config({"BLOCK_SIZE_N": n}, num_warps=b)
         for n, b in itertools.product([16, 32, 64, 128, 256, 512, 1024, 2048, 4096], [1, 2, 4, 8])
@@ -525,6 +534,7 @@ def get_stddev_configs() -> list[triton.Config]:
 
 @triton.jit()
 def unary_noop(x: tl.tensor) -> tl.tensor:
+    """Return ``x`` unchanged."""
     return x
 
 
@@ -774,6 +784,7 @@ def matmul_kernel_float32(
 
 
 def matmul_float32(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Multiply two float32 matrices with the Triton kernel."""
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     M, K = a.shape
     K, N = b.shape
@@ -798,6 +809,7 @@ def matmul_float32(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 def matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Multiply two float32 or float64 matrices with the Triton kernel."""
     if a.dtype == torch.float64 and b.dtype == torch.float64:
         return matmul_float64(a, b)
     if a.dtype == torch.float32 and b.dtype == torch.float32:

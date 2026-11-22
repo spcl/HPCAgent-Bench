@@ -38,6 +38,7 @@ def to_numpy(a: np.ndarray | tvm.runtime.Tensor) -> np.ndarray:
 
 
 def spmv_primfunc(n: int, nnz: int, max_nnz: int, dtype: np.dtype | str) -> tvm.tirx.PrimFunc:
+    """The TVM function of a CSR sparse matrix-vector product, padded to ``max_nnz`` per row."""
     indptr = te.placeholder((n + 1,), name="indptr", dtype="int32")
     indices = te.placeholder((nnz,), name="indices", dtype="int32")
     data = te.placeholder((nnz,), name="data", dtype=dtype)

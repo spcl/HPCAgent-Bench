@@ -134,6 +134,7 @@ def gen_kernel_mpi_stub(binding: Binding, lang: Language = Language.C, *, padded
 
 
 def c_int_array(name: str, values: Sequence[int]) -> str:
+    """A C ``static const int`` array named ``name`` holding ``values``."""
     body = ", ".join(str(int(v)) for v in values) or "0"
     return f"static const int {name}[] = {{ {body} }};"
 

@@ -22,6 +22,7 @@ class SparseConfigError(ValueError):
 
 
 def config_error(source: str, path: str, msg: str) -> SparseConfigError:
+    """The config error for ``msg`` at ``path`` in ``source``."""
     return SparseConfigError(f"{source}: {path}: {msg}")
 
 

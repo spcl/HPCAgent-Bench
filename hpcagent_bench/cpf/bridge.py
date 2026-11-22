@@ -543,14 +543,17 @@ class RenderedForm(NamedTuple):
 
     @property
     def binding_name(self) -> str:
+        """The file name of the form's binding."""
         return f"{pathlib.Path(self.name).stem}_binding.json"
 
     @property
     def device_name(self) -> str:
+        """The file name of the form's device half."""
         return f"{pathlib.Path(self.name).stem}.{LANGUAGE_EXT[self.device_dialect]}"
 
     @property
     def sdfg_name(self) -> str:
+        """The file name of the form's SDFG."""
         return f"{pathlib.Path(self.name).stem}.sdfgz"
 
     def artefacts(self) -> tuple[tuple[Role, str, bytes], ...]:
@@ -651,6 +654,7 @@ class PythonIntegerForm(ast.NodeTransformer):
     """Rewrites the :data:`DACE_INTEGER_HELPERS` calls of a size expression into Python operators."""
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
+        """Rewrite a DaCe integer helper call as its Python integer equivalent."""
         self.generic_visit(node)
         name = node.func.id if isinstance(node.func, ast.Name) else ""
         if name not in DACE_INTEGER_HELPERS:

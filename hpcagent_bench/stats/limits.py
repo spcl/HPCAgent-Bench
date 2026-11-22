@@ -134,6 +134,7 @@ class Limits(NamedTuple):
 
     @property
     def protocol_recorded(self) -> bool:
+        """Whether the limits come from a recorded protocol."""
         return bool(self.source)
 
     def text(self) -> str:

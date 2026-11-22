@@ -54,4 +54,5 @@ def __getattr__(name: str) -> object:
 
 
 def __dir__() -> list[str]:
+    """The module's own names plus the lazily exported API names."""
     return sorted(list(globals()) + list(API_EXPORTS))

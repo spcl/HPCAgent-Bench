@@ -210,6 +210,7 @@ class Curve:
 
     @property
     def ranks(self) -> tuple[int, ...]:
+        """The rank counts of the curve's points."""
         return tuple(point.ranks for point in self.points)
 
     def mean_efficiency(self) -> float:

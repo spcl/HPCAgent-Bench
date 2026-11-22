@@ -318,6 +318,7 @@ def canon_rows(log: pathlib.Path) -> list[dict[str, Any]]:
 
 
 def write_csv(path: pathlib.Path, fields: Iterable[str], rows: Iterable[dict[str, Any]]) -> int:
+    """Write ``rows`` as a CSV with columns ``fields``, replacing ``path``; return the row count."""
     written = 0
     with replacing(path) as tmp, tmp.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(fields), extrasaction="ignore")
@@ -1394,6 +1395,7 @@ def baseline_entries(
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse the extract command line."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument(
         "--runs",
@@ -1586,6 +1588,7 @@ def extract(options: Options) -> Extracted:
 
 
 def main(argv: list[str]) -> int:
+    """Command line: extract observations from run roots and results databases."""
     args = parse_args(argv)
     try:
         sources = source_roots(args.runs)

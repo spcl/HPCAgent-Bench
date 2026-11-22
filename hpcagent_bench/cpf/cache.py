@@ -192,6 +192,7 @@ class Entry(pydantic.BaseModel):
 
     @pydantic.model_validator(mode="after")
     def current_and_complete(self) -> "Entry":
+        """This entry, after checking its layout and that an ok entry lists its artefacts; ``ValueError`` otherwise."""
         if self.layout != LAYOUT:
             raise ValueError(f"layout {self.layout}, this reader expects {LAYOUT}")
         if self.verdict is RenderVerdict.OK and not (
@@ -231,6 +232,7 @@ def cache_key(kind: str, inputs: str, dace_commit: str, options: Mapping[str, ob
 
 
 def entry_path(cache_root: pathlib.Path, key: str) -> pathlib.Path:
+    """The path of entry ``key`` under ``cache_root``."""
     return cache_root / key[:2] / key
 
 

@@ -18,6 +18,7 @@ __all__ = ["append_line", "file_sha256", "json_digest", "replacing", "sha256_hex
 
 
 def sha256_hex(data: bytes) -> str:
+    """The SHA-256 hex digest of ``data``."""
     return hashlib.sha256(data).hexdigest()
 
 

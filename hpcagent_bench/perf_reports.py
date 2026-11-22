@@ -195,6 +195,7 @@ class CallNode:
     children: dict[tuple[str, str], "CallNode"] = dataclasses.field(default_factory=dict["tuple[str, str]", "CallNode"])
 
     def child(self, symbol: str, dso: str) -> "CallNode":
+        """The child node of ``symbol`` in ``dso``, added on first use."""
         return self.children.setdefault((symbol, dso), CallNode(symbol, dso))
 
     def ordered_children(self) -> list["CallNode"]:

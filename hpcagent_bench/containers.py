@@ -181,6 +181,7 @@ def clean_partial_install(prefix: str, preexisting: Collection[str]) -> None:
 
 
 def install_apptainer_main(argv: Sequence[str] | None = None) -> int:
+    """Command line: install Apptainer under a prefix (default ``~/.local``)."""
     argv = sys.argv[1:] if argv is None else argv
     prefix = argv[0] if argv else "~/.local"
     return install_apptainer(prefix)

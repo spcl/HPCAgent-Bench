@@ -553,6 +553,7 @@ class MinorLocator(Locator):
         return self.tick_values(low, high)
 
     def tick_values(self, vmin: float, vmax: float) -> Sequence[float]:
+        """The minor tick positions between the major ticks in ``[vmin, vmax]``."""
         if not isinstance(self.axis, Axis):
             return []
         low, high = sorted((float(vmin), float(vmax)))

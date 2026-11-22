@@ -373,6 +373,7 @@ def prerender(
 
 
 def render_command(args: argparse.Namespace) -> int:
+    """Render the requested kernels into the cache in a scratch directory removed afterwards."""
     target, hints = cpf_cache.Target.parse(args.target), cpf_cache.HintDetail.parse(args.hints)
     require_toolchain()
     package = dace_package()
@@ -389,6 +390,7 @@ def render_command(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line: render, check or stage CPF forms."""
     parser = argparse.ArgumentParser(description="render CPF forms into the cache, check it, or stage one form")
     sub = parser.add_subparsers(dest="command", required=True)
     render = sub.add_parser("render", help="render kernels into the cache")

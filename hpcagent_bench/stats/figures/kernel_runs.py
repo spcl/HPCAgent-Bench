@@ -133,6 +133,7 @@ def condition_of(setup: str) -> str:
 
 
 def is_temperature(condition: str) -> bool:
+    """Whether ``condition`` names a served temperature."""
     return TEMPERATURE_SUFFIX.search(f"-{condition}") is not None
 
 
@@ -190,6 +191,7 @@ def column_key(condition: str, kernel: str) -> str:
 
 
 def kernel_of_key(key: str) -> str:
+    """The kernel part of a row key."""
     return key.split(KEY_SEP, 1)[1]
 
 

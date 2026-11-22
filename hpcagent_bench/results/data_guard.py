@@ -79,10 +79,12 @@ def protected_roots() -> tuple[pathlib.Path, ...]:
 
 
 def real(path: PathLike) -> pathlib.Path:
+    """``path`` with the user expanded and resolved."""
     return pathlib.Path(path).expanduser().resolve()
 
 
 def within(path: pathlib.Path, root: pathlib.Path) -> bool:
+    """Whether ``path`` is ``root`` or under it."""
     return path == root or root in path.parents
 
 

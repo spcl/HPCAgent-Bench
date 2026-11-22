@@ -106,6 +106,7 @@ def c_constants(binding: Binding) -> str:
 
 
 def gen_c(binding: Binding, *, cpp: bool) -> str:
+    """The C or C++ stub of a binding."""
     lang = Language.CPP if cpp else Language.C
     sym = binding.symbols[lang]
     parts: list[str] = c_params(binding, lang)
@@ -131,6 +132,7 @@ def fortran_extents(arg: Arg, in_scope: frozenset) -> str:
 
 
 def gen_fortran(binding: Binding) -> str:
+    """The Fortran stub of a binding."""
     sym = binding.symbols[Language.FORTRAN]
     names = [a.name for a in binding.args] + [WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
     arglist = ", ".join(names)

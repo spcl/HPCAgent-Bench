@@ -39,6 +39,7 @@ KMP_PAUSE_SYMBOL = "__kmpc_pause_resource"
 
 
 def exports(lib: ctypes.CDLL, symbol: str) -> bool:
+    """Whether ``lib`` exports ``symbol``."""
     try:
         lib[symbol]
     except AttributeError:

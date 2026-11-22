@@ -30,6 +30,7 @@ class Parser(argparse.ArgumentParser):
         )
 
     def add_argument(self, *args: Any, **kwargs: Any) -> argparse.Action:  # noqa: ANN401 -- argparse's own signature
+        """Add an argument, remembering the options that take one value."""
         action = super().add_argument(*args, **kwargs)
         if kwargs.get("action") != "append":
             self.single.update(action.option_strings)
@@ -40,6 +41,7 @@ class Parser(argparse.ArgumentParser):
         args: Sequence[str] | None = None,
         namespace: Any = None,  # noqa: ANN401 -- argparse's own signature
     ) -> tuple[Any, list[str]]:
+        """Parse, refusing a single-value option given twice."""
         given = sys.argv[1:] if args is None else list(args)
         flags = (arg.partition("=")[0] for arg in itertools.takewhile(lambda arg: arg != "--", given))
         for flag, count in collections.Counter(flag for flag in flags if flag in self.single).items():

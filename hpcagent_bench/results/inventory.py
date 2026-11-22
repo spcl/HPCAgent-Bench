@@ -81,6 +81,8 @@ type Row = dict[str, str | int | float]
 
 
 class JobRow(NamedTuple):
+    """One job directory under a run root."""
+
     root: str
     job: str
     path: pathlib.Path
@@ -120,6 +122,8 @@ def launch_stamp(run_dir: pathlib.Path) -> LaunchStamp | None:
 
 
 class NodeHours(NamedTuple):
+    """One Slurm job's node count and elapsed seconds."""
+
     job: str
     name: str
     state: str
@@ -197,6 +201,7 @@ def inventory(roots: Iterable[pathlib.Path]) -> list[Row]:
 
 
 def write_csv(path: pathlib.Path, columns: Sequence[str], rows: Iterable[Row]) -> None:
+    """Write ``rows`` as a CSV with ``columns``."""
     with path.open("w", newline="", encoding="utf-8") as out:
         writer = csv.DictWriter(out, fieldnames=columns)
         writer.writeheader()
@@ -247,6 +252,7 @@ def sacct_text(jobs: Sequence[str]) -> str:
 
 
 def parse_sacct(text: str) -> list[NodeHours]:
+    """Parse ``sacct`` pipe-separated output into node-hour rows."""
     rows = [line.split("|") for line in text.splitlines() if line.strip()]
     return [
         NodeHours(job, name, state.split()[0], int(nodes), int(elapsed)) for job, name, state, elapsed, nodes in rows

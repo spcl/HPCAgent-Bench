@@ -195,9 +195,11 @@ class KernelCell:
 
     @property
     def n(self) -> int:
+        """The number of episodes."""
         return len(self.episodes)
 
     def median(self) -> float:
+        """The median episode value, or NaN if there is none."""
         return float(np.median(self.episodes)) if self.episodes else math.nan
 
 
