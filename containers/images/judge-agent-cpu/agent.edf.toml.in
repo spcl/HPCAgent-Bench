@@ -5,7 +5,9 @@
 # /usr/local/bin is the gcc 16 symlinks (ahead of distro gcc 13), /usr/lib/llvm-22/bin clang/flang;
 # keep in sync with the Dockerfile's GCC_MAJOR / LLVM_MAJOR.
 #
-# No hooks: grades on one node with the image's spack MPICH over its own libfabric.
+# On Slingshot the cxi hook and the FI_CXI_* settings below are the GPU EDFs' (judge-agent-cuda). A multi-node
+# grade over cxi is NOT yet verified for this image: its MPICH links spack's libfabric in /opt/view, and a two-node
+# Daint run must show provider cxi (mpi_gpu_check.sh) before the MPI track relies on it.
 image = "${SCRATCH}/ce-images/hpcagent-bench-agent-cpu.sqsh"
 mounts = [
     # install_edfs.sh replaces this item with hpcagent_bench_edf_mounts (helpers/scripts/cache_env.sh):
@@ -38,3 +40,12 @@ DACE_compiler_cpu_executable = "/usr/bin/g++-16"
 HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
 # hwloc preloaded with MPI: MPICH resolves libhwloc.so.15 to this PCI-capable one (mpi_gpu_check.sh 1a).
 LD_PRELOAD = "/usr/local/lib/libmimalloc.so:/usr/lib/${MULTIARCH}/libhwloc.so.15"
+# CSCS's Slingshot settings, as judge-agent-cuda. FI_MR_CACHE_MONITOR is left to libfabric: AMD and CUDA set it per
+# platform (disabled, userfaultfd), and this EDF serves both architectures.
+FI_CXI_RX_MATCH_MODE = "software"
+FI_CXI_DEFAULT_CQ_SIZE = "131072"
+FI_CXI_DEFAULT_TX_SIZE = "16384"
+FI_CXI_DISABLE_HOST_REGISTER = "1"
+
+[annotations]
+com.hooks.cxi.enabled = "true"

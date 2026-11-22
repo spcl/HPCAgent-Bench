@@ -484,6 +484,10 @@ RUN set -eux; \
       '        prefix: /usr/local/cuda' \
       '      buildable: false' \
       "      require: [\"@$(cat /opt/cuda-version)\"]" \
+      '    # hwloc +pci, as judge-agent-amd step 4: MPICH finds the cxi NIC by its PCI bus id, and a reused ~pci hwloc' \
+      '    # asserts in MPI_Init (mpir_hwtopo.c io_device) on every cross-node launch.' \
+      '    hwloc:' \
+      '      require: ["+pci"]' \
       '    # libfabric: OURS -- external here AND required, see judge-agent-amd step 4 (630049, 630267).' \
       '    libfabric:' \
       "      require: [\"@$(cat /opt/ofi-sdk/VERSION) +cuda\"]" \

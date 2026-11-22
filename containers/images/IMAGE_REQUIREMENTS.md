@@ -34,13 +34,20 @@ the image does not keep (the launch gate at the end of the agent stage).
 
 AMD and CUDA stay separate images: different base, architecture, compiler (`hipcc` vs `nvcc`), cupy
 build and library backends. Every judge/agent image uses its base's Python 3.12 (no second
-interpreter). Python installs only through `uv sync --frozen --inexact` from `uv.lock`, so numpy, scipy,
+interpreter). Python installs only through `uv sync --frozen` from `uv.lock`, so numpy, scipy,
 pandas and astunparse are the versions the lock (and the host venv) grades with, recorded in
-`/usr/local/share/image-provenance`; an image skips only what its base provides its own build of (ROCm or NGC
-torch and triton). The workspace member `agent/` is linked at `/opt/hpcagent-bench/agent`. The host venv and CI
+`/usr/local/share/image-provenance`. The AMD and CPU images sync `--exact` into their own `/opt/venv`, which also
+removes the base's torch and triton; the CUDA image syncs `--inexact` into the NGC base's system Python, so NGC
+packages outside the lock stay importable through the launch venv's `.pth`. Moving the CUDA image to its own venv and
+`--exact` is deferred past v1.0: `--exact` on NGC's system Python would uninstall NGC's own tools. The workspace member `agent/` is linked at `/opt/hpcagent-bench/agent`. The host venv and CI
 run a newer Python: a result that differs between host and container can be the interpreter.
 
 ## Toolchain (every judge/agent image)
+
+The tables in this section and the next describe the GPU images (`judge-agent-amd`, `judge-agent-cuda`).
+`judge-agent-cpu` is lightweight on purpose and carries a subset, listed under "Platform notes": binary LLVM 22 from
+apt, no Open MPI, no ppcg, no PETSc, SLEPc, hypre or MAGMA. No kernel needs those to grade (`jfnk_bratu` names PETSc
+only as provenance).
 
 | what | requirement |
 |---|---|
@@ -137,6 +144,9 @@ in a prefix the Dockerfile controls (a copy in the image would be found first).
   must match the image's CUDA major.
 * `judge-agent-*` build a providerless libfabric only for MPICH to link against, and delete it
   before the image ships: bound by RPATH it would win over the node's and abort `MPI_Init`.
+* `judge-agent-cpu` EDFs: `com.hooks.cxi.enabled` and the GH200 EDFs' `FI_CXI_*` settings. Not yet verified: the
+  image's MPICH links spack's libfabric in `/opt/view`, and a two-node Daint run must show provider `cxi`
+  (`mpi_gpu_check.sh`) before a multi-node grade relies on this image.
 * `FI_PROVIDER=cxi` goes on inference EDFs only; MPICH inherits it and aborts.
 * A missing `aws_ofi_nccl` hook does not fail: NCCL/RCCL fall back to TCP sockets over `hsn*` and are
   merely slow. Multi-node checks assert `NET/OFI` in the log, never just a correct result.
@@ -229,9 +239,24 @@ cuTENSOR come from NVIDIA's arm64/sbsa apt repos; NVHPC compiles against the CUD
 Compute 2026.3.0 is installed to match the toolkit; Nsight Systems 2026.5.1 is the base's. The NGC base's
 HPC-X Open MPI stays off `PATH`. No MKL, likwid or msr-tools (x86 only).
 
-**judge-agent-cpu.** Binary packages only (about an hour). gcc 16 from the ubuntu-toolchain-r PPA
-snapshot `16-20260315-1ubuntu1~24~ppa1`; clang/flang 22 from apt.llvm.org with Polly; Debian's
-OpenBLAS (openmp) owns the generic BLAS/LAPACK names; MPICH only (the build fails if Open MPI
-arrives); torch is the CPU wheel. Absent by design: ROCm, CUDA, spack, the distributed and GPU
-solvers, NVHPC, ppcg, cupy, triton; a column that needs one declines. Its gcc 16 is a different
+**judge-agent-cpu.** Binary packages except the MPI stack (minutes, not hours). gcc 16 from the ubuntu-toolchain-r
+PPA snapshot `16-20260315-1ubuntu1~24~ppa1`; clang/flang 22 from apt.llvm.org with Polly (host OpenMP only, no
+offload, no MLIR); spack builds MPICH `~slurm` with ScaLAPACK, HDF5, Scotch and MUMPS, and the same pinned OpenBLAS
+as the GPU images, into `/opt/view` once, through the shared buildcache; MPICH only (the build fails if Open MPI
+arrives); torch is the CPU wheel. Absent by design: ROCm, CUDA, GPU-aware MPI, PETSc, SLEPc, hypre, MAGMA and the
+other distributed solvers, NVHPC, ppcg (GPU-only), cupy, triton; a column that needs one declines. Its gcc 16 is a different
 build from beverin's: compare numbers within one image, never across the two.
+
+## Platform differences by design
+
+These differ between the images on purpose; aligning them would break the platform they serve.
+
+| difference | where | why |
+|---|---|---|
+| Polygeist | AMD only | its column (`polygeist_gpu`) lowers through ROCDL, which targets AMD GPUs only |
+| NVHPC | CUDA only | the only OpenACC compiler |
+| `MPIR_CVAR_ENABLE_GPU` and a stub `libcuda` at build time | CUDA only | the build machine has no CUDA driver |
+| `FI_MR_CACHE_MONITOR` | `disabled` on AMD, `userfaultfd` on CUDA, unset on CPU | the memory-registration monitor each platform's fabric stack supports |
+| netstack hook annotation | AMD only | a beverin site setting: the hook's host mode does not land there (see the AMD EDF) |
+| `uv sync --inexact` into the system Python | CUDA only | the NGC base's own tools live there (deferred, above) |
+| hwloc `+pci` | required in the AMD and CUDA spack configs, `^hwloc +pci` in the CPU MPICH spec | MPICH finds the cxi NIC by its PCI bus id; every EDF also preloads the distro `libhwloc.so.15` |
