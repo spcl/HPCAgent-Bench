@@ -44,10 +44,13 @@ __all__ = [
     "DO_CONCURRENT_FLANG",
     "DO_CONCURRENT_GFORTRAN",
     "DO_CONCURRENT_NVFORTRAN",
+    "FAST_MATH",
+    "FAST_MATH_NVHPC",
     "FLANG_BASELINE",
     "FP_ASSOC_FLANG",
     "FP_CONTRACT_NVHPC",
     "GCC_AUTOPAR",
+    "GCC_AUTOPAR_FAST",
     "GCC_AUTOPAR_OUTLINE_PATTERN",
     "GCC_OPT_REPORT",
     "GCC_VECT_UNLIMITED",
@@ -56,6 +59,7 @@ __all__ = [
     "LINK_MIMALLOC",
     "NO_OUTLINE_PATTERN",
     "NVHPC_CONCUR",
+    "NVHPC_CONCUR_FAST",
     "NVHPC_OPT_REPORT",
     "NVHPC_RUNTIME_CALL_PATTERN",
     "OMP_RUNTIME_CALL_PATTERN",
@@ -68,6 +72,7 @@ __all__ = [
     "PLUTO_PAR",
     "POLLY_OUTLINE_PATTERN",
     "POLLY_PAR",
+    "POLLY_PAR_FAST",
     "ROCMINFO_GFX_NAME",
     "ROCMINFO_TIMEOUT",
     "SIBLINGS",
@@ -238,6 +243,20 @@ CPU_BASELINE_CLANG_PLUTO = CPU_BASELINE_CLANG.replace(OPENMP_CLANG, PLUTO_PAR)
 
 #: NVHPC pure-source CPU auto-parallelization (analogue of GCC ``-ftree-parallelize-loops``).
 NVHPC_CONCUR = "-Mconcur"
+
+# Fast-math deltas of the ``cc_*_fastmath`` columns, appended after the baseline (and its autopar delta, if any): the
+# last flag wins, so each overrides ``-fp-model=precise`` (icx) and the baseline's FP-relax knobs.
+
+#: gcc / clang / icx / AOCC: reassociation, reciprocal math, no NaN/Inf guarantees.
+FAST_MATH = "-ffast-math"
+
+#: nvc's ``-fast`` lowers the optimization level, so ``-O3`` is restated after it.
+FAST_MATH_NVHPC = f"-fast {OPT_LEVEL}"
+
+#: The autopar deltas with fast-math, for the autopar columns' fast-math siblings.
+GCC_AUTOPAR_FAST = f"{GCC_AUTOPAR} {FAST_MATH}"
+POLLY_PAR_FAST = f"{POLLY_PAR} {FAST_MATH}"
+NVHPC_CONCUR_FAST = f"{NVHPC_CONCUR} {FAST_MATH_NVHPC}"
 
 # Autopar capability probe: accepted flags prove nothing; the evidence is ``nm`` on a compiled object (a parallel
 # runtime call, or an outlined body named per compiler).
