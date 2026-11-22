@@ -166,6 +166,10 @@ The 15 November rows that used to sit here were rechecked on 16 November and are
 
 The files edited after the 15 November preset S snapshot were rechecked on 16 November. The results are in the table above.
 
+On `main`, `reduce_2d_triton.py` is EmreUte's version from `45e1e572f`, not the one
+checked above. Its `reduce_2d` results here describe the replaced file; EmreUte's
+version has not been run through preset S or fuzz.
+
 ## Pitfalls that already failed a run
 
 These are in addition to [triton_authoring.md](triton_authoring.md).
