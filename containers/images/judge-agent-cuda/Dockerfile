@@ -906,19 +906,23 @@ RUN set -eux; \
     rm -f /tmp/smoke.c /tmp/smoke_host.cu /tmp/smoke_kernel.cu /tmp/smoke_kernel.hu
 
 # ---------------------------------------------------------------------------------------------
-# 12. The image's own Python, in the image python's prefix: only what is built from source against this toolchain.
+# 12. The image's own Python, in /opt/venv: only what is built from source against this toolchain.
 #
 # numpy and scipy (on the image's OpenBLAS, below) and mpi4py (on its MPICH): the `image-python` group of
 # pyproject.toml, at the versions uv.lock pins. Every other locked package -- torch from PyTorch's cu132 index,
 # CUDA 13's jax and cupy wheels, triton, dace, the judge proxy, ... -- is installed when a job starts, into a
 # node-local venv that sees these through a .pth (containers/images/lib/launch_venv.sh, the image's ENTRYPOINT, step 13),
-# so a moved pin needs no rebuild. --inexact: the prefix is the system python's, whose other packages stay (the
-# launch venv's own wheels come first). uv comes from the pins.
+# so a moved pin needs no rebuild. --exact into its own venv, as judge-agent-amd and judge-agent-cpu: the base's system
+# python keeps NGC's unlocked packages, which a .pth to its prefix would put on every launch venv's path. uv comes
+# from the pins.
 COPY agent/harness/pins.env agent/harness/install_tools.sh /opt/harness/
 # The pins are bound for this step, never COPYed: a COPY would make every uv.lock or pyproject.toml edit rebuild these
 # source builds and all that follows. IMAGE_PYTHON_LOCK (build_common.sh ce_lock_keys) keys the step instead: it moves
 # with the locked packages built here and nothing else in the lock. /opt/hpcagent-bench keeps a copy for the steps below.
 ARG IMAGE_PYTHON_LOCK
+# Set here, not with the toolchain's ENV above, so the layers before this step keep their cache keys.
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:${PATH}
 RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pins/pyproject.toml \
     --mount=type=bind,source=uv.lock,target=/tmp/pins/uv.lock \
     --mount=type=bind,source=agent/pyproject.toml,target=/tmp/pins/agent/pyproject.toml \
@@ -929,10 +933,11 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pins/pyproject.toml \
     cp /tmp/pins/agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml; \
     ln -s /opt/hpcagent-bench-agent /opt/hpcagent-bench/agent; \
     cd /opt/hpcagent-bench; \
-    MPICC=/opt/view/bin/mpicc UV_PROJECT_ENVIRONMENT="$(python3 -c 'import sys; print(sys.prefix)')" \
-      uv sync --frozen --inexact --no-cache --python "$(command -v python3)" \
+    test ! -e /opt/venv; \
+    MPICC=/opt/view/bin/mpicc UV_PROJECT_ENVIRONMENT=/opt/venv \
+      uv sync --frozen --exact --no-cache --python "$(command -v python3)" \
       --only-group image-python --no-binary-package mpi4py; \
-    python3 -c "import mpi4py.MPI as M; print('mpi4py', M.Get_library_version().splitlines()[0])"
+    /opt/venv/bin/python3 -c "import mpi4py.MPI as M; v = M.Get_library_version(); assert 'MPICH' in v, v; print(v.splitlines()[0])"
 
 # numpy and scipy on the image's OpenBLAS rather than their wheels' bundled scipy-openblas (a second,
 # pthreads MAX_THREADS=64 BLAS that crashed under numba prange), and numba on OpenMP, so every BLAS
@@ -946,7 +951,7 @@ RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --only
 COPY containers/images/lib/launch_venv.sh containers/images/lib/one_openmp.sh containers/images/lib/openmp_gate.py /opt/launch/
 COPY containers/images/lib/tilelang/pyproject.toml containers/images/lib/tilelang/uv.lock /opt/launch/tilelang/
 RUN set -eux; \
-    command -v python3 > /opt/launch/python; \
+    echo /opt/venv/bin/python3 > /opt/launch/python; \
     echo "--no-install-project --extra nvgpu --group judge-proxy --no-install-package numpy --no-install-package scipy \
 --no-install-package mpi4py" > /opt/launch/sync.args; \
     date +%s%N > /opt/launch/image.id; \
@@ -1148,8 +1153,8 @@ RUN --mount=type=bind,source=hpcagent_bench,target=/hb-src/hpcagent_bench \
       mods = (\"numpy\", \"scipy\", \"pandas\", \"astunparse\", \"cupy\", \"dace\", \"jax\", \"numba\", \
               \"pythran\", \"triton\", \"tvm\", \"torch\", \"mpi4py\", \"islpy\", \"z3\", \"sympy\", \"h5py\", \"einops\"); \
       [importlib.import_module(m) for m in mods]; print(\"imported:\", \" \".join(mods))"; \
-    python3 -c "import numpy, scipy, mpi4py, sys; \
-      assert all(m.__file__.startswith(sys.base_prefix + \"/\") for m in (numpy, scipy, mpi4py)), \"a wheel shadows an image build\""; \
+    python3 -c "import numpy, scipy, mpi4py; \
+      assert all(m.__file__.startswith(\"/opt/venv/\") for m in (numpy, scipy, mpi4py)), \"a wheel shadows an image build\""; \
     python3 -c "import dace, pathlib; \
       p = pathlib.Path(dace.__file__).parent / \"runtime\" / \"include\" / \"dace\" / \"ska_sort.hpp\"; assert p.is_file(), p"; \
     python3 -c "import dace.sdfg.analysis.polyhedral_isl; \

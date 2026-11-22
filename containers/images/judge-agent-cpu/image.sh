@@ -16,9 +16,10 @@ ce_image_args() {
     ce_lock_keys
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
     ce_spack_jobs
+    ce_libfabric_commit
     # The OpenMP catalog step bind-mounts these trees, and a bind mount's contents are not in a layer's cache key.
     HB_SRC_TREE="$(git -C "${CE_REPO_DIR}" rev-parse HEAD:hpcagent_bench HEAD:agent/hpcagent_agent | paste -sd:)"
-    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK SPACK_TARGET MARCH SPACK_BUILD_JOBS HB_SRC_TREE
+    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK SPACK_TARGET MARCH LIBFABRIC_REF LIBFABRIC_COMMIT SPACK_BUILD_JOBS HB_SRC_TREE
 }
 
 # Base cache, spack buildcache and uv cache per CPU family: an x86_64 layer is no use to aarch64.
@@ -26,6 +27,7 @@ ce_image_inputs() {
     ce_mirror_args
     ce_require_mirror_commit "spcl/dace.git" "${DACE_COMMIT}"
     ce_require_mirror_commit "ThrudPrimrose/relayout.git" "${RELAYOUT_COMMIT}"
+    ce_require_mirror_commit "ofiwg/libfabric.git" "${LIBFABRIC_COMMIT}"
     BASE_CACHE="${BASE_CACHE:-${SCRATCH:?}/base-images-$(uname -m)}"
     ce_cache_base_image
     # One spack cache per image: the cuda llvm context reused the cpu image's apt-llvm OpenBLAS.
