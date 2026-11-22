@@ -1052,8 +1052,13 @@ def probe_unsynchronized(probe: TimingProbe, native_ns: float) -> bool:
 
 
 def short_timing(native_ns: float, probe: TimingProbe) -> bool:
-    """A parent-clocked grade under :data:`trusted_clock.SHORT_FACTOR` handshake spreads: credited, flagged short."""
-    return probe.protocol == trusted_clock.PARENT_CLOCK and 0 < native_ns < trusted_clock.SHORT_FACTOR * probe.spread_ns
+    """A parent-clocked HOST grade under :data:`trusted_clock.SHORT_FACTOR` handshake spreads: credited, flagged
+    short. A device grade's samples are GPU event times, which no handshake enters, so its spread does not bound them."""
+    return (
+        probe.protocol == trusted_clock.PARENT_CLOCK
+        and probe.device_index < 0
+        and 0 < native_ns < trusted_clock.SHORT_FACTOR * probe.spread_ns
+    )
 
 
 def physical_floor_for(spec: BenchSpec, binding: Binding, data: Mapping[str, Any], device: bool) -> float:
