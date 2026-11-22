@@ -71,7 +71,7 @@ def test_a_fused_job_runs_each_line_on_its_own_nodes_and_hands_freed_nodes_to_th
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "SLURM_JOB_ID": "9",
             "SLURM_JOB_NODELIST": "n[1-4]",
-            "FUSED_POLL_S": "0.1",
+            "FUSED_POLL_SECONDS": "0.1",
         },
     )
     assert done.returncode == 0, done.stderr
@@ -105,7 +105,7 @@ def test_a_fused_line_wider_than_the_allocation_is_dropped_so_freed_nodes_still_
             "SLURM_JOB_NODELIST": "n[1-2]",
             "SLURMD_NODENAME": "n1",
             "UPDATES": str(updates),
-            "FUSED_POLL_S": "0.1",
+            "FUSED_POLL_SECONDS": "0.1",
         },
     )
     assert done.returncode == 0, done.stderr
@@ -138,7 +138,7 @@ def test_a_fused_job_releases_the_nodes_of_ended_runs_once_nothing_is_queued(
             "SLURM_JOB_ID": "9",
             "SLURM_JOB_NODELIST": "n[1-3]",
             "SLURMD_NODENAME": "n1",
-            "FUSED_POLL_S": "0.1",
+            "FUSED_POLL_SECONDS": "0.1",
             "FUSED_AUTO_FREE": auto_free,
         },
     )
@@ -170,7 +170,7 @@ def test_a_fused_job_logs_each_runs_own_exit_status(tmp_path: pathlib.Path) -> N
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "SLURM_JOB_ID": "9",
             "SLURM_JOB_NODELIST": "n[1-2]",
-            "FUSED_POLL_S": "0.1",
+            "FUSED_POLL_SECONDS": "0.1",
             "FUSED_AUTO_FREE": "0",
         },
     )
@@ -211,7 +211,7 @@ def pool_fixture(tmp_path: pathlib.Path, demand: int) -> tuple[pathlib.Path, pat
         "SLURM_JOB_ID": "9",
         "SLURM_JOB_NODELIST": "n[1-3]",
         "SLURMD_NODENAME": "n1",
-        "FUSED_POLL_S": "0.1",
+        "FUSED_POLL_SECONDS": "0.1",
     }
     return instances, pool, env
 
@@ -259,12 +259,22 @@ def test_a_malformed_fused_line_is_dropped_instead_of_killing_the_launcher(tmp_p
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "SLURM_JOB_ID": "9",
         "SLURM_JOB_NODELIST": "n[1-2]",
-        "FUSED_POLL_S": "0.1",
+        "FUSED_POLL_SECONDS": "0.1",
     }
     done = run_launcher(instances, {**env, "FUSED_AUTO_FREE": "0"})
     assert done.returncode == 0, done.stderr
     assert "never started (0 nodes, the launcher has 2): bad 1" in done.stdout
     assert " end good status=0 " in done.stdout
+
+
+@pytest.mark.parametrize("old", ["FUSED_MIN_LEFT_S", "FUSED_POLL_S"])
+def test_the_launcher_refuses_a_renamed_seconds_knob(tmp_path: pathlib.Path, old: str) -> None:
+    """Read silently, the old name would leave the default: a run started with too little time left, or a slow poll."""
+    instances = tmp_path / "instances.txt"
+    instances.write_text(f"good 1 {tmp_path} -- true\n")
+    done = run_launcher(instances, {"PATH": "/usr/bin:/bin", "SLURM_JOB_ID": "9", old: "1"})
+    assert done.returncode == 2
+    assert f"{old} is renamed {old}ECONDS" in done.stderr
 
 
 def test_a_fused_pool_server_starts_only_with_a_setup_of_its_pool(tmp_path: pathlib.Path) -> None:
@@ -337,7 +347,7 @@ def test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps
             "SLURM_CPUS_ON_NODE": "2",
             "SLURM_CPU_BIND": "quiet,mask_cpu:1000000000000000000000001",
             "SLURM_CPU_BIND_LIST": "1000000000000000000000001",
-            "FUSED_POLL_S": "0.1",
+            "FUSED_POLL_SECONDS": "0.1",
         },
     )
     assert done.returncode == 0, done.stderr

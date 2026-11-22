@@ -25,7 +25,7 @@
 # FUSED_NODES (default the allocation's): the nodes this launcher may use, for a second launcher started as a step
 # (srun --overlap) on nodes the first one's ended runs freed. The first launcher must not reuse them: start it with
 # FUSED_AUTO_FREE=0, no pool, and nothing left queued.
-# FUSED_MIN_LEFT_S (default 3600): a queued run is not started with less than this left in the allocation.
+# FUSED_MIN_LEFT_SECONDS (default 3600): a queued run is not started with less than this left in the allocation.
 # FUSED_AUTO_FREE (default 1): once nothing is queued, free nodes but the batch host are released to Slurm.
 # Each run logs to <instances dir>/logs/<run id>-<name>.{out,err}; this script logs starts and ends. It exits 1 when a
 # run failed.
@@ -46,8 +46,11 @@ set -uo pipefail
 ulimit -c 0
 INSTANCES="$(realpath "${1:?usage: launch_fused.sbatch <instances>}")"
 LOG_DIR="${FUSED_LOG_DIR:-$(dirname -- "${INSTANCES}")/logs}"
-MIN_LEFT_S="${FUSED_MIN_LEFT_S:-3600}"
-POLL_S="${FUSED_POLL_S:-30}"
+for old in FUSED_MIN_LEFT_S FUSED_POLL_S; do
+    [[ -z "${!old:-}" ]] || { echo "launch_fused: ${old} is renamed ${old}ECONDS" >&2; exit 2; }
+done
+MIN_LEFT_S="${FUSED_MIN_LEFT_SECONDS:-3600}"
+POLL_S="${FUSED_POLL_SECONDS:-30}"
 mkdir -p -- "${LOG_DIR}"
 AUTO_FREE="${FUSED_AUTO_FREE:-1}"
 BATCH_HOST="${SLURMD_NODENAME:-$(hostname -s)}"
