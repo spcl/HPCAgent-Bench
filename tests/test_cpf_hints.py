@@ -72,6 +72,14 @@ def test_the_render_options_and_so_the_cache_key_name_the_detail() -> None:
     assert cpf_cache.cache_key("form", "sdfg", "dace", proofs) != cpf_cache.cache_key("form", "sdfg", "dace", kinds)
 
 
+def test_a_cpu_form_is_keyed_as_the_llm_friendly_spelling_and_a_gpu_form_is_not() -> None:
+    """The CPU form is served in DaCe's LLM-friendly spelling; DaCe respells host units only, so a GPU form keeps its
+    names. The option is part of the key, so a cached form of the other spelling is never a hit."""
+    spec = BenchSpec.load(KERNEL)
+    assert cpf_bridge.render_options(spec, "c", "", Target.CPU, HintDetail.PROOFS)["llm_friendly"] is True
+    assert cpf_bridge.render_options(spec, "c", "", Target.GPU, HintDetail.PROOFS)["llm_friendly"] is False
+
+
 def test_the_stage_and_check_commands_read_the_detail_they_are_given(tmp_path: pathlib.Path) -> None:
     """materialize_shared.sh and the launch gates pass the setup's detail; each reads exactly that form."""
     cache = tmp_path / "cache"
