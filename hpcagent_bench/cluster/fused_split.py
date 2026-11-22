@@ -59,11 +59,13 @@ class SetupsFile(pydantic.BaseModel):
 
 
 def line_key(line: str) -> str:
+    """The key an env-file line assigns, or "" for any other line."""
     match = ENV_LINE.match(line)
     return match.group(1) if match else ""
 
 
 def split(env_path: pathlib.Path, problems_path: pathlib.Path, setups_path: pathlib.Path, out: pathlib.Path) -> int:
+    """Split a fused job's env and problems files into one pair per setup under ``out``."""
     job_lines = [
         line for line in env_path.read_text(encoding="utf-8").splitlines() if line_key(line) not in JOB_FILE_KEYS
     ]

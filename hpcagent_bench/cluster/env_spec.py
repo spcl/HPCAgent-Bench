@@ -359,6 +359,7 @@ def as_text(env: dict[str, str]) -> str:
 
 
 def main() -> int:
+    """Command line: render, check and list experiment env specs."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("render", help="print one experiment:model, experiment or env file flat").add_argument("target")

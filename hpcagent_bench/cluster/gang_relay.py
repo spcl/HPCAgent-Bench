@@ -227,6 +227,7 @@ def serve(directory: str, parent: int) -> None:
 
 
 def main(argv: list[str]) -> int:
+    """Command line: serve the gang launch requests under one request directory."""
     if len(argv) != 1:
         sys.stderr.write("usage: gang_relay.py <request dir>\n")
         return 2

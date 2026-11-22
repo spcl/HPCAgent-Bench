@@ -119,6 +119,7 @@ type Record = dict[str, Any]
 
 
 def report_name(name: str) -> str:
+    """The report file name of bench ``name``."""
     return f"bench-{name}.json"
 
 
@@ -130,6 +131,7 @@ def text(rng: random.Random, tokens: int) -> str:
 async def conversation(
     client: httpx.AsyncClient, args: argparse.Namespace, agent: int, stop_at: float, records: list[Record]
 ) -> None:
+    """Run one synthetic agent's multi-turn conversation until ``stop_at``, appending a record per turn."""
     rng = random.Random(1000 * args.seed_base + agent)
     messages = [{"role": "system", "content": f"agent {agent}. " + text(rng, args.prefix_tokens)}]
     turn = 0
@@ -186,6 +188,7 @@ async def conversation(
 
 
 def percentile(values: list[float], q: float) -> float:
+    """The ``q`` quantile of sorted ``values`` (nearest rank), or 0.0 if empty."""
     return values[min(len(values) - 1, int(q * len(values)))] if values else 0.0
 
 
@@ -212,6 +215,7 @@ def summarize(records: list[Record], seconds: float, concurrency: int) -> dict[s
 
 
 async def phase(args: argparse.Namespace, concurrency: int) -> dict[str, Any]:
+    """Run ``concurrency`` conversations for the phase's duration and summarize them."""
     records: list[Record] = []
     limits = httpx.Limits(max_connections=concurrency + 8, max_keepalive_connections=concurrency + 8)
     async with httpx.AsyncClient(timeout=httpx.Timeout(3600, connect=30), limits=limits) as client:
@@ -296,6 +300,7 @@ def submit(model: str, configs: Sequence[str], concurrency: Sequence[int], secon
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line of ``hpcagent-bench serve-bench``: submit, run or report serving benchmarks."""
     parser = argparse.ArgumentParser(prog="hpcagent-bench serve-bench", description=(__doc__ or "").split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     queued = sub.add_parser("submit", help="submit one serve-only job per configuration")

@@ -57,6 +57,7 @@ GPU_COL_RE = re.compile(r"^gpu(\d+)_pct$")
 
 
 def percentile(values: list[float], p: float) -> float | None:
+    """The ``p``-th percentile of ``values`` by linear interpolation, or None if empty."""
     # linear interpolation between closest ranks, same convention as numpy's default
     if not values:
         return None
@@ -73,6 +74,7 @@ def percentile(values: list[float], p: float) -> float | None:
 
 
 def parse_role_host(path: Path) -> tuple[str, str]:
+    """The role and host a monitor CSV's file name encodes."""
     stem = path.stem
     for role in ROLES:
         prefix = role + "-"
@@ -90,6 +92,7 @@ def gpu_index(column: str) -> int:
 
 
 def gpu_columns(fieldnames: Sequence[str]) -> list[str]:
+    """The per-GPU columns of a CSV header, in GPU index order."""
     # header-driven: whatever gpuN_pct columns this file's header declares, in GPU index order
     found = [name for name in fieldnames if GPU_COL_RE.match(name)]
     return sorted(found, key=gpu_index)
@@ -116,6 +119,8 @@ def read_columns(path: Path) -> tuple[dict[str, list[float]], list[str]]:
 
 @dataclass(slots=True)
 class NodeStats:
+    """The utilization summary of one monitored node."""
+
     role: str
     host: str
     samples: int
@@ -130,6 +135,7 @@ class NodeStats:
 
 
 def compute_node_stats(path: Path) -> NodeStats:
+    """Summarize one node's monitor CSV."""
     role, host = parse_role_host(path)
     cols, gpu_cols = read_columns(path)
     cpu = cols["cpu_pct"]
@@ -154,12 +160,14 @@ def compute_node_stats(path: Path) -> NodeStats:
 
 
 def fmt(value: float | None, unit: str = "") -> str:
+    """``value`` with one decimal and ``unit``, or "-" for None."""
     if value is None:
         return "-"
     return f"{value:.1f}{unit}"
 
 
 def print_table(nodes: list[NodeStats]) -> None:
+    """Print the per-node utilization table."""
     header = (
         f"{'role':<7} {'host':<20} {'n':>5} {'cpu_mean':>9} {'cpu_p95':>8} "
         f"{'gpu_mean':>9} {'gpu_p95':>8} {'mem_peak':>10} {'vram_peak':>10}"
@@ -176,6 +184,7 @@ def print_table(nodes: list[NodeStats]) -> None:
 
 
 def print_gpu_balance(nodes: list[NodeStats]) -> None:
+    """Print each node's per-GPU means and their spread."""
     extended = [n for n in nodes if n.per_gpu_mean]
     if not extended:
         return
@@ -188,6 +197,7 @@ def print_gpu_balance(nodes: list[NodeStats]) -> None:
 
 
 def print_role_summary(groups: dict[str, list[NodeStats]]) -> None:
+    """Print the mean utilization of each role."""
     print()
     print(f"{'role':<7} {'nodes':>5} {'cpu_mean':>9} {'gpu_mean':>9}")
     for role in ROLES:
@@ -202,6 +212,7 @@ def print_role_summary(groups: dict[str, list[NodeStats]]) -> None:
 
 
 def print_verdicts(groups: dict[str, list[NodeStats]]) -> None:
+    """Print the verdicts on which role is the bottleneck."""
     print()
     print("verdicts:")
     judge_nodes = groups.get("judge", [])
@@ -235,6 +246,7 @@ def print_verdicts(groups: dict[str, list[NodeStats]]) -> None:
 
 
 def main() -> None:
+    """Command line: summarize the monitor CSVs under a directory."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("monitor_dir", type=Path, help="monitor dir or run dir to scan")
     args = parser.parse_args()

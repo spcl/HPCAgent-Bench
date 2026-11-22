@@ -35,6 +35,8 @@ FIELD = re.compile(r"(\w+)=(\S*)")
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Reservation:
+    """One Slurm reservation: its window, partition and who may use it."""
+
     name: str
     start: datetime.datetime
     end: datetime.datetime
@@ -43,6 +45,7 @@ class Reservation:
     accounts: frozenset[str]
 
     def usable_by(self, user: str, accounts: Iterable[str]) -> bool:
+        """Whether ``user`` or one of ``accounts`` may use this reservation."""
         return user in self.users or bool(self.accounts & set(accounts))
 
     def holds(self, partition: str) -> bool:
@@ -157,10 +160,12 @@ def seconds_of(clock: str) -> int:
 
 
 def clock_of(seconds: int) -> str:
+    """``seconds`` as ``HH:MM:SS``."""
     return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line: fit a job's ``--time`` and ``--begin`` around the reservations."""
     parser = argparse.ArgumentParser(prog="reservations", description=(__doc__ or "").split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     command = sub.add_parser("fit", help="the --time and --begin a job gets")

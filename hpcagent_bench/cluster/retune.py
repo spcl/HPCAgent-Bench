@@ -70,6 +70,7 @@ def refused(key: str, *, adding: bool, current: Mapping[str, str]) -> str:
 
 
 def backup_of(env: pathlib.Path) -> pathlib.Path:
+    """The first unused backup path for ``env``."""
     number = 1
     while (env.with_name(f"{env.name}.retune-{number}.bak")).exists():
         number += 1
@@ -159,6 +160,7 @@ def copy_ledger(env: pathlib.Path, run_dir: pathlib.Path) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line of ``hpcagent-bench job retune``: edit a queued job's env with a ledger entry."""
     parser = argparse.ArgumentParser(prog="hpcagent-bench job retune", description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("job", nargs="?")
     parser.add_argument("edits", nargs="*", metavar="KEY=VALUE")

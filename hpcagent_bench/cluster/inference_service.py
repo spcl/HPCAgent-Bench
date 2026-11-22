@@ -165,6 +165,7 @@ def source(environ: Mapping[str, str]) -> Source:
 
 
 def required_value(environ: Mapping[str, str], key: str) -> str:
+    """The stripped value of ``key`` in ``environ``; a missing or empty one exits."""
     value = environ.get(key, "").strip()
     if not value:
         raise SystemExit(f"a service setup must set {key}")
@@ -333,6 +334,8 @@ class Endpoint(pydantic.BaseModel):
 
 
 class ListingData(pydantic.BaseModel):
+    """One model of an endpoint listing, with its endpoints."""
+
     model_config = pydantic.ConfigDict(extra="ignore", frozen=True)
 
     id: str
@@ -599,6 +602,7 @@ def record(run_dir: pathlib.Path, environ: Mapping[str, str]) -> Provenance:
 
 
 def main(argv: list[str]) -> int:
+    """Command line: resolve a setup's inference source, or check it is free and reachable."""
     parser = argparse.ArgumentParser(description="Resolve a setup's inference source.")
     parser.add_argument("--export", action="store_true", help="print the endpoint block for the launcher to eval")
     parser.add_argument(

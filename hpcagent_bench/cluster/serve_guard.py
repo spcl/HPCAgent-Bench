@@ -40,6 +40,8 @@ POLL_SECONDS = 30.0
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Verdict:
+    """The KV-pool guard's verdict: the pool, its floor and why."""
+
     ok: bool
     pool: int | None
     floor: int | None
@@ -67,6 +69,7 @@ def floor_tokens(env: Mapping[str, str]) -> int | None:
 
 
 def verdict(pool: int | None, floor: int | None) -> Verdict:
+    """Compare the server's KV pool with the per-agent floor."""
     if floor is None:
         return Verdict(True, pool, None, "no KV_TOKENS_PER_AGENT: no guard")
     if pool is None:
@@ -129,6 +132,7 @@ def watch(env: Mapping[str, str], run_dir: pathlib.Path, job: str, timeout: floa
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line: watch or check a serving job's KV pool."""
     parser = argparse.ArgumentParser(prog="serve_guard", description=__doc__.split("\n\n")[0] if __doc__ else None)
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("watch", "check"):

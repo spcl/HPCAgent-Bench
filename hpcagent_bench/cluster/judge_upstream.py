@@ -138,6 +138,7 @@ class Supervisor:
 
 
 def parse(argv: Sequence[str]) -> argparse.Namespace:
+    """Parse the supervisor's arguments."""
     parser = argparse.ArgumentParser(description="Run a judge upstream and restart it when it dies.")
     parser.add_argument("--label", default="", help="how this rank is named in the log lines")
     parser.add_argument("--min-uptime-seconds", type=float, default=60.0)
@@ -148,6 +149,7 @@ def parse(argv: Sequence[str]) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str]) -> int:
+    """Command line: run a judge upstream and restart it when it dies."""
     args = parse(argv)
     command = [str(word) for word in args.command]
     command = command[1:] if command[:1] == ["--"] else command
