@@ -153,7 +153,8 @@ def test_the_shell_exports_the_current_names() -> None:
 def test_run_cluster_exports_the_current_names_in_its_batch_shell() -> None:
     """The batch shell translates once its setup .env and the host interpreter are in place."""
     script = (paths.ROOT / "hpcagent_bench" / "cluster" / "run_cluster.sh").read_text(encoding="utf-8")
-    translate = script.index('eval "$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_agent.env_aliases)"')
+    translate = script.index('aliases="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_agent.env_aliases)" || exit 1')
+    assert script.index('eval "${aliases}"') > translate
     assert script.index('. "${ENV_FILE}"') < translate
     assert script.index('. "${SCRIPT_DIR}/env.sh"') < translate < script.index("HPCAGENT_BENCH_LIMITS_CORES=")
 

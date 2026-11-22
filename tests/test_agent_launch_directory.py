@@ -102,12 +102,10 @@ def test_restaging_the_same_job_replaces_the_launch_directory(tmp_path: pathlib.
     assert PROBLEMS not in {path.name for path in launch.iterdir()}
 
 
-def test_concurrent_staging_of_the_same_job_never_leaves_a_readonly_partial_env(tmp_path: pathlib.Path) -> None:
-    """Every role of a job (inference, agent, judge) runs its own run_cluster.sh and each one calls
-    stage_agent_launch on the SAME AGENT_LAUNCH_DIR (keyed by job id, not role). An in-place
-    rm-rf + populate + chmod lets one caller's chmod a-w land between another caller's cp and its
-    later `>>` append -- "Permission denied", the whole job dead before any agent work. Runs several stagers of the SAME setup in parallel; every one must still exit 0 and
-    the launch directory must end up complete and read-only, not truncated mid-write."""
+def test_a_restage_replaces_a_complete_read_only_launch_env(tmp_path: pathlib.Path) -> None:
+    """A requeued job stages again over its earlier, read-only launch directory (fused setups/ included): the
+    restage must exit 0 and leave the directory complete, with every file read-only. A read-only setups/ once made
+    the second attempt's rm -rf fail (EACCES) and killed the job before any agent work."""
     scripts = tmp_path / "experiments"
     scripts.mkdir()
     for name in launch_files():
@@ -115,6 +113,10 @@ def test_concurrent_staging_of_the_same_job_never_leaves_a_readonly_partial_env(
     env_file = scripts / ".env.setup-c"
     env_file.write_text("SETUP=setup-c\n")
     (scripts / PROBLEMS).write_text("{}\n")
+    run_dir = tmp_path / "run"
+    (run_dir / "setups").mkdir(parents=True)
+    for name in ("a.resolved", "a.env", "a.jsonl"):
+        (run_dir / "setups" / name).write_text(f"{name}\n")
     launch = tmp_path / "runs" / ".agent-launch" / "7"
     script = "\n".join(
         [
@@ -122,21 +124,27 @@ def test_concurrent_staging_of_the_same_job_never_leaves_a_readonly_partial_env(
             LAUNCH_FILES_RE.search(RUN_CLUSTER.read_text()).group(0),
             f"SCRIPT_DIR={shlex.quote(str(scripts))}",
             f"AGENT_LAUNCH_DIR={shlex.quote(str(launch))}",
+            f"RUN_DIR={shlex.quote(str(run_dir))}",
             shell_function("stage_agent_launch"),
             f"stage_agent_launch {shlex.quote(str(env_file))} {shlex.quote(str(scripts / PROBLEMS))}",
         ]
     )
-    procs = [
-        subprocess.Popen(["bash", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        for _ in range(8)
-    ]
-    results = [(proc.wait(), *proc.communicate()) for proc in procs]
-    failed = [err for code, _, err in results if code != 0]
-    assert not failed, failed
-    assert sorted(path.name for path in launch.iterdir()) == sorted((*launch_files(), ".env", PROBLEMS))
+    for attempt in range(2):
+        done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+        assert done.returncode == 0, (attempt, done.stderr)
+    assert sorted(path.name for path in launch.iterdir()) == sorted((*launch_files(), ".env", PROBLEMS, "setups"))
     assert (launch / ".env").read_text().splitlines()[-1] == f"PROBLEMS_FILE={PROBLEMS}"
-    writable = [path.name for path in launch.iterdir() if path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP)]
+    files = [path for path in launch.rglob("*") if path.is_file()]
+    writable = [path.name for path in files if path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP)]
     assert not writable, writable
+
+
+def test_only_the_batch_shell_stages_the_launch_env() -> None:
+    """Staging is not safe to race (one rm -rf, one rename), so no role step may reach it: every
+    --vllm-node, --judge-node and --agent-node invocation exits before the one staging call."""
+    script = RUN_CLUSTER.read_text()
+    assert script.count('    stage_agent_launch "${ENV_FILE}"') == 1
+    assert script.index('case "${1:-}" in\n    --vllm-node)') < script.index('    stage_agent_launch "${ENV_FILE}"')
 
 
 def test_every_file_the_agent_step_reaches_beside_itself_is_staged() -> None:

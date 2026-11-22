@@ -122,9 +122,13 @@ def test_a_base_env_sets_none_of_the_common_client_settings(path: str, name: str
 
 @pytest.mark.parametrize("name", COMMON_VARS)
 def test_the_launcher_exports_each_common_setting_with_its_default(name: str) -> None:
-    """The .env files do not carry these, so the launcher's default IS what every setup runs at."""
+    """The .env files do not carry these, so the launcher's default IS what every setup runs at. A default a
+    command computes is assigned under a guard, so the command's failure stops the run instead of exporting ""."""
     default = LAUNCHER_DEFAULTS[name]
-    assert f'export {name}="${{{name}:-{default}}}"' in LAUNCHER.read_text(encoding="utf-8")
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    one_line = f'export {name}="${{{name}:-{default}}}"'
+    guarded = f'if [[ -z "${{{name}:-}}" ]]; then\n        {name}="{default}" || exit 1\n    fi\n    export {name}\n'
+    assert (one_line in launcher) != (guarded in launcher)
 
 
 @pytest.mark.parametrize("path", ENGINE_BASE_ENVS)
@@ -164,12 +168,11 @@ def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:
     reads "0" as falsy and then passes ``timeout: false`` to fetch). A 262144-token qwen38 setup at 40
     agents per node derives the CLI's 30-minute ceiling."""
     names = ("CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS", "CLAUDE_STREAM_IDLE_TIMEOUT_MS", "API_FORCE_IDLE_TIMEOUT")
-    lines = [
-        line.strip()
-        for line in LAUNCHER.read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith(tuple(f"export {name}=" for name in names))
-    ]
-    assert len(lines) == len(names)
+    launcher = LAUNCHER.read_text(encoding="utf-8").splitlines()
+    first = next(i for i, line in enumerate(launcher) if f'"${{{names[0]}:-}}"' in line)
+    last = next(i for i, line in enumerate(launcher) if line.strip().startswith(f"export {names[-1]}="))
+    lines = [line.strip() for line in launcher[first : last + 1]]
+    assert all(any(line.startswith(f"export {name}") for line in lines) for name in names), lines
     script = "\n".join([*lines, *(f'echo "{name}=${{{name}}}"' for name in names)])
     done = subprocess.run(
         ["bash", "-c", script],
