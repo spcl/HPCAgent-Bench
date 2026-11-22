@@ -116,8 +116,10 @@ These are procedures, not image defects. Each one cost a verify or suite run on 
 
 - **Never wrap `build_and_verify.sbatch` or `verify_image.sbatch` in an `srun` step.** Both start their own steps.
   Inside an outer step that holds a node's CPUs, those inner steps wait for resources until the job's time limit:
-  job 758042 spent 6 h in "Requested nodes are busy". Call them from the batch shell; in a multi-node job, an
-  inner step lands on whichever node is free.
+  job 758042 spent 6 h in "Requested nodes are busy". Call them from the batch shell.
+- **Every inner step is one task on one node.** An `srun` without `--nodes` in a multi-node job asks for all the
+  job's nodes, so in job 758676 both verifies waited while a suite step held the third node. The verify steps now
+  pass `--nodes=1 --ntasks=1`.
 - **A push deletes the local `.oci.tar`.** `registry.sh push` removes the archive once the registry holds it. A
   verifier built after the push takes its judge from the registry tag (the default `BASE_IMAGE`), not from
   `oci-archive:`.

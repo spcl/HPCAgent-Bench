@@ -57,8 +57,9 @@ case "${PROFILE}" in
 esac
 
 # Every step names its CPUs: srun inherits no --cpus-per-task (nor SRUN_CPUS_PER_TASK on this site), so a step of
-# an exclusive build_and_verify job would get one core and every threading check would fail.
-step=(srun "--cpus-per-task=${SLURM_CPUS_PER_TASK:-${SLURM_CPUS_ON_NODE:-1}}")
+# an exclusive build_and_verify job would get one core and every threading check would fail. Every step is also one
+# task on one node: an unsized step of a multi-node job asks for all its nodes and waits while any one is busy.
+step=(srun --nodes=1 --ntasks=1 "--cpus-per-task=${SLURM_CPUS_PER_TASK:-${SLURM_CPUS_ON_NODE:-1}}")
 EDF="${SCRATCH}/.tmp/verify-${SLURM_JOB_ID:-$$}-${ROLE}.toml"
 mkdir -p "$(dirname "${EDF}")"
 # Probes run from `/`, so a `dace` directory in a CWD cannot shadow the image's own.
@@ -115,7 +116,7 @@ fi
 
 if [[ "${nvidia_probe}" == 1 && ${#agent_mount[@]} -gt 0 ]]; then
     echo "=== GPU probe: cupy/jax/torch devices, PAPI cuda events, Nsight ==="
-    "${step[@]}" --ntasks=1 --environment="${EDF}" bash -c '
+    "${step[@]}" --environment="${EDF}" bash -c '
         # pipefail: a profiler that fails behind `| tail` must fail the probe.
         set -euo pipefail
         ulimit -c 0
