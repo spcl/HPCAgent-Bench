@@ -313,3 +313,12 @@ def test_the_devices_input_draw_stays_out_of_the_parents_bracket() -> None:
     assert parent_ok == [True] * 5
     assert parent.probes.timing.protocol == trusted_clock.PARENT_CLOCK
     assert parent.probes.timing.tamper == ""
+
+
+def test_a_host_call_the_handshake_noise_hides_is_credited_the_noise_not_one_nanosecond() -> None:
+    """A call no longer than the handshake's median reads as the handshake's spread (job 758887: an honest 100 ns sum
+    under load read 1 ns and was credited 4220x); a call well above the noise keeps its bracket less the handshake."""
+    handshake, spread = trusted_clock.handshake_cost([1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900])
+    assert (handshake, spread) == (1450, 880)
+    assert trusted_clock.host_samples([1200, 1450, 50_000], handshake, spread) == (880, 880, 48_550)
+    assert trusted_clock.host_samples([10], 20, 0) == (1,)

@@ -24,6 +24,7 @@ from hpcagent_bench import flags, modules
 from hpcagent_bench.categories import Language
 from tests.dace_build_isolation import pin_per_worker_dace_build_folder
 from tests.fresh_module import FRESHENED, restore_freshened
+from tests.gpu_per_worker import pin_worker_gpu
 from tests.request_allowances import every_request_allowed as allowing_every_request
 
 # The probe_flavor fixture is registered here rather than imported by each test module that takes it.
@@ -42,6 +43,8 @@ os.environ["PACK_AFTER"] = "0"
 
 # Before any module that imports dace: the per-worker build folder is a process-wide pin.
 pin_per_worker_dace_build_folder()
+# Before any module that loads a device runtime: one GPU per xdist worker (tests/gpu_per_worker.py).
+pin_worker_gpu()
 
 #: Where a standalone script may live. Scripts move between these (plot_score_change.py
 #: landed in statistics/), and a test that PINS one directory does not fail as one red test:

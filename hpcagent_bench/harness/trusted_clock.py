@@ -48,6 +48,8 @@ __all__ = [
     "Hold",
     "Watched",
     "exposed",
+    "handshake_cost",
+    "host_samples",
     "read_array",
     "supported",
     "tampered",
@@ -498,15 +500,13 @@ class ClockServer:
         """The credited samples: host brackets less the median null call, or the GPU events the brackets bound."""
         if len(self.null_ns) < CALIBRATION_CALLS:
             raise ClockError(f"{len(self.null_ns)} of {CALIBRATION_CALLS} calibration calls reached the parent")
-        handshake = int(statistics.median(self.null_ns))
-        tenths = statistics.quantiles(self.null_ns, n=10)
-        spread = max(0, int(tenths[-1] - tenths[0]))
+        handshake, spread = handshake_cost(self.null_ns)
         findings = list(self.findings)
         if self.plan.device:
             samples = tuple(self.events)
             findings += event_findings(self.events, self.brackets, handshake)
         else:
-            samples = tuple(max(1, bracket - handshake) for bracket in self.brackets)
+            samples = host_samples(self.brackets, handshake, spread)
         return ClockSummary(samples, tuple(self.brackets), handshake, spread, "; ".join(dict.fromkeys(findings)))
 
     def release(self) -> None:
@@ -523,6 +523,20 @@ class ClockServer:
         for end in (self.parent, self.child):
             with contextlib.suppress(OSError):
                 end.close()
+
+
+def handshake_cost(null_ns: Sequence[int]) -> tuple[int, int]:
+    """The handshake's median cost and its spread (first to last decile) over the calibration calls ``null_ns``."""
+    tenths = statistics.quantiles(null_ns, n=10)
+    return int(statistics.median(null_ns)), max(0, int(tenths[-1] - tenths[0]))
+
+
+def host_samples(brackets: Sequence[int], handshake: int, spread: int) -> tuple[int, ...]:
+    """Each host call's bracket less the median ``handshake``, floored at the handshake's ``spread``: a call the
+    noise hides is credited as the noise, never as the 1 ns a bare subtraction leaves (job 758887 credited an honest
+    100 ns sum 4220x that way and marked it suspect)."""
+    floor = max(1, spread)
+    return tuple(max(floor, bracket - handshake) for bracket in brackets)
 
 
 def event_findings(events: Sequence[int], brackets: Sequence[int], handshake: int) -> list[str]:
