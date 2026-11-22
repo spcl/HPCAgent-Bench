@@ -7,7 +7,7 @@ export function Footer({ paper }: { paper: PaperMeta }) {
     <footer className="border-t border-stone-200 bg-paper py-8">
       <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 px-5 text-xs text-zinc-500 sm:flex-row">
         <div>
-          <span className="font-editorial text-sm font-medium text-zinc-800">HPCAgent-Bench</span> · SPCL, ETH Zurich ·{" "}
+          <span className="text-sm font-semibold text-zinc-800">HPCAgent-Bench</span> · SPCL, ETH Zurich ·{" "}
           {paper.license}
         </div>
         <div className="flex items-center gap-4">

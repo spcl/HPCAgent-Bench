@@ -4,7 +4,7 @@ import { ArrowUpRight, BookOpen, Github } from "lucide-react";
 import type { PaperMeta } from "../types/leaderboard";
 
 const ANCHORS: [string, string][] = [
-  ["#leaderboard", "Models"],
+  ["#scores", "Scores"],
   ["#difficulty", "Difficulty"],
   ["#ablations", "Ablations"],
   ["#skills", "Skills"],
@@ -15,7 +15,7 @@ export function Navbar({ paper }: { paper: PaperMeta }) {
     <header className="sticky top-0 z-30 border-b border-stone-200/90 bg-paper/90 backdrop-blur-md">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-3.5">
         <a href="#" className="flex items-baseline gap-2.5">
-          <span className="font-editorial text-xl font-semibold tracking-tight text-zinc-950">HPCAgent-Bench</span>
+          <span className="text-xl font-bold tracking-tight text-zinc-950">HPCAgent-Bench</span>
           <span className="hidden text-xs text-zinc-400 sm:inline">SPCL · ETH Zurich</span>
         </a>
         <nav className="flex items-center gap-4 text-sm text-zinc-600 sm:gap-5">
@@ -24,8 +24,8 @@ export function Navbar({ paper }: { paper: PaperMeta }) {
               {label}
             </a>
           ))}
-          <a href={paper.arxiv_url} target="_blank" rel="noreferrer" className="hidden transition hover:text-zinc-950 lg:inline">
-            Paper
+          <a href={paper.arxiv_url} target="_blank" rel="noreferrer" className="font-medium text-blue-700 transition hover:text-blue-900">
+            arXiv
           </a>
           <a
             href={paper.docs_url}
