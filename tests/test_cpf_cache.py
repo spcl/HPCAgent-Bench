@@ -240,10 +240,18 @@ def test_a_gpu_setup_is_served_the_device_form_of_its_hosts_backend_for_a_host_d
 
 
 def run_main(argv: list[str]) -> tuple[int, str]:
-    """``cpf_prerender.main(argv)``'s exit status and what it printed."""
-    with contextlib.redirect_stdout(io.StringIO()) as out:
+    """``cpf_prerender.main(argv)``'s exit status and what it printed, stderr included: a failed ``stage`` names its
+    miss only there."""
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
         status = cpf_prerender.main(argv)
     return status, out.getvalue()
+
+
+def assert_staged(argv: list[str]) -> None:
+    """``stage`` exits 0; its failure message is the reason it printed."""
+    status, printed = run_main(argv)
+    assert status == 0, printed
 
 
 def test_a_gpu_form_stages_as_the_two_units_a_gpu_submission_is(tmp_path: pathlib.Path) -> None:
@@ -251,7 +259,7 @@ def test_a_gpu_form_stages_as_the_two_units_a_gpu_submission_is(tmp_path: pathli
     cache, dest = tmp_path / "cache", tmp_path / "tasks" / "gemm"
     publish_form(cache, "gemm", "hip", target=Target.GPU, device="// kernels\n")
     stage = ["stage", "--cache", str(cache), "--kernel", "gemm", "--language", "hip", "--target", "gpu"]
-    assert run_main([*stage, "--dest", str(dest), "--name", "gemm_reference"])[0] == 0
+    assert_staged([*stage, "--dest", str(dest), "--name", "gemm_reference"])
     assert sorted(path.name for path in dest.iterdir()) == ["gemm_reference.cpp", "gemm_reference.hip"]
 
 
@@ -277,7 +285,7 @@ def test_check_and_stage_strip_the_kernel_names_the_render_and_verify_commands_s
     assert [line.split(":", 1)[0] for line in out.splitlines()] == ["atax"]
     dest = tmp_path / "tasks" / "gemm"
     stage = ["stage", "--cache", str(cache), "--kernel", " gemm ", "--language", "c", "--target", "cpu"]
-    assert run_main([*stage, "--dest", str(dest)])[0] == 0
+    assert_staged([*stage, "--dest", str(dest)])
     assert (dest / "gemm.c").is_file()
 
 
@@ -285,7 +293,7 @@ def test_stage_copies_the_form_under_the_task_basename(tmp_path: pathlib.Path) -
     cache, dest = tmp_path / "cache", tmp_path / "tasks" / "gemm"
     publish_form(cache, "gemm", "c", source="// gemm form\n")
     stage = ["stage", "--cache", str(cache), "--kernel", "gemm", "--language", "c", "--target", "cpu"]
-    assert run_main([*stage, "--dest", str(dest)])[0] == 0
+    assert_staged([*stage, "--dest", str(dest)])
     assert [p.name for p in dest.iterdir()] == ["gemm.c"]
     assert (dest / "gemm.c").read_text() == "// gemm form\n"
 

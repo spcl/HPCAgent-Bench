@@ -536,7 +536,10 @@ def install_harnesses(found: Iterable[Plugin], venv: pathlib.Path, python: str, 
             (pathlib.Path(site.strip()) / "zz-agent.pth").write_text(f"{agent}\n", encoding="utf-8")
             run_command(plugin, plugin.root, block.install, interpreter)
             modules = ", ".join(("importlib.util", "hpcagent_agent.harness.runner_common", *block.imports))
-            probe = f"import {modules}\nassert importlib.util.find_spec('hpcagent_bench') is None, 'hpcagent_bench'"
+            probe = (
+                f"import {modules}\nspec = importlib.util.find_spec('hpcagent_bench')\n"
+                "assert spec is None, f'hpcagent_bench importable from {spec.origin}'"
+            )
             checked_run(plugin, [interpreter, "-c", probe], target)  # out of a checkout, whose folders import
             built.append(name)
     return built

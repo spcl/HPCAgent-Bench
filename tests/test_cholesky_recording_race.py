@@ -39,9 +39,12 @@ def run_framework_worker(
     canon_path: str,
     start: multiprocessing.synchronize.Barrier,
     outcome: multiprocessing.queues.Queue[str],
+    cpus: frozenset[int],
 ) -> None:
     """One rank's ``run-framework -b cholesky -f numba --canon-db <shared>``: every sibling records into the same
-    fresh canon DB."""
+    fresh canon DB. The rank runs on ``cpus``, its quarter of the worker's share, as a Slurm rank runs on its own
+    cores: four ranks each sized to the whole share ran 4x oversubscribed past the 120 s wait (758901)."""
+    os.sched_setaffinity(0, cpus)
     os.environ.pop("SLURM_PROCID", None)
     os.environ.pop("HPCAGENT_BENCH_DB_SHARD", None)
     from hpcagent_bench.support.collect.sweep import CanonTarget, run_framework_sweep
@@ -63,7 +66,9 @@ def test_cholesky_survives_four_ranks_recording_through_run_framework_sweep(tmp_
     ctx = multiprocessing.get_context("fork")
     barrier = ctx.Barrier(4)
     outcome: multiprocessing.queues.Queue[str] = ctx.Queue()
-    workers = [ctx.Process(target=run_framework_worker, args=(db_path, barrier, outcome)) for rank in range(4)]
+    share = sorted(os.sched_getaffinity(0))
+    quarters = [frozenset(share[rank::4] or share) for rank in range(4)]
+    workers = [ctx.Process(target=run_framework_worker, args=(db_path, barrier, outcome, cpus)) for cpus in quarters]
     for worker in workers:
         worker.start()
     try:
