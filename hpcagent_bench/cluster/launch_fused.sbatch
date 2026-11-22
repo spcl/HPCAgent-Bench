@@ -23,10 +23,12 @@
 # A run inherits this job's environment (the submitter's, as sbatch passes it) plus its own KEY=VALUE words: name
 # there what differs between checkouts, the interpreter's import path among them.
 # FUSED_NODES (default the allocation's): the nodes this launcher may use, for a second launcher started as a step
-# (srun --overlap) on nodes the first one's ended runs freed.
+# (srun --overlap) on nodes the first one's ended runs freed. The first launcher must not reuse them: start it with
+# FUSED_AUTO_FREE=0, no pool, and nothing left queued.
 # FUSED_MIN_LEFT_S (default 3600): a queued run is not started with less than this left in the allocation.
 # FUSED_AUTO_FREE (default 1): once nothing is queued, free nodes but the batch host are released to Slurm.
-# Each run logs to <instances dir>/logs/<job>-<name>.{out,err}; this script logs starts and ends.
+# Each run logs to <instances dir>/logs/<run id>-<name>.{out,err}; this script logs starts and ends. It exits 1 when a
+# run failed.
 # Inference pools: a setup whose env sets INFERENCE_SOURCE=pool and INFERENCE_POOL_DIR=<pool> serves from the live
 # servers of that pool, which the @serve line naming SERVE_POOL=<pool> starts (serve-only.sbatch SERVE_POOL); its
 # agent driver re-reads the pool for every episode. A pool setup starts together with a server when its pool has none
@@ -47,8 +49,6 @@ LOG_DIR="${FUSED_LOG_DIR:-$(dirname -- "${INSTANCES}")/logs}"
 MIN_LEFT_S="${FUSED_MIN_LEFT_S:-3600}"
 POLL_S="${FUSED_POLL_S:-30}"
 mkdir -p -- "${LOG_DIR}"
-# FUSED_AUTO_FREE (default 1): once no queued run is left, every free node but the batch host goes back to Slurm (the
-# job shrinks), so the nodes of finished runs are not held until the slowest run ends. 0 keeps them.
 AUTO_FREE="${FUSED_AUTO_FREE:-1}"
 BATCH_HOST="${SLURMD_NODENAME:-$(hostname -s)}"
 
@@ -62,6 +62,14 @@ if [[ -n "${SLURM_STEP_ID:-}" ]]; then
     # without its own --cpu-bind applies it: inference servers and agents would run on 2 of the node's cores.
     unset SLURM_CPU_BIND SLURM_CPU_BIND_LIST SLURM_CPU_BIND_TYPE SLURM_CPU_BIND_VERBOSE
 fi
+# word_value <KEY> <line> -> the value of the line's first KEY=VALUE word, empty when it has none.
+word_value() {
+    local word
+    local -a words
+    read -r -a words <<<"$2"
+    for word in "${words[@]}"; do [[ "${word}" != "$1="* ]] || { echo "${word#*=}"; return; }; done
+}
+
 mapfile -t queue < <(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "${INSTANCES}")
 REASSIGN="${FUSED_REASSIGN:-0}"
 # The @serve lines are the pools' server templates (pool -> line), started by fill and reassign, never queued.
@@ -70,14 +78,14 @@ pools=() lines=()
 for line in "${queue[@]}"; do
     [[ "${line}" == "@serve "* ]] || { lines+=("${line}"); continue; }
     line="${line#@serve }"
-    pool="$(for word in ${line}; do [[ "${word}" != SERVE_POOL=* ]] || echo "${word#*=}"; done | tail -1)"
+    pool="$(word_value SERVE_POOL "${line}")"
     [[ -n "${pool}" ]] || { echo "$(date -Is) never started (an @serve line names no SERVE_POOL): ${line}"; continue; }
     template_of[${pool}]="${line}"
     serve_count[${pool}]=0
     pools+=("${pool}")
     # A server file another job left (a server killed before its EXIT trap) would route episodes to a dead URL.
     for stale in "${pool}"/servers/*.json; do
-        [[ -e "${stale}" && "$(basename "${stale}")" != "${SLURM_JOB_ID}"* ]] || continue
+        [[ -e "${stale}" && ! "$(basename "${stale}")" =~ ^${SLURM_JOB_ID}[0-9]{2,}\.json$ ]] || continue
         echo "$(date -Is) removed ${stale}: another job's server"
         rm -f -- "${stale}"
     done
@@ -87,12 +95,7 @@ declare -A name_of nodes_of run_of server_pool user_pool retired
 # FUSED_FIRST_INDEX: a second launcher inside the same job (on the nodes the first one's ended runs freed) numbers
 # its runs on from there, so no run id repeats.
 k=$((${FUSED_FIRST_INDEX:-1} - 1))
-
-# word_value <KEY> <line> -> the value of the line's KEY=VALUE word, empty when it has none.
-word_value() {
-    local word
-    for word in $2; do [[ "${word}" != "$1="* ]] || { echo "${word#*=}"; return; }; done
-}
+failed=0
 
 # line_pool <line> -> the pool a setup line's env serves from (INFERENCE_SOURCE=pool), empty for any other line.
 line_pool() {
@@ -109,18 +112,6 @@ run_demand() {
     cat "$1/runs/$2/pool-demand/"node-* 2>/dev/null | awk '{n += $1} END {print n + 0}'
 }
 
-# need <line> -> the nodes the line takes to start: its own, plus a server's when its pool has none running.
-need() {
-    local n pool
-    n="$(awk '{print $2}' <<<"$1")"
-    [[ "${n}" =~ ^[0-9]+$ ]] || { echo 0; return; }
-    pool="$(line_pool "$1")"
-    if [[ -n "${pool}" && -n "${template_of[${pool}]:-}" ]] && ! served "${pool}"; then
-        n=$((n + $(awk '{print $2}' <<<"${template_of[${pool}]}")))
-    fi
-    echo "${n}"
-}
-
 # served <pool>: a server of the pool runs and is not being stopped.
 served() {
     local pid
@@ -130,11 +121,31 @@ served() {
     return 1
 }
 
+# needs_server <line> -> the pool of a setup line that must start a server with it (its pool has a template and no
+# server running), empty otherwise.
+needs_server() {
+    local pool
+    pool="$(line_pool "$1")"
+    [[ -z "${pool}" || -z "${template_of[${pool}]:-}" ]] || served "${pool}" || echo "${pool}"
+}
+
+# need <line> -> the nodes the line takes to start: its own, plus its pool's server's (needs_server); 0 for a line
+# that is not <name> <nodes> <checkout> <env or -- command>.
+need() {
+    local -a words
+    local pool
+    read -r -a words <<<"$1"
+    ((${#words[@]} >= 4)) && [[ "${words[1]}" =~ ^[0-9]+$ ]] || { echo 0; return; }
+    pool="$(needs_server "$1")"
+    echo $((words[1] + ${pool:+$(awk '{print $2}' <<<"${template_of[${pool}]}")} + 0))
+}
+
 # start_server <pool>: one more server of the pool, from its @serve line, named <name>-<count>.
 start_server() {
     local line="${template_of[$1]}"
     serve_count[$1]=$((serve_count[$1] + 1))
     start "${line%% *}-${serve_count[$1]} ${line#* }"
+    server_pool[$!]="$1"
 }
 
 seconds_left() {
@@ -179,50 +190,43 @@ start() {
         ((${#env[@]} == 0)) || export "${env[@]}"
         cd "${workdir}" || exit 2
         exec "${words[@]}"
-    ) >"${LOG_DIR}/${SLURM_JOB_ID}-${name}.out" 2>"${LOG_DIR}/${SLURM_JOB_ID}-${name}.err" &
+    ) >"${LOG_DIR}/${run_id}-${name}.out" 2>"${LOG_DIR}/${run_id}-${name}.err" &
     name_of[$!]="${name}"
     nodes_of[$!]="${slice}"
     run_of[$!]="${run_id}"
     local pool
-    pool="$(word_value SERVE_POOL "$1")"
-    if [[ -n "${pool}" ]]; then
-        server_pool[$!]="${pool}"
-    else
-        pool="$(line_pool "$1")"
-        [[ -z "${pool}" ]] || user_pool[$!]="${pool}"
-    fi
+    pool="$(line_pool "$1")"
+    [[ -z "${pool}" ]] || user_pool[$!]="${pool}"
 }
 
-# reassign: per pool, in file order: stop the servers of a pool no running setup uses, replace a server a running setup
-# lost, and under FUSED_REASSIGN, with nothing queued, start one more server for the pool with the most unstarted
-# episodes. Sets HOLD while free nodes wait for a pool's drivers to report.
+# stop_servers <pool>: TERM to the pool's servers (no running setup uses it; a queued one starts a server again).
+stop_servers() {
+    local pid
+    for pid in "${!server_pool[@]}"; do
+        [[ "${server_pool[${pid}]}" == "$1" && -z "${retired[${pid}]:-}" ]] || continue
+        echo "$(date -Is) stop ${name_of[${pid}]}: no running setup serves from $1"
+        kill -TERM "${pid}" 2>/dev/null || true
+        retired[${pid}]=1
+    done
+}
+
+# reassign: per pool, in file order: stop the servers of a pool no running setup uses, replace the server a running
+# setup lost, and under FUSED_REASSIGN, with nothing queued, start one more server for the pool with the most unstarted
+# episodes (one loading server per pool at a time). Sets HOLD while free nodes wait for a server or a pool's report.
 reassign() {
     HOLD=0
-    local pool pid n users unreported servers demand ready best="" best_demand=0
+    local pool pid n users unreported servers demand best="" best_demand=0
     for pool in "${pools[@]}"; do
         n="$(awk '{print $2}' <<<"${template_of[${pool}]}")"
-        users=0 unreported=0 servers=0 demand=0
-        for pid in "${!name_of[@]}"; do
-            if [[ "${user_pool[${pid}]:-}" == "${pool}" ]]; then
-                users=$((users + 1))
-                [[ -d "${pool}/runs/${run_of[${pid}]}/pool-demand" ]] || unreported=$((unreported + 1))
-                demand=$((demand + $(run_demand "${pool}" "${run_of[${pid}]}")))
-            elif [[ "${server_pool[${pid}]:-}" == "${pool}" && -z "${retired[${pid}]:-}" ]]; then
-                servers=$((servers + 1))
-            fi
+        users=0 unreported=0 demand=0
+        for pid in "${!user_pool[@]}"; do
+            [[ "${user_pool[${pid}]}" == "${pool}" ]] || continue
+            users=$((users + 1))
+            [[ -d "${pool}/runs/${run_of[${pid}]}/pool-demand" ]] || unreported=$((unreported + 1))
+            demand=$((demand + $(run_demand "${pool}" "${run_of[${pid}]}")))
         done
-        if ((users == 0)); then
-            # A queued setup of the pool starts a server of its own again (fill, need).
-            for pid in "${!server_pool[@]}"; do
-                [[ "${server_pool[${pid}]}" == "${pool}" && -z "${retired[${pid}]:-}" ]] || continue
-                echo "$(date -Is) stop ${name_of[${pid}]}: no running setup serves from ${pool}"
-                kill -TERM "${pid}" 2>/dev/null || true
-                retired[${pid}]=1
-            done
-            continue
-        fi
-        if ((servers == 0)); then
-            # its server ended under running setups: they wait for one (run_cluster.sh) or stripe onto none
+        ((users)) || { stop_servers "${pool}"; continue; }
+        if ! served "${pool}"; then
             if ((n <= ${#free_nodes[@]})) && (( $(seconds_left) >= MIN_LEFT_S )); then
                 echo "$(date -Is) replace the server of ${pool}: it ended under ${users} running setup(s)"
                 start_server "${pool}"
@@ -232,11 +236,13 @@ reassign() {
             continue
         fi
         [[ "${REASSIGN}" == 1 ]] && ((${#queue[@]} == 0 && n <= ${#free_nodes[@]})) || continue
-        # Free nodes a server of this pool fits on are held while its drivers may still ask for one.
         ((unreported == 0 && demand == 0)) || HOLD=1
-        ready=$(compgen -G "${pool}/servers/${SLURM_JOB_ID}*.json" | wc -l)
-        # a server of this pool still loading: wait for it before starting another
-        ((demand > best_demand && servers <= ready)) && { best="${pool}"; best_demand=${demand}; }
+        servers=0
+        for pid in "${!server_pool[@]}"; do
+            [[ "${server_pool[${pid}]}" != "${pool}" || -n "${retired[${pid}]:-}" ]] || servers=$((servers + 1))
+        done
+        ((demand > best_demand && servers <= $(compgen -G "${pool}/servers/${SLURM_JOB_ID}*.json" | wc -l))) \
+            && { best="${pool}"; best_demand=${demand}; }
     done
     [[ -n "${best}" ]] && (( $(seconds_left) >= MIN_LEFT_S )) || return 0
     echo "$(date -Is) reassign: ${best_demand} unstarted episode(s) for ${best}"
@@ -249,12 +255,16 @@ reassign() {
 fill() {
     local i n pool
     local -a waiting=()
-    (( $(seconds_left) >= MIN_LEFT_S )) || { ((${#queue[@]} == 0)) || echo "$(date -Is) not starting ${#queue[@]} run(s): under ${MIN_LEFT_S}s left"; queue=(); return; }
+    if (( $(seconds_left) < MIN_LEFT_S )); then
+        ((${#queue[@]} == 0)) || echo "$(date -Is) not starting ${#queue[@]} run(s): under ${MIN_LEFT_S}s left"
+        queue=()
+        return
+    fi
     for i in "${!queue[@]}"; do
         n="$(need "${queue[i]}")"
-        if (( n >= 1 && n <= ${#free_nodes[@]} )); then
-            pool="$(line_pool "${queue[i]}")"
-            [[ -z "${pool}" || -z "${template_of[${pool}]:-}" ]] || served "${pool}" || start_server "${pool}"
+        if ((n <= ${#free_nodes[@]})); then
+            pool="$(needs_server "${queue[i]}")"
+            [[ -z "${pool}" ]] || start_server "${pool}"
             start "${queue[i]}"
         else
             waiting+=("${queue[i]}")
@@ -273,6 +283,7 @@ release_free() {
     done
     ((${#drop[@]})) || return 0
     mapfile -t current < <(scontrol show hostnames "$(squeue -h -j "${SLURM_JOB_ID}" -o %N)")
+    ((${#current[@]})) || return 0  # squeue failed: try again next round
     for node in "${current[@]}"; do
         [[ " ${drop[*]} " == *" ${node} "* ]] || keep+=("${node}")
     done
@@ -285,8 +296,8 @@ release_free() {
     fi
 }
 
-# A line wider than the launcher's nodes (with its pool's server) can never start, and a queue it stays in never
-# empties, so no node would ever be released: it is dropped at once.
+# A malformed line, or one wider than the launcher's nodes (with its pool's server), can never start, and a queue it
+# stays in never empties, so no node would ever be released: it is dropped at once.
 total_nodes=${#free_nodes[@]}
 fitting=()
 for line in "${queue[@]}"; do
@@ -310,6 +321,7 @@ while ((${#name_of[@]})); do
         wait "${pid}"
         status=$?
         echo "$(date -Is) end ${name_of[${pid}]} status=${status} nodes=${nodes_of[${pid}]}"
+        ((status == 0)) || [[ -n "${retired[${pid}]:-}" ]] || failed=1
         # A server killed before its EXIT trap leaves its file; no setup may stripe onto it.
         [[ -z "${server_pool[${pid}]:-}" ]] || rm -f -- "${server_pool[${pid}]}/servers/${run_of[${pid}]}.json"
         IFS=, read -r -a back <<<"${nodes_of[${pid}]}"
@@ -321,4 +333,4 @@ while ((${#name_of[@]})); do
     reassign
     release_free
 done
-((${#queue[@]} == 0)) || echo "$(date -Is) never started (more nodes than the allocation): ${queue[*]}"
+exit "${failed}"

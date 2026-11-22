@@ -168,28 +168,31 @@ sbatch --nodes=10 --time=12:00:00 --account=<a> --partition=<p> --gpus-per-node=
     hpcagent_bench/cluster/launch_fused.sbatch /path/to/instances.txt
 ```
 
-Each run logs to `<instances dir>/logs/<job>-<name>.{out,err}`, and the launcher's own log records every start and end
-with its exit status. A queued run is not started with less than `FUSED_MIN_LEFT_S` (default 3600) seconds left in
+Each run logs to `<instances dir>/logs/<run id>-<name>.{out,err}`, and the launcher's own log records every start and
+end with its exit status; the launcher exits 1 when a run failed. A queued run is not started with less than `FUSED_MIN_LEFT_S` (default 3600) seconds left in
 the allocation. `FUSED_AUTO_FREE=0` keeps the free nodes until the job ends. A second launcher can run as a step on
 nodes the first one freed: `FUSED_NODES=<nodes> FUSED_FIRST_INDEX=<k> srun --overlap -c1 -N1 bash
 hpcagent_bench/cluster/launch_fused.sbatch <instances>`, with `FUSED_FIRST_INDEX` past the first launcher's last run
-so that no run id repeats.
+so that no run id repeats. The first launcher still counts those nodes as its own, so it must not start anything on
+them: run it with `FUSED_AUTO_FREE=0`, no pool, and nothing left queued.
 
 #### Inference pools
 
 Setups of one model can share servers the launcher starts, so the inference nodes follow the work. A setup env with
 `INFERENCE_SOURCE=pool`, `INFERENCE_NODES=0` and `INFERENCE_POOL_DIR=<pool>` starts no server of its own; it serves
-from every live server of the pool, and its agent driver re-reads the pool for each episode. A pool server is an
-`@serve` line, which the launcher starts before every other line:
+from every live server of the pool, and its agent driver re-reads the pool for each episode. The pool's server is an
+`@serve` line, a template the launcher starts together with a setup of the pool when the pool has no server, so a
+setup starts only once the nodes of both are free:
 
 ```text
 @serve serve-qwen38 1 /path/to/hpcagent-bench SERVE_POOL=/path/to/pool/qwen38 MODEL=qwen38 -- \
     bash hpcagent_bench/cluster/serve-only.sbatch
 ```
 
-The server writes `<pool>/servers/<run id>.json` once every replica answers, and removes it when it stops. A setup
-refuses a pool server of another checkpoint. Once no running or queued setup serves from a pool, the launcher stops
-the pool's servers (under `FUSED_AUTO_FREE`). With `FUSED_REASSIGN=1` and nothing queued, a free node starts one more
+The server writes `<pool>/servers/<run id>.json` once every replica answers, and removes it when it stops (the
+launcher removes the file of a server that ended without doing so, and other jobs' files at start). A setup refuses a
+pool server of another checkpoint. Once no running setup serves from a pool, the launcher stops the pool's servers; a
+server that ends while setups of its pool run is replaced. With `FUSED_REASSIGN=1` and nothing queued, a free node starts one more
 server for the pool whose setups report the most unstarted episodes (`RUN_DIR/pool-demand`); new episodes reach it,
 running ones stay where they are. Free nodes a server could use are held until every setup of the pool reports no
 unstarted episode, and then released.

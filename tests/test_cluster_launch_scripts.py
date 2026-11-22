@@ -76,10 +76,10 @@ def test_a_fused_job_runs_each_line_on_its_own_nodes_and_hands_freed_nodes_to_th
     )
     assert done.returncode == 0, done.stderr
     logs = tmp_path / "logs"
-    assert (logs / "9-a.out").read_text() == "901 n1,n2 2 x\n"
-    assert (logs / "9-b.out").read_text() == "902 n3,n4 2 \n"
-    assert (logs / "9-c.out").read_text().split()[0] == "903"
-    assert len((logs / "9-c.out").read_text().split()[1].split(",")) == 3
+    assert (logs / "901-a.out").read_text() == "901 n1,n2 2 x\n"
+    assert (logs / "902-b.out").read_text() == "902 n3,n4 2 \n"
+    assert (logs / "903-c.out").read_text().split()[0] == "903"
+    assert len((logs / "903-c.out").read_text().split()[1].split(",")) == 3
     starts = [line.split()[2] for line in done.stdout.splitlines() if " start " in line]
     assert starts == ["a", "b", "c"]
 
@@ -152,7 +152,8 @@ def test_a_fused_job_releases_the_nodes_of_ended_runs_once_nothing_is_queued(
 
 
 def test_a_fused_job_logs_each_runs_own_exit_status(tmp_path: pathlib.Path) -> None:
-    """The end line of a run carries the run's exit status, not that of the $(date) on the same line."""
+    """The end line of a run carries the run's exit status, not that of the $(date) on the same line, and a failed run
+    fails the launcher (a job whose runs all failed must not show COMPLETED)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "scontrol").write_text("#!/bin/bash\nprintf 'n%s\\n' 1 2\n")
@@ -173,7 +174,7 @@ def test_a_fused_job_logs_each_runs_own_exit_status(tmp_path: pathlib.Path) -> N
             "FUSED_AUTO_FREE": "0",
         },
     )
-    assert done.returncode == 0, done.stderr
+    assert done.returncode == 1, "a failed run fails the job"
     ends = {line.split()[2]: line.split()[3] for line in done.stdout.splitlines() if " end " in line}
     assert ends == {"ok": "status=0", "fails": "status=3"}, done.stdout
 
@@ -243,6 +244,24 @@ def test_a_fused_pool_server_stops_once_no_setup_serves_from_its_pool(tmp_path: 
     assert list((pool / "servers").iterdir()) == []
 
 
+def test_a_malformed_fused_line_is_dropped_instead_of_killing_the_launcher(tmp_path: pathlib.Path) -> None:
+    """``bad 1`` has no checkout: start() read past its words under set -u and the launcher died, ending the job and
+    every run in it."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "scontrol").write_text("#!/bin/bash\nprintf 'n%s\\n' 1 2\n")
+    (bin_dir / "squeue").write_text("#!/bin/bash\necho 4102444800\n")
+    for tool in ("scontrol", "squeue"):
+        (bin_dir / tool).chmod(0o755)
+    instances = tmp_path / "instances.txt"
+    instances.write_text(f"bad 1\ngood 1 {tmp_path} -- true\n")
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "SLURM_JOB_ID": "9", "SLURM_JOB_NODELIST": "n[1-2]", "FUSED_POLL_S": "0.1"}
+    done = run_launcher(instances, {**env, "FUSED_AUTO_FREE": "0"})
+    assert done.returncode == 0, done.stderr
+    assert "never started (0 nodes, the launcher has 2): bad 1" in done.stdout
+    assert " end good status=0 " in done.stdout
+
+
 def test_a_fused_pool_server_starts_only_with_a_setup_of_its_pool(tmp_path: pathlib.Path) -> None:
     """A server that started before its setups could fit held nodes those setups waited for: it is not started until a
     setup of its pool starts with it, and a setup that cannot fit with its server is dropped at once."""
@@ -269,7 +288,7 @@ def test_a_fused_pool_server_that_ends_under_running_setups_is_replaced(tmp_path
     )
     instances.write_text(instances.read_text().replace(f"bash {tmp_path / 'server.sh'}", f"bash {crash}"))
     done = run_launcher(instances, env)
-    assert done.returncode == 0, done.stderr
+    assert done.returncode == 1, "the crashed server is a failed run"
     assert "replace the server of " in done.stdout, done.stdout
     assert " start srv-2 " in done.stdout
     assert list((pool / "servers").iterdir()) == []
@@ -283,7 +302,7 @@ def test_a_fused_pool_grows_on_free_nodes_while_its_setups_have_unstarted_episod
     assert done.returncode == 0, done.stderr
     assert "reassign: 5 unstarted episode(s) for " in done.stdout, done.stdout
     assert " start srv-2 " in done.stdout
-    assert (tmp_path / "logs" / "9-user.err").read_text() == ""
+    assert (tmp_path / "logs" / "902-user.err").read_text() == ""
     assert list((pool / "servers").iterdir()) == []
 
 
@@ -315,7 +334,7 @@ def test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps
         },
     )
     assert done.returncode == 0, done.stderr
-    assert (tmp_path / "logs" / "9-a.out").read_text() == "cpus=192 bind=unset list=unset\n"
+    assert (tmp_path / "logs" / "901-a.out").read_text() == "cpus=192 bind=unset list=unset\n"
 
 
 @pytest.mark.parametrize(

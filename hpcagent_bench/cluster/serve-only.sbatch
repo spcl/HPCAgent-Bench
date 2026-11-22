@@ -87,6 +87,8 @@ set +a
 # CE_IMAGE_RELEASE (containers/images/images.env): the frozen serving EDF of that release, as submit.sh names it.
 INFERENCE_CE_ENV="${INFERENCE_CE_ENV:-}${INFERENCE_CE_ENV:+${CE_IMAGE_RELEASE:+-${CE_IMAGE_RELEASE}}}"
 ACCESS="${ACCESS:-open}"
+# A pool's setups read its server files with no key (launch_fused.sbatch inference pools).
+[[ -z "${SERVE_POOL:-}" || "${ACCESS}" == open ]] || { echo "serve-only: SERVE_POOL serves open, not ACCESS=${ACCESS}" >&2; exit 2; }
 if [[ "${ACCESS}" == alps ]]; then
     refuse() {
         printf 'serve-only: refusing: %s\n' "$*" >&2
@@ -228,6 +230,18 @@ srun --nodes="${INFERENCE_NODES}" --ntasks="${INFERENCE_NODES}" --ntasks-per-nod
     --output="${RUN_DIR}/server-%t.log" --error="${RUN_DIR}/server-%t.log" \
     "${SCRIPT_DIR}/run_cluster.sh" --vllm-node &
 SERVER_PID=$!
+if [[ -n "${SERVE_POOL:-}" ]]; then
+    # The launcher retires a pool server with TERM, while it loads too: the step goes with it, and its pool file first
+    # once there is one, so a pool setup never stripes an episode onto a server that is gone.
+    pool_file=""
+    cleanup_pool() {
+        [[ -z "${pool_file}" ]] || rm -f -- "${pool_file}"
+        kill "${SERVER_PID}" 2>/dev/null || true
+        wait "${SERVER_PID}" 2>/dev/null || true
+    }
+    trap cleanup_pool EXIT
+    trap 'exit 143' TERM INT
+fi
 
 echo "waiting for the API (up to ${READY_TIMEOUT}s); weight load dominates this"
 deadline=$(( $(date +%s) + READY_TIMEOUT ))
@@ -321,18 +335,10 @@ EOF
 fi
 
 if [[ -n "${SERVE_POOL:-}" ]]; then
-    # A pool server (launch_fused.sbatch @serve): published once every replica answered, unpublished first on the way
-    # out, so a pool setup never stripes an episode onto a server that is gone; the launcher retires it with TERM.
+    # A pool server (launch_fused.sbatch @serve): published once every replica answered (cleanup_pool unpublishes it).
     pool_file="$(VLLM_REPLICA_URLS="$(IFS=,; printf '%s' "${endpoints[*]}")" \
         INFERENCE_CE_ENV="${INFERENCE_CE_ENV}" VLLM_MODEL="${VLLM_MODEL:-}" INFERENCE_ENGINE="${INFERENCE_ENGINE:-vllm}" \
         "${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/inference_service.py" --write-pool "${SERVE_POOL}")" || exit 1
-    cleanup_pool() {
-        rm -f -- "${pool_file}"
-        kill "${SERVER_PID}" 2>/dev/null || true
-        wait "${SERVER_PID}" 2>/dev/null || true
-    }
-    trap cleanup_pool EXIT
-    trap 'exit 143' TERM INT
     echo "pool server live in ${SERVE_POOL}: ${endpoints[*]}"
     wait "${SERVER_PID}"
     exit
