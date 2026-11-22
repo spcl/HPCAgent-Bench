@@ -4,7 +4,6 @@
 anywhere; counter tests are gated on explicit predicates, and a host without countable events asserts the
 refusal."""
 
-import contextlib
 import ctypes
 import faulthandler
 import json
@@ -12,7 +11,7 @@ import os
 import pathlib
 import signal
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 
 import pytest
 
@@ -1006,21 +1005,32 @@ SKEWED_GEMM = OPENMP_GEMM.replace(
 )
 
 
-def openmp_threads(monkeypatch: pytest.MonkeyPatch) -> int:
+@pytest.fixture
+def openmp_threads(monkeypatch: pytest.MonkeyPatch) -> Iterator[int]:
     """Put this process in the counted configuration: N threads, pinned, env set BEFORE the .so
-    loads (which is when the OpenMP runtime reads it). Returns the thread count."""
+    loads (which is when the OpenMP runtime reads it). Yields the thread count."""
     threads = min(4, flags.ncores())
     for key, value in {**flags.cpu_env(Mode.MULTI_CORE, threads=threads), **papi.PINNED_ENV}.items():
         monkeypatch.setenv(key, value)
     # numpy's OpenMP-flavour OpenBLAS has loaded libgomp already, which read OMP_NUM_THREADS then (the image's
     # core count): the pool this process's forked children inherit takes the API call, not the env.
-    with contextlib.suppress(OSError):
-        ctypes.CDLL("libgomp.so.1").omp_set_num_threads(threads)
-    return threads
+    try:
+        gomp = ctypes.CDLL("libgomp.so.1")
+    except OSError:
+        yield threads
+        return
+    width = gomp.omp_get_max_threads()
+    gomp.omp_set_num_threads(threads)
+    try:
+        yield threads
+    finally:
+        # The team outlives the test in this worker: a later grade's forked child cannot widen it back and
+        # refuses to time (native_call.check_loaded_team).
+        gomp.omp_set_num_threads(width)
 
 
 @requires_counters
-def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(openmp_threads: int) -> None:
     """The headline: a process-wide count cannot tell these two kernels apart, and this can.
 
     Both do the same gemm on the same data; one spreads it evenly and one gives its four static
@@ -1040,7 +1050,7 @@ def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch: p
         or papi.resolve("instructions", papi.available_events()) is None
     ):
         pytest.skip(f"no cycle/instruction preset on this CPU; available: {papi.available_events()}")
-    threads = openmp_threads(monkeypatch)
+    threads = openmp_threads
     if threads < 4:
         pytest.skip(f"only {flags.ncores()} physical core(s); the 1:2:3:4 schedule needs 4 threads")
     binding = binding_from_spec(BenchSpec.load("gemm"))
@@ -1086,6 +1096,7 @@ def test_the_per_thread_report_recovers_a_KNOWN_work_distribution(monkeypatch: p
 
 
 @requires_papi
+@pytest.mark.usefixtures("openmp_threads")
 def test_a_serial_kernel_is_refused_as_not_openmp_rather_than_reported_balanced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1102,7 +1113,6 @@ def test_a_serial_kernel_is_refused_as_not_openmp_rather_than_reported_balanced(
     from hpcagent_bench.spec import BenchSpec
     from hpcagent_bench.support.bindings.contract import binding_from_spec
 
-    openmp_threads(monkeypatch)
     # No pragma AND no library call. gemm's C reference dispatches to cblas, whose pool reads its
     # thread knobs when the library loads; setting them inside this test did not reach it in the
     # MI300A hardware run, four BLAS threads burned cycles and the report read balanced.
