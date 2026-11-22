@@ -572,8 +572,7 @@ def render_canonical(
     """Step 4 on a canonical SDFG, copied first so one parse serves every language.
 
     The entry takes the canonical native symbol and the ABI order (kernel args, then the workspace pair); a mismatch
-    surfaces as a refusal, never as shifted arguments. ``hints`` is passed only when not :data:`DEFAULT_HINTS` (an
-    older dace lacks the parameter)."""
+    surfaces as a refusal, never as shifted arguments. ``hints`` is passed only when not :data:`DEFAULT_HINTS`."""
     import copy
 
     from dace.codegen.cpf import EntrySignature, compile_check, dialect_for, render
@@ -597,11 +596,13 @@ def render_canonical(
     emitted = cpf_cache.served_dialect(target, language)
     try:
         signature = EntrySignature(abi_args, workspace=WORKSPACE_NAME, workspace_size=WORKSPACE_SIZE_NAME)
+        # A CPU form is served in DaCe's LLM-friendly spelling (short generated names, unreachable statics dropped);
+        # DaCe respells host units only, so a GPU form keeps its names.
+        options: dict[str, object] = {"llm_friendly": target is Target.CPU}
+        if hints is not DEFAULT_HINTS:
+            options["hints"] = hints.text
         with gpu_codegen_pinned(target):
-            if hints is DEFAULT_HINTS:
-                rendering = render(sdfg, language=emitted, signature=signature, check_compiles=False)
-            else:
-                rendering = render(sdfg, language=emitted, signature=signature, check_compiles=False, hints=hints.text)  # pyright: ignore[reportCallIssue] -- hints= is newer than some dace pins; only a non-default detail needs it
+            rendering = render(sdfg, language=emitted, signature=signature, check_compiles=False, **options)  # pyright: ignore[reportArgumentType] -- render's keywords are typed one by one
         code = exact_abi_signature(
             rendering.code, native.symbol, abi_parameters(native, emitted), {v: k for k, v in renames.items()}
         )
@@ -834,6 +835,7 @@ def render_options(
         "precision": fptype_tag(precision),
         "target": target.text,
         "hints": hints.text,
+        "llm_friendly": target is Target.CPU,
         "bridge": framework_cache.bench_tree_fingerprint(),
         "dace_env": cpf_canonical.dace_environment(),
         "entry": native.symbol,
