@@ -107,7 +107,7 @@ EXPERIMENT=${EXPERIMENT:-${TAG:-$(basename -- "${KERNELS_FILE%.*}")}}
 RECORD_STUDY_GIVEN=${RECORD_STUDY:+1}
 RECORD_STUDY=${RECORD_STUDY:-${TAG:-${EXPERIMENT}}}
 STAMP=${STAMP:-$(date +%Y%m%d)}
-deadline_setup "${DEADLINE:-}" "${DEADLINE_MARGIN_SECONDS:-300}" || exit 2
+deadline_setup "${DEADLINE:-}" 300 || exit 2
 BEGIN=${BEGIN:-}
 [[ "${BEGIN}" != now ]] || BEGIN=""
 

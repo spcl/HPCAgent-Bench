@@ -163,7 +163,7 @@ JUDGE_PORT="${JUDGE_PORT:-8800}"
 # pair below VLLM_PORT, refused if it meets a port the inference or proxy binds on the same host.
 if [[ "${COLOCATE:-0}" == 1 ]]; then
     INFERENCE_NODES=1 AGENT_NODES=1 JUDGE_NODES=1 JUDGE_SLOTS_PER_NODE=1
-    JUDGE_PORT="${COLOCATE_JUDGE_PORT:-7800}"
+    JUDGE_PORT=7800
     case " ${VLLM_PORT} ${VLLM_MASTER_PORT} ${LITELLM_PORT} " in
         *" ${JUDGE_PORT} "* | *" $((JUDGE_PORT + 1)) "*)
             echo "COLOCATE: judge ports ${JUDGE_PORT}/$((JUDGE_PORT + 1)) collide with an inference or proxy port" >&2
@@ -543,7 +543,7 @@ PY
                 # The gloo cpu_group carrying tensor-dict metadata has its OWN timeout, defaulting
                 # to 1800 s while the line above covers only the device group.
                 --cpu-distributed-timeout-seconds \
-                    "${VLLM_CPU_DISTRIBUTED_TIMEOUT_SECONDS:-${VLLM_DISTRIBUTED_TIMEOUT_SECONDS:-3600}}"
+                    "${VLLM_DISTRIBUTED_TIMEOUT_SECONDS:-3600}"
             )
             # Async scheduling is ON by default (config/vllm.py: async_scheduling=None -> True) and
             # it is the only thing that ever runs a COLLECTIVE on pp.device_group: the last rank
@@ -778,8 +778,8 @@ run_judge_node() {
     # grade into a 502. The supervisor restarts it and still ends non-zero on a crash loop, which
     # the readiness loop below reads as "died during startup".
     "${HPCAGENT_BENCH_IMAGE_PYTHON}" "${SCRIPT_DIR}/judge_upstream.py" --label "rank=${judge_rank}" \
-        --min-uptime-seconds "${JUDGE_UPSTREAM_MIN_UPTIME_SECONDS:-60}" \
-        --max-quick-restarts "${JUDGE_UPSTREAM_MAX_QUICK_RESTARTS:-3}" \
+        --min-uptime-seconds 60 \
+        --max-quick-restarts 3 \
         -- "${serve[@]}" >"${log_dir}/upstream-${judge_rank}.log" 2>&1 &
     upstream_pid="$!"
 
