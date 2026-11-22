@@ -215,11 +215,8 @@ def pool_fixture(tmp_path: pathlib.Path, demand: int) -> tuple[pathlib.Path, pat
     return instances, pool, env
 
 
-def test_a_fused_pool_server_stops_once_no_setup_serves_from_its_pool(tmp_path: pathlib.Path) -> None:
-    """The @serve line starts first; when the only setup of its pool ends, the server gets TERM instead of holding its
-    nodes until the allocation ends, and it unregisters from the pool."""
-    instances, pool, env = pool_fixture(tmp_path, demand=0)
-    done = subprocess.run(
+def run_launcher(instances: pathlib.Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         ["bash", str(CLUSTER / "launch_fused.sbatch"), str(instances)],
         env=env,
         capture_output=True,
@@ -227,10 +224,54 @@ def test_a_fused_pool_server_stops_once_no_setup_serves_from_its_pool(tmp_path: 
         timeout=20,
         check=False,
     )
+
+
+@pytest.mark.parametrize("auto_free", ["1", "0"])
+def test_a_fused_pool_server_stops_once_no_setup_serves_from_its_pool(tmp_path: pathlib.Path, auto_free: str) -> None:
+    """The server starts with the pool's first setup; when that setup ends, the server gets TERM instead of holding its
+    nodes, and the job, until the allocation ends, also when free nodes are kept (FUSED_AUTO_FREE=0). A server file
+    another job left in the pool is removed first."""
+    instances, pool, env = pool_fixture(tmp_path, demand=0)
+    (pool / "servers").mkdir(parents=True)
+    (pool / "servers" / "7701.json").write_text("{}")
+    done = run_launcher(instances, {**env, "FUSED_AUTO_FREE": auto_free})
     assert done.returncode == 0, done.stderr
     starts = [line.split()[2] for line in done.stdout.splitlines() if " start " in line]
     assert starts == ["srv-1", "user"], done.stdout
-    assert " stop srv-1: no setup serves from " in done.stdout
+    assert "removed " in done.stdout and "7701.json: another job's server" in done.stdout
+    assert " stop srv-1: no running setup serves from " in done.stdout
+    assert list((pool / "servers").iterdir()) == []
+
+
+def test_a_fused_pool_server_starts_only_with_a_setup_of_its_pool(tmp_path: pathlib.Path) -> None:
+    """A server that started before its setups could fit held nodes those setups waited for: it is not started until a
+    setup of its pool starts with it, and a setup that cannot fit with its server is dropped at once."""
+    instances, pool, env = pool_fixture(tmp_path, demand=0)
+    setup = tmp_path / ".env.setup"
+    text = instances.read_text().replace(f"user 1 {tmp_path} {setup}", f"a 2 {tmp_path} -- sleep 0.5\nuser 2 {tmp_path} {setup}")
+    instances.write_text(text + f"wide 3 {tmp_path} {setup}\n")
+    done = run_launcher(instances, env)
+    assert done.returncode == 0, done.stderr
+    starts = [line.split()[2] for line in done.stdout.splitlines() if " start " in line]
+    assert starts == ["a", "srv-1", "user"], done.stdout
+    assert "never started (4 nodes, the launcher has 3)" in done.stdout
+
+
+def test_a_fused_pool_server_that_ends_under_running_setups_is_replaced(tmp_path: pathlib.Path) -> None:
+    """The first server registers and dies without its EXIT trap: its file is removed, so no episode stripes onto a dead
+    URL, and a new server starts for the setup still running."""
+    instances, pool, env = pool_fixture(tmp_path, demand=0)
+    crash = tmp_path / "crash.sh"
+    crash.write_text(
+        f'[[ -e {tmp_path}/crashed ]] || {{ touch {tmp_path}/crashed; mkdir -p "$SERVE_POOL/servers"\n'
+        'echo {} >"$SERVE_POOL/servers/$HPCAGENT_BENCH_RUN_ID.json"; exit 1; }\n'
+        f"exec bash {tmp_path / 'server.sh'}\n"
+    )
+    instances.write_text(instances.read_text().replace(f"bash {tmp_path / 'server.sh'}", f"bash {crash}"))
+    done = run_launcher(instances, env)
+    assert done.returncode == 0, done.stderr
+    assert "replace the server of " in done.stdout, done.stdout
+    assert " start srv-2 " in done.stdout
     assert list((pool / "servers").iterdir()) == []
 
 
@@ -238,14 +279,7 @@ def test_a_fused_pool_grows_on_free_nodes_while_its_setups_have_unstarted_episod
     """Under FUSED_REASSIGN=1, nothing queued and a free node: the pool whose setup reports unstarted episodes gets a
     second server, which the setup then sees. FUSED_REASSIGN=0 (the default) only stops servers."""
     instances, pool, env = pool_fixture(tmp_path, demand=5)
-    done = subprocess.run(
-        ["bash", str(CLUSTER / "launch_fused.sbatch"), str(instances)],
-        env={**env, "FUSED_REASSIGN": "1"},
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    done = run_launcher(instances, {**env, "FUSED_REASSIGN": "1"})
     assert done.returncode == 0, done.stderr
     assert "reassign: 5 unstarted episode(s) for " in done.stdout, done.stdout
     assert " start srv-2 " in done.stdout
