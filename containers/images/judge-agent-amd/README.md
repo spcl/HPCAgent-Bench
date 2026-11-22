@@ -128,6 +128,12 @@ These are procedures, not image defects. Each one cost a verify or suite run on 
 - **Every inner step is one task on one node.** An `srun` without `--nodes` in a multi-node job asks for all the
   job's nodes, so in job 758676 both verifies waited while a suite step held the third node. The verify steps now
   pass `--nodes=1 --ntasks=1`.
+- **Two nodes before promotion.** `containers/images/mpi_two_node_check.sbatch` (EDF= the candidate's EDF, two
+  `mi300` nodes) checks one communicator across nodes, a GPU-aware allreduce and provider `cxi`. The `~pci` hwloc
+  abort passed every one-node check and showed only in production runs (756270), as the GH200 images were checked
+  across two nodes from the start.
+- **The build gate reads libmpi's own NEEDED entries.** `ldd` is transitive; the gate also requires `libmpi.so` to
+  NEED `libamdhip64`, which an MPL built without HIP does not (the mi300 v1.0 image NEEDs `libamdhip64.so.7`).
 - **A push deletes the local `.oci.tar`.** `registry.sh push` removes the archive once the registry holds it. A
   verifier built after the push takes its judge from the registry tag (the default `BASE_IMAGE`), not from
   `oci-archive:`.

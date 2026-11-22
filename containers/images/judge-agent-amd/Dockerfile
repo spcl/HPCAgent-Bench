@@ -817,6 +817,11 @@ RUN set -eux; \
     ldd "${libmpi}" | grep -qiE 'libamdhip64|libhsa-runtime64' \
       || { echo "${libmpi} links no ROCm runtime -- GPU buffers would go through host staging at best" >&2; \
            ldd "${libmpi}" >&2; exit 1; }; \
+    # ldd is transitive: a dependency that links ROCm satisfies it. MPICH's own GPU layer NEEDs the HIP runtime;
+    # judge-agent-cuda's MPL built without CUDA under a configure line that said CUDA, and only the query said NO.
+    readelf -d "${libmpi}" | grep -qE 'NEEDED.*libamdhip64\.so' \
+      || { echo "${libmpi} NEEDs no libamdhip64: MPL built without HIP, MPIX_GPU_query_support will say NO" >&2; \
+           exit 1; }; \
     test -f /opt/rocm/include/rccl/rccl.h || { echo "missing rccl.h" >&2; exit 1; }; \
     ls /opt/rocm/lib/librccl.so* >/dev/null \
       || { echo "librccl.so missing -- device collectives unavailable" >&2; exit 1; }; \
