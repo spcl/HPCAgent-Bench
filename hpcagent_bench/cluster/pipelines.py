@@ -72,11 +72,13 @@ def written(path: pathlib.Path, text: str) -> None:
 
 def split(env: pathlib.Path, problems: pathlib.Path) -> list[Part]:
     """The jobs of the staged setup ``env`` over its ``problems``, their files written beside them. A model with no
-    ``AGENTS_PER_PIPELINE`` is not split (the one :class:`Part` is the setup itself); a setup of one pipeline's
+    ``AGENTS_PER_PIPELINE``, or served from servers it does not start (INFERENCE_SOURCE other than node), is not split
+    (the one :class:`Part` is the setup itself); a setup of one pipeline's
     problems or fewer keeps its env file, pinned to one pipeline."""
     values = env_spec.assignments(env)
     per_pipeline = int(values.get("AGENTS_PER_PIPELINE") or 0)
-    if not per_pipeline:
+    # Only a setup's own server has pipelines to split over: jobs of an endpoint or pool setup share its servers.
+    if not per_pipeline or values.get("INFERENCE_SOURCE", "node") != "node":
         return [Part(env, problems, 1, 1)]
     lines = [ProblemLine.model_validate_json(line) for line in raw_lines(problems)]
     if not lines:

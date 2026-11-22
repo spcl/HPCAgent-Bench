@@ -286,12 +286,14 @@ apply_release() {
     sed -i -E "s/^([A-Z_]*CE_ENV=.+)$/\1-${CE_IMAGE_RELEASE}/" "$1"
 }
 
-# finalize_staged_env <staged> <env> -- the hardware, the image flavor and release, then the rename. A
+# finalize_staged_env <staged> <env> [KEY=VALUE ...] -- the hardware, the image flavor and release, then the rename. A
 # bailed gate leaves neither a staged nor a final file looking complete.
 finalize_staged_env() {
-    local staged="$1" env="$2"
+    local staged="$1" env="$2" kv
     apply_hardware "${staged}" "$(sed -n 's/^HPCAGENT_BENCH_RECORD_MODEL=//p' "${staged}" | tail -1)" \
         || { rm -f "${staged}"; return 2; }
+    # The submitter's own pins win over the hardware layer's (AGENTS_PER_NODE=20 stays 20 on a gh200 layer of 40).
+    for kv in "${@:3}"; do pin_env_kv "${staged}" "${kv}" || { rm -f "${staged}"; return 2; }; done
     apply_flavor "${staged}" || { rm -f "${staged}"; return 2; }
     apply_release "${staged}" || { rm -f "${staged}"; return 2; }
     mv -- "${staged}" "${env}"
@@ -484,20 +486,27 @@ plan_waves() {
 }
 
 # submit_waves <max-nodes> <dep-ids> <begin> [prep-ids] -- submit_setup_job for every staged setup (the arrays
-# WAVE_ENVS, WAVE_SETUPS, WAVE_WALLTIMES, one entry per setup), split into waves by plan_waves over their setup_nodes
-# counts. Prints one line per wave (its number, summed nodes, dependency) before its setups. Wave 1 depends on
+# WAVE_ENVS, WAVE_SETUPS, WAVE_WALLTIMES, one entry per setup), in the waves plan_setup_waves plans. Prints one line per wave (its number, summed nodes, dependency) before its setups. Wave 1 depends on
 # <dep-ids>; every later wave on all job ids of the previous wave (afterany: a failed wave does not stop the next),
 # so at most <max-nodes> nodes of this call run or wait at once. EVERY wave also depends afterok on <prep-ids>, the
 # prepare and golden jobs: afterany does not carry their failure across a wave, and a wave cancelled by it would
 # release the next. Under a dry run the ids are names and the dependencies those of the jobs it does not submit.
-submit_waves() {
-    local max="$1" dep_ids="$2" begin="$3" prep_ids="${4:-}" index wave last total after nodes
-    local -a counts=() previous=()
+# plan_setup_waves <max-nodes> -- WAVE_COUNTS (setup_nodes of every WAVE_ENVS entry) and their WAVE_NUMBERS
+# (plan_waves): run before the prepare and golden jobs, so a setup that cannot fit refuses before they are queued.
+plan_setup_waves() {
+    local index nodes
+    WAVE_COUNTS=()
     for index in "${!WAVE_ENVS[@]}"; do
         nodes=$(setup_nodes "${WAVE_ENVS[index]}") || return 2
-        counts+=("${nodes}")
+        WAVE_COUNTS+=("${nodes}")
     done
-    plan_waves "${max}" "${counts[@]}" || return 2
+    plan_waves "$1" "${WAVE_COUNTS[@]}"
+}
+
+submit_waves() {
+    local max="$1" dep_ids="$2" begin="$3" prep_ids="${4:-}" index wave last total after
+    plan_setup_waves "${max}" || return 2
+    local -a counts=("${WAVE_COUNTS[@]}") previous=()
     last=${WAVE_NUMBERS[${#WAVE_NUMBERS[@]} - 1]:-0}
     for (( wave = 1; wave <= last; wave++ )); do
         total=0

@@ -345,7 +345,7 @@ def test_parallel_callers_in_one_shell_write_separate_temporaries(tmp_path: path
             "fails=0",
             "for round in $(seq 10); do",
             "    for i in 1 2 3 4; do (derived_edf bench judge >/dev/null 2>&1) & done",
-            "    for job in $(jobs -p); do wait \"${job}\" || fails=$((fails + 1)); done",
+            '    for job in $(jobs -p); do wait "${job}" || fails=$((fails + 1)); done',
             "done",
             'echo "${fails}"',
         ]

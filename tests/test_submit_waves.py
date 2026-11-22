@@ -177,14 +177,14 @@ def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_pa
     assert not [line for line in calls if "--export" in line], calls
 
 
-#: A stub squeue: this user's queued prep jobs of the experiment ``wave`` -- the prepare job (renders numba,c) and the
+#: A stub squeue: this user's queued prep jobs of the experiment ``wave`` over subset.txt -- the prepare job (renders numba,c) and the
 #: c golden job -- as ``<id> <comment>``, for the job name after ``-n``, queued from the submitting checkout (``OPT``).
 QUEUED_SQUEUE = """name=""
 while [ $# -gt 0 ]; do [ "$1" = -n ] && name="$2"; shift; done
 commit=$(git -C "${OPT}" rev-parse --short=9 HEAD 2>/dev/null || echo unknown)
 case "${name}" in
-    prepare-wave) echo "55 renders=numba,c;commit=${commit}" ;;
-    goldens-wave-c) echo "56 goldens;commit=${commit}" ;;
+    prepare-wave) echo "55 renders=numba,c;kernels=subset.txt;commit=${commit}" ;;
+    goldens-wave-c) echo "56 goldens;kernels=subset.txt;commit=${commit}" ;;
 esac
 """
 

@@ -24,7 +24,9 @@ setup_nodes() {
     fi
     # A pp model serves AGENTS_PER_PIPELINE agents per pipeline; more queue at the server, which evicts their cached
     # prefixes, so every turn re-prefills and episodes run into the time limit (issue #193)
+    # (only the setup's own server: an endpoint or pool serves other jobs too, and its owner sizes it)
     per_pipeline="$(env_number "${env_file}" AGENTS_PER_PIPELINE)"
+    [[ "$(grep -oP '^INFERENCE_SOURCE=\K\S+' "${env_file}" | tail -n 1 || true)" =~ ^(node)?$ ]] || per_pipeline=""
     per_node="$(env_number "${env_file}" AGENTS_PER_NODE)"
     if [[ -n "${per_pipeline}" ]] && (( ${agent:-1} * ${per_node:-40} > ${replicas:-1} * per_pipeline )); then
         echo "setup_nodes: ${env_file##*/}: AGENT_NODES=${agent:-1} x AGENTS_PER_NODE=${per_node:-40} agents need" \
