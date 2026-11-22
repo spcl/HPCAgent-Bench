@@ -9,14 +9,18 @@
 #SBATCH --no-requeue
 # The fabric check a one-node verify cannot make: MPI across two nodes of an image, under its production EDF.
 #
-#   EDF=$HOME/.edf/hpcagent-bench-judge-amd-latest.toml sbatch -A <account> -p mi300 containers/images/mpi_two_node_check.sbatch
+#   EDF=hpcagent-bench-judge-amd-latest sbatch -A <account> -p mi300 containers/images/mpi_two_node_check.sbatch
 #   EDF=... sbatch -A <account> -p normal containers/images/mpi_two_node_check.sbatch       # GH200 (Daint)
 #
 # Passes when one COMM_WORLD spans two distinct nodes, a host and a GPU-aware allreduce of device buffers return
 # the expected sums, and rank 0's MPICH opened libfabric provider cxi. One-node verifies miss what this catches:
 # the cross-node MPI_Init assertion of a ~pci hwloc (756270) and a silent tcp fallback.
 set -uo pipefail
-: "${EDF:?set EDF to the EDF of the image under test, a path or a name under ~/.edf}"
+
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
+: "${EDF:?set EDF to the EDF of the image under test, a path or an EDF name on EDF_PATH}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/containers/images/lib/mpi_two_node.c" ]] \
     && here="${SLURM_SUBMIT_DIR}/containers/images"
