@@ -654,9 +654,10 @@ RUN sh /tmp/git_mirror.sh drop && rm -f /tmp/git_mirror.sh
 #      takes the hook's libfabric (bound onto /usr/lib/<multiarch>/libfabric.so.1), which ranks cxi first.
 #   2. Elsewhere: a site libfabric earlier on LD_LIBRARY_PATH wins; otherwise the fallback (verbs, then tcp).
 COPY --from=ofi-fallback /opt/ofi-fallback/lib /opt/ofi-fallback/lib
+# librdmacm: the fallback's verbs provider links it; the CUDA base already ships it, this Ubuntu base does not.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ibverbs-providers; \
+    apt-get install -y --no-install-recommends ibverbs-providers librdmacm1t64; \
     rm -rf /var/lib/apt/lists/*; \
     ! ldd /opt/ofi-fallback/lib/libfabric.so.1 | grep 'not found' \
       || { echo "the fallback libfabric misses a runtime library" >&2; exit 1; }; \
