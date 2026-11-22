@@ -22,8 +22,7 @@ image must carry is in [IMAGE_REQUIREMENTS.md](../IMAGE_REQUIREMENTS.md); the NC
   (6e961399c, in every image built since 2026-11-20). Until a two-node run without it passes, the judge and agent
   EDFs also preload the distro `libhwloc.so.15`, which sees PCI (9a81172fa).
 - **Evidence.** Job 756270, with the preload: 2 and 8 ranks over two `mi300` nodes open cxi, at 14.4 µs for 8 B and
-  20.5 GB/s for 16 MB, against 31 µs and 2.1 GB/s over tcp. Job 758676 on the v1.0 candidate: 8 ranks over
-  nid002992 and nid002998 form one communicator, and a host allreduce and a GPU-aware allreduce of device buffers
+  20.5 GB/s for 16 MB, against 31 µs and 2.1 GB/s over tcp. Job 758676 on the v1.0 candidate: 8 ranks over two `mi300` nodes form one communicator, and a host allreduce and a GPU-aware allreduce of device buffers
   both return the expected sums.
 
 ### Hydra died of SIGFPE in a one-node step of a multi-node job
