@@ -61,10 +61,6 @@ ENV_RECEIVERS = frozenset({"env", "environ", "environment"})
 #: Read methods of an environment mapping, besides subscripting.
 ENV_METHODS = frozenset({"get", "pop", "setdefault"})
 
-#: The table of deprecated names (agent/hpcagent_agent/env_aliases.py ``DEPRECATED``): its translation at process entry
-#: reads every key, by iterating the table rather than by a literal, so each counts as one read there.
-ALIAS_TABLE = ("env_aliases.py", "DEPRECATED")
-
 #: Prefixes of the vendor and tool stacks whose names the project does not own; the env cleanup never moves one.
 VENDOR_PREFIXES = (
     "ANTHROPIC_",
@@ -178,21 +174,6 @@ def py_names(path: pathlib.Path, root: pathlib.Path, counts: Counter, first: dic
         name = read_name(node)
         if name is not None:
             record(counts, first, name, where.format(line=node.lineno))
-        for key in alias_keys(path, node):
-            record(counts, first, key, where.format(line=node.lineno))
-
-
-def alias_keys(path: pathlib.Path, node: ast.AST) -> list[str]:
-    """The deprecated names ``node`` lists when it is the :data:`ALIAS_TABLE` assignment; none otherwise."""
-    if path.name != ALIAS_TABLE[0] or not isinstance(node, ast.Assign | ast.AnnAssign):
-        return []
-    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-    if not any(isinstance(target, ast.Name) and target.id == ALIAS_TABLE[1] for target in targets):
-        return []
-    if not isinstance(node.value, ast.Dict):
-        return []
-    names = (literal(key) for key in node.value.keys if key is not None)
-    return [name for name in names if name is not None]
 
 
 def read_name(node: ast.AST) -> str | None:
