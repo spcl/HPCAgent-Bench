@@ -14,6 +14,8 @@ should not differ between two identical runs.
 
 import gc
 import http.server
+import json
+import pathlib
 import threading
 import time
 import warnings
@@ -143,3 +145,35 @@ def test_a_warming_replica_leaves_no_response_open(driver: ModuleType) -> None:
         stuck_server.shutdown()
         stuck_server.server_close()
     assert [str(warning.message) for warning in caught if issubclass(warning.category, ResourceWarning)] == []
+
+
+def test_a_pool_setup_reads_the_pools_servers_for_each_episode(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """A server the launcher adds to the pool mid-run is in the list the next episode picks its replica from, and a
+    stopped one (its file removed) is not."""
+    servers = tmp_path / "pool" / "servers"
+    servers.mkdir(parents=True)
+    (servers / "901.json").write_text(json.dumps({"replicas": ["http://a:8000/"]}))
+    monkeypatch.setenv("INFERENCE_SOURCE", "pool")
+    monkeypatch.setenv("INFERENCE_POOL_DIR", str(tmp_path / "pool"))
+    monkeypatch.setenv("VLLM_REPLICA_URLS", "http://a:8000")
+    assert driver.vllm_urls() == ["http://a:8000"]
+    (servers / "905.json").write_text(json.dumps({"replicas": ["http://b:8000", "http://c:8000"]}))
+    assert driver.vllm_urls() == ["http://a:8000", "http://b:8000", "http://c:8000"]
+    (servers / "901.json").unlink()
+    assert driver.vllm_urls() == ["http://b:8000", "http://c:8000"]
+
+
+def test_a_pool_setup_reports_its_unstarted_episodes(
+    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """The launcher reads RUN_DIR/pool-demand to pick the pool a freed node serves; other setups write nothing."""
+    monkeypatch.setenv("RUN_DIR", str(tmp_path))
+    driver.write_pool_demand(0, 7)
+    assert not (tmp_path / "pool-demand").exists()
+    monkeypatch.setenv("INFERENCE_SOURCE", "pool")
+    driver.write_pool_demand(0, 7)
+    driver.write_pool_demand(0, 3)
+    assert [path.name for path in (tmp_path / "pool-demand").iterdir()] == ["node-0"]
+    assert (tmp_path / "pool-demand" / "node-0").read_text() == "3\n"

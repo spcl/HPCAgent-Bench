@@ -493,6 +493,7 @@ def test_every_amd_trace_runs_its_child_with_the_openmp_tool_interface_disabled(
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     monkeypatch.setenv("OMP_TOOL", "enabled")
+    monkeypatch.setenv("LD_PRELOAD", "/usr/local/lib/libmimalloc.so")
     monkeypatch.setattr(gpu_profiling, "run_command", record)
     gpu_profiling.rocprof_record(
         ["child"],
@@ -504,4 +505,5 @@ def test_every_amd_trace_runs_its_child_with_the_openmp_tool_interface_disabled(
     )
     assert len(seen) == 1, seen
     assert seen[0]["OMP_TOOL"] == "disabled", seen[0].get("OMP_TOOL")
+    assert "LD_PRELOAD" not in seen[0], "a preloaded mimalloc makes rocprofv3 abort at exit and hang"
     assert seen[0]["PATH"] == os.environ["PATH"], "the rest of the judge's environment must be inherited"

@@ -110,6 +110,7 @@ __all__ = [
     "rocprof_check",
     "rocprof_command",
     "rocprof_csv",
+    "rocprof_env",
     "rocprof_failure",
     "rocprof_launch_configs",
     "rocprof_record",
@@ -187,6 +188,15 @@ ROCTX_LIBRARY = "rocprofiler-sdk-roctx"
 
 #: Set on every AMD traced child: rocprofv3 started as an OMPT tool crashes offload builds linking OpenBLAS.
 ROCPROF_CHILD_ENV = {"OMP_TOOL": "disabled"}
+
+
+def rocprof_env() -> dict[str, str]:
+    """The environment of every AMD traced child: this process's, with :data:`ROCPROF_CHILD_ENV` and without
+    ``LD_PRELOAD``. The AMD images preload mimalloc; under rocprofv3 the tracer's ring buffer then fails to mmap at
+    exit (errno 22), it aborts, and its signal handler hangs past any timeout."""
+    inherited = {name: value for name, value in os.environ.items() if name != "LD_PRELOAD"}
+    return {**inherited, **ROCPROF_CHILD_ENV}
+
 
 #: Where ``rocprofv3`` writes under the sandbox root (one CSV per report).
 ROCPROF_OUTDIR = "rocprof"
@@ -607,7 +617,7 @@ def rocprof_record(
     """Trace ``argv`` under ``rocprofv3`` into ``outdir`` (inside ``plan``'s work area; the seal wraps the tracer)."""
     outdir.mkdir(parents=True, exist_ok=True)
     cmd = seal.wrap(plan, rocprof_command(exe, argv, outdir))
-    return run_command(cmd, env={**os.environ, **ROCPROF_CHILD_ENV}, cwd=str(cwd), timeout=timeout)
+    return run_command(cmd, env=rocprof_env(), cwd=str(cwd), timeout=timeout)
 
 
 def rocprof_csv(outdir: pathlib.Path, suffix: str) -> pathlib.Path | None:

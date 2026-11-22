@@ -586,3 +586,44 @@ def test_the_launcher_exports_every_pinned_model_variable_after_the_free_check(s
     exports = " ".join(line for line in branch.replace("\\\n", " ").splitlines() if "export" in line)
     for name in service.CLAUDE_MODEL_PINS:
         assert name in exports, name
+
+
+# pool servers (launch_fused.sbatch FUSED_REASSIGN)
+
+
+def pool_server_env(run_id: str, replicas: str, model: str = "openai/gpt-oss-120b") -> dict[str, str]:
+    """What serve-only.sbatch SERVE_POOL=<pool> passes once its replicas answered."""
+    return {
+        "HPCAGENT_BENCH_RUN_ID": run_id,
+        "VLLM_REPLICA_URLS": replicas,
+        "VLLM_SERVED_MODEL": "oss120b",
+        "VLLM_MODEL": model,
+        "INFERENCE_CE_ENV": "vllm-0.21",
+    }
+
+
+def test_a_pool_setup_reaches_every_replica_of_every_live_server(
+    service: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Two servers in the pool: the setup's endpoint list is all their replicas, and it starts no server of its own."""
+    service.write_pool_server(tmp_path, pool_server_env("901", "http://n1:8000/v1,http://n1:8001/v1"))
+    service.write_pool_server(tmp_path, pool_server_env("905", "http://n4:8000/v1"))
+    setup = {"INFERENCE_SOURCE": "pool", "INFERENCE_POOL_DIR": str(tmp_path), "VLLM_MODEL": "openai/gpt-oss-120b"}
+    exported = service.pool_launcher_env({**setup, "INFERENCE_NODES": "0"})
+    assert exported["VLLM_REPLICA_URLS"] == "http://n1:8000/v1,http://n1:8001/v1,http://n4:8000/v1"
+    assert exported["VLLM_SERVED_MODEL"] == "oss120b"
+    with pytest.raises(SystemExit, match="INFERENCE_NODES=0"):
+        service.pool_launcher_env({**setup, "INFERENCE_NODES": "1"})
+    assert service.provenance(setup).source is service.Source.POOL
+
+
+def test_a_pool_server_of_another_checkpoint_is_refused(service: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    """A row records the setup's model; a server in the pool that serves another one would make that record false."""
+    service.write_pool_server(tmp_path, pool_server_env("901", "http://n1:8000/v1", model="Qwen/Qwen3.8-235B"))
+    with pytest.raises(SystemExit, match="refusing to record it"):
+        service.pool_servers(tmp_path, "openai/gpt-oss-120b")
+
+
+def test_an_empty_pool_is_refused(service: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    with pytest.raises(SystemExit, match="no live server"):
+        service.pool_launcher_env({"INFERENCE_POOL_DIR": str(tmp_path), "INFERENCE_NODES": "0"})

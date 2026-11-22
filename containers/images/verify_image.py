@@ -66,8 +66,17 @@ class Check:
 def run(
     cmd: list[str], timeout: float = 120.0, cwd: str | None = None, env: dict[str, str] | None = None
 ) -> tuple[int, str]:
+    """``cmd``'s exit code and output; 124 past ``timeout`` (as coreutils ``timeout``), 127 when it cannot start."""
     try:
         done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False, cwd=cwd, env=env)
+    except subprocess.TimeoutExpired as exc:
+        # The output so far is the only evidence of where the child hung; the note prints the last line.
+        partial = "".join(
+            part.decode(errors="replace") if isinstance(part, bytes) else part
+            for part in (exc.stdout, exc.stderr)
+            if part
+        )
+        return 124, f"{partial.strip()}\ntimed out after {timeout:g}s: {last_line(partial)}"
     except (OSError, subprocess.SubprocessError) as exc:
         return 127, str(exc)
     return done.returncode, (done.stdout + done.stderr).strip()
@@ -129,8 +138,9 @@ def have_exe(name: str) -> tuple[bool, str]:
         code, out = run([path, flag], timeout=60.0)
         if code == 0 and out:
             return True, out.splitlines()[0][:60]
-        # 126/127 and signals: the file could not run (wrong architecture, a missing library, a crash).
-        ran = ran or 0 <= code < 126
+        # 124 (timed out), 126/127 and signals: the file could not run (wrong architecture, a missing library, a
+        # crash, a hang).
+        ran = ran or 0 <= code < 124
     return (True, path) if ran else (False, f"{path} does not run")
 
 
@@ -1043,6 +1053,13 @@ int main(void) {
 #: What the harness sets on every child it traces on AMD (gpu_profiling.ROCPROF_CHILD_ENV).
 ROCPROF_CHILD_ENV = {"OMP_TOOL": "disabled"}
 
+
+def rocprof_env() -> dict[str, str]:
+    """A traced child's environment as the harness builds it (gpu_profiling.rocprof_env): no ``LD_PRELOAD``, whose
+    mimalloc makes rocprofv3 abort at exit and hang."""
+    return {**{k: v for k, v in os.environ.items() if k != "LD_PRELOAD"}, **ROCPROF_CHILD_ENV}
+
+
 #: ``papi_range name=... thread=N cycles=C instructions=I``, the line papi_ranges.h prints per pool thread.
 PAPI_RANGE_LINE = re.compile(r"^papi_range name=verify thread=(\d+) cycles=(\d+) instructions=(\d+)", re.MULTILINE)
 
@@ -1195,7 +1212,7 @@ def rocprofv3_trace_run(tmp: pathlib.Path) -> tuple[bool, str]:
     out_dir = tmp / "rocprof"
     trace = ["rocprofv3", "--kernel-trace", "--memory-copy-trace", "--marker-trace", "--stats"]
     trace += ["--output-format", "csv", "--output-directory", str(out_dir), "--output-file", "verify"]
-    code, out = run([*trace, "--", str(exe)], timeout=600.0, env=probe_env(**ROCPROF_CHILD_ENV))
+    code, out = run([*trace, "--", str(exe)], timeout=600.0, env=rocprof_env())
     rows = [row for row in csv_rows(out_dir, "_kernel_stats.csv") if "verify_probe_kernel" in row.get("Name", "")]
     if code == 0 and rows and int(rows[0].get("Calls", "0") or 0) == 5:
         return True, f"kernel_stats: verify_probe_kernel calls=5 total_ns={rows[0].get('TotalDurationNs')}"
@@ -1207,9 +1224,7 @@ def rocprofv3_pmc_run(tmp: pathlib.Path) -> tuple[bool, str]:
     exe = hip_probe(tmp)
     out_dir = tmp / "pmc"
     pmc = ["rocprofv3", "--pmc", "SQ_WAVES", "--output-format", "csv", "--output-directory", str(out_dir)]
-    code, out = run(
-        [*pmc, "--output-file", "verify", "--", str(exe)], timeout=600.0, env=probe_env(**ROCPROF_CHILD_ENV)
-    )
+    code, out = run([*pmc, "--output-file", "verify", "--", str(exe)], timeout=600.0, env=rocprof_env())
     waves = [
         float(row.get("Counter_Value") or 0)
         for row in csv_rows(out_dir, "_counter_collection.csv")
@@ -1225,11 +1240,11 @@ def rocprof_compute_run(tmp: pathlib.Path) -> tuple[bool, str]:
     exe = hip_probe(tmp)
     workload = tmp / "workload"
     record = ["rocprof-compute", "profile", "-n", "verify", "-p", str(workload), "--no-roof", "--", str(exe)]
-    code, out = run(record, timeout=1500.0, env=probe_env(**ROCPROF_CHILD_ENV))
+    code, out = run(record, timeout=1500.0, env=rocprof_env())
     if not (workload / "pmc_perf.csv").is_file():
         return False, f"profile rc={code} wrote no pmc_perf.csv: {last_line(out)}"
     analyze = ["rocprof-compute", "analyze", "-p", str(workload), "--output-format", "csv", "--output-name", "tables"]
-    code, out = run(analyze, timeout=600.0, cwd=str(tmp), env=probe_env(**ROCPROF_CHILD_ENV))
+    code, out = run(analyze, timeout=600.0, cwd=str(tmp), env=rocprof_env())
     top = tmp / "tables" / "0.1_Top_Kernels.csv"
     if top.is_file() and "verify_probe_kernel" in top.read_text(errors="replace"):
         return True, "0.1_Top_Kernels names verify_probe_kernel"

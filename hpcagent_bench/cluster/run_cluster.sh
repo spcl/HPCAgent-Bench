@@ -1155,6 +1155,24 @@ elif [[ "${INFERENCE_SOURCE}" == "endpoint" ]]; then
     eval "${endpoint_env}"
     VLLM_API_KEY="$(tr -d '\n' <"${INFERENCE_KEY_FILE}")"
     export VLLM_API_KEY
+elif [[ "${INFERENCE_SOURCE}" == "pool" ]]; then
+    # The open servers of this allocation that publish to INFERENCE_POOL_DIR (launch_fused.sbatch FUSED_REASSIGN): the
+    # same names a server setup composes below, from the servers live now; the agent driver re-reads the pool for every
+    # episode, so a server the launcher starts later takes the episodes that start after it.
+    pool_deadline=$(( $(date +%s) + ${AGENT_READY_TIMEOUT_SECONDS:-7200} ))
+    [[ "${DRY_RUN:-0}" != 1 ]] || pool_deadline=0
+    until compgen -G "${INFERENCE_POOL_DIR:?a pool setup names its pool}/servers/*.json" >/dev/null; do
+        (( $(date +%s) < pool_deadline )) || {
+            echo "no server in ${INFERENCE_POOL_DIR} within ${AGENT_READY_TIMEOUT_SECONDS:-7200}s: is its @serve line running?" >&2
+            exit 1
+        }
+        sleep 30
+    done
+    pool_env="$("${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/inference_service.py" --export)" || exit 1
+    eval "${pool_env}"
+    export INFERENCE_POOL_DIR
+    # The launcher reads this run's unstarted episodes (the driver's pool-demand/ in RUN_DIR) through this link.
+    mkdir -p "${INFERENCE_POOL_DIR}/runs" && ln -sfn "${RUN_DIR}" "${INFERENCE_POOL_DIR}/runs/${HPCAGENT_BENCH_RUN_ID:-${SLURM_JOB_ID}}"
 else
     VLLM_MASTER_HOST="${inference_nodes[0]}"
     VLLM_BASE_URL="http://${VLLM_MASTER_HOST}:${VLLM_PORT}/v1"

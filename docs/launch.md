@@ -138,6 +138,62 @@ naming its `env_file` and `setup`), and `<out>/setups.json` each setup's overlay
 model and its server, the judge and service, the node shape, the run root, the limits, and the keys a judge reads once
 per process).
 
+### Many runs in one allocation
+
+On a site whose QOS admits one job per user, `hpcagent_bench/cluster/launch_fused.sbatch` runs many independent runs
+inside one allocation. Each line of an instances file is one run that would otherwise be its own job. The launcher
+starts the runs in file order on free nodes, starts a queued run as soon as enough nodes are free, and releases free
+nodes to Slurm once nothing is queued. Each run executes as its own job would, under the run id
+`<job id><k>`, which names its run directory and the job its records carry.
+
+An instances line names the run, its node count and its checkout, then optional `KEY=VALUE` words, then either a
+setup env or `--` and a command run in the checkout:
+
+```text
+# <name> <nodes> <checkout> [KEY=VALUE ...] <env file>
+llr40-qwen38-c   5 /path/to/hpcagent-bench /path/to/hpcagent-bench/experiments/.env.llr40-qwen38-c
+llr40-qwen38-hip 5 /path/to/hpcagent-bench /path/to/hpcagent-bench/experiments/.env.llr40-qwen38-hip
+# <name> <nodes> <checkout> [KEY=VALUE ...] -- <command> [args]
+regrade 4 /path/to/hpcagent-bench SLURM_CPUS_PER_TASK=96 GANG_NODES=1 -- \
+    bash hpcagent_bench/cluster/grade-under.sbatch <worklist> <out>
+```
+
+A dry run of `submit.sh` (without `SUBMIT=1`) stages each setup's env as `experiments/.env.<setup>` and prints
+`prepared <setup> (<n> nodes ...)`, which gives the first and second words of the setup's line. A setup env
+runs as `services.sbatch <env file>`. Size the allocation for the runs that should run at the same time, and its time
+limit for the longest chain of runs:
+
+```bash
+sbatch --nodes=10 --time=12:00:00 --account=<a> --partition=<p> --gpus-per-node=4 \
+    hpcagent_bench/cluster/launch_fused.sbatch /path/to/instances.txt
+```
+
+Each run logs to `<instances dir>/logs/<job>-<name>.{out,err}`, and the launcher's own log records every start and end
+with its exit status. A queued run is not started with less than `FUSED_MIN_LEFT_S` (default 3600) seconds left in
+the allocation. `FUSED_AUTO_FREE=0` keeps the free nodes until the job ends. A second launcher can run as a step on
+nodes the first one freed: `FUSED_NODES=<nodes> FUSED_FIRST_INDEX=<k> srun --overlap -c1 -N1 bash
+hpcagent_bench/cluster/launch_fused.sbatch <instances>`, with `FUSED_FIRST_INDEX` past the first launcher's last run
+so that no run id repeats.
+
+#### Inference pools
+
+Setups of one model can share servers the launcher starts, so the inference nodes follow the work. A setup env with
+`INFERENCE_SOURCE=pool`, `INFERENCE_NODES=0` and `INFERENCE_POOL_DIR=<pool>` starts no server of its own; it serves
+from every live server of the pool, and its agent driver re-reads the pool for each episode. A pool server is an
+`@serve` line, which the launcher starts before every other line:
+
+```text
+@serve serve-qwen38 1 /path/to/hpcagent-bench SERVE_POOL=/path/to/pool/qwen38 MODEL=qwen38 -- \
+    bash hpcagent_bench/cluster/serve-only.sbatch
+```
+
+The server writes `<pool>/servers/<run id>.json` once every replica answers, and removes it when it stops. A setup
+refuses a pool server of another checkpoint. Once no running or queued setup serves from a pool, the launcher stops
+the pool's servers (under `FUSED_AUTO_FREE`). With `FUSED_REASSIGN=1` and nothing queued, a free node starts one more
+server for the pool whose setups report the most unstarted episodes (`RUN_DIR/pool-demand`); new episodes reach it,
+running ones stay where they are. Free nodes a server could use are held until every setup of the pool reports no
+unstarted episode, and then released.
+
 ### Alps (aarch64 GH200)
 
 The Container Engine (`ce`) is the native backend; the image is chosen by `srun --environment=<edf>`.

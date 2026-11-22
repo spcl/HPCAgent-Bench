@@ -426,7 +426,7 @@ def amd_compute_once(root: pathlib.Path, request_file: pathlib.Path, *, exe: str
     plan = profiling.request_plan(request_file)
     measured = gpu_profiling.measured_argv(request_file, sealed_outside=plan is not None)
     argv = seal.wrap(plan, rocprof_compute_profile_argv(exe, workload, measured))
-    env = {**os.environ, **gpu_profiling.ROCPROF_CHILD_ENV}
+    env = gpu_profiling.rocprof_env()
     proc = run_command(argv, env=env, cwd=str(root), timeout=timeout)
     if not (workload / PMC_CSV).is_file():
         raise recording_failure(proc, AMD_REFUSALS, PMC_CSV)

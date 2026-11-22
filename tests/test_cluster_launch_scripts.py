@@ -84,6 +84,36 @@ def test_a_fused_job_runs_each_line_on_its_own_nodes_and_hands_freed_nodes_to_th
     assert starts == ["a", "b", "c"]
 
 
+def test_a_fused_line_wider_than_the_allocation_is_dropped_so_freed_nodes_still_go_back(tmp_path: pathlib.Path) -> None:
+    """A 5-node line in a 2-node allocation never starts; left in the queue, it kept every freed node in the job."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "scontrol").write_text(
+        '#!/bin/bash\n[[ "$1" == update ]] && { echo "$*" >>"$UPDATES"; exit 0; }\nprintf \'n%s\\n\' 1 2\n'
+    )
+    (bin_dir / "squeue").write_text('#!/bin/bash\n[[ "$*" == *%N* ]] && echo "n[1-2]" || echo 4102444800\n')
+    for tool in ("scontrol", "squeue"):
+        (bin_dir / tool).chmod(0o755)
+    updates = tmp_path / "updates.txt"
+    instances = tmp_path / "instances.txt"
+    instances.write_text(f"wide 5 {tmp_path} -- true\na 1 {tmp_path} -- sleep 0.3\n")
+    done = bash(
+        f"bash {quote(str(CLUSTER / 'launch_fused.sbatch'))} {quote(str(instances))}",
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "SLURM_JOB_ID": "9",
+            "SLURM_JOB_NODELIST": "n[1-2]",
+            "SLURMD_NODENAME": "n1",
+            "UPDATES": str(updates),
+            "FUSED_POLL_S": "0.1",
+        },
+    )
+    assert done.returncode == 0, done.stderr
+    assert "never started (5 nodes, the launcher has 2)" in done.stdout
+    assert " start wide " not in done.stdout
+    assert updates.read_text().strip() == "update JobId=9 NodeList=n1"
+
+
 @pytest.mark.parametrize("auto_free", ["1", "0"])
 def test_a_fused_job_releases_the_nodes_of_ended_runs_once_nothing_is_queued(
     tmp_path: pathlib.Path, auto_free: str
@@ -148,6 +178,81 @@ def test_a_fused_job_logs_each_runs_own_exit_status(tmp_path: pathlib.Path) -> N
     assert ends == {"ok": "status=0", "fails": "status=3"}, done.stdout
 
 
+def pool_fixture(tmp_path: pathlib.Path, demand: int) -> tuple[pathlib.Path, pathlib.Path, dict[str, str]]:
+    """Stub Slurm, a pool server that registers itself until TERM, and a setup (env file) serving from the pool that
+    reports ``demand`` unstarted episodes and ends once the pool has two servers or after 3 s."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "scontrol").write_text("#!/bin/bash\n[[ \"$1\" == update ]] && exit 0\nprintf 'n%s\\n' 1 2 3\n")
+    (bin_dir / "squeue").write_text('#!/bin/bash\n[[ "$*" == *%N* ]] && echo "n[1-3]" || echo 4102444800\n')
+    for tool in ("scontrol", "squeue"):
+        (bin_dir / tool).chmod(0o755)
+    pool = tmp_path / "pool"
+    server = tmp_path / "server.sh"
+    server.write_text(
+        'mkdir -p "$SERVE_POOL/servers"; f="$SERVE_POOL/servers/$HPCAGENT_BENCH_RUN_ID.json"\n'
+        'trap \'rm -f "$f"; exit 143\' TERM\necho {} >"$f"\nfor i in $(seq 300); do sleep 0.1; done\n'
+    )
+    services = tmp_path / "hpcagent_bench" / "cluster" / "services.sbatch"
+    services.parent.mkdir(parents=True)
+    (tmp_path / "experiments").mkdir()
+    services.write_text(
+        '. "$1"; d="$INFERENCE_POOL_DIR/runs/$HPCAGENT_BENCH_RUN_ID/pool-demand"; mkdir -p "$d"\n'
+        f'echo {demand} >"$d/node-0"\n'
+        'for i in $(seq 30); do (($(ls "$INFERENCE_POOL_DIR/servers" | wc -l) < 2)) || exit 0; sleep 0.1; done\n'
+    )
+    setup = tmp_path / ".env.setup"
+    setup.write_text(f"INFERENCE_SOURCE=pool\nINFERENCE_POOL_DIR={pool}\n")
+    instances = tmp_path / "instances.txt"
+    instances.write_text(f"@serve srv 1 {tmp_path} SERVE_POOL={pool} -- bash {server}\nuser 1 {tmp_path} {setup}\n")
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "SLURM_JOB_ID": "9",
+        "SLURM_JOB_NODELIST": "n[1-3]",
+        "SLURMD_NODENAME": "n1",
+        "FUSED_POLL_S": "0.1",
+    }
+    return instances, pool, env
+
+
+def test_a_fused_pool_server_stops_once_no_setup_serves_from_its_pool(tmp_path: pathlib.Path) -> None:
+    """The @serve line starts first; when the only setup of its pool ends, the server gets TERM instead of holding its
+    nodes until the allocation ends, and it unregisters from the pool."""
+    instances, pool, env = pool_fixture(tmp_path, demand=0)
+    done = subprocess.run(
+        ["bash", str(CLUSTER / "launch_fused.sbatch"), str(instances)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    starts = [line.split()[2] for line in done.stdout.splitlines() if " start " in line]
+    assert starts == ["srv-1", "user"], done.stdout
+    assert " stop srv-1: no setup serves from " in done.stdout
+    assert list((pool / "servers").iterdir()) == []
+
+
+def test_a_fused_pool_grows_on_free_nodes_while_its_setups_have_unstarted_episodes(tmp_path: pathlib.Path) -> None:
+    """Under FUSED_REASSIGN=1, nothing queued and a free node: the pool whose setup reports unstarted episodes gets a
+    second server, which the setup then sees. FUSED_REASSIGN=0 (the default) only stops servers."""
+    instances, pool, env = pool_fixture(tmp_path, demand=5)
+    done = subprocess.run(
+        ["bash", str(CLUSTER / "launch_fused.sbatch"), str(instances)],
+        env={**env, "FUSED_REASSIGN": "1"},
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "reassign: 5 unstarted episode(s) for " in done.stdout, done.stdout
+    assert " start srv-2 " in done.stdout
+    assert (tmp_path / "logs" / "9-user.err").read_text() == ""
+    assert list((pool / "servers").iterdir()) == []
+
+
 def test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps(tmp_path: pathlib.Path) -> None:
     """A launcher run as a one-CPU step (srun --overlap -c1) must not pass that step's CPU count or CPU binding to its
     runs: a role srun without its own --cpu-bind applies the inherited SLURM_CPU_BIND, which pinned every inference
@@ -177,6 +282,47 @@ def test_a_launcher_started_as_a_step_hands_its_runs_the_jobs_cpus_not_the_steps
     )
     assert done.returncode == 0, done.stderr
     assert (tmp_path / "logs" / "9-a.out").read_text() == "cpus=192 bind=unset list=unset\n"
+
+
+@pytest.mark.parametrize(
+    ("run_id", "nodelists"),
+    [("901", ["--nodelist=n3", "--nodelist=n[3-4]", "--nodelist=n9"]), ("", ["", "", "--nodelist=n9"])],
+)
+def test_a_fused_runs_helper_steps_stay_on_its_own_nodes(
+    tmp_path: pathlib.Path, run_id: str, nodelists: list[str]
+) -> None:
+    """srun places a step on any node of the job, so a helper step of a fused run (baseline, prepare) that names no
+    nodes could land on another run's slice: it runs on the run's own nodes, a one-task step on the first of them."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "srun").write_text(
+        '#!/bin/bash\n[[ "$1" == --help ]] && exit 0\necho "$*" | tr "\\n" " " >>"$SRUN_LOG"\necho >>"$SRUN_LOG"\n'
+    )
+    (bin_dir / "scontrol").write_text("#!/bin/bash\nprintf 'n%s\\n' 3 4\n")
+    for tool in ("srun", "scontrol"):
+        (bin_dir / tool).chmod(0o755)
+    log = tmp_path / "srun.log"
+    done = bash(
+        f". {quote(str(CLUSTER / 'job_step.sh'))}; job_step --ntasks=1 -- a; job_step --mem=0 -- b; "
+        "job_step --nodelist=n9 -- c",
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "SRUN_LOG": str(log),
+            "SLURM_JOB_NODELIST": "n[3-4]",
+            "HPCAGENT_BENCH_RUN_ID": run_id,
+        },
+    )
+    assert done.returncode == 0, done.stderr
+    steps = log.read_text().splitlines()
+    assert [next((w for w in step.split() if w.startswith("--nodelist=")), "") for step in steps] == nodelists
+
+
+def test_a_fused_runs_helper_jobs_name_their_edf_copy_by_the_run() -> None:
+    """Every run of a fused allocation shares SLURM_JOB_ID: an EDF copy named by it is one file for all of them, and
+    the first run to end removes it (job_step_judge_edf's EXIT trap) under the others."""
+    for script in ("prepare.sbatch", "baseline.sbatch"):
+        text = (CLUSTER / script).read_text()
+        assert "${HPCAGENT_BENCH_RUN_ID:-${SLURM_JOB_ID}}.edf.toml" in text, script
 
 
 @pytest.mark.parametrize(("left_s", "stopped"), [(600, True), (7200, False)])
