@@ -51,6 +51,7 @@ def read_binding(path: pathlib.Path) -> BindingFile:
 
 
 def write_binding(binding: BindingFile, out_path: pathlib.Path) -> None:
+    """Write ``binding`` as JSON to ``out_path``."""
     write_atomic(out_path, binding.model_dump_json(indent=2, exclude_none=True).encode())
 
 

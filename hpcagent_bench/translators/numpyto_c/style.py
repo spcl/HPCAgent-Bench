@@ -342,6 +342,7 @@ def restyle(text: str, style: CodeStyle, extension: str) -> str:
 
 
 def main() -> None:
+    """Command line: print a source file restyled."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("source", type=pathlib.Path)
     parser.add_argument("--style", default=CodeStyle.LLM_FRIENDLY.text, choices=CodeStyle.texts())

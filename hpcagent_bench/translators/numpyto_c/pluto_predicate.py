@@ -117,6 +117,7 @@ def conj(guard: ast.expr | None, test: ast.expr) -> ast.expr:
 
 
 def negate(test: ast.expr) -> ast.expr:
+    """The logical negation of a copy of ``test``."""
     return ast.UnaryOp(op=ast.Not(), operand=copy.deepcopy(test))
 
 
@@ -156,6 +157,7 @@ class Flagger:
         self.flags: list[str] = []
 
     def branch(self, stmts: Iterable[ast.stmt], guard: ast.expr | None) -> list[ast.stmt]:
+        """Flag-convert the ifs of ``stmts`` and predicate the other statements on ``guard``."""
         out: list[ast.stmt] = []
         for stmt in stmts:
             if isinstance(stmt, ast.If):
@@ -165,6 +167,7 @@ class Flagger:
         return out
 
     def split(self, node: ast.If, guard: ast.expr | None) -> list[ast.stmt]:
+        """Replace one ``if`` with a flag assignment and the flag-guarded branches."""
         flag = self.fresh()
         self.flags.append(flag)
         bit = ast.IfExp(test=copy.deepcopy(node.test), body=ast.Constant(1), orelse=ast.Constant(0))
@@ -201,12 +204,14 @@ class IfConverter(ast.NodeTransformer):
         self.fresh = lambda: next(f"{FLAG_PREFIX}{n}" for n in counter if f"{FLAG_PREFIX}{n}" not in taken)
 
     def visit_For(self, node: ast.For) -> ast.For:
+        """Convert the ifs inside a for loop."""
         self.depth += 1
         self.generic_visit(node)
         self.depth -= 1
         return node
 
     def visit_If(self, node: ast.If) -> object:
+        """Convert a value-dependent ``if`` inside a loop when both branches allow it."""
         if self.depth and self.value_dependent(node.test) and convertible(node.body) and convertible(node.orelse):
             return convert(node, self.fresh, self.flags)
         self.generic_visit(node)

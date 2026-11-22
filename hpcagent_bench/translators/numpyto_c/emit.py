@@ -179,6 +179,7 @@ __all__ = [
 
 @lru_cache(maxsize=None, typed=True)
 def c_type_(dtype: str) -> str:
+    """The C type of NumPy ``dtype``; ``double`` when none is recorded."""
     # dtype -> C type mapping lives in numpyto_common.dtypes (canonical int is int64_t);
     # a fixed, module-level static table, so the mapping is pure -- cached per emitted kernel.
     if not dtype:
@@ -636,6 +637,7 @@ class CBodyEmitter(BaseEmitter):
         return super().emit_stmt(node, indent)
 
     def emit_for(self, node: ast.For, indent: str) -> str:
+        """Emit a range loop as a C ``for``, with its OpenMP pragma where the loop allows one."""
         var, lo, hi, step = self.range_loop_bounds(node)
         args = parallelism.range_args(node)
 
@@ -707,6 +709,7 @@ class CBodyEmitter(BaseEmitter):
         return ""
 
     def emit_while(self, node: ast.While, indent: str) -> str:
+        """Emit a C ``while`` loop."""
         body = self.emit_block(node.body, indent + "  ")
         return f"{indent}while ({self.emit_expr(node.test)}) {{\n{body}\n{indent}}}"
 
@@ -727,6 +730,7 @@ class CBodyEmitter(BaseEmitter):
         return in_branch + list(self.heap_locals)
 
     def emit_return(self, node: ast.Return, indent: str) -> str:
+        """Emit a return: dropped in the kernel, a C return that frees live heap locals in a helper."""
         # In the (void) kernel a return is dropped; in a HELPER function it's a real C return.
         mode = self.return_mode
         if mode is None:
@@ -775,6 +779,7 @@ class CBodyEmitter(BaseEmitter):
         return "\n".join([self.emit_assign(assign, indent), *frees, f"{indent}return;"])
 
     def emit_if(self, node: ast.If, indent: str) -> str:
+        """Emit a C ``if``, keeping only the deferred allocations both branches make."""
         hoisted = self.declare_inline_locals_before(node, indent)
         # Each branch starts from the allocations made before the ``if``; after it, only those both paths made hold.
         before = dict(self._deferred_alloc_size)
@@ -876,6 +881,7 @@ class CBodyEmitter(BaseEmitter):
         return fill_loop_stmt(name, list(dims), size, "1" if kind in ("ones", "ones_like") else "0", indent)
 
     def emit_assign(self, node: ast.Assign, indent: str) -> str:
+        """Emit one assignment as C statements."""
         if len(node.targets) != 1:
             raise NotImplementedError("chained assignment not supported")
         target = node.targets[0]
@@ -987,6 +993,7 @@ class CBodyEmitter(BaseEmitter):
         return "\n".join(lines)
 
     def emit_augassign(self, node: ast.AugAssign, indent: str) -> str:
+        """Emit an augmented assignment; ``//=`` and ``%=`` expand to their NumPy-semantics helpers."""
         # // and % have no C compound operator with numpy semantics (// needs int_floor,
         # % needs python_mod's divisor sign). Expand ``t //= v`` / ``t %= v`` to ``t = t <op> v``
         # and route the RHS through the BinOp emitter, which applies the right helper (and any
@@ -1045,9 +1052,11 @@ class CBodyEmitter(BaseEmitter):
     # expression-level
 
     def wrap_narrow(self, text: str, wrap: str) -> str:
+        """``text`` cast to the C type of ``wrap``."""
         return f"(({c_type_(wrap)})({text}))"
 
     def emit_expr_inner(self, node: ast.expr) -> str:
+        """Emit one expression as C."""
         if isinstance(node, ast.Constant):
             return self.emit_constant(node.value)
         if isinstance(node, ast.Name):
@@ -1108,6 +1117,7 @@ class CBodyEmitter(BaseEmitter):
         raise NotImplementedError(f"literal {v!r}")
 
     def emit_unaryop(self, node: ast.UnaryOp) -> str:
+        """Emit a unary operation; ``~`` on a boolean is logical negation."""
         # ~x on a boolean operand is numpy logical negation, not bitwise NOT -- emit ! so a 0/1 bool inverts to 1/0.
         if isinstance(node.op, ast.Invert) and self.operand_is_bool(node.operand):
             return f"(!{self.emit_expr(node.operand)})"
@@ -1117,6 +1127,7 @@ class CBodyEmitter(BaseEmitter):
         return f"({op}{self.emit_expr(node.operand)})"
 
     def emit_binop(self, node: ast.BinOp) -> str:
+        """Emit a binary operation with NumPy semantics for power, floor division and modulo."""
         # a ** b -> pow(a, b); on a complex base, a**2 -> a*a (cheaper), any other exponent -> cpow(a, k).
         if isinstance(node.op, ast.Pow):
             if self.is_complex_operand(node.left):
@@ -1218,6 +1229,7 @@ class CBodyEmitter(BaseEmitter):
                 node.slice = self.dim_minus_k(shape[0], k, sl)
 
     def emit_subscript(self, node: ast.Subscript) -> str:
+        """Emit a subscript as a flattened C index."""
         # numpy negative index a[-1] -> explicit a[N-1]; done first so flatten/chained paths below see it normalized.
         self.normalize_negative_indices(node)
         # Fold a constant-index subscript of a tuple literal: (n,)[0] -> n.
@@ -1350,6 +1362,7 @@ class CBodyEmitter(BaseEmitter):
         return self.emit_expr(node)
 
     def emit_call(self, node: ast.Call) -> str:
+        """Emit a call as its C function or intrinsic."""
         if isinstance(node.func, ast.Name):
             return self.emit_name_call(node, node.func.id)
         # np.X(arg) / arr.X(...): handle passthrough/identity intrinsics that survived lowering.
@@ -1552,6 +1565,7 @@ class CBodyEmitter(BaseEmitter):
         return f"{{ {declarations}{call}; }}" if declarations else call
 
     def is_complex_name(self, name: str) -> bool:
+        """Whether ``name`` has a complex dtype."""
         return str(self.name_dtype(name) or "").startswith("complex")
 
     def emit_widened_gemm(self, a: str, b: str, out: str, extents: tuple[str, str, str]) -> str:
@@ -1926,6 +1940,7 @@ class CBodyEmitter(BaseEmitter):
         return isinstance(node, ast.Call)  # a lowered call returns a value
 
     def array_names(self) -> set[str]:
+        """The names of the kernel's arrays and zeros locals."""
         return {a.name for a in self.kir.arrays} | set(self.kir.zeros_locals)
 
     def is_complex_operand(self, node: ast.expr) -> bool:
@@ -1996,6 +2011,7 @@ class CBodyEmitter(BaseEmitter):
         return fn
 
     def dtype_for_name(self, name: str) -> str | None:
+        """The dtype of a local or array ``name``, or None."""
         local_dtypes = self.kir.local_dtypes
         dt = local_dtypes.get(name)
         if dt is None:
@@ -2550,6 +2566,7 @@ class LocalGroups:
 
     @staticmethod
     def of(kir: KernelIR, implicit: list[tuple[str, str]]) -> "LocalGroups":
+        """Sort a kernel's zeros locals into parameter fills, loop locals and function-top locals."""
         params = set(kir.param_order())
         loop_iters = loop_target_names(kir.tree)
         computed_scalars: set[str] = {n for n, unused in implicit} | set(kir.int_locals)
@@ -2590,6 +2607,7 @@ class FunctionTopDecls:
         self.stack_used = 0
 
     def declare(self, name: str, shape: tuple[str, ...], c_type: str) -> None:
+        """Declare one function-top local, on the stack or the heap by its size."""
         indent = self.indent
         size = flat_size(shape)
         stack_bytes = literal_stack_bytes(size, c_type)
@@ -3681,14 +3699,17 @@ class ReservedNameRespelling(ast.NodeTransformer):
         self.helpers = helpers
 
     def visit_Name(self, node: ast.Name) -> ast.Name:
+        """Respell a reserved name."""
         node.id = self.respellings.get(node.id, node.id)
         return node
 
     def visit_arg(self, node: ast.arg) -> ast.arg:
+        """Respell a reserved parameter name."""
         node.arg = self.respellings.get(node.arg, node.arg)
         return node
 
     def visit_Call(self, node: ast.Call) -> ast.Call:
+        """Respell a call's arguments, and its callee only if it is a helper."""
         if isinstance(node.func, ast.Name) and node.func.id not in self.helpers:
             node.args = [self.visit(arg) for arg in node.args]
             node.keywords = [self.visit(keyword) for keyword in node.keywords]
@@ -3839,10 +3860,12 @@ def c_family_source(
 
 
 def emit_c(kir: KernelIR, fn_name: str | None = None) -> str:
+    """Emit the kernel as C source."""
     return c_family_source(kir, fn_name or f"{kir.kernel_name}_d_c", C_HEADER, cpp=False)
 
 
 def emit_cpp(kir: KernelIR, fn_name: str | None = None) -> str:
+    """Emit the kernel as C++ source."""
     return c_family_source(kir, fn_name or f"{kir.kernel_name}_d", CPP_HEADER, cpp=True)
 
 
@@ -3885,6 +3908,7 @@ def emit_pluto_signature(kir: KernelIR, fn_name: str, multidim: set[str]) -> str
 
 
 def emit_pluto(kir: KernelIR, fn_name: str | None = None) -> str:
+    """Emit the kernel as C for Pluto: affine array parameters, loop nests inside ``#pragma scop``."""
     name = fn_name or f"{kir.kernel_name}_d_pluto"
     kir = c_spelling(kir)
     # Rank>=2 array params are direct VLA parameters so polycc/pet see affine references; rank-1 stays flat/cast-view.
