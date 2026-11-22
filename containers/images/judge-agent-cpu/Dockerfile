@@ -26,6 +26,58 @@
 #
 # Pinned by digest: ubuntu:24.04's multi-arch index, so each architecture resolves its own manifest.
 ARG BASE_IMAGE=docker.io/library/ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+# ------------------------------------------------------------------------------------------------
+# Stage 0: a compile-only libfabric, as judge-agent-cuda's. MPICH (netmod=ofi) links against it at build time; at run
+# time on Alps the node's libfabric, injected by the CE cxi hook, loads instead (provider cxi). The .so is deleted
+# from the shipped image: RPATH-bound, a copy in a prefix MPICH names wins over the node's. Before this stage MPICH
+# linked spack's own libfabric (no cxi provider), and a two-node Daint grade ran on sockets with or without the hook
+# (job 5428698).
+# ------------------------------------------------------------------------------------------------
+FROM ${BASE_IMAGE} AS ofi-builder
+ARG LIBFABRIC_REF=v2.6.0
+# The commit the tag resolved to, passed in by build.sh; a moved tag fails the build.
+ARG LIBFABRIC_COMMIT=5de2d6a2df83595bcc38531cb91bf59495559495
+COPY containers/images/lib/git_mirror.sh /tmp/git_mirror.sh
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      autoconf automake binutils build-essential ca-certificates git \
+      libhwloc-dev libnuma-dev libtool make pkg-config \
+ && rm -rf /var/lib/apt/lists/* \
+ && sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
+WORKDIR /tmp/build
+RUN set -eux; \
+    gitretry clone --branch "${LIBFABRIC_REF}" --depth 1 https://github.com/ofiwg/libfabric.git libfabric; \
+    cd libfabric; \
+    test "$(git rev-parse HEAD)" = "${LIBFABRIC_COMMIT}" \
+      || { echo "libfabric ${LIBFABRIC_REF} is $(git rev-parse HEAD), expected ${LIBFABRIC_COMMIT}: the tag MOVED" >&2; exit 1; }; \
+    ./autogen.sh; \
+    ./configure --prefix=/opt/ofi-sdk --without-curl \
+        --disable-verbs --disable-psm3 --disable-efa --disable-usnic \
+        --disable-opx --disable-shm --enable-sockets --enable-tcp; \
+    make -j"$(nproc)"; \
+    make install; \
+    test -e /opt/ofi-sdk/lib/libfabric.so.1
+
+# The same source with the providers a host without the CE hook has: verbs (InfiniBand, RoCE), shm and tcp/sockets.
+# It ships as /opt/ofi-fallback, last on the image's LD_LIBRARY_PATH (the end of the agent stage says when it loads).
+FROM ofi-builder AS ofi-fallback
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libibverbs-dev librdmacm-dev \
+ && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    cd /tmp/build/libfabric; \
+    git clean -fdxq; \
+    ./autogen.sh; \
+    ./configure --prefix=/opt/ofi-fallback --without-curl \
+        --enable-verbs --enable-shm --enable-tcp --enable-sockets \
+        --disable-psm3 --disable-usnic --disable-opx; \
+    for have in HAVE_VERBS HAVE_SHM HAVE_TCP; do \
+      grep -q "^#define ${have} 1" config.h || { echo "fallback libfabric configure dropped ${have}" >&2; exit 1; }; \
+    done; \
+    make -j"$(nproc)"; \
+    make install; \
+    test -e /opt/ofi-fallback/lib/libfabric.so.1
+
 FROM ${BASE_IMAGE} AS agent
 
 ARG BASE_IMAGE
@@ -168,6 +220,7 @@ ARG MARCH=native
 # What a registry reader needs to know before pulling: the CPU baseline, or native (not publishable).
 LABEL org.hpcagent-bench.cpu-target="${SPACK_TARGET:-native}"
 COPY containers/images/lib/spack-overlay /opt/spack-overlay
+COPY --from=ofi-builder /opt/ofi-sdk /opt/ofi-sdk
 ENV SPACK_ROOT=/opt/spack \
     SPACK_ENV_DIR=/opt/spack-env \
     SPACK_DISABLE_LOCAL_CONFIG=true \
@@ -209,8 +262,19 @@ RUN set -eux; \
     if [ -d /spack-buildcache ]; then \
       "${spack}" mirror add --scope site --unsigned --autopush localcache /spack-buildcache; \
     fi; \
+    ofi_version="$(/opt/ofi-sdk/bin/fi_info --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"; \
+    test -n "${ofi_version}"; \
+    # libfabric: ours, external AND required at environment scope (judge-agent-amd step 4, 630049 and 630267: a
+    # site-scope declaration or a cached spack build let MPICH link spack's own, cxi-less libfabric).
     printf '%s\n' 'spack:' \
       '  concretizer:' '    unify: true' \
+      '  packages:' \
+      '    libfabric:' \
+      "      require: [\"@${ofi_version}\"]" \
+      '      externals:' \
+      "      - spec: \"libfabric@${ofi_version}\"" \
+      '        prefix: /opt/ofi-sdk' \
+      '      buildable: false' \
       '  specs:' \
       '  - mpich@4 +fortran +hwloc ~slurm device=ch4 netmod=ofi ^hwloc +pci' \
       '  - openblas@0.3.30 threads=openmp +fortran +dynamic_dispatch' \
@@ -243,6 +307,11 @@ and not n.get('external')}); sys.exit(f'spack would build {bad}: a second BLAS o
       ln -sf "/opt/view/bin/${wrapper}" "/usr/local/bin/${wrapper}.mpich"; \
     done; \
     ln -sf /opt/view/bin/hydra_pmi_proxy /usr/local/bin/hydra_pmi_proxy; \
+    lf="$(ldd /opt/view/lib/libmpi.so | awk '/libfabric/ {print $3}')"; \
+    case "${lf}" in \
+      /opt/ofi-sdk/lib/*) echo "mpi links the compile-only libfabric ${lf}; the node's replaces it at run time";; \
+      *) echo "MPI links ${lf:-no libfabric}, not /opt/ofi-sdk: the cxi hook could never replace it (5428698)" >&2; exit 1;; \
+    esac; \
     ! ls -d /opt/spack-install/*/slurm-* 2>/dev/null \
       || { echo "spack built a Slurm: the image must launch under any host Slurm" >&2; exit 1; }; \
     ! readelf -d /opt/view/lib/libmpi.so | grep 'NEEDED.*libslurm' \
@@ -576,6 +645,24 @@ ENV LIBXSMM_ROOT=/usr/local
 # Drop the build-time mirror rewrite from the SHIPPED image.
 COPY containers/images/lib/git_mirror.sh /tmp/git_mirror.sh
 RUN sh /tmp/git_mirror.sh drop && rm -f /tmp/git_mirror.sh
+
+# THE STUB MUST NOT SHIP: RPATH would bind MPI to it ahead of the node's libfabric the cxi hook injects. The
+# fallback ships where RPATH cannot see it, last on the image's LD_LIBRARY_PATH. Which libfabric MPI gets:
+#   1. Alps: the EDF's [env] LD_LIBRARY_PATH replaces the image's and never names the fallback, so the loader
+#      takes the hook's libfabric (bound onto /usr/lib/<multiarch>/libfabric.so.1), which ranks cxi first.
+#   2. Elsewhere: a site libfabric earlier on LD_LIBRARY_PATH wins; otherwise the fallback (verbs, then tcp).
+COPY --from=ofi-fallback /opt/ofi-fallback/lib /opt/ofi-fallback/lib
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ibverbs-providers; \
+    rm -rf /var/lib/apt/lists/*; \
+    ! ldd /opt/ofi-fallback/lib/libfabric.so.1 | grep 'not found' \
+      || { echo "the fallback libfabric misses a runtime library" >&2; exit 1; }; \
+    rm -f /opt/ofi-sdk/lib/libfabric.so*; \
+    ! find /opt/ofi-sdk -name 'libfabric.so*' | grep -q . \
+      || { echo "the compile-only libfabric is still in the image" >&2; exit 1; }
+ENV LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/opt/ofi-fallback/lib
+RUN ldd /opt/view/lib/libmpi.so | grep -q '/opt/ofi-fallback/lib/libfabric\.so\.1'
 
 WORKDIR /work
 
