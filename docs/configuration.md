@@ -273,10 +273,7 @@ text is parsed by the key's type (`config.parse_env`):
 | `map[...]` | a JSON object; the map is replaced whole (`mpi.env`, `oracle.overrides`, `timeouts.kernel_s_by_level`, `attempts.token_budget_by_level`), and its entries have no variables of their own |
 
 Nine keys had short names before the env cleanup (`AGENT_EFFORT`, `HARNESS`, `JUDGE_TIMEOUT_SECONDS`,
-`HPCAGENT_BENCH_NCORES`, ...; the table is `DEPRECATED` in `agent/hpcagent_agent/env_aliases.py`). They still work
-in this release, through one translation: when a Python process of the bench or the agent starts, and when
-`run_cluster.sh` has read the setup `.env`, each old name that is set while its current name is not is copied to the
-current name, with one `FutureWarning` per name. The current name wins when both are set; no code reads an old name.
+`HPCAGENT_BENCH_NCORES`, ...). No code reads them; set the key's `HPCAGENT_BENCH_<SECTION>_<KEY>` name.
 
 A value that does not parse, a constraint violation (`int >= 1` given `0`) and an `HPCAGENT_BENCH_<SECTION>_*`
 name that is no key are errors when the configuration is next read; names that other code owns under a section

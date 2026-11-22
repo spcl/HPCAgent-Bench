@@ -77,10 +77,6 @@ if (( $# == 0 )); then
     # cannot re-read ENV_FILE (its EDF does not mount experiments/), so the layer's value reaches the server
     # command (run_vllm_node) under a name the hook leaves alone.
     export SERVER_NCCL_NET_GDR_LEVEL="${NCCL_NET_GDR_LEVEL:-}"
-    # A deprecated short name the setup .env or the submitting shell still sets (AGENT_EFFORT, JUDGE_INPUT_MODE, ...;
-    # agent/hpcagent_agent/env_aliases.py) is exported under its current name, which this script and every step it
-    # starts read; a current name already set wins.
-    eval "$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_agent.env_aliases)"
 fi
 
 INFERENCE_NODES="${INFERENCE_NODES:-2}"
