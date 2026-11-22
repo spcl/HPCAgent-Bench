@@ -817,6 +817,16 @@ jobs:
             tests/test_mpi_requesting_judge_distribution.py \
             tests/test_mpi_dtensor_layout_parity.py
 
+      # The DaCe form of each distributed reference against its mpi4py twin, and the distributed /profile's PMPI
+      # shim, on real ranks.
+      - name: Phase 3d -- DaCe distributed references + the distributed profile's PMPI shim
+        if: ${{ !cancelled() }}
+        timeout-minutes: 25
+        run: |
+          python -m pytest -q -p no:cacheprovider -p tests.no_silent_skips -rfEs --timeout=1200 \
+            tests/test_dace_mpi_reference_real_launch.py \
+            tests/test_distributed_profile.py
+
       # Every mlscale-part2 reference through the real ML rank driver on gloo at P = 1, 2, 4.
       - name: Phase 3c -- mlscale-part2 references through the real ML rank driver (gloo)
         if: ${{ !cancelled() }}
