@@ -48,7 +48,7 @@ export function useLeaderboard() {
       .catch(() => null)
       .then((board) => {
         if (!active) return;
-        const usable = board !== null && board.schema_version === 1 ? board : null;
+        const usable = board !== null && board.schema_version === 2 ? board : null;
         const card = usable?.cost ?? { fresh_input: 1, cached_input: 0.1, output: 1 };
         setData({
           ...fixed,

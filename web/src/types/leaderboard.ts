@@ -28,11 +28,10 @@ export interface ExportScore {
   per_kernel: ExportKernel[];
 }
 
-/** The exported file (leaderboard.py: Leaderboard); this page reads schema_version 1. */
+/** The exported file (leaderboard.py: Leaderboard); this page reads schema_version 2. */
 export interface ExportBoard {
   schema_version: number;
-  experiment: string;
-  language: string;
+  selections: { experiment: string; language: string }[];
   score_rule: string;
   policy: string;
   confidence: number;

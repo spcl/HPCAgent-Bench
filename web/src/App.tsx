@@ -8,6 +8,7 @@ import { Hero } from "./components/Hero";
 import { Navbar } from "./components/Navbar";
 import { SkillsShowcaseSection } from "./components/SkillsShowcaseSection";
 import { TrackScores } from "./components/TrackScores";
+import { AAStudySection } from "./components/AAStudySection";
 import { useLeaderboard } from "./hooks/useLeaderboard";
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
         <DifficultyAgreementSection tracks={data.tracks} />
         <AblationStudySection ablations={data.ablations} docsUrl={data.paper.docs_url} />
         <SkillsShowcaseSection ablations={data.ablations} />
+        <AAStudySection />
         <DocsAndQuickstart paper={data.paper} />
       </main>
       <Footer paper={data.paper} />
