@@ -25,8 +25,8 @@ ulimit -c 0
 
 #: The first leg's port (serve-private.sbatch API_PORT).
 DEFAULT_PORT=30000
-#: The name the server answers to (serve-private.sbatch SERVED_MODEL).
-SERVED_MODEL=hpcagent-bench-vllm
+#: The name the server answers to (serve-private.sbatch VLLM_SERVED_MODEL).
+VLLM_SERVED_MODEL=hpcagent-bench-vllm
 #: A completion long enough to time, short enough to answer in seconds.
 DEFAULT_MAX_TOKENS=128
 #: Seconds one request may take; a loaded server answers well inside it.
@@ -42,7 +42,7 @@ hops="${hops%,}"
 jump=(${hops:+-J "${hops}"})
 
 ssh "${jump[@]}" -o BatchMode=yes "${node}" bash -s -- \
-    "${port}" "${key_file}" "${SERVED_MODEL}" "${MAX_TOKENS:-${DEFAULT_MAX_TOKENS}}" "${REQUEST_TIMEOUT_S}" <<'ON_NODE'
+    "${port}" "${key_file}" "${VLLM_SERVED_MODEL}" "${MAX_TOKENS:-${DEFAULT_MAX_TOKENS}}" "${REQUEST_TIMEOUT_S}" <<'ON_NODE'
 set -euo pipefail
 port=$1 key_file=${2/#\~/$HOME} model=$3 max_tokens=$4 timeout=$5
 url="http://127.0.0.1:${port}"

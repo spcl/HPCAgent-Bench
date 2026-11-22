@@ -56,7 +56,7 @@ JOB_ENV_INFERENCE='SGLANG_.*|AITER_.*|NCCL_.*|SERVER_NCCL_NET_GDR_LEVEL'
 JOB_ENV_JUDGE='SERPAPI_.*|WEBSEARCH_.*'
 JOB_ENV_AGENT='ANTHROPIC_.*|CLAUDE_.*|OPENAI_.*|LITELLM_.*|API_FORCE_IDLE_TIMEOUT|API_TIMEOUT_MS|CONTEXT_LENGTH'
 JOB_ENV_AGENT+='|AGENTS_PER_NODE|AGGREGATE_PROBE_SECONDS|THROUGHPUT_PROBE_REQUESTS|TOOL_TIMEOUT_SECONDS'
-JOB_ENV_AGENT+='|PROMOTE_BUDGET_S'
+JOB_ENV_AGENT+='|PROMOTE_BUDGET_SECONDS'
 # Paths every runtime must present at the same location inside the container. The shared folder is
 # not one of them: it is mounted at ${SHARED_MOUNT} instead, so both containers spell it alike.
 # Set to override role_mounts entirely; empty means "use the per-role policy", which is the default.

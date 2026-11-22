@@ -112,7 +112,7 @@ fi
 INFERENCE_NODES="${INFERENCE_NODES:-1}"
 INFERENCE_MODE="${INFERENCE_MODE:-replicas}"
 VLLM_PORT="${VLLM_PORT:-8000}"
-SERVED_MODEL="${VLLM_SERVED_MODEL:-hpcagent-bench-vllm}"
+export VLLM_SERVED_MODEL="${VLLM_SERVED_MODEL:-hpcagent-bench-vllm}"
 # same precedence the cluster path uses, so one key covers both; 2400 could not hold a
 # GLM-5.3 start, whose slowest stage alone reaches 4200 s before KV alloc and graph capture
 READY_TIMEOUT="${AGENT_READY_TIMEOUT_SECONDS:-${VLLM_READY_TIMEOUT_SECONDS:-7200}}"
@@ -133,7 +133,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
         printf '  image    %s\n' "${INFERENCE_CE_ENV:-unset}"
         printf '  access   %s%s\n' "${ACCESS}" "${KEY_FILE:+, key ${KEY_FILE}}"
         printf '  engine   %s (%s), port %s, model name %s\n' \
-            "${INFERENCE_ENGINE:-vllm}" "${INFERENCE_MODE}" "${VLLM_PORT}" "${SERVED_MODEL}"
+            "${INFERENCE_ENGINE:-vllm}" "${INFERENCE_MODE}" "${VLLM_PORT}" "${VLLM_SERVED_MODEL}"
         printf '  weights  %s\n' "${VLLM_MODEL:-unset}"
         printf '  submit   %s\n' "${submit[*]}"
         exit 0
@@ -171,7 +171,7 @@ if [[ "${ACCESS}" == alps ]]; then
     trap 'exit 143' TERM INT
     private_secrets "${RUN_DIR}"
     printf '{"model": "%s", "messages": [{"role": "user", "content": "Say hi."}], "max_tokens": 16}\n' \
-        "${SERVED_MODEL}" >"${RUN_DIR}/hello.json"
+        "${VLLM_SERVED_MODEL}" >"${RUN_DIR}/hello.json"
 fi
 mkdir -p "${RUN_DIR}"
 # The one file run_cluster.sh re-reads in the container, and the record of what this job served. ACCESS=alps adds the
@@ -200,7 +200,7 @@ auth=()
 
 cat <<EOF
 job:     ${SLURM_JOB_ID}
-model:   ${VLLM_MODEL:-unset} as "${SERVED_MODEL}"
+model:   ${VLLM_MODEL:-unset} as "${VLLM_SERVED_MODEL}"
 engine:  ${INFERENCE_ENGINE:-vllm} (${INFERENCE_MODE}) on ${INFERENCE_NODES} node(s): ${nodes[*]}
 image:   ${INFERENCE_CE_ENV:-unset}
 logs:    ${RUN_DIR}
@@ -254,7 +254,7 @@ if [[ -n "${SERVE_BENCH:-}" ]]; then
     echo "bench: API up after ${api_up} s; config ${SERVE_BENCH}"
     rc=0
     KV_GUARD=warn "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.serve_bench run --base "${BASE_URL}" \
-        --model "${SERVED_MODEL}" --name "${SERVE_BENCH}" --run-dir "${RUN_DIR}" --api-up-s "${api_up}" \
+        --model "${VLLM_SERVED_MODEL}" --name "${SERVE_BENCH}" --run-dir "${RUN_DIR}" --api-up-s "${api_up}" \
         --concurrency ${BENCH_CONCURRENCY:-20 40} --seconds "${BENCH_SECONDS:-900}" || rc=$?
     grep -a "PP0 TP0] Decode batch" "${RUN_DIR}"/server-0.log | tail -n 3 || true
     kill "${SERVER_PID}" 2>/dev/null || true
@@ -280,9 +280,9 @@ if [[ "${PREWARM:-0}" == 1 ]]; then
     gates="${HPCAGENT_BENCH_REPO}/containers/inference"
     py="${HPCAGENT_BENCH_HOST_PYTHON:-python3}"
     rc=0
-    "${py}" "${gates}/verify-tools-reasoning.py" --base "${BASE_URL}" --model "${SERVED_MODEL}" || rc=1
-    "${py}" "${gates}/accuracy-gate.py" --base "${BASE_URL}" --model "${SERVED_MODEL}" || rc=1
-    body="{\"model\":\"${SERVED_MODEL}\",\"max_tokens\":64,\"messages\":[{\"role\":\"user\",\"content\":\"Count to twenty.\"}]}"
+    "${py}" "${gates}/verify-tools-reasoning.py" --base "${BASE_URL}" --model "${VLLM_SERVED_MODEL}" || rc=1
+    "${py}" "${gates}/accuracy-gate.py" --base "${BASE_URL}" --model "${VLLM_SERVED_MODEL}" || rc=1
+    body="{\"model\":\"${VLLM_SERVED_MODEL}\",\"max_tokens\":64,\"messages\":[{\"role\":\"user\",\"content\":\"Count to twenty.\"}]}"
     seq 48 | xargs -P 48 -I{} curl -sf -o /dev/null -H 'Content-Type: application/json' -d "${body}" \
         "${BASE_URL}/v1/chat/completions" || rc=1
     printf 'prewarm: %s aiter builds this boot; cache %s\n' \
@@ -298,7 +298,7 @@ if [[ "${ACCESS}" == alps ]]; then
         private_auth_check "${endpoint%/v1}" "${RUN_DIR}/hello.json" "${RUN_DIR}/auth.header" \
             || { echo "FAIL: ${endpoint} did not answer 401 without the key and 200 with it" >&2; exit 1; }
     done
-    VLLM_REPLICA_URLS="$(IFS=,; printf '%s' "${endpoints[*]}")" VLLM_SERVED_MODEL="${SERVED_MODEL}" \
+    VLLM_REPLICA_URLS="$(IFS=,; printf '%s' "${endpoints[*]}")" \
         INFERENCE_CE_ENV="${INFERENCE_CE_ENV}" INFERENCE_KEY_FILE="${KEY_FILE}" \
         "${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/inference_service.py" --write-endpoint "${RUN_DIR}/endpoint.json" \
         || exit 1
@@ -307,7 +307,7 @@ if [[ "${ACCESS}" == alps ]]; then
 ===== keyed endpoint is live =====
 endpoint:   ${RUN_DIR}/endpoint.json
 replicas:   ${endpoints[*]}
-model name: ${SERVED_MODEL}
+model name: ${VLLM_SERVED_MODEL}
 key file:   ${KEY_FILE}
 server log: ${RUN_DIR}/server-0.log (in a mode-700 dir: it prints the key)
 
@@ -323,7 +323,7 @@ fi
 if [[ -n "${SERVE_POOL:-}" ]]; then
     # A pool server (launch_fused.sbatch @serve): published once every replica answered, unpublished first on the way
     # out, so a pool setup never stripes an episode onto a server that is gone; the launcher retires it with TERM.
-    pool_file="$(VLLM_REPLICA_URLS="$(IFS=,; printf '%s' "${endpoints[*]}")" VLLM_SERVED_MODEL="${SERVED_MODEL}" \
+    pool_file="$(VLLM_REPLICA_URLS="$(IFS=,; printf '%s' "${endpoints[*]}")" \
         INFERENCE_CE_ENV="${INFERENCE_CE_ENV}" VLLM_MODEL="${VLLM_MODEL:-}" INFERENCE_ENGINE="${INFERENCE_ENGINE:-vllm}" \
         "${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/inference_service.py" --write-pool "${SERVE_POOL}")" || exit 1
     cleanup_pool() {
@@ -342,7 +342,7 @@ cat <<EOF
 
 ===== endpoint is live =====
 base URL:   ${endpoints[0]}
-model name: ${SERVED_MODEL}
+model name: ${VLLM_SERVED_MODEL}
 replicas:   ${endpoints[*]}
 health:     curl -s ${BASE_URL}/v1/models
 metrics:    curl -s ${BASE_URL}/metrics
@@ -350,7 +350,7 @@ server log: ${RUN_DIR}/server-0.log
 
 curl -s ${BASE_URL}/v1/chat/completions \\
   -H 'Content-Type: application/json' \\
-  -d '{"model":"${SERVED_MODEL}","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
+  -d '{"model":"${VLLM_SERVED_MODEL}","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
 
 The endpoint takes no API key. It stays up until this job ends; scancel ${SLURM_JOB_ID} to stop it.
 EOF

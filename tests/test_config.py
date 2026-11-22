@@ -138,6 +138,14 @@ def test_a_misspelled_name_is_an_error_naming_the_key_it_means(
         config.current()
 
 
+@pytest.mark.parametrize("name", sorted(config.RENAMED_ENV))
+def test_a_renamed_name_is_an_error_naming_its_new_name(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """A renamed seconds knob still set under its old name would be ignored and its default used in silence."""
+    monkeypatch.setenv(name, "60")
+    with pytest.raises(config.UnknownConfigEnvError, match=rf"{name} \(renamed {config.RENAMED_ENV[name]}\)"):
+        config.current()
+
+
 @pytest.mark.parametrize("name", ["HPCAGENT_BENCH_JUDGE_URLS", "HPCAGENT_BENCH_REPO", "HPCAGENT_BENCH_CACHE"])
 def test_a_non_config_name_is_accepted(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     monkeypatch.setenv(name, "/somewhere")
@@ -170,6 +178,10 @@ def test_get_of_an_unknown_key_raises() -> None:
         config.get("measurement.repeats")
 
 
+#: The files that may name a renamed env name: its refusal table and the changelog.
+RENAMED_HOMES = frozenset({"hpcagent_bench/config.py", "CHANGELOG.md"})
+
+
 def test_every_env_name_in_the_repository_is_a_key_or_listed_as_non_config() -> None:
     """A launcher or layer that exports a name the model does not know would stop every config read."""
     tracked = tracked_files(REPO)
@@ -179,9 +191,11 @@ def test_every_env_name_in_the_repository_is_a_key_or_listed_as_non_config() -> 
         if relative.startswith("third_party/") or path == pathlib.Path(__file__).resolve() or not path.is_file():
             continue
         try:
-            names |= set(re.findall(r"HPCAGENT_BENCH_[A-Z0-9_]*[A-Z0-9]\b", path.read_text(encoding="utf-8")))
+            found = set(re.findall(r"HPCAGENT_BENCH_[A-Z0-9_]*[A-Z0-9]\b", path.read_text(encoding="utf-8")))
         except UnicodeDecodeError:
             continue
+        # The table of renamed names and the changelog name an old name only to refuse or record it.
+        names |= found - set(config.RENAMED_ENV) if relative in RENAMED_HOMES else found
     config.check_env(dict.fromkeys(names, ""))
 
 

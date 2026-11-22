@@ -627,3 +627,15 @@ def test_a_promotion_reads_the_routers_verdict(
     monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], body=verdict))
     item = {"kernel": "gemm", "episode_id": "setup.n0.p1.w1", "language": "c", "source": "void gemm(void){}"}
     assert promoter.promote("http://judge:8800", item, dry_run=False, rank=0).startswith(expected)
+
+
+def test_the_old_budget_name_is_refused_not_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PROMOTE_BUDGET_S became PROMOTE_BUDGET_SECONDS; read silently, the old name would leave the 1800 s default."""
+    monkeypatch.setenv("PROMOTE_BUDGET_S", "60")
+    with pytest.raises(SystemExit, match="PROMOTE_BUDGET_S is renamed PROMOTE_BUDGET_SECONDS"):
+        fresh("promote_unsubmitted")
+
+
+def test_the_budget_reads_its_seconds_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROMOTE_BUDGET_SECONDS", "60")
+    assert fresh("promote_unsubmitted").PROMOTE_BUDGET_S == 60.0

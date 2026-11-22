@@ -116,6 +116,22 @@ def test_the_launcher_refuses_to_start_without_a_preset(tmp_path: pathlib.Path) 
     assert_untouched(tmp_path, done)
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("SERVED_MODEL", "VLLM_SERVED_MODEL"),
+        ("MODEL_REPO", "VLLM_MODEL"),
+        ("READY_TIMEOUT", "VLLM_READY_TIMEOUT_SECONDS"),
+    ],
+)
+def test_the_launcher_refuses_a_renamed_knob(tmp_path: pathlib.Path, old: str, new: str) -> None:
+    """An invocation that still sets an old name fails instead of serving the default it no longer overrides."""
+    done = launch(tmp_path, "mi300", **{old: "x"})
+    assert done.returncode == 2
+    assert f"{old} is renamed {new}" in done.stderr
+    assert_untouched(tmp_path, done)
+
+
 def test_the_launcher_refuses_an_unknown_mode(tmp_path: pathlib.Path) -> None:
     done = launch(tmp_path, "mi300", MODE="public")
     assert done.returncode == 2
@@ -364,7 +380,7 @@ def test_alps_serve_mode_deletes_endpoint_json_with_the_secrets_when_the_job_exi
 
 
 def test_alps_serve_mode_refuses_a_served_model_that_would_break_endpoint_json(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi300", ACCESS="alps", MODE="serve", SERVED_MODEL='qwen"38')
+    done = launch(tmp_path, "mi300", ACCESS="alps", MODE="serve", VLLM_SERVED_MODEL='qwen"38')
     assert done.returncode == 2
     assert "may not contain a quote or a backslash" in done.stderr
     assert_untouched(tmp_path, done)

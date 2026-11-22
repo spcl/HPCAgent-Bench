@@ -79,6 +79,11 @@ use_preset() {  # sets the PRESET_* values; key file, triton cache and run root 
     esac
 }
 
+# Renamed knobs, refused so an old invocation fails loudly instead of serving the defaults.
+for old_new in SERVED_MODEL:VLLM_SERVED_MODEL MODEL_REPO:VLLM_MODEL READY_TIMEOUT:VLLM_READY_TIMEOUT_SECONDS; do
+    old="${old_new%%:*}"
+    [[ -z "${!old:-}" ]] || refuse "${old} is renamed ${old_new#*:}"
+done
 MODE="${MODE:-smoke}"
 DRY_RUN="${DRY_RUN:-0}"
 use_preset
@@ -102,10 +107,10 @@ GATE="${REPO}/containers/inference/verify-tools-reasoning.py"
 KEY_FILE="${KEY_FILE:-${HOME}/.config/hpcagent-bench/${PRESET}-endpoint.key}"
 EDF="${EDF:-${PRESET_EDF}}"
 LEGS="${LEGS:-${PRESET_LEGS}}"
-MODEL_REPO="${MODEL_REPO:-${PRESET_MODEL}}"
-SERVED_MODEL="${SERVED_MODEL:-hpcagent-bench-vllm}"
+VLLM_MODEL="${VLLM_MODEL:-${PRESET_MODEL}}"
+VLLM_SERVED_MODEL="${VLLM_SERVED_MODEL:-hpcagent-bench-vllm}"
 API_PORT="${API_PORT:-30000}"
-READY_TIMEOUT="${READY_TIMEOUT:-3600}"
+VLLM_READY_TIMEOUT_SECONDS="${VLLM_READY_TIMEOUT_SECONDS:-3600}"
 LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-16}"
 REASONING_EFFORT="${REASONING_EFFORT:-}"
 # Operator words placed before --host/--port; they may not name the host, port, key or config.
@@ -136,8 +141,8 @@ use_access() {  # sets BIND_HOST and METRICS_FLAGS
     fi
     # sglang serves /metrics without the key, so off the loopback metrics stay off.
     METRICS_FLAGS=()
-    [[ "${SERVED_MODEL}${KEY_FILE}${NODE}" != *[\"\\]* ]] \
-        || refuse "ACCESS=alps: SERVED_MODEL, KEY_FILE and the node name may not contain a quote or a backslash"
+    [[ "${VLLM_SERVED_MODEL}${KEY_FILE}${NODE}" != *[\"\\]* ]] \
+        || refuse "ACCESS=alps: VLLM_SERVED_MODEL, KEY_FILE and the node name may not contain a quote or a backslash"
     local iface="${HPCAGENT_BENCH_BIND_IFACE:-}"
     [[ -n "${iface}" ]] || refuse "ACCESS=alps: set HPCAGENT_BENCH_BIND_IFACE (site layer) to the interface to bind"
     BIND_HOST="$(ip -4 -o addr show dev "${iface}" 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')"
@@ -148,7 +153,7 @@ sglang_argv() {  # sglang_argv <tp> <fraction> <port>: sets SERVER_ARGV
     # shellcheck disable=SC2206 # EXTRA_ARGS is an operator word list
     SERVER_ARGV=(/opt/venv/bin/python3 -m sglang.launch_server
         --config "${RUN_DIR}/sglang-auth.yaml"
-        --model-path "${MODEL_REPO}" --served-model-name "${SERVED_MODEL}"
+        --model-path "${VLLM_MODEL}" --served-model-name "${VLLM_SERVED_MODEL}"
         --tp-size "$1" --mem-fraction-static "$2" "${PRESET_FLAGS[@]}"
         --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code --language-only --kv-cache-dtype fp8_e4m3
         --watchdog-timeout 1800 --context-length 262144 --mamba-full-memory-ratio 0.5 --max-running-requests 128
@@ -163,7 +168,7 @@ vllm_argv() {  # vllm_argv <tp> <fraction> <port>: sets SERVER_ARGV
     # shellcheck disable=SC2016,SC2206 # single quotes: expanded by the inner bash; EXTRA_ARGS is a word list
     SERVER_ARGV=(bash -c 'VLLM_API_KEY="$(cat "$1")"; export VLLM_API_KEY; shift; exec "$@"' key-loader
         "${RUN_DIR}/api.key"
-        /usr/bin/python3 -m vllm.entrypoints.cli.main serve "${MODEL_REPO}" --served-model-name "${SERVED_MODEL}"
+        /usr/bin/python3 -m vllm.entrypoints.cli.main serve "${VLLM_MODEL}" --served-model-name "${VLLM_SERVED_MODEL}"
         --tensor-parallel-size "$1" --gpu-memory-utilization "$2" "${PRESET_FLAGS[@]}"
         --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code
         --max-model-len 262144 --max-num-seqs 128
@@ -182,7 +187,7 @@ without_key() {  # filter stdin: drop any line carrying the key (sglang logs ser
 
 wait_ready() {  # wait_ready <port> <dir>
     local deadline code
-    deadline=$(($(date +%s) + READY_TIMEOUT))
+    deadline=$(($(date +%s) + VLLM_READY_TIMEOUT_SECONDS))
     while :; do
         code="$(curl -s -o /dev/null -w '%{http_code}' "http://${BIND_HOST}:$1/health" || true)"
         [[ "${code}" == 200 ]] && return 0
@@ -192,7 +197,7 @@ wait_ready() {  # wait_ready <port> <dir>
             return 1
         fi
         if (($(date +%s) > deadline)); then
-            echo "not ready within ${READY_TIMEOUT}s" >&2
+            echo "not ready within ${VLLM_READY_TIMEOUT_SECONDS}s" >&2
             return 1
         fi
         sleep 15
@@ -213,7 +218,7 @@ auth_checks() {  # auth_checks <port> <dir>
 tools_gate() {  # tools_gate <port> <dir>
     local rc=0
     srun --overlap --ntasks=1 --cpus-per-task=4 --export=ALL --environment="${EDF}" \
-        "${ENGINE_PYTHON}" "${GATE}" --base "http://${BIND_HOST}:$1" --model "${SERVED_MODEL}" \
+        "${ENGINE_PYTHON}" "${GATE}" --base "http://${BIND_HOST}:$1" --model "${VLLM_SERVED_MODEL}" \
         --api-key-file "${RUN_DIR}/api.key" --reasoning-effort "${REASONING_EFFORT}" \
         > "$2/tools-reasoning.out" 2>&1 || rc=$?
     cat "$2/tools-reasoning.out"
@@ -302,7 +307,7 @@ On your laptop, while this job runs (docs/serving/private-endpoint.md):
   ssh -N -J ${hops} -L 127.0.0.1:$1:127.0.0.1:$1 ${USER:-$(id -un)}@${node}
   curl -s http://127.0.0.1:$1/v1/chat/completions -H 'Content-Type: application/json' \\
     -H "@\$HOME/.config/hpcagent-bench/${header_name}" \\
-    -d '{"model": "${SERVED_MODEL}", "max_tokens": 128, "messages": [{"role": "user", "content": "Say hi."}]}'
+    -d '{"model": "${VLLM_SERVED_MODEL}", "max_tokens": 128, "messages": [{"role": "user", "content": "Say hi."}]}'
 Stop: Ctrl-C the tunnel, then scancel ${SLURM_JOB_ID:-<jobid>}.
 Do not share the key, the header file or this endpoint with anyone, project members included.
 EOF
@@ -311,7 +316,7 @@ EOF
 write_endpoint_file() {  # write_endpoint_file <port>: what alps-endpoint.sh reads; the key path, never the key
     local url="http://${BIND_HOST}:$1/v1"
     (umask 077 && printf '{"url": "%s", "served_model": "%s", "key_file": "%s", "node": "%s", "job_id": "%s"}\n' \
-        "${url}" "${SERVED_MODEL}" "${KEY_FILE}" "${NODE}" "${SLURM_JOB_ID:-dry-run}" > "${RUN_DIR}/endpoint.json")
+        "${url}" "${VLLM_SERVED_MODEL}" "${KEY_FILE}" "${NODE}" "${SLURM_JOB_ID:-dry-run}" > "${RUN_DIR}/endpoint.json")
 }
 
 alps_help() {  # alps_help <port>: how your own jobs elsewhere on Alps connect; never the key
@@ -359,7 +364,7 @@ read -r -a LEG_SPECS <<< "${LEGS}"
 ((${#LEG_SPECS[@]} > 0)) || refuse "LEGS is empty"
 for spec in "${LEG_SPECS[@]}"; do parse_leg "${spec}"; done
 [[ "${MODE}" == smoke ]] || LEG_SPECS=("${LEG_SPECS[0]}")
-[[ -d "${HF_HOME}/hub/models--${MODEL_REPO//\//--}" ]] || refuse "no ${MODEL_REPO} under ${HF_HOME}/hub"
+[[ -d "${HF_HOME}/hub/models--${VLLM_MODEL//\//--}" ]] || refuse "no ${VLLM_MODEL} under ${HF_HOME}/hub"
 # Partition table, image stamp and rocminfo agree before any secret is written or weights load.
 [[ "${DRY_RUN}" == 1 ]] || bash "${REPO}/containers/images/gpu_arch_check.sh" "${EDF}"
 
@@ -369,15 +374,15 @@ trap cleanup EXIT
 trap 'exit 143' TERM INT
 private_secrets "${RUN_DIR}"
 printf '{"model": "%s", "messages": [{"role": "user", "content": "Say hi."}], "max_tokens": 16}\n' \
-    "${SERVED_MODEL}" > "${RUN_DIR}/hello.json"
+    "${VLLM_SERVED_MODEL}" > "${RUN_DIR}/hello.json"
 filler="$(printf 'The kernel iterates over the array and accumulates into the result buffer. %.0s' {1..200})"
 printf '{"model": "%s", "messages": [{"role": "user", "content": "%s Explain loop tiling."}], "max_tokens": 256, "ignore_eos": true}\n' \
-    "${SERVED_MODEL}" "${filler}" > "${RUN_DIR}/load.json"
+    "${VLLM_SERVED_MODEL}" "${filler}" > "${RUN_DIR}/load.json"
 
 cat <<EOF
 job:      ${SLURM_JOB_ID:-dry run}
 preset:   ${PRESET} (partition ${PRESET_PARTITION}), mode ${MODE}
-model:    ${MODEL_REPO} as "${SERVED_MODEL}" (HF_HOME=${HF_HOME})
+model:    ${VLLM_MODEL} as "${VLLM_SERVED_MODEL}" (HF_HOME=${HF_HOME})
 image:    ${EDF}
 engine:   ${PRESET_ENGINE}, env ${PRESET_ENV[*]}
 access:   ${ACCESS}, --host ${BIND_HOST}

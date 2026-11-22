@@ -121,10 +121,10 @@ PRESET=mi300 MODE=serve DRY_RUN=1 bash "$L"                                   # 
 | `LEGS` | per preset | `tp<N>:<mem-fraction-static>` entries, N up to the node's GPUs; entry i listens on `API_PORT + i` |
 | `API_PORT` | `30000` | first entry's port |
 | `KEY_FILE` | `~/.config/hpcagent-bench/<preset>-endpoint.key` | key file |
-| `SERVED_MODEL` | `hpcagent-bench-vllm` | name clients send |
-| `EDF`, `MODEL_REPO`, `HF_HOME` | per preset | image, weights repo, weights cache |
+| `VLLM_SERVED_MODEL` | `hpcagent-bench-vllm` | name clients send |
+| `EDF`, `VLLM_MODEL`, `HF_HOME` | per preset | image, weights repo, weights cache |
 | `EXTRA_ARGS` | empty | extra SGLang flags, placed before `--host` |
-| `READY_TIMEOUT` | `3600` | seconds to wait for `/health` 200 |
+| `VLLM_READY_TIMEOUT_SECONDS` | `3600` | seconds to wait for `/health` 200 |
 | `LOAD_CONCURRENCY` | `16` | concurrent requests in the smoke load probe |
 | `--time` | `04:00:00` | Slurm walltime |
 
