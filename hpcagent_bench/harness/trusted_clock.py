@@ -100,6 +100,7 @@ class Exposed:
     base: int = 0
 
     def wire(self) -> list[object]:
+        """The array as its wire list."""
         return [self.name, self.address, list(self.shape), list(self.strides), self.dtype, self.base]
 
 
@@ -110,6 +111,7 @@ def exposed(name: str, array: np.ndarray, base: int = 0) -> Exposed:
 
 
 def ints(value: object, what: str) -> tuple[int, ...]:
+    """``value`` as a tuple of at most 32 ints; anything else is a ``ClockError``."""
     if not isinstance(value, list) or len(value) > 32 or not all(type(n) is int for n in value):
         raise ClockError(f"bad {what} {value!r}")
     return tuple(value)
@@ -131,6 +133,7 @@ def from_wire(raw: object) -> Exposed:
 
 
 def array_dtype(found: Exposed) -> np.dtype:
+    """The dtype an exposed array names; an unknown one is a ``ClockError``."""
     try:
         return np.dtype(found.dtype)
     except TypeError as exc:
@@ -201,10 +204,12 @@ def write_array(pid: int, found: Exposed, value: object) -> None:
 
 
 def encode(message: Mapping[str, object]) -> bytes:
+    """``message`` as compact JSON bytes."""
     return json.dumps(message, separators=(",", ":")).encode()
 
 
 def decode(raw: bytes) -> dict[str, object]:
+    """The message in ``raw``; one that is unreadable or has no kind is a ``ClockError``."""
     try:
         message = json.loads(raw)
     except (ValueError, UnicodeDecodeError) as exc:
@@ -215,6 +220,7 @@ def decode(raw: bytes) -> dict[str, object]:
 
 
 def arrays_of(message: Mapping[str, object]) -> tuple[Exposed, ...]:
+    """The arrays a message exposes."""
     raw = message.get("arrays", [])
     if not isinstance(raw, list):
         raise ClockError("bad array list")
@@ -311,6 +317,7 @@ DONE = done_message()
 
 
 def no_outputs(result: object) -> bytes:
+    """The done reply of a call whose outputs are not sent."""
     del result
     return DONE
 
@@ -318,9 +325,13 @@ def no_outputs(result: object) -> bytes:
 class Hold(Protocol):
     """How the parent stops and resumes the measurement's whole process tree."""
 
-    def freeze(self) -> list[int]: ...
+    def freeze(self) -> list[int]:
+        """Stop the process tree; return the stopped pids."""
+        ...
 
-    def thaw(self, stopped: list[int]) -> None: ...
+    def thaw(self, stopped: list[int]) -> None:
+        """Resume the stopped pids."""
+        ...
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -382,9 +393,11 @@ class ClockServer:
 
     @property
     def armed(self) -> bool:
+        """Whether a child is attached."""
         return self.pid > 0
 
     def fileno(self) -> int:
+        """The parent end's file descriptor."""
         return self.parent.fileno()
 
     def receive(self) -> tuple[dict[str, object], int, int]:
@@ -450,6 +463,7 @@ class ClockServer:
                     self.findings.append(f"process {pid} left the grading child's process group")
 
     def ready(self, hold: Hold, message: Mapping[str, object]) -> None:
+        """Answer a child's ready message: audit the stopped tree, write the drawn inputs, start the clock."""
         stopped = hold.freeze()
         try:
             self.audit(stopped)
@@ -473,6 +487,7 @@ class ClockServer:
         message: Mapping[str, object],
         stamp: int,
     ) -> None:
+        """Answer a child's done message: audit the stopped tree, stop the clock and check the outputs."""
         stopped = hold.freeze()
         try:
             self.audit(stopped)
@@ -519,6 +534,7 @@ class ClockServer:
             os.killpg(self.pid, signal.SIGCONT)
 
     def close(self) -> None:
+        """Release the child and close both ends."""
         self.release()
         for end in (self.parent, self.child):
             with contextlib.suppress(OSError):

@@ -596,10 +596,12 @@ def write(pair: Pair, arrays: Mapping[str, npt.ArrayLike]) -> None:
 
 
 def output_prefix(entry: Entry) -> str:
+    """The key prefix of an entry's outputs."""
     return f"out/{entry.tag}/{entry.seed}/"
 
 
 def output_marker(entry: Entry) -> str:
+    """The key that marks an entry's outputs as stored."""
     return f"has/{entry.tag}/{entry.seed}"
 
 
@@ -613,6 +615,7 @@ def load_outputs(entry: Entry) -> dict[str, np.ndarray] | None:
 
 
 def store_outputs(entry: Entry, outputs: Mapping[str, npt.ArrayLike]) -> None:
+    """Store an entry's outputs and their marker."""
     prefix = output_prefix(entry)
     arrays: dict[str, npt.ArrayLike] = {prefix + name: value for name, value in outputs.items()}
     arrays[output_marker(entry)] = np.asarray(True)
@@ -631,6 +634,7 @@ def load_probe(pair: Pair) -> Probe | None:
 
 
 def store_probe(pair: Pair, probe: Probe) -> None:
+    """Store a write probe's masks and rule overrides, and their marker."""
     masks, overrides = probe
     arrays: dict[str, npt.ArrayLike] = (
         {NO_MASK: np.asarray(True)} if masks is None else {MASK_PREFIX + name: mask for name, mask in masks.items()}

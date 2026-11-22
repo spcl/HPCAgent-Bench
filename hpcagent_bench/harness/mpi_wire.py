@@ -131,6 +131,7 @@ INT_CODES = frozenset(
 
 
 def i64(values: Sequence[int]) -> bytes:
+    """``values`` as little-endian 64-bit integers."""
     return np.asarray(list(values), dtype="<i8").tobytes()
 
 
@@ -143,6 +144,7 @@ def scalar8(value: float, type_code: int) -> bytes:
 
 
 def read_scalar8(raw: Buffer, type_code: int) -> int | float:
+    """The 8-byte scalar in ``raw``, as an int or a float by ``type_code``."""
     if type_code in INT_CODES:
         return int(struct.unpack_from("<q", raw)[0])
     return float(struct.unpack_from("<d", raw)[0])

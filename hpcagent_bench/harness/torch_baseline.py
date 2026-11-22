@@ -208,6 +208,7 @@ class CacheLayer:
 
     @classmethod
     def for_key(cls, key: str) -> "CacheLayer":
+        """The cache layer of ``key``: its work directory and its archive."""
         return cls(work_root() / key, archive_root() / f"{key}{ARCHIVE_SUFFIX}")
 
     def archive_state(self) -> str:

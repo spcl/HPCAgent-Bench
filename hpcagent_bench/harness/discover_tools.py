@@ -148,6 +148,7 @@ class Report(TypedDict):
 
 
 def detect_platform() -> PlatformInfo:
+    """The operating system, machine, distribution and WSL flag of this host."""
     sysname = platform.system()
     info: PlatformInfo = {"system": sysname.lower(), "machine": platform.machine(), "wsl": False, "distro": ""}
     if sysname == "Darwin":
@@ -166,6 +167,7 @@ def detect_platform() -> PlatformInfo:
 
 
 def linux_distro() -> str:
+    """The Linux distribution and version from ``/etc/os-release``."""
     try:
         release = pathlib.Path("/etc/os-release").read_text()
     except OSError:
@@ -191,6 +193,7 @@ def accel_roots() -> list[str]:
 
 @functools.lru_cache(maxsize=1, typed=True)
 def lib_dirs() -> list[str]:
+    """The library directories that exist on this host."""
     dirs = ["/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64", "/opt/homebrew/lib", "/usr/local/opt"]
     dirs += [str(pathlib.Path(r, sub)) for r in accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
     dirs += [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
@@ -199,6 +202,7 @@ def lib_dirs() -> list[str]:
 
 @functools.lru_cache(maxsize=1, typed=True)
 def include_dirs() -> list[str]:
+    """The include directories that exist on this host."""
     dirs = ["/usr/include", "/usr/local/include", "/opt/homebrew/include"]
     dirs += [str(pathlib.Path(r, "include")) for r in accel_roots()]
     dirs += [p for p in os.environ.get("CPATH", "").split(os.pathsep) if p]
@@ -226,6 +230,7 @@ def ldconfig_index() -> dict[str, str]:
 
 
 def run_version(cmd: str, args: list[str] | None) -> str | None:
+    """The version ``cmd`` prints for the first of ``args`` that yields one, or None."""
     for a in args or []:
         try:
             r = subprocess.run([cmd, a], capture_output=True, text=True, timeout=10, check=False)
@@ -239,6 +244,7 @@ def run_version(cmd: str, args: list[str] | None) -> str | None:
 
 
 def detect_binary(spec: ToolSpec) -> DetectResult:
+    """Find a tool's binaries on ``PATH`` and their version."""
     found: list[tuple[str, str]] = []
     for name in spec.names:
         path = shutil.which(name)
@@ -261,6 +267,7 @@ def so_version(path: str) -> tuple[int, ...]:
 
 
 def detect_library(spec: ToolSpec) -> DetectResult:
+    """Find a library through pkg-config, then headers and library files."""
     # 1) pkg-config (authoritative; gives a version)
     if shutil.which("pkg-config"):
         for pc in spec.pkgconfig:
@@ -303,6 +310,7 @@ DETECTORS: dict[Detector, Callable[[ToolSpec], DetectResult]] = {
 
 
 def discover() -> Report:
+    """Detect every tool of the toolset on this host."""
     report: Report = {"platform": detect_platform(), "categories": {}}
     for cat, tools in toolset().items():
         out: dict[str, ToolEntry] = {}
@@ -316,6 +324,7 @@ def discover() -> Report:
 
 
 def missing_for_target(report: Report, target: Hardware) -> list[str]:
+    """The tools ``target`` requires that the report did not find."""
     miss: list[str] = []
     for cat in report["categories"].values():
         for tool, res in cat.items():
@@ -325,6 +334,7 @@ def missing_for_target(report: Report, target: Hardware) -> list[str]:
 
 
 def print_human(report: Report) -> None:
+    """Print the report for a reader."""
     p = report["platform"]
     wsl = " (WSL)" if p.get("wsl") else ""
     print(f"platform: {p['distro']}{wsl}  [{p['system']}/{p['machine']}]\n")
@@ -348,6 +358,7 @@ def print_human(report: Report) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Command line: report the tools on this host; exit non-zero if one a target requires is missing."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", action="store_true", help="emit JSON")
     ap.add_argument("--yaml", action="store_true", help="emit YAML")

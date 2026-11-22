@@ -63,6 +63,7 @@ class JudgeRefusal(urllib.error.HTTPError):
         self.close()
 
     def read(self, n: int | None = -1) -> bytes:
+        """Up to ``n`` bytes of the refusal body; all of it for a negative or None ``n``."""
         return self.body if n is None or n < 0 else self.body[:n]
 
 

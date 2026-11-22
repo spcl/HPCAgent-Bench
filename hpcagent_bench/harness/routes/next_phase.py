@@ -82,6 +82,7 @@ def run_phases() -> tuple[PacketPhase, ...]:
 
 
 def agent_indices(phases: tuple[PacketPhase, ...]) -> list[int]:
+    """The indices of the agent phases."""
     return [index for index, phase in enumerate(phases) if phase.mode == "agent"]
 
 
@@ -136,12 +137,15 @@ class Capture:
         self.answer: dict[str, Any] = {"error": "the route did not answer"}
 
     def reply(self, code: int, payload: JudgeAnswer) -> None:
+        """Keep the answer instead of sending it."""
         self.status, self.answer = code, payload.to_json()
 
     def device_slot(self, terminal: bool = False) -> contextlib.AbstractContextManager[DeviceSlot | None]:
+        """Hold a device slot of the wrapped judge."""
         return self.judge.device_slot(terminal)
 
     def client_left(self) -> contextlib.AbstractContextManager[threading.Event]:
+        """An event never set: the captured call has no client to leave."""
         return contextlib.nullcontext(threading.Event())  # a default call has no client of its own to leave
 
 
@@ -157,6 +161,7 @@ def run_default(judge: Judge, request: RouteRequest, phase: PacketPhase, kernel:
 
 @route(plugins.NEXT_PHASE, methods=(HTTPMethod.POST,))
 def serve(judge: Judge, request: RouteRequest) -> None:
+    """Answer ``POST /next_phase``: run the default phases up to the episode's next agent phase."""
     phases = run_phases()
     if not agent_indices(phases):
         return judge.reply(HTTPStatus.NOT_FOUND, JudgeError(error="this run's packet has no agent phases"))

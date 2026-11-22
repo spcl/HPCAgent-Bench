@@ -338,11 +338,17 @@ type PythonMeta = tuple[str, tuple[str, ...], tuple[str, ...]]
 class TorchTensor(Protocol):
     """The slice of ``torch.Tensor`` a python output is read back through."""
 
-    def detach(self) -> "TorchTensor": ...
+    def detach(self) -> "TorchTensor":
+        """The tensor detached from autograd."""
+        ...
 
-    def cpu(self) -> "TorchTensor": ...
+    def cpu(self) -> "TorchTensor":
+        """The tensor on the host."""
+        ...
 
-    def numpy(self) -> np.ndarray: ...
+    def numpy(self) -> np.ndarray:
+        """The host tensor as a NumPy array."""
+        ...
 
 
 class CallWith(Protocol):
@@ -355,17 +361,23 @@ class DevicePointer(Protocol):
     """A device allocation: ``ptr`` is its base address, which is what the ABI passes."""
 
     @property
-    def ptr(self) -> int: ...
+    def ptr(self) -> int:
+        """The device address."""
+        ...
 
 
 class DeviceBuffer(Protocol):
     """A cupy array as this module uses one (cupy is optional, so the protocol is declared here)."""
 
     @property
-    def data(self) -> DevicePointer: ...
+    def data(self) -> DevicePointer:
+        """The buffer's device pointer."""
+        ...
 
     @property
-    def size(self) -> int: ...
+    def size(self) -> int:
+        """The buffer's element count."""
+        ...
 
     def __getitem__(self, key: slice) -> "DeviceBuffer": ...
 
@@ -499,6 +511,7 @@ class OutputRegion:
 
     @property
     def nbytes(self) -> int:
+        """The region's size in bytes."""
         return math.prod(self.shape) * self.dtype.itemsize
 
 
@@ -809,14 +822,20 @@ class NumbaParallel(Protocol):
     _is_initialized: bool
     NUM_THREADS: int
 
-    def set_num_threads(self, n: int) -> None: ...
+    def set_num_threads(self, n: int) -> None:
+        """Set Numba's thread count."""
+        ...
 
 
 class NumbaConfig(Protocol):
+    """The part of ``numba.config`` the call reads."""
+
     NUMBA_NUM_THREADS: int
 
 
 class NumbaPackage(Protocol):
+    """The part of the ``numba`` package the call reads."""
+
     config: NumbaConfig
 
 
@@ -1346,6 +1365,7 @@ type GroupConverter = Callable[[StagedGroup, bool], None]
 
 
 def no_group_converter(staged: StagedGroup, to_whole: bool) -> None:
+    """The converter of a group that has none; calling it is a bug."""
     raise AssertionError(f"no converter for the group {staged.regroup.group.name!r}")
 
 
@@ -1860,6 +1880,7 @@ def staged_ends(staged: Staged, inward: bool) -> tuple["ArrayBuffer", "ArrayBuff
 
 
 def staged_conversion(staged: Staged) -> Conversion:
+    """The layout conversion of a staged argument."""
     assert staged.layout is not None
     return precision_casts.layout_conversion(staged.name, staged.layout, staged.logical_dtype, staged.stored_dtype)
 
@@ -2826,6 +2847,7 @@ class RepCheckServer:
         self.root = 0
 
     def held_s(self) -> float:
+        """Seconds the child was held stopped so far."""
         since = self.holding_since
         return self.held + (time.monotonic() - since if since is not None else 0.0)
 
@@ -2845,9 +2867,11 @@ class RepCheckServer:
         return stopped
 
     def thaw(self, stopped: list[int]) -> None:
+        """Resume the stopped processes."""
         resume_tree(stopped)
 
     def serve(self, pid: int, device_index: int | None) -> None:
+        """Hand the child its descriptors and check each rep it hands over until it is done."""
         set_assigned_device(device_index)
         self.root = pid
         try:
@@ -2940,6 +2964,7 @@ class RepCheckServer:
         return host_outputs(outputs)
 
     def close(self) -> None:
+        """Stop serving and close the connections and the clock."""
         self.done.set()
         # Wake a thread still waiting on the child's end of the connection.
         with contextlib.suppress(OSError), socket.socket(fileno=os.dup(self.conn.fileno())) as end:

@@ -110,12 +110,15 @@ class ClaimQueue:
         (self.root / self.job).mkdir(parents=True, exist_ok=True)
 
     def done(self, key: str) -> pathlib.Path:
+        """The marker of a finished ``key``."""
         return self.root / f"{key}.done"
 
     def claim(self, key: str, attempt: int) -> pathlib.Path:
+        """This job's claim of ``key`` for ``attempt``."""
         return self.root / self.job / f"{key}.{attempt}"
 
     def closed(self, key: str) -> pathlib.Path:
+        """This job's marker that ``key`` is closed."""
         return self.root / self.job / f"{key}.closed"
 
     def settled(self, key: str) -> bool:
@@ -167,6 +170,7 @@ class Held[ItemT]:
     finished: bool = False
 
     def finish(self) -> None:
+        """Mark the held claim finished."""
         self.finished = True
 
 

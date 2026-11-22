@@ -65,7 +65,9 @@ class DeviceArray(Protocol):
     """A C-contiguous device buffer (a cupy array) as a kernel argument."""
 
     @property
-    def size(self) -> int: ...
+    def size(self) -> int:
+        """The array's element count."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +101,7 @@ class Regroup:
 
     @property
     def parts(self) -> tuple[str, ...]:
+        """The names of the group's member arrays."""
         return tuple(member.name for member in self.group.parts)
 
     @property
@@ -151,6 +154,7 @@ def symbol(src: str, dst: str) -> str:
 
 
 def pairs(dtypes: Iterable[str]) -> list[Conversion]:
+    """The conversion of every unordered pair of ``dtypes``."""
     ordered = sorted(set(dtypes))
     return [conversion(a, b) for k, a in enumerate(ordered) for b in ordered[k + 1 :]]
 

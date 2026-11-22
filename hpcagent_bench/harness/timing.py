@@ -219,6 +219,7 @@ def sampled_reps[PayloadT](
 
 
 def positive_samples(samples: Sequence[float]) -> list[float]:
+    """The positive samples as floats."""
     return [float(s) for s in (samples or []) if s and float(s) > 0]
 
 

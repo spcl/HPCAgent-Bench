@@ -54,6 +54,8 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class SearchResult:
+    """One search engine result."""
+
     title: str
     url: str
     snippet: str
@@ -61,6 +63,8 @@ class SearchResult:
 
 @dataclass(slots=True)
 class CrawledPage:
+    """One crawled result page."""
+
     title: str
     url: str
     snippet: str
@@ -79,11 +83,13 @@ DEBUG = False
 
 
 def debug(message: str) -> None:
+    """Print ``message`` to stderr when debugging is on."""
     if DEBUG:
         print(f"[web_search] {message}", file=sys.stderr, flush=True)
 
 
 def load_env_file(path: pathlib.Path) -> None:
+    """Set the unset environment variables a ``.env`` file assigns."""
     if not path.exists():
         return
     for raw in path.read_text().splitlines():
@@ -97,6 +103,7 @@ def load_env_file(path: pathlib.Path) -> None:
 
 
 def discover_env_file(explicit: str | None) -> None:
+    """Load the first ``.env`` file found: ``explicit``, the working directory, then the package parent."""
     candidates: list[pathlib.Path] = []
     if explicit:
         candidates.append(pathlib.Path(explicit))
@@ -109,6 +116,7 @@ def discover_env_file(explicit: str | None) -> None:
 
 
 def env_int(name: str, default: int) -> int:
+    """The integer environment variable ``name``, or ``default`` if unset."""
     value = os.environ.get(name, "").strip()
     if not value:
         return default
@@ -116,6 +124,7 @@ def env_int(name: str, default: int) -> int:
 
 
 def env_float(name: str, default: float) -> float:
+    """The float environment variable ``name``, or ``default`` if unset."""
     value = os.environ.get(name, "").strip()
     if not value:
         return default
@@ -123,6 +132,7 @@ def env_float(name: str, default: float) -> float:
 
 
 def env_bool(name: str, default: bool) -> bool:
+    """The boolean environment variable ``name``, or ``default`` if unset."""
     value = os.environ.get(name, "").strip().lower()
     if not value:
         return default
@@ -132,6 +142,7 @@ def env_bool(name: str, default: bool) -> bool:
 def post_json(
     url: str, payload: dict[str, Any], timeout: float, headers: dict[str, str] | None = None
 ) -> dict[str, Any]:
+    """POST ``payload`` as JSON and return the JSON answer; an HTTP error is a ``RuntimeError``."""
     data = json.dumps(payload).encode("utf-8")
     request_headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if headers:
@@ -147,6 +158,7 @@ def post_json(
 
 
 def retryable_post_json(url: str, payload: dict[str, Any], timeout: float, headers: dict[str, str]) -> dict[str, Any]:
+    """POST as :func:`post_json`, retrying once without a parameter the model refuses."""
     try:
         return post_json(url, payload, timeout, headers)
     except RuntimeError as exc:
@@ -174,6 +186,7 @@ def retryable_post_json(url: str, payload: dict[str, Any], timeout: float, heade
 
 
 def get_json(url: str, params: dict[str, str], timeout: float) -> dict[str, Any]:
+    """GET ``url`` with ``params`` and return the JSON answer."""
     query = urllib.parse.urlencode(params)
     sep = "&" if "?" in url else "?"
     req = urllib.request.Request(f"{url}{sep}{query}", headers={"Accept": "application/json"})
@@ -182,6 +195,7 @@ def get_json(url: str, params: dict[str, str], timeout: float) -> dict[str, Any]
 
 
 def call_serpapi(query: str, max_results: int, timeout: float) -> list[SearchResult]:
+    """Search Google through SerpAPI."""
     api_key = os.environ.get("SERPAPI_API_KEY", "").strip()
     serpapi_url = os.environ.get("SERPAPI_URL", "https://serpapi.com/search.json").strip()
     if not api_key and "localhost" not in serpapi_url and "127.0.0.1" not in serpapi_url:
@@ -237,6 +251,7 @@ def markdown_references(markdown: object) -> str:
 async def collect_arun_many(
     crawler: "AsyncWebCrawler", urls: list[str], config: "CrawlerRunConfig"
 ) -> list["CrawlResult"]:
+    """Crawl ``urls`` and collect the results, whatever form ``arun_many`` returns."""
     crawled = crawler.arun_many(urls, config=config)
     if inspect.isawaitable(crawled):
         crawled = await crawled
@@ -248,6 +263,7 @@ async def collect_arun_many(
 async def crawl_with_crawl4ai(
     results: Iterable[SearchResult], query: str, max_pages: int, max_chars: int
 ) -> list[CrawledPage]:
+    """Crawl the top result pages with Crawl4AI."""
     fake = os.environ.get("WEBSEARCH_FAKE_CRAWL_JSON", "").strip()
     if fake:
         debug("using WEBSEARCH_FAKE_CRAWL_JSON instead of Crawl4AI")
@@ -354,6 +370,7 @@ async def crawl_with_crawl4ai(
 
 
 def build_llm_messages(query: str, pages: list[CrawledPage]) -> list[dict[str, str]]:
+    """The chat messages asking the model to answer ``query`` from the crawled pages."""
     context_blocks = []
     for idx, page in enumerate(pages, 1):
         if page.content:
@@ -386,6 +403,7 @@ def build_llm_messages(query: str, pages: list[CrawledPage]) -> list[dict[str, s
 
 
 def call_llm(query: str, pages: list[CrawledPage], timeout: float) -> str:
+    """Ask the configured chat model to answer ``query`` from the crawled pages."""
     base = os.environ.get("WEBSEARCH_LLM_BASE_URL", "").strip().rstrip("/")
     model = os.environ.get("WEBSEARCH_LLM_MODEL", "").strip()
     if not base:
@@ -445,6 +463,7 @@ def call_llm(query: str, pages: list[CrawledPage], timeout: float) -> str:
 
 
 def result_dict(query: str, answer: str, results: list[SearchResult], pages: list[CrawledPage]) -> dict[str, Any]:
+    """The search answer with its sources, results and pages."""
     return {
         "query": query,
         "answer": answer,
@@ -463,6 +482,7 @@ def run_web_search(
     max_chars_per_page: int | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:
+    """Search, crawl and answer one query."""
     seconds = timeout if timeout is not None else float(os.environ.get("WEBSEARCH_TIMEOUT_SECONDS", "60"))
     result_count = max_results if max_results is not None else env_int("WEBSEARCH_MAX_RESULTS", 5)
     page_count = max_pages if max_pages is not None else env_int("WEBSEARCH_MAX_PAGES", 3)
@@ -480,6 +500,7 @@ def run_web_search(
 
 
 def main() -> int:
+    """Command line: run one web search query."""
     parser = argparse.ArgumentParser(description="Run one WebSearch query via SerpAPI, Crawl4AI, and vLLM/OpenAI chat.")
     parser.add_argument("--query", required=True, help="Question/query to answer.")
     parser.add_argument("--env-file", help="Optional .env path. Defaults to ./env then judge/.env.")

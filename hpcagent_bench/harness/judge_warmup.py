@@ -116,6 +116,7 @@ class Warmer:
         self.active = 0
 
     def start(self, workers: int) -> list[threading.Thread]:
+        """Start ``workers`` warm-up threads."""
         self.active = max(1, workers)
         threads = [threading.Thread(target=self.work, name=f"warmup-{i}", daemon=True) for i in range(self.active)]
         for thread in threads:
@@ -128,6 +129,7 @@ class Warmer:
             return next((cell for cell in self.cells if cell.kernel not in self.refused), None)
 
     def work(self) -> None:
+        """Warm cells until none is left; the last worker publishes the warmed baselines."""
         while (cell := self.next_cell()) is not None:
             try:
                 self.warm(cell)
@@ -173,6 +175,7 @@ class Warmer:
 
     @staticmethod
     def publish(kind: Baseline) -> None:
+        """Publish the warm ``kind`` baseline; a failure is printed."""
         try:
             torch_baseline.publish_warm(kind)
         except RuntimeError as exc:

@@ -84,6 +84,7 @@ class Grid:
 
     @property
     def nranks(self) -> int:
+        """The number of ranks in the grid."""
         return math.prod(self.dims)
 
     def coords_of(self, rank: int) -> tuple[int, ...]:
@@ -91,9 +92,11 @@ class Grid:
         return tuple((rank // stride) % self.dims[i] for i, stride in enumerate(self.rank_strides()))
 
     def rank_of(self, coords: Sequence[int]) -> int:
+        """The rank at grid coordinates ``coords``."""
         return int(sum(c * s for c, s in zip(coords, self.rank_strides(), strict=False)))
 
     def rank_strides(self) -> list[int]:
+        """The row-major rank stride of each grid axis."""
         strides = [1] * len(self.dims)
         for i in range(len(self.dims) - 2, -1, -1):
             strides[i] = strides[i + 1] * self.dims[i + 1]
@@ -127,6 +130,7 @@ def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> 
 
 
 def axis_index_lists(shape: Sequence[int], dist: ArrayDist, grid: Grid, coords: Sequence[int]) -> list[np.ndarray]:
+    """The indices each axis of an array owns at grid ``coords``."""
     if len(dist.axes) != len(shape):
         raise ValueError(f"ArrayDist has {len(dist.axes)} axes but the array has {len(shape)} dimension(s)")
     return [owned_indices(n, ax, grid, coords) for n, ax in zip(shape, dist.axes, strict=False)]

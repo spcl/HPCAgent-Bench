@@ -2195,10 +2195,12 @@ class BaselineRace:
 
     @property
     def policy(self) -> str:
+        """The baseline policy stamp of the raced kinds."""
         return baseline_policy(self.kinds)
 
     @property
     def best_of(self) -> bool:
+        """Whether the race takes the best of several baselines."""
         return is_best_of(self.kinds)
 
     def load_kept(self) -> None:
@@ -4218,6 +4220,7 @@ class RankNotes:
     by_rank: dict[int, str] = field(default_factory=dict)
 
     def add(self, p: int, reason: str) -> None:
+        """Note ``reason`` for rank count ``p``."""
         self.flat.append(f"P={p}: {reason}")
         self.by_rank[p] = "; ".join(x for x in (self.by_rank.get(p), reason) if x)
 

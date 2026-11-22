@@ -55,6 +55,7 @@ def root() -> pathlib.Path:
 
 
 def package_root() -> pathlib.Path:
+    """The package directory."""
     return paths.ROOT / "hpcagent_bench"
 
 

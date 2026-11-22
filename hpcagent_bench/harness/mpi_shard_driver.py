@@ -1028,6 +1028,7 @@ def run(plan_path: str, out_path: str) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line: run one shard plan on every rank; any rank's failure aborts the job."""
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) != 2:
         sys.stderr.write(

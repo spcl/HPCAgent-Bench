@@ -404,6 +404,7 @@ class RecordingLoader(jinja2.ChoiceLoader):
     def get_source(
         self, environment: jinja2.Environment, template: str
     ) -> tuple[str, str | None, Callable[[], bool] | None]:
+        """The template's source with its extra blocks added before and after, its file name recorded."""
         source, filename, uptodate = self.aliased_source(environment, template)
         before = "".join(self.target_source(environment, extra)[0] for extra in self.blocks.before.get(template, ()))
         source = before + source
@@ -443,6 +444,7 @@ class RecordingLoader(jinja2.ChoiceLoader):
         name: str,
         globals: MutableMapping[str, object] | None = None,  # noqa: A002 -- the overridden signature
     ) -> jinja2.Template:
+        """Load the template through :meth:`get_source`."""
         # ChoiceLoader.load bypasses get_source; BaseLoader.load does not.
         return jinja2.BaseLoader.load(self, environment, name, globals)
 
