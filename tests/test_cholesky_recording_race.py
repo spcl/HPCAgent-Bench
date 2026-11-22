@@ -43,7 +43,7 @@ def run_framework_worker(
 ) -> None:
     """One rank's ``run-framework -b cholesky -f numba --canon-db <shared>``: every sibling records into the same
     fresh canon DB. The rank runs on ``cpus``, its quarter of the worker's share, as a Slurm rank runs on its own
-    cores: four ranks each sized to the whole share ran 4x oversubscribed past the 120 s wait (758901)."""
+    cores."""
     os.sched_setaffinity(0, cpus)
     os.environ.pop("SLURM_PROCID", None)
     os.environ.pop("HPCAGENT_BENCH_DB_SHARD", None)
@@ -58,12 +58,14 @@ def run_framework_worker(
         outcome.put(f"{type(exc).__name__}: {exc}")
 
 
-@pytest.mark.skipif(not osinfo.IS_LINUX, reason="fork start method is Linux-only")
+@pytest.mark.skipif(not osinfo.IS_LINUX, reason="sched_setaffinity is Linux-only")
 def test_cholesky_survives_four_ranks_recording_through_run_framework_sweep(tmp_path: pathlib.Path) -> None:
     """The production shape: four ranks each running ``run-framework -b cholesky -f numba`` against ONE shared,
     not-yet-existing canon DB must all record, and the file holds the one row they share."""
     db_path = str(tmp_path / "canon.db")
-    ctx = multiprocessing.get_context("fork")
+    # forkserver: ranks forked from a multithreaded xdist worker never reported in any sweep of 758901 or 758921,
+    # while the file alone on one worker's 12 cores passes in 44 s.
+    ctx = multiprocessing.get_context("forkserver")
     barrier = ctx.Barrier(4)
     outcome: multiprocessing.queues.Queue[str] = ctx.Queue()
     share = sorted(os.sched_getaffinity(0))

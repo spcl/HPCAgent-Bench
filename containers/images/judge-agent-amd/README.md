@@ -179,17 +179,59 @@ These are procedures, not image defects. Each one cost a verify or suite run on 
 repetition of five guarded and five honest grades (758886) alternates between runs of about 100 us and about
 250 us for both sources, while a credited cache hit would skip the loop entirely. The margin is 5x (702b462a1).
 
+### A worker outlived pytest-timeout while the clock held its child stopped
+
+- **Symptom.** In six of seven sweeps of rounds 4 to 10 a grade, often a `test_numba_reference_overrides` case
+  (`bdf_newton_krylov`, `channel_flow`), outlived pytest-timeout's 600 s. The kernel child was in state `T`, stopped
+  inside `sendto` by the clock's `F_SETSIG(SIGSTOP)`, and the worker waited in `run_forked` (758887).
+- **Cause.** No deadlock. The thread dump of 758889 shows the clock's DONE handler holding the candidate stopped
+  while `check_outputs` computes the expected outputs: `run_expected` calls `cached_reference`, which ran a torch
+  reference child sized to the whole node. With sixteen workers each such child ran about a hundred threads, and
+  one did not finish within 600 s. The judge sizes each child to its slot, so this was a test-suite effect.
+- **Fix.** `tests/worker_slot.py` also pins worker `gwN` to the N-th share of the cores, so every child it starts
+  sizes itself to that share (dff818949). A pytest child a test starts in its own process inherits the share and is
+  not pinned again: re-pinned, `bdf_newton_krylov`'s child ran on 18 of 288 cores and timed out (758901, aa06dfae3).
+  No sweep of 758901 hung.
+
+### jax processes sharing one GPU crashed and took the GPU with them
+
+- **Symptom.** With one GPU per worker, three of six sweeps of 758901 still failed every later GPU test of some
+  workers with `hipErrorLaunchFailure`, after a worker died in a jax test (mostly `lenet` and `conv2d`).
+- **Cause.** At `-n 16` four jax processes share each MI300A GPU. One of them segfaults in XLA's executable call
+  (`pxla` `__call__`), and the fault fails every process on that GPU (`hipCtxSetCurrent` 719). The jax tests alone
+  at `-n 16` reproduce it (758901); the judge never runs two jax grades on one GPU.
+- **Fix.** The jax reference tests share one `xdist_group`, so one worker runs them all (aa06dfae3). Their failure
+  message carries the run's printed tail, as the Triton test's does.
+
+### Forked ranks and pool workers of a multithreaded worker
+
+- `test_cholesky_recording_race.py` failed in every sweep of 758901 and 758921: none of its four ranks, forked from
+  the xdist worker, reported within 120 s. The file alone on one worker's 12 cores passes in 44 s. The ranks now
+  start from a `forkserver`, as the dace emit pool's do.
+- `test_dace_frontend_validity.py` lost a process-pool worker (758887, 758901): a child forked from a
+  multithreaded xdist worker segfaulted importing dace. The pool now starts its workers with `forkserver`.
+- `test_mpi_shard_driver_cpu_gloo_real_launch.py` failed four of five cases in the dedicated run of 758921 with
+  "mpirun/mpiexec timed out": every rank imports torch, which took past the 90 s limit while seven sibling steps
+  imported their own stacks. The file alone passes in 118 s serially and 28 s at `-n 8`. The limit is now 300 s.
+- `test_packaging.py::test_wheel_is_pip_installable_and_complete` imported `hpcagent_bench` from the checkout
+  because the probe script put it on `PYTHONPATH`; the probe no longer does. In 758921 it failed copying the
+  package: a sibling worker's `write_atomic` staging file was renamed away mid-copy. The copy now skips `.*.tmp`.
+
 ## Open at the time of writing
 
-- **A grading child left stopped by the parent's clock.** In the full sweep a
-  `test_numba_reference_overrides` case (`bdf_newton_krylov`, `channel_flow`) or another grade sometimes outlives
-  pytest-timeout's 600 s: six of seven sweeps of rounds 4 to 10 lost a worker this way. In 758887 the kernel child
-  is in state `T`, stopped inside `sendto` by the clock's `F_SETSIG(SIGSTOP)`, and the worker's main thread waits
-  in `run_forked`; nothing resumed it. Whether the parent's clock thread missed the DONE message or blocked while
-  handling it is not yet known (round 13 dumps every thread). Unlike the GPU cascade, this path is the judge's own.
-- **Two dedicated test files in the image.** `test_packaging.py::test_wheel_is_pip_installable_and_complete`
-  imports `hpcagent_bench` from the mounted checkout instead of the installed wheel, and
-  `test_dace_frontend_validity.py` lost a process-pool worker (758887). Both pass in CI.
+- **GPU faults with four test processes per GPU.** With jax on one worker, three of five sweeps of 758921 still
+  failed the later Triton reference tests of the workers on one or more GPUs, first with `hipErrorIllegalAddress`,
+  then `hipErrorLaunchFailure`. The Triton file alone at `-n 16` passes (758901), so the fault needs a mix of GPU
+  workloads on one device; which one faults first is not known. The judge runs one grade per GPU and no image
+  build runs the suite in parallel. Until the cause is known, run the GPU test files at `-n 4`, one worker per GPU.
+- **A stage that missed once.** `test_cpf_cache.py::test_check_and_stage_strip_the_kernel_names_the_render_and_verify_commands_strip`
+  failed once in 758901: `check` found the gemm form and `stage` exited 1 right after. The test now shows what
+  `stage` printed to stderr, which names the miss.
+- **The plugin harness venv in the image.** `test_plugin_harness.py::test_a_plugin_harness_venv_is_built_from_its_install_with_the_agent_on_its_path`
+  fails in every sweep of 758901 that reaches it: the harness venv can import `hpcagent_bench`. The file alone passes
+  in the image (758921) and in CI, so an earlier test of the sweep leaves something behind; no test writes
+  `PYTHONPATH`. The probe now names where `hpcagent_bench` was found.
+
 - **What the clock can resolve.** On the mi300 judge the parent's handshake costs a median 33 us with a 45 us spread,
   so a host call under about 2.3 ms is recorded `timing_short`. No graded host cell of the November regrade is that
   short; the suite's preset S tests are (docs/measurement_statistics.md, "What the clock can resolve"). A device
