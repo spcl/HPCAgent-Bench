@@ -124,7 +124,11 @@ class JudgeAnswer(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid", ser_json_inf_nan="constants")
 
     def to_json(self) -> dict[str, object]:
-        """The answer as the JSON object sent: the fields it was built with, nothing else."""
+        """
+        Serialize the answer as the JSON object sent.
+
+        :return: the fields the answer was built with, nothing else.
+        """
         return self.model_dump(mode="json", exclude_unset=True)
 
 

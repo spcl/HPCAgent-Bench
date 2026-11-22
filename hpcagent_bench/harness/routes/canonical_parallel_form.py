@@ -32,7 +32,11 @@ def canonical_parallel_form_root() -> pathlib.Path | None:
 
 
 def canonical_parallel_form_target() -> cpf_cache.Target:
-    """The device this setup's forms are rendered for: hip/cuda -> gpu, else the record device, else cpu."""
+    """
+    Pick the device this setup's canonical parallel forms are rendered for.
+
+    :return: ``GPU`` for a HIP or CUDA language, else the device the setup record declares, else ``CPU``.
+    """
     language = config.env_value("LANGUAGE") or ""
     if language:
         return cpf_cache.Target.GPU if language in [lang.text for lang in GPU_LANGUAGES] else cpf_cache.Target.CPU

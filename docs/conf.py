@@ -11,7 +11,8 @@ project = "HPCAgent-Bench"
 copyright = "2026 ETH Zurich and the HPCAgent-Bench authors"  # noqa: A001
 author = "SPCL @ ETH Zurich"
 
-extensions = ["myst_parser", "sphinx_rtd_theme"]
+extensions = ["myst_parser", "sphinx_rtd_theme", "sphinx.ext.autodoc"]
+autodoc_member_order = "bysource"
 myst_heading_anchors = 4
 exclude_patterns = ["_build"]
 html_theme = "sphinx_rtd_theme"

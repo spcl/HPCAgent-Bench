@@ -145,9 +145,15 @@ def flat_layout_refusal() -> str:
 
 
 def agent_root(episode_id: str | None) -> pathlib.Path:
-    """The folder ``episode_id`` writes and the judge reads its files and libraries from: its own folder in a
-    per-agent-folder run, else the shared root (``ValueError`` under :func:`flat_layout_refusal`). Resolve it once
-    per request; it re-reads the folder log."""
+    """
+    Find the folder an episode writes and the judge reads its files and libraries from.
+
+    Resolve it once per request; each call re-reads the folder log.
+
+    :param episode_id: the episode, or None.
+    :return: the episode's own folder in a per-agent-folder run, else the shared root.
+    :raises ValueError: if the episode has no folder and :func:`flat_layout_refusal` refuses the shared root.
+    """
     folder = episode_folder(episode_id)
     if folder is None and flat_layout_refusal():
         raise ValueError(flat_layout_refusal())

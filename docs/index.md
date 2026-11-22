@@ -121,3 +121,10 @@ serving/glm53
 serving/kimi27sglang
 serving/oss120b
 ```
+
+```{toctree}
+:caption: API reference
+:maxdepth: 1
+
+api/index
+```

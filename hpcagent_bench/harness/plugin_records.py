@@ -47,8 +47,16 @@ class PluginRecord(pydantic.BaseModel):
 
 
 def keep(folder: pathlib.Path, plugin: str, schema_version: int, data: pydantic.JsonValue) -> pathlib.Path:
-    """Write ``plugin``'s record into the episode folder ``folder``, replacing an earlier one; returns its path. A
-    record over :data:`CAP_BYTES` or an unusable plugin name is a ``ValueError``."""
+    """
+    Write a plugin's record into an episode folder, replacing an earlier one.
+
+    :param folder: the episode folder.
+    :param plugin: the plugin name, which names the record file.
+    :param schema_version: the version of the plugin's record schema.
+    :param data: the record's JSON data.
+    :return: the path of the written record.
+    :raises ValueError: if ``plugin`` cannot name a file or the record is over :data:`CAP_BYTES`.
+    """
     if not NAME.fullmatch(plugin):
         raise ValueError(f"plugin name {plugin!r} cannot name a record file")
     text = PluginRecord(schema_version=schema_version, data=data).model_dump_json()

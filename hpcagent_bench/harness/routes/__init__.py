@@ -37,13 +37,32 @@ class Judge(Protocol):
 
     cfg: RunConfig
 
-    def reply(self, code: int, payload: JudgeAnswer) -> None: ...
+    def reply(self, code: int, payload: JudgeAnswer) -> None:
+        """
+        Send the answer to this request.
 
-    def device_slot(self, terminal: bool = False) -> contextlib.AbstractContextManager[DeviceSlot | None]: ...
+        :param code: the HTTP status code.
+        :param payload: the answer, sent as its JSON object.
+        """
+        ...
+
+    def device_slot(self, terminal: bool = False) -> contextlib.AbstractContextManager[DeviceSlot | None]:
+        """
+        Hold one device slot of the judge node for a timed section.
+
+        :param terminal: schedule the section at the priority of a submission (a route's final, timed work).
+        :return: a context manager yielding the slot, or None if the client left while waiting.
+        """
+        ...
 
     def client_left(self) -> contextlib.AbstractContextManager[threading.Event]:
-        """The event set once this request's client left, watched while the block runs: what a route's own long
-        work stops on (the judge itself watches only its graded routes)."""
+        """
+        Watch for this request's client leaving while the block runs.
+
+        A route's own long work stops on the event; the judge itself watches only its graded routes.
+
+        :return: a context manager yielding the event, set once the client left.
+        """
         ...
 
 
@@ -80,13 +99,27 @@ ROUTES: dict[str, Route] = {}
 
 
 def first_param(qs: Mapping[str, list[str]], name: str) -> str | None:
-    """The first value of query parameter ``name``, or None."""
+    """
+    Read one query parameter.
+
+    :param qs: the parsed query string.
+    :param name: the parameter name.
+    :return: the parameter's first value, or None if it is absent.
+    """
     values = qs.get(name)
     return values[0] if values else None
 
 
 def route(name: str, *, methods: Iterable[HTTPMethod] = (HTTPMethod.GET,)) -> Callable[[Handler], Handler]:
-    """Register the decorated handler for ``methods`` on ``/<name>/...``; a reserved or taken name is refused."""
+    """
+    Register the decorated handler for ``methods`` on ``/<name>/...``.
+
+    :param name: the route's first path segment.
+    :param methods: the HTTP methods the handler answers; only ``GET`` and ``POST`` are served.
+    :return: the decorator, which returns the handler unchanged.
+    :raises ValueError: if ``methods`` holds another method, or (at decoration) ``name`` is reserved or registered
+                        by another module.
+    """
     answered = frozenset(methods)
     if not answered <= {HTTPMethod.GET, HTTPMethod.POST}:
         raise ValueError(
@@ -94,6 +127,7 @@ def route(name: str, *, methods: Iterable[HTTPMethod] = (HTTPMethod.GET,)) -> Ca
         )
 
     def register(handler: Handler) -> Handler:
+        """Add ``handler`` to :data:`ROUTES` under ``name``."""
         if name in RESERVED:
             raise ValueError(f"route {name!r} of {handler.__module__} is one the judge answers itself")
         existing = ROUTES.get(name)
@@ -108,15 +142,25 @@ def route(name: str, *, methods: Iterable[HTTPMethod] = (HTTPMethod.GET,)) -> Ca
 
 
 def load() -> dict[str, Route]:
-    """Import every route module of this package (each registers itself) and return :data:`ROUTES`."""
+    """
+    Import every route module of this package; each registers itself.
+
+    :return: :data:`ROUTES`.
+    """
     for module in pkgutil.iter_modules(__path__):
         importlib.import_module(f"{__name__}.{module.name}")
     return ROUTES
 
 
 class EpisodeStore[State]:
-    """Per-episode state of a stateful route, built on first call and dropped after ``idle_seconds`` unused.
-    Thread-safe."""
+    """
+    Per-episode state of a stateful route, built on first use and dropped after ``idle_seconds`` unused.
+
+    Thread-safe.
+
+    :param build: builds the state of a new episode from its id.
+    :param idle_seconds: how long an unused state is kept.
+    """
 
     __slots__ = ("build", "idle_seconds", "lock", "states")
 
@@ -128,7 +172,13 @@ class EpisodeStore[State]:
         self.states: dict[str, tuple[State, float]] = {}
 
     def get(self, episode_id: str) -> State:
-        """``episode_id``'s state, built on first use; an empty id is refused, so no state is shared by accident."""
+        """
+        Return an episode's state, built on first use.
+
+        :param episode_id: the episode the request came from.
+        :return: the episode's state.
+        :raises ValueError: if ``episode_id`` is empty, so no state is shared by accident.
+        """
         if not episode_id:
             raise ValueError("a stateful route serves an episode, and this request named none")
         with self.lock:
@@ -147,6 +197,10 @@ class EpisodeStore[State]:
             return state
 
     def drop(self, episode_id: str) -> None:
-        """Forget ``episode_id``'s state (a route whose episode said it is done)."""
+        """
+        Forget an episode's state, once the episode says it is done.
+
+        :param episode_id: the episode whose state is dropped; an unknown id is ignored.
+        """
         with self.lock:
             self.states.pop(episode_id, None)
