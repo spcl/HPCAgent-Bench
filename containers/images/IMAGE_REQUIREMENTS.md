@@ -36,10 +36,9 @@ AMD and CUDA stay separate images: different base, architecture, compiler (`hipc
 build and library backends. Every judge/agent image uses its base's Python 3.12 (no second
 interpreter). Python installs only through `uv sync --frozen` from `uv.lock`, so numpy, scipy,
 pandas and astunparse are the versions the lock (and the host venv) grades with, recorded in
-`/usr/local/share/image-provenance`. The AMD and CPU images sync `--exact` into their own `/opt/venv`, which also
-removes the base's torch and triton; the CUDA image syncs `--inexact` into the NGC base's system Python, so NGC
-packages outside the lock stay importable through the launch venv's `.pth`. Moving the CUDA image to its own venv and
-`--exact` is deferred past v1.0: `--exact` on NGC's system Python would uninstall NGC's own tools. The workspace member `agent/` is linked at `/opt/hpcagent-bench/agent`. The host venv and CI
+`/usr/local/share/image-provenance`. Every image syncs `--exact` into its own `/opt/venv`: on AMD that also removes
+the base's torch and triton, and on CUDA it keeps the NGC base's system Python, and the packages NGC ships outside
+the lock, off the launch venv's `.pth` (the CUDA image's next build). The workspace member `agent/` is linked at `/opt/hpcagent-bench/agent`. The host venv and CI
 run a newer Python: a result that differs between host and container can be the interpreter.
 
 ## Toolchain (every judge/agent image)
@@ -144,9 +143,11 @@ in a prefix the Dockerfile controls (a copy in the image would be found first).
   must match the image's CUDA major.
 * `judge-agent-*` build a providerless libfabric only for MPICH to link against, and delete it
   before the image ships: bound by RPATH it would win over the node's and abort `MPI_Init`.
-* `judge-agent-cpu` EDFs: `com.hooks.cxi.enabled` and the GH200 EDFs' `FI_CXI_*` settings. Not yet verified: the
-  image's MPICH links spack's libfabric in `/opt/view`, and a two-node Daint run must show provider `cxi`
-  (`mpi_gpu_check.sh`) before a multi-node grade relies on this image.
+* `judge-agent-cpu` EDFs: `com.hooks.cxi.enabled` and the GH200 EDFs' `FI_CXI_*` settings, which do NOT reach cxi
+  yet. Measured on Daint (job 5428698, 2 nodes x 1 rank): provider `sockets` with and without the hook, because
+  the image's `libmpi.so` RPATHs spack's own libfabric 2.6.0 (no cxi provider), which the hook cannot replace.
+  A multi-node grade on this image runs over TCP until the image links a libfabric the hook replaces, as the GPU
+  images do (their providerless build, above).
 * `FI_PROVIDER=cxi` goes on inference EDFs only; MPICH inherits it and aborts.
 * A missing `aws_ofi_nccl` hook does not fail: NCCL/RCCL fall back to TCP sockets over `hsn*` and are
   merely slow. Multi-node checks assert `NET/OFI` in the log, never just a correct result.
@@ -258,5 +259,4 @@ These differ between the images on purpose; aligning them would break the platfo
 | `MPIR_CVAR_ENABLE_GPU` and a stub `libcuda` at build time | CUDA only | the build machine has no CUDA driver |
 | `FI_MR_CACHE_MONITOR` | `disabled` on AMD, `userfaultfd` on CUDA, unset on CPU | the memory-registration monitor each platform's fabric stack supports |
 | netstack hook annotation | AMD only | a beverin site setting: the hook's host mode does not land there (see the AMD EDF) |
-| `uv sync --inexact` into the system Python | CUDA only | the NGC base's own tools live there (deferred, above) |
 | hwloc `+pci` | required in the AMD and CUDA spack configs, `^hwloc +pci` in the CPU MPICH spec | MPICH finds the cxi NIC by its PCI bus id; every EDF also preloads the distro `libhwloc.so.15` |
