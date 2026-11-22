@@ -222,8 +222,8 @@ repetition of five guarded and five honest grades (758886) alternates between ru
 - **GPU faults with four test processes per GPU.** With jax on one worker, three of five sweeps of 758921 still
   failed the later Triton reference tests of the workers on one or more GPUs, first with `hipErrorIllegalAddress`,
   then `hipErrorLaunchFailure`. The Triton file alone at `-n 16` passes (758901), so the fault needs a mix of GPU
-  workloads on one device; which one faults first is not known. The judge runs one grade per GPU and no image
-  build runs the suite in parallel. Until the cause is known, run the GPU test files at `-n 4`, one worker per GPU.
+  workloads on one device; which one faults first is not known. The Triton references now share one `xdist_group`
+  as the jax ones do. The judge runs one grade per GPU, and no image build runs the suite in parallel.
 - **A stage that missed once.** `test_cpf_cache.py::test_check_and_stage_strip_the_kernel_names_the_render_and_verify_commands_strip`
   failed once in 758901: `check` found the gemm form and `stage` exited 1 right after. The test now shows what
   `stage` printed to stderr, which names the miss.

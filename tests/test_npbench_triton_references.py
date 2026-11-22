@@ -165,6 +165,9 @@ def test_compute_tries_its_largest_blocks_first() -> None:
     assert blocks == sorted(blocks, reverse=True)
 
 
+# One worker runs every Triton reference, as one worker runs the jax ones: with four test processes per MI300A GPU
+# a Triton run hit hipErrorIllegalAddress and every later GPU test on that device failed (758921).
+@pytest.mark.xdist_group(name="triton_gpu")
 @pytest.mark.parametrize(
     ("kernel", "preset"), [(kernel, "S") for kernel in NPBENCH_KERNELS] + [(kernel, "M") for kernel in AMPLIFIES_ULPS]
 )
