@@ -118,6 +118,7 @@ class FftInline(ast.NodeTransformer):
         self._ctr = 0
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Inline an ``np.fft`` assignment as a DFT loop nest."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
@@ -213,6 +214,7 @@ class SubstituteFftCalls(ast.NodeTransformer):
         self.visitor = visitor
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
+        """Replace an accepted ``np.fft`` call with the name the visitor returns."""
         self.generic_visit(node)
         return self.visitor(node) or node
 

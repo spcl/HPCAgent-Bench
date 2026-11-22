@@ -46,6 +46,7 @@ class SelfAssignDropper(ast.NodeTransformer):
         self.keep = keep
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
+        """Drop a scalar ``X = X``."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
@@ -161,12 +162,14 @@ class ForwardSubstituteInvariantScalars(ast.NodeTransformer):
         return self
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
+        """Drop the substituted assignment."""
         if node is self.stmt_:
             return None
         self.generic_visit(node)
         return node
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace a load of the substituted scalar with its expression."""
         if self.expr_ is not None and node.id == self.name_ and isinstance(node.ctx, ast.Load):
             return copy.deepcopy(self.expr_)
         return node

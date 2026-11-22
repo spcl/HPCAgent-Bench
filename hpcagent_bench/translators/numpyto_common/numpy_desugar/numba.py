@@ -190,6 +190,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         return None
 
     def combine(self, nodes: Sequence[ast.expr]) -> list[str] | None:
+        """The broadcast extents of ``nodes``, or None if one is unknown."""
         out: list[str] = []
         for n in nodes:
             ext = self.extents_(n)
@@ -276,6 +277,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         return False
 
     def peel(self, expr: ast.expr, idx: str, rank: int) -> ast.expr | None:
+        """``expr`` at index ``idx`` of its outermost axis, or None if it cannot be peeled."""
         ext = self.extents_(expr)
         if ext is None or len(ext) > rank:
             return None
@@ -365,6 +367,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         return ivars, row, probe, checks
 
     def rebuild(self, expr: ast.AST, peeled: list[ast.expr]) -> ast.expr:
+        """``expr`` rebuilt with its peeled operands."""
         if isinstance(expr, ast.BinOp):
             return ast.BinOp(left=peeled[0], op=expr.op, right=peeled[1])
         if isinstance(expr, ast.Compare):
@@ -376,6 +379,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         raise TypeError(f"cannot rebuild {type(expr).__name__}")
 
     def peel_subscript(self, sub: ast.Subscript, idx: str) -> ast.expr | None:
+        """A subscript at index ``idx`` of its outermost axis, or None."""
         axes = self.axes_(sub)
         if not axes:
             return None
@@ -462,6 +466,7 @@ class OuterBroadcastPeel(RankedRewritePass):
                 self.changed = True
 
     def replace(self, node: ast.AST, i: int, operand: ast.expr) -> None:
+        """Replace operand ``i`` of ``node`` in place."""
         if isinstance(node, ast.BinOp):
             node.left, node.right = (operand, node.right) if i == 0 else (node.left, operand)
         elif isinstance(node, ast.Compare):
@@ -537,6 +542,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         return [*binds, *peeled]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Peel an outer-product broadcast assignment into a loop over its outermost axis."""
         if len(node.targets) != 1:
             return node
         self.drop_newaxes(node.value)
@@ -634,12 +640,14 @@ class SliceObjectInline(ast.NodeTransformer):
             self.slices[node.targets[0].id] = ast.Slice(lower=lower, upper=upper, step=step)
 
     def entry(self, e: ast.expr) -> ast.expr:
+        """The slice a slice-object name stands for, or ``e`` unchanged."""
         if isinstance(e, ast.Name) and isinstance(e.ctx, ast.Load) and e.id in self.slices:
             self.changed = True
             return copy.deepcopy(self.slices[e.id])
         return e
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Inline the slice objects of a subscript."""
         self.generic_visit(node)
         if isinstance(node.slice, ast.Tuple):
             node.slice.elts = [self.entry(e) for e in node.slice.elts]
@@ -679,6 +687,7 @@ def name_stores(node: ast.AST) -> list[ast.Name]:
 
 
 def stored_names(node: ast.AST) -> set[str]:
+    """The names stored under ``node``."""
     return {n.id for n in name_stores(node)}
 
 
@@ -753,6 +762,7 @@ class NonePlaceholderDrop(ast.NodeTransformer):
         self.names = (placeholders & rebound) - unsafe - params
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        """Drop the replaced targets of a None placeholder assignment."""
         if not is_none_assign(node):
             return node
         kept = [t for t in node.targets if not (isinstance(t, ast.Name) and t.id in self.names)]
@@ -775,6 +785,7 @@ class ReshapeFortranOrderInline(RewritePass):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite a Fortran-order reshape as a transpose, C-order reshape and transpose."""
         self.generic_visit(node)
         f = node.func
         if not (isinstance(f, ast.Attribute) and f.attr == "reshape" and node.args and len(node.keywords) == 1):
@@ -808,6 +819,7 @@ class BroadcastAugAssignSpellOut(RankedRewritePass):
     __slots__ = ()
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+        """Spell out a broadcasting augmented assignment as a full assignment."""
         target = node.target
         if not isinstance(target, (ast.Name, ast.Subscript)) or isinstance(node.op, ast.MatMult):
             return node
@@ -842,6 +854,7 @@ class RollInline(RankedRewritePass):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Inline an ``np.roll`` with a literal axis as two concatenated pieces."""
         self.generic_visit(node)
         if numpy_call_attr(node) != "roll" or not is_numpy_module(
             node.func.value if isinstance(node.func, ast.Attribute) else node.func
@@ -886,6 +899,7 @@ class NumbaDtypeFixups(ast.NodeTransformer):
         self.changed = False
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Respell a bool dtype argument of a NumPy call as ``np.bool_``."""
         self.generic_visit(node)
         attr = numpy_call_attr(node)
         if attr is None:
@@ -902,6 +916,7 @@ class NumbaDtypeFixups(ast.NodeTransformer):
         return node
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Cast the float operand of a mixed float and complex matmul to complex."""
         self.generic_visit(node)
         if not isinstance(node.op, ast.MatMult):
             return node
@@ -935,6 +950,7 @@ class NdimFold(ast.NodeTransformer):
         self.changed = False
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        """Fold ``x.ndim`` of a parameter with a known rank."""
         self.generic_visit(node)
         if node.attr == "ndim" and isinstance(node.value, ast.Name) and node.value.id in self.known:
             self.changed = True
@@ -942,6 +958,7 @@ class NdimFold(ast.NodeTransformer):
         return node
 
     def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        """Fold an equality test of two integer literals."""
         self.generic_visit(node)
         if len(node.ops) != 1 or not isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
             return node
@@ -954,6 +971,7 @@ class NdimFold(ast.NodeTransformer):
         return ast.copy_location(ast.Constant(value=equal if isinstance(node.ops[0], ast.Eq) else not equal), node)
 
     def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        """Replace a conditional expression on a boolean literal with its live branch."""
         self.generic_visit(node)
         if isinstance(node.test, ast.Constant) and isinstance(node.test.value, bool):
             self.changed = True

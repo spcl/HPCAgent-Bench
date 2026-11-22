@@ -222,6 +222,7 @@ class InlineTupleHelperCalls(ast.NodeTransformer):
         self.templates = templates
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Replace a tuple helper call with its result template, the arguments substituted."""
         self.generic_visit(node)
         template = self.templates.get(id(node))
         if template is None:

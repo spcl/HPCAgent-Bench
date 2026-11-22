@@ -430,6 +430,7 @@ def lstsq_index2d(name: str, i: ast.expr, j: ast.expr, base: list[ast.expr | Non
 
 
 def lstsq_index1d(name: str, i: ast.expr, base: list[ast.expr | None] | None) -> ast.Subscript:
+    """A 1-D read of ``name`` at ``i``, shifted by the base offset."""
     slot = shifted(i, base[0]) if base is not None else i
     return ast.Subscript(value=name_(name), slice=slot, ctx=ast.Load())
 
@@ -676,17 +677,21 @@ class GaussJordanSide:
         self.is_2d = is_2d
 
     def iterator(self, tag: str) -> ast.Name:
+        """The loop iterator of ``tag``."""
         return name_(f"{self.prefix}_{tag}")
 
     def scratch(self, tag: str) -> ast.Name:
+        """The scratch variable of ``tag``, as a store target."""
         return store_(f"{self.prefix}_{tag}")
 
     def cell(self, row: str, col: str = "c", ctx: ast.expr_context | None = None) -> ast.Subscript:
+        """The matrix cell at ``row`` and ``col``."""
         index = self.iterator(row)
         slot = ast.Tuple(elts=[index, self.iterator(col)], ctx=ast.Load()) if self.is_2d else index
         return ast.Subscript(value=name_(self.array), slice=slot, ctx=ctx or ast.Load())
 
     def store(self, row: str, col: str = "c") -> ast.Subscript:
+        """The matrix cell at ``row`` and ``col``, as a store target."""
         return self.cell(row, col, ast.Store())
 
     def swap(self) -> list[ast.stmt]:

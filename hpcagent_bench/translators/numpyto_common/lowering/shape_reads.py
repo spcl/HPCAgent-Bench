@@ -78,6 +78,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
         self.arrays_shapes = arrays_shapes
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Replace ``arr.shape[k]`` with its shape symbol."""
         # Check the ``arr.shape[k]`` pattern BEFORE descending into
         # the children -- otherwise ``visit_Attribute`` would rewrite
         # the ``arr.shape`` inner node to a Tuple and the pattern
@@ -114,6 +115,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
         return node
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Replace ``len(arr)`` with the first extent's symbol."""
         self.generic_visit(node)
         # ``len(arr)`` -> the array's FIRST-dim size symbol (numpy ``len`` is
         # ``shape[0]``). C / C++ have no array ``len`` and Fortran's ``len`` is
@@ -133,6 +135,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
         return node
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        """Replace a bare ``.shape`` with the tuple of its extents."""
         self.generic_visit(node)
         if not isinstance(node.value, ast.Name):
             # Bare ``<array-expr>.shape`` on a Subscript or CALL base (``Y.shape`` where
@@ -335,28 +338,34 @@ class ResolveArrShape(ast.NodeTransformer):
         return ast.unparse(tree)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        """Resolve the shape reads of the function body."""
         node.body = self.visit_stmt_list(node.body)
         return node
 
     def visit_For(self, node: ast.For) -> ast.AST:
+        """Resolve the shape reads of a for loop."""
         node.iter = self.visit(node.iter)
         node.body = self.visit_stmt_list(node.body)
         node.orelse = self.visit_stmt_list(node.orelse)
         return node
 
     def visit_If(self, node: ast.If) -> ast.AST:
+        """Resolve the shape reads of an ``if``."""
         return self.visit_conditional(node)
 
     def visit_While(self, node: ast.While) -> ast.AST:
+        """Resolve the shape reads of a while loop."""
         return self.visit_conditional(node)
 
     def visit_conditional(self, node: ast.If | ast.While) -> ast.AST:
+        """Resolve the shape reads of a conditional's test and bodies."""
         node.test = self.visit(node.test)
         node.body = self.visit_stmt_list(node.body)
         node.orelse = self.visit_stmt_list(node.orelse)
         return node
 
     def visit_stmt_list(self, node: Sequence[ast.stmt]) -> list[ast.stmt]:
+        """Resolve the shape reads of a statement list, tracking the shapes it rebinds."""
         out: list[ast.stmt] = []
         for stmt in node:
             new_stmt = self.visit(stmt)
@@ -454,6 +463,7 @@ class ResolveArrShape(ast.NodeTransformer):
         return False
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Replace a constant-index ``.shape`` read of a known array with its symbol."""
         self.generic_visit(node)
         if not (
             isinstance(node.value, ast.Attribute)

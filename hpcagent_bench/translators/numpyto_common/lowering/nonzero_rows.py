@@ -70,6 +70,7 @@ class RowRewriter:
         self.locals_: dict[str, int] = {}
 
     def statement(self, stmt: ast.stmt) -> ast.stmt:
+        """Rewrite one statement for the selected row."""
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
             value, rank = self.expr(stmt.value)
             if rank is None:
@@ -124,6 +125,7 @@ class RowRewriter:
         raise RowRefusal(f"expression {type(node).__name__} over the selected rows")
 
     def subscript(self, node: ast.Subscript) -> tuple[ast.expr, int | None]:
+        """Rewrite a subscript for the selected row, with its row rank."""
         index = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
         if isinstance(index[0], ast.Name) and index[0].id == self.rows:
             base, base_rank = self.expr(node.value)
@@ -148,6 +150,7 @@ class RowRewriter:
         raise RowRefusal(f"{ast.unparse(node)}: an index into a value over the selected rows")
 
     def binop(self, node: ast.BinOp) -> tuple[ast.expr, int | None]:
+        """Rewrite a binary operation for the selected row; a contraction over the rows is refused."""
         left, left_rank = self.expr(node.left)
         right, right_rank = self.expr(node.right)
         if isinstance(node.op, ast.MatMult):
@@ -180,6 +183,7 @@ class RowRewriter:
         return top
 
     def call(self, node: ast.Call) -> tuple[ast.expr, int | None]:
+        """Rewrite a call for the selected row; a keyword call over the rows is refused."""
         pairs = [self.expr(a) for a in node.args]
         ranks = [pair[1] for pair in pairs]
         if node.keywords:
@@ -196,6 +200,7 @@ class RowRewriter:
         return call, self.elementwise(node, list(zip(node.args, ranks, strict=True)))
 
     def invariant(self, node: ast.expr) -> ast.expr:
+        """Copy an index that must not depend on the selected rows; one that does is refused."""
         new, rank = self.expr(node) if not isinstance(node, ast.Slice) else (copy.deepcopy(node), None)
         if rank is not None:
             raise RowRefusal(f"{ast.unparse(node)}: an index that depends on the selected rows")
@@ -203,10 +208,12 @@ class RowRewriter:
 
     @staticmethod
     def is_full_slice(node: ast.expr) -> bool:
+        """Whether ``node`` is a bare ``:``."""
         return isinstance(node, ast.Slice) and node.lower is None and node.upper is None and node.step is None
 
     @staticmethod
     def is_newaxis(node: ast.expr) -> bool:
+        """Whether ``node`` is ``None`` or ``np.newaxis``."""
         return (isinstance(node, ast.Constant) and node.value is None) or (
             isinstance(node, ast.Attribute) and node.attr == "newaxis"
         )
@@ -227,6 +234,7 @@ class NonzeroRowsToGuardedLoop:
         self.counter = 0
 
     def run(self) -> None:
+        """Rewrite every statement list of the tree."""
         for node in list(ast.walk(self.tree)):
             for field, block in ast.iter_fields(node):
                 if field not in ("body", "orelse"):
@@ -235,6 +243,7 @@ class NonzeroRowsToGuardedLoop:
                     set_field(node, field, self.block(block))
 
     def block(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+        """Rewrite the first nonzero-row selection of a statement list and the statements after it."""
         for at, stmt in enumerate(stmts):
             if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
                 continue
@@ -247,6 +256,7 @@ class NonzeroRowsToGuardedLoop:
         return stmts
 
     def loop(self, rows: str, mask: ast.expr, after: list[ast.stmt]) -> list[ast.stmt]:
+        """The guarded row loop that replaces a selection and the statements after it."""
         self.counter += 1
         held, row = f"__nzm{self.counter}", f"__nzr{self.counter}"
         rewriter = RowRewriter(rows, row, self.ranks)

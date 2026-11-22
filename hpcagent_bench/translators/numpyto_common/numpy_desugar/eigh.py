@@ -377,6 +377,7 @@ class EighLoopRewriter(ast.NodeTransformer):
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Rewrite an ``eigh`` or ``eigvalsh`` assignment into the eigensolver loops."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
@@ -422,6 +423,7 @@ class EighCallHoister(ast.NodeTransformer):
         self._ctr = 0
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Hoist a nested ``eigh`` call into a temporary."""
         self.generic_visit(node)
         if eigh_call_kind(node, self.alias_names) is None:
             return node
@@ -431,6 +433,7 @@ class EighCallHoister(ast.NodeTransformer):
         return name_(name)
 
     def flush(self, node: ast.stmt) -> ast.AST | list[ast.stmt]:
+        """Visit ``node`` and emit its hoisted eigh calls before it; a direct eigh assignment is left alone."""
         # Descending into a direct eigh-assign would hoist its own RHS and hide it from the rewriter.
         if is_eigh_assign_target(node, self.alias_names):
             return node
@@ -447,6 +450,7 @@ class EighCallHoister(ast.NodeTransformer):
         return [*pre, node]
 
     def visit_stmts(self, node: Sequence[ast.stmt]) -> list[ast.stmt]:
+        """Visit a statement list, splicing the hoists."""
         out: list[ast.stmt] = []
         for s in node:
             r = self.visit(s)
@@ -456,6 +460,7 @@ class EighCallHoister(ast.NodeTransformer):
         return out
 
     def visit_While(self, node: ast.While) -> ast.AST:
+        """Hoist out of a while loop's bodies, not its test."""
         # ``node.test`` stays unvisited: a temp hoisted before the loop would freeze a value
         # the condition recomputes each iteration.
         node.body = self.visit_stmts(node.body)
@@ -463,21 +468,27 @@ class EighCallHoister(ast.NodeTransformer):
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Hoist out of an assignment."""
         return self.flush(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        """Hoist out of an augmented assignment."""
         return self.flush(node)
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST | list[ast.stmt]:
+        """Hoist out of an expression statement."""
         return self.flush(node)
 
     def visit_Return(self, node: ast.Return) -> ast.AST | list[ast.stmt]:
+        """Hoist out of a return."""
         return self.flush(node)
 
     def visit_If(self, node: ast.If) -> ast.AST | list[ast.stmt]:
+        """Hoist out of an ``if``."""
         return self.flush(node)
 
     def visit_For(self, node: ast.For) -> ast.AST | list[ast.stmt]:
+        """Hoist out of a for loop."""
         return self.flush(node)
 
 
@@ -509,6 +520,7 @@ class EighInline(ast.NodeTransformer):
         self._ctr = 0
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Lower an ``eigh`` or ``eigvalsh`` assignment."""
         if len(node.targets) != 1:
             return node
         hit = eigh_call_kind(node.value, self.alias_names)
@@ -545,10 +557,13 @@ class EighInline(ast.NodeTransformer):
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+        """Leave an augmented assignment unchanged."""
         return node
 
     def visit_Return(self, node: ast.Return) -> ast.AST:
+        """Leave a return unchanged."""
         return node
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
+        """Leave an expression statement unchanged."""
         return node

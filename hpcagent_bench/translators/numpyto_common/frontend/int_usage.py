@@ -50,6 +50,7 @@ BITWISE_OPS = (ast.BitOr, ast.BitAnd, ast.BitXor, ast.LShift, ast.RShift)
 
 
 def index_slots(node: ast.Subscript) -> list[ast.expr]:
+    """The index expressions of a subscript."""
     sl = node.slice
     return sl.elts if isinstance(sl, ast.Tuple) else [sl]
 
@@ -63,6 +64,7 @@ class IntUses:
         self.names: set[str] = set()
 
     def collect(self, node: ast.expr | None) -> None:
+        """Collect the names ``node`` feeds into an integer position."""
         if node is None:
             return
         if isinstance(node, ast.Name):

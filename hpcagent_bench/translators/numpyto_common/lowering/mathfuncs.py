@@ -173,6 +173,7 @@ class MathRewriter(ast.NodeTransformer):
         self.defer_array_capable = defer_array_capable
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
+        """Rewrite a ``math`` or NumPy scalar math call as the bare function."""
         self.generic_visit(node)
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             mod = node.func.value.id

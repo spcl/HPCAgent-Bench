@@ -166,9 +166,11 @@ class Env:
         self.kinds: dict[str, str] = dict(kinds or {})
 
     def copy(self) -> "Env":
+        """A copy for one branch."""
         return Env(self.tuples, self.bound, self.kinds)
 
     def invalidate(self, names: OrderedSet | list[str]) -> None:
+        """Forget ``names`` and every recorded tuple that reads one."""
         for name in names:
             self.tuples.pop(name, None)
             self.kinds.pop(name, None)
@@ -262,6 +264,7 @@ def exact_tuple(node: ast.expr) -> tuple[object, ...] | None:
 
 
 def static_bool(node: ast.expr) -> bool | None:
+    """The boolean value of a constant expression, or None."""
     v = const_value(node)
     return None if v is NO_VALUE else bool(v)
 
@@ -493,6 +496,7 @@ class TupleDesugar:
 
     # -- expression folding ------------------------------------------------- #
     def fold(self, node: ast.expr, env: Env) -> ast.expr:
+        """Fold an expression against ``env``."""
         folded = Folder(self, env).visit(node)
         if not isinstance(folded, ast.expr):
             raise TypeError(f"folding an expression yields an expression, got {type(folded).__name__}")
@@ -500,12 +504,14 @@ class TupleDesugar:
 
     # -- statements --------------------------------------------------------- #
     def run(self, stmts: Sequence[ast.stmt], env: Env, linear: bool = True) -> list[ast.stmt]:
+        """Interpret a statement list against ``env``."""
         out: list[ast.stmt] = []
         for stmt in stmts:
             out.extend(self.statement(stmt, env, linear))
         return out
 
     def statement(self, stmt: ast.stmt, env: Env, linear: bool) -> list[ast.stmt]:
+        """Interpret one statement against ``env``."""
         if isinstance(stmt, ast.If):
             return self.branch(stmt, env, linear)
         if isinstance(stmt, (ast.For, ast.While)):
@@ -533,6 +539,7 @@ class TupleDesugar:
         return [stmt]
 
     def assign(self, stmt: ast.Assign, target: ast.Name, env: Env, linear: bool) -> list[ast.stmt]:
+        """Interpret an assignment, recording a tuple binding on a straight line."""
         name = target.id
         stmt.value = self.fold(stmt.value, env)
         elts = self.tuple_of(stmt.value, env)
@@ -655,6 +662,7 @@ class TupleDesugar:
             self.ranks[name] = rank
 
     def branch(self, stmt: ast.If, env: Env, linear: bool) -> list[ast.stmt]:
+        """Interpret an ``if``: the live branch when the test is constant, else both on copies."""
         stmt.test = self.fold(stmt.test, env)
         taken = static_bool(stmt.test)
         if taken is not None:
@@ -665,6 +673,7 @@ class TupleDesugar:
         return [stmt]
 
     def loop(self, stmt: ast.For | ast.While, env: Env) -> list[ast.stmt]:
+        """Interpret a loop with the names its body rebinds forgotten."""
         if isinstance(stmt, ast.For):
             stmt.iter = self.fold(stmt.iter, env)
         elif isinstance(stmt, ast.While):
@@ -688,9 +697,11 @@ class Folder(ast.NodeTransformer):
         self.env = env
 
     def visit(self, node: ast.AST) -> ast.AST:
+        """Leave a materialized tuple alone; fold anything else."""
         return node if id(node) in self.interp.materialized else super().visit(node)
 
     def materialize(self, elts: Sequence[ast.expr], at: ast.expr) -> ast.Tuple:
+        """A fresh tuple literal of ``elts`` at ``at``, marked materialized."""
         memo: dict[int, object] = {}
         out = ast.copy_location(ast.Tuple(elts=[copy.deepcopy(e, memo) for e in elts], ctx=ast.Load()), at)
         materialized = self.interp.materialized
@@ -702,12 +713,14 @@ class Folder(ast.NodeTransformer):
         return out
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace a load of a tuple-bound name with its tuple."""
         elts = self.env.tuples.get(node.id)
         if elts is None or not isinstance(node.ctx, ast.Load):
             return node
         return self.materialize(elts, node)
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Fold a subscript of a known tuple."""
         self.generic_visit(node)
         # After folding, never before: the index is often ``(slice(None),) + built`` and only
         # becomes a tuple of slice() calls once the concatenation has folded.
@@ -738,6 +751,7 @@ class Folder(ast.NodeTransformer):
         return [copy.deepcopy(e) for e in elts[slice(*bounds)]]
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Fold tuple concatenation and repetition, and integer arithmetic."""
         self.generic_visit(node)
         if isinstance(node.op, (ast.Add, ast.Mult)):
             elts = self.interp.tuple_of(node, self.env)
@@ -747,6 +761,7 @@ class Folder(ast.NodeTransformer):
         return node if folded is None else ast.copy_location(folded, node)
 
     def visit_UnaryOp(self, node: ast.UnaryOp) -> ast.AST:
+        """Fold a signed integer literal."""
         self.generic_visit(node)
         value = const_int(node.operand)
         if value is None or not isinstance(node.op, (ast.USub, ast.UAdd)):
@@ -754,6 +769,7 @@ class Folder(ast.NodeTransformer):
         return ast.copy_location(ast.Constant(value=-value if isinstance(node.op, ast.USub) else value), node)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Fold ``isinstance``, ``tuple``, ``len`` and similar calls on known tuples."""
         if isinstance(node.func, ast.Name) and node.func.id == "isinstance" and len(node.args) == 2:
             folded = self.isinstance_(node)
             if folded is not None:
@@ -815,6 +831,7 @@ class Folder(ast.NodeTransformer):
         return None if decided is None else ast.copy_location(ast.Constant(value=decided), node)
 
     def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        """Fold a decidable ``is None`` or tuple comparison."""
         self.generic_visit(node)
         if len(node.ops) != 1:
             return node
@@ -859,6 +876,7 @@ class Folder(ast.NodeTransformer):
         return False if isinstance(left, ast.Name) and left.id in self.env.bound else None
 
     def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        """Replace a conditional expression on a constant with its live branch."""
         self.generic_visit(node)
         taken = static_bool(node.test)
         return node if taken is None else (node.body if taken else node.orelse)
@@ -910,6 +928,7 @@ def slice_calls_to_slices(index: ast.expr) -> ast.expr:
 
 
 def as_slice(node: ast.expr) -> ast.Slice | None:
+    """The slice a ``slice(...)`` call spells, or None."""
     if not (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)

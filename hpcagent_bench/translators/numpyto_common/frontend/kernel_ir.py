@@ -149,6 +149,7 @@ class Signature:
 
     @classmethod
     def read(cls, bench_info: pathlib.Path) -> "Signature":
+        """Read the signature from a ``bench_info`` file."""
         bench = load_bench_info(bench_info)
         parameters = dict(bench.parameters)
         return cls(
@@ -185,6 +186,7 @@ class Signature:
         self.dtypes_raw = {rename.get(k, k): v for k, v in self.dtypes_raw.items()}
 
     def sign_of(self, name: str) -> str:
+        """The sign of symbol ``name`` from its bindings."""
         return symbol_sign_from_bindings(name, self.parameters, self.scalars, self.config_values)
 
 
@@ -380,6 +382,8 @@ def inline_helpers(
 
 @dataclasses.dataclass(slots=True)
 class InlineCounters:
+    """The counters that keep inlined and hoisted temporaries unique."""
+
     inl: list[int] = dataclasses.field(default_factory=lambda: [0])
     hcall: list[int] = dataclasses.field(default_factory=lambda: [0])
 
@@ -549,6 +553,7 @@ def declare_arguments(src: ArgumentSources) -> tuple[list[SymbolDesc], list[Arra
 
 
 def array_desc(arg: str, src: ArgumentSources, index_names: set[str], fallback_shape: str | None) -> ArrayDesc:
+    """The descriptor of array argument ``arg``."""
     sig = src.sig
     if arg in src.returned_shapes:
         # A returned output: shape and dtype come from its assignment, not from the manifest.

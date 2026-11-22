@@ -198,6 +198,7 @@ def parse_einsum_subscripts(spec: str) -> tuple[list[str], str]:
 
 
 def axes_kwarg(kwargs: list[ast.keyword] | None) -> ast.expr:
+    """The ``axes`` keyword's value, or 2."""
     for kw in kwargs or []:
         if kw.arg == "axes":
             return kw.value
@@ -276,6 +277,7 @@ def pad_widths(pad_arg: ast.expr | None, n_axes: int) -> list[tuple[ast.expr, as
 
 
 def axis_kwarg(kwargs: list[ast.keyword] | None) -> ast.expr | None:
+    """The ``axis`` keyword's value, or None."""
     for kw in kwargs or []:
         if kw.arg == "axis":
             return kw.value

@@ -98,6 +98,7 @@ def row_(
     value_range: tuple[int, int] | None = None,
     size_multiple: int = 1,
 ) -> DTypeInfo:
+    """One row of the dtype table."""
     return DTypeInfo(numpy, c, fortran, scalar_kind, ptr_kind, ctype, compute, storage, value_range, size_multiple)
 
 

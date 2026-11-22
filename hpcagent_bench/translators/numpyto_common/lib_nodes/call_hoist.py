@@ -549,6 +549,7 @@ class CallHoister(ast.NodeTransformer):
         return reads_complex(expr, self.local_dtypes)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Hoist a registered NumPy call out of its expression into a temporary."""
         self.visit_call_children(node)
         self.hoist_argument_matmuls(node)
         key = numpy_call_key(node)

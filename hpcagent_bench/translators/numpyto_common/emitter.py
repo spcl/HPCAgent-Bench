@@ -137,6 +137,8 @@ class TupleTargetSplitter(SplitTupleUnpack):
     __slots__ = ()
 
     def values(self, targets: Sequence[ast.expr], value: ast.expr) -> Spelled | None:
+        """One element expression per target, from a tuple literal or a tuple-valued expression; None if one has
+        none."""
         if isinstance(value, ast.Tuple):
             return super().values(targets, value)
         parts: list[ast.expr] = []
@@ -192,25 +194,32 @@ class BaseEmitter:
         return (self.numpy_note(node, indent) + text) if text else text
 
     def emit_block(self, stmts: Sequence[ast.stmt], indent: str) -> str:
+        """Emit a statement list, one statement per line."""
         out = [self.emit_stmt_with_note(s, indent) for s in stmts]
         return "\n".join(line for line in out if line)
 
     def emit_for(self, node: ast.For, indent: str) -> str:
+        """Emit a for loop; the target emitter overrides it."""
         raise NotImplementedError("a target emitter renders a for loop")
 
     def emit_while(self, node: ast.While, indent: str) -> str:
+        """Emit a while loop; the target emitter overrides it."""
         raise NotImplementedError("a target emitter renders a while loop")
 
     def emit_if(self, node: ast.If, indent: str) -> str:
+        """Emit an if; the target emitter overrides it."""
         raise NotImplementedError("a target emitter renders an if")
 
     def emit_assign(self, node: ast.Assign, indent: str) -> str:
+        """Emit an assignment; the target emitter overrides it."""
         raise NotImplementedError("a target emitter renders an assignment")
 
     def emit_augassign(self, node: ast.AugAssign, indent: str) -> str:
+        """Emit an augmented assignment; the target emitter overrides it."""
         raise NotImplementedError("a target emitter renders an augmented assignment")
 
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:
+        """Emit one statement through the emit method of its form."""
         if isinstance(node, ast.For):
             return self.emit_for(node, indent)
         if isinstance(node, ast.While):
@@ -255,9 +264,11 @@ class BaseEmitter:
         return ""
 
     def emit_expr_inner(self, node: ast.expr) -> str:
+        """Emit one expression; the target emitter overrides it."""
         raise NotImplementedError
 
     def name_dtype(self, name: str) -> str | None:
+        """The dtype of ``name``; the target emitter overrides it."""
         raise NotImplementedError
 
     def wrap_narrow(self, text: str, wrap: str) -> str:
@@ -290,6 +301,7 @@ class BaseEmitter:
         return self.name_dtype(name)
 
     def fp8_fns(self, dtype: str) -> Fp8Fns | None:
+        """The fp8 helper functions of ``dtype``, or None if it is not an fp8 dtype."""
         return fp8_functions(dtype, self.fp8_names)
 
     def fp8_round(self, node: ast.BinOp, text: str) -> str:

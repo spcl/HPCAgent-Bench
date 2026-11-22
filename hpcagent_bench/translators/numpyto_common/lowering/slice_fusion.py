@@ -117,12 +117,14 @@ class SliceFusion(ast.NodeTransformer):
         self.overlap_temps: dict[str, tuple[tuple[str, ...], str]] = {}
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Fuse a slice assignment into one loop."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
         return self.rewrite_(node.targets[0], node.value, aug_op=None) or node
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        """Fuse a slice augmented assignment into one loop."""
         self.generic_visit(node)
         return self.rewrite_(node.target, node.value, aug_op=node.op) or node
 
@@ -237,6 +239,7 @@ class SliceFusion(ast.NodeTransformer):
         return body[0] if len(body) == 1 else body
 
     def axis_length(self, array_name: str, axis: int) -> ast.expr:
+        """The length of axis ``axis`` of ``array_name``; an unknown shape is refused."""
         shape = self.array_shapes.get(array_name)
         if shape is None or axis >= len(shape):
             raise NotImplementedError(
@@ -333,11 +336,13 @@ class HoistInvariantSelfReads(ast.NodeTransformer):
         self._by_source: dict[str, str] = {}
 
     def visit_IfExp(self, node: ast.IfExp | ast.BoolOp) -> ast.AST:
+        """Leave conditional reads unhoisted."""
         return node
 
     visit_BoolOp = visit_IfExp
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Stage a loop-invariant element read of the written array into a temporary."""
         self.generic_visit(node)
         if not self.is_invariant_element(node):
             return node
@@ -413,6 +418,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         return self.new_locals
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Lift a slice-valued assignment to a fresh array into an allocation and a fused loop."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node

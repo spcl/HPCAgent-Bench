@@ -39,7 +39,9 @@ class DesugarPass(Protocol):
 
     changed: bool
 
-    def visit(self, node: ast.stmt) -> ast.stmt | list[ast.stmt] | None: ...
+    def visit(self, node: ast.stmt) -> ast.stmt | list[ast.stmt] | None:
+        """Rewrite one statement."""
+        ...
 
 
 class RewritePass(ast.NodeTransformer):
@@ -70,6 +72,7 @@ LIKE_CTORS = {"empty_like", "zeros_like", "ones_like"}
 
 
 def tuple_len(node: ast.expr) -> int | None:
+    """The length of a tuple or list literal, or None."""
     if isinstance(node, (ast.Tuple, ast.List)):
         return len(node.elts)
     return None

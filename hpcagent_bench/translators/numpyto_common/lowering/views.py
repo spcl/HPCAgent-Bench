@@ -65,6 +65,7 @@ class EllipsisExpander(ast.NodeTransformer):
         return len(ext) if ext else None
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Expand an ellipsis in a subscript into full slices."""
         self.generic_visit(node)
         rank = self.base_rank(node.value)
         if rank is None:
@@ -108,6 +109,7 @@ class PadImplicitTrailingSlices(ast.NodeTransformer):
         self.array_shapes = array_shapes
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Add the implicit trailing full slices to a basic subscript."""
         self.generic_visit(node)
         if not isinstance(node.value, ast.Name):
             return node
@@ -256,6 +258,7 @@ class AliasFold(ast.NodeTransformer):
         self.good = good
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
+        """Drop a folded alias assignment."""
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.good:
             return None
         self.generic_visit(node)
@@ -268,6 +271,7 @@ class SubarrayAliasFold(AliasFold):
     __slots__ = ()
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Rewrite ``alias[k]`` as the base array's subscript."""
         self.generic_visit(node)
         if isinstance(node.value, ast.Name) and node.value.id in self.good:
             aname, base = self.good[node.value.id]
@@ -279,6 +283,7 @@ class SubarrayAliasFold(AliasFold):
 
 
 def child_blocks_of(stmt: ast.stmt) -> Iterator[list[ast.stmt]]:
+    """The statement lists nested in ``stmt``."""
     if isinstance(stmt, (ast.For, ast.While, ast.If)):
         yield stmt.body
         yield stmt.orelse
@@ -344,6 +349,7 @@ def stores_through(stmt: ast.stmt, name: str) -> bool:
 
 
 def mentions(stmt: ast.stmt, name: str) -> bool:
+    """Whether ``stmt`` mentions ``name``."""
     return any(isinstance(n, ast.Name) and n.id == name for n in walk_nodes(stmt))
 
 
@@ -617,6 +623,7 @@ class SliceViewFold(AliasFold):
     __slots__ = ()
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Rewrite ``view[use]`` as the base array's composed subscript."""
         self.generic_visit(node)
         if not (isinstance(node.value, ast.Name) and node.value.id in self.good):
             return node

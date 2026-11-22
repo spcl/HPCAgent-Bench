@@ -97,6 +97,7 @@ def fold_default_args(fn: ast.FunctionDef, input_args: list[str]) -> None:
 
 
 def find_function(tree: ast.Module, name: str) -> ast.FunctionDef | None:
+    """The module-level function ``name``, or None."""
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return node
@@ -174,6 +175,7 @@ def fold_const_expr(v: ast.expr, consts: dict[str, ModuleConst]) -> ModuleConst 
 
 
 def fold_const_binop(v: ast.BinOp, consts: dict[str, ModuleConst]) -> ModuleConst | None:
+    """Fold a binary operation of module constants, or None if it does not fold."""
     a, b = fold_const_expr(v.left, consts), fold_const_expr(v.right, consts)
     if a is None or b is None:
         return None
@@ -271,6 +273,8 @@ def dtype_module_consts(tree: ast.Module, shadowed: set[str]) -> dict[str, str]:
 
 
 class SubstituteModuleConsts(ast.NodeTransformer):
+    """Substitute module-level constants, sequences and dtype aliases into a kernel."""
+
     __slots__ = ("consts", "dtype_attrs", "seqs")
 
     def __init__(self, consts: dict[str, ModuleConst], seqs: dict[str, ast.Tuple], dtype_attrs: dict[str, str]) -> None:
@@ -279,6 +283,7 @@ class SubstituteModuleConsts(ast.NodeTransformer):
         self.dtype_attrs = dtype_attrs
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace a load of a module constant, sequence or dtype alias with its value."""
         if not isinstance(node.ctx, ast.Load):
             return node
         if node.id in self.consts:

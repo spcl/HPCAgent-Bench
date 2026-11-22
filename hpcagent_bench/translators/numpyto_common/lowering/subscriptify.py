@@ -49,6 +49,7 @@ class SubscriptifyNames(ast.NodeTransformer):
         self.iters = iters
 
     def visit_Name(self, node: ast.Name) -> ast.expr:
+        """Subscript a whole-array name with the loop iterators, right-aligned."""
         shape = self.shape_table.get(node.id)
         if not shape:
             return node

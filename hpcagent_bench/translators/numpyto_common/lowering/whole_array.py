@@ -304,6 +304,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         value: ast.expr,
         op: ast.operator | None = None,
     ) -> list[ast.stmt]:
+        """The per-element loop nest of a whole-array assignment to ``target``; empty if it does not apply."""
         shape = self.shape_table.get(target.id)
         if not shape:
             return []
@@ -615,6 +616,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         )
 
     def ix_iters(self, prefix: str, k: int) -> list[str]:
+        """``k`` fresh open-mesh iterator names."""
         self._ix_ctr += 1
         return [f"{prefix}{self._ix_ctr}_{d}" for d in range(k)]
 
@@ -731,6 +733,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         return out_stmts
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt] | None:
+        """Lower a whole-array assignment into per-element loops."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
@@ -1192,6 +1195,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         return True
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        """Lower a whole-array augmented assignment or open-mesh scatter-add into loops."""
         self.generic_visit(node)
         if isinstance(node.target, ast.Name) and node.target.id in self.shape_table:
             expanded = self.expand_(node.target, node.value, node.op)
@@ -1303,6 +1307,7 @@ class IndexArraysAtIter(ast.NodeTransformer):
         self.it = it
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Index an index-array name at the iterator."""
         if node.id in self.idx_names:
             return ast.Subscript(
                 value=name_(node.id),

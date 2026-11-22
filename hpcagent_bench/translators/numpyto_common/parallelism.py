@@ -416,6 +416,7 @@ def reduction_op(value: ast.AST, acc: str) -> str | None:
 
 
 def reads_acc(node: ast.AST, acc: str) -> bool:
+    """Whether ``node`` reads the accumulator ``acc``."""
     return isinstance(node, ast.Name) and node.id == acc
 
 

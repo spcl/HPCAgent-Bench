@@ -28,6 +28,7 @@ class TupleSubscriptFolder(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Fold a constant-index subscript of a tuple literal."""
         self.generic_visit(node)
         if isinstance(node.value, ast.Tuple):
             elts = node.value.elts
@@ -105,6 +106,7 @@ class TupleLocalPropagator(ast.NodeTransformer):
 
     @classmethod
     def is_dim(cls, elt: ast.expr) -> bool:
+        """Whether ``elt`` can be a dimension: a name, an integer literal, or a unary operation of one."""
         if isinstance(elt, ast.Name):
             return True
         if isinstance(elt, ast.Constant):
@@ -117,6 +119,7 @@ class TupleLocalPropagator(ast.NodeTransformer):
         return False
 
     def run(self, tree: ast.AST) -> "TupleLocalPropagator":
+        """Collect the locals bound once to a tuple of dimensions, then substitute them in ``tree``."""
         store_counts: dict[str, int] = {}
         for n in walk_nodes(tree):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
@@ -145,12 +148,14 @@ class TupleLocalPropagator(ast.NodeTransformer):
         return self
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
+        """Drop the binding of a propagated tuple local."""
         self.generic_visit(node)
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.tuples:
             return None
         return node
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace a load of a propagated tuple local with its tuple."""
         if isinstance(node.ctx, ast.Load) and node.id in self.tuples:
             return copy.deepcopy(self.tuples[node.id])
         return node
@@ -183,6 +188,7 @@ class ShapeTableTupleSplit(SplitTupleUnpack):
         self.int_locals: list[str] = []
 
     def values(self, targets: Sequence[ast.expr], value: ast.expr) -> Spelled | None:
+        """One value per target, ``.shape`` unpacks read from the shape table; None if one has none."""
         names = [target.id for target in targets if isinstance(target, ast.Name)]
         if len(names) != len(targets):
             return super().values(targets, value)
@@ -204,8 +210,10 @@ class ShapeTableTupleSplit(SplitTupleUnpack):
         return [], [const_or_name(token) for token in shape]
 
     def temp_name(self, position: int) -> str:
+        """The name of the swap temporary at ``position``."""
         return f"__swap{self.racing}_{position}"
 
 
 def is_int_constant(node: ast.expr) -> bool:
+    """Whether ``node`` is an integer literal."""
     return isinstance(node, ast.Constant) and isinstance(node.value, int)

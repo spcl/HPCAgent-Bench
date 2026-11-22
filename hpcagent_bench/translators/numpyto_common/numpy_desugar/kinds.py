@@ -225,6 +225,7 @@ def real_part_kind(kind: str | None) -> str | None:
 
 
 def binop_kind(value: ast.BinOp, dtypes: dict[str, str], calls: CallKinds) -> str | None:
+    """The dtype kind of a binary operation; true division promotes to float."""
     lk, rk = dtype_kind(value.left, dtypes, calls), dtype_kind(value.right, dtypes, calls)
     if isinstance(value.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
         return "bool" if (lk == "bool" or rk == "bool") else promote_kind(lk, rk)

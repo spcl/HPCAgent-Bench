@@ -253,6 +253,7 @@ class ShapeArithFolder(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.expr:
+        """Fold a binary operation of constants, or simplify it by an integer identity."""
         self.generic_visit(node)
         left, right = const_int(node.left), const_int(node.right)
         op = FOLD_OPS.get(type(node.op))

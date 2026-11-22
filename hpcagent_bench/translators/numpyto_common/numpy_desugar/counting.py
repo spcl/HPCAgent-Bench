@@ -54,6 +54,7 @@ class DiffToSliceDifference(RewritePass):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite ``np.diff(p)`` as ``p[1:] - p[:-1]``."""
         self.generic_visit(node)
         if numpy_call_attr(node) != "diff" or len(node.args) != 1 or node.keywords:
             return node
@@ -82,6 +83,7 @@ class StripAstypeCopyKwarg(RewritePass):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Drop the ``copy`` keyword of ``astype``."""
         self.generic_visit(node)
         if (
             isinstance(node.func, ast.Attribute)
@@ -143,6 +145,7 @@ class SegmentSumInline(RewritePass):
             self.changed = True
 
     def generic_visit(self, node: ast.AST) -> ast.AST:
+        """Inline the segment sums of every statement list under ``node``."""
         # Any statement list under the statement: inlined helpers put the pair inside the solver's loops.
         while any(self.rewrite_block(self.fn, body) for body in statement_lists(node)):
             self.changed = True
@@ -286,6 +289,7 @@ class RepeatCountsInline(RankedRewritePass):
     __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Inline the ``np.repeat`` by ``np.diff`` counts of an assignment as a fill loop."""
         self.generic_visit(node)
         calls = [
             n
@@ -336,6 +340,7 @@ class BincountInline(RankedRewritePass):
     __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Inline the ``np.bincount`` calls of an assignment as scatter-add loops."""
         self.generic_visit(node)
         calls = [
             n for n in walk_nodes(node.value) if isinstance(n, ast.Call) and numpy_call_attr(n) == "bincount" and n.args
@@ -379,6 +384,7 @@ class AddAtInline(RankedRewritePass):
     __slots__ = ()
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST | list[ast.stmt]:
+        """Inline an ``np.<op>.at`` statement as a scatter loop."""
         self.generic_visit(node)
         call = node.value
         if not isinstance(call, ast.Call):
@@ -460,6 +466,7 @@ class SearchsortedMaterialize(RewritePass):
     __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Make the sorted operand of each ``np.searchsorted`` contiguous."""
         self.generic_visit(node)
         calls = [
             n

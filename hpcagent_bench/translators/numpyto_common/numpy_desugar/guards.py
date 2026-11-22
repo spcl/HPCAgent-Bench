@@ -38,6 +38,7 @@ class SpliceErrstate(RewritePass):
     __slots__ = ()
 
     def visit_With(self, node: ast.With) -> ast.AST | list[ast.stmt]:
+        """Splice the body of a ``with np.errstate(...)`` block."""
         self.generic_visit(node)
         if len(node.items) != 1 or node.items[0].optional_vars is not None:
             return node
@@ -85,6 +86,7 @@ class DropGuards(RewritePass):
         self.data_tests = 0
 
     def visit_If(self, node: ast.If) -> ast.AST:
+        """Track whether the guards below sit under a data test."""
         data = self.keep_data and not validates_metadata(node.test)
         self.data_tests += data
         self.generic_visit(node)
@@ -92,6 +94,7 @@ class DropGuards(RewritePass):
         return node
 
     def visit_Raise(self, node: ast.Raise) -> ast.stmt:
+        """Replace a ``raise`` with ``pass``, unless it is a builtin exception under a kept data test."""
         exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
         builtin = modules.optional(builtins, exc.id) if isinstance(exc, ast.Name) else None
         if not (self.data_tests and isinstance(builtin, type) and issubclass(builtin, BaseException)):
@@ -103,6 +106,7 @@ class DropGuards(RewritePass):
         return node
 
     def visit_Assert(self, node: ast.Assert) -> ast.stmt:
+        """Replace an ``assert`` with ``pass``, unless it is a kept data check."""
         if not (self.keep_data and not validates_metadata(node.test)):
             self.changed = True
             return ast.copy_location(ast.Pass(), node)
@@ -121,6 +125,7 @@ class DropValidationGuards(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_If(self, node: ast.If) -> ast.stmt | None:
+        """Drop an ``if`` whose body only raises, asserts or passes."""
         self.generic_visit(node)
         if not node.orelse and node.body and all(isinstance(s, (ast.Raise, ast.Assert, ast.Pass)) for s in node.body):
             return None
@@ -154,6 +159,7 @@ class IssubdtypeFold(ast.NodeTransformer):
         self.changed = False
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
+        """Fold ``np.issubdtype`` on a known kind to a boolean."""
         self.generic_visit(node)
         if numpy_call_attr(node) != "issubdtype" or len(node.args) != 2:
             return node
@@ -180,6 +186,7 @@ class DeadBranchElim(RewritePass):
     __slots__ = ()
 
     def const_bool(self, node: ast.expr) -> bool | None:
+        """The boolean value of a constant test, or None."""
         if isinstance(node, ast.Constant) and isinstance(node.value, bool):
             return node.value
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
@@ -193,6 +200,7 @@ class DeadBranchElim(RewritePass):
         return None
 
     def visit_If(self, node: ast.If) -> ast.stmt | list[ast.stmt]:
+        """Replace an ``if`` on a constant with its live branch."""
         self.generic_visit(node)
         taken = self.const_bool(node.test)
         if taken is True:
@@ -231,6 +239,7 @@ class BoolOpIfToChain(RewritePass):
     __slots__ = ()
 
     def visit_If(self, node: ast.If) -> ast.AST:
+        """Split an ``if`` on a boolean operation into a chain."""
         self.generic_visit(node)
         test = node.test
         if not isinstance(test, ast.BoolOp) or not any(symbolic_eq_test(v) for v in test.values):

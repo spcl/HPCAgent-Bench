@@ -35,6 +35,7 @@ def expand_definitions(text: str, defs: Mapping[str, str], active: tuple[str, ..
 
 
 def is_word_char(ch: str) -> bool:
+    """Whether ``ch`` can be part of an identifier."""
     return ch.isalnum() or ch == "_"
 
 

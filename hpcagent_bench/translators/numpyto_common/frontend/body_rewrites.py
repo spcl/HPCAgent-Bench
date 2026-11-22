@@ -145,6 +145,7 @@ class FoldSliceLocals:
     __slots__ = ()
 
     def apply(self, fn: ast.FunctionDef) -> None:
+        """Inline the function's slice locals and drop their dead bindings."""
         folded = self.walk_(fn.body, {})
         if folded:
             drop_dead_slice_bindings(fn, folded)
@@ -302,11 +303,13 @@ class ListRepeatToFull(ast.NodeTransformer):
         self.mutated: frozenset[str] = frozenset()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        """Note the function's mutated lists, then rewrite its list repeats."""
         self.mutated = list_mutated_names(node)
         self.generic_visit(node)
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        """Rewrite ``[K] * n`` bound to an unmutated name as ``np.full``."""
         self.generic_visit(node)
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             return node
@@ -370,11 +373,13 @@ class ArrayLiteralToFill(ast.NodeTransformer):
         self.fn: ast.FunctionDef | None = None
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        """Rewrite the function's array literals."""
         self.fn = node
         self.generic_visit(node)
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Rewrite an array literal assignment into an allocation and one store per element."""
         if self.fn is None or len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             return node
         name = node.targets[0].id
@@ -674,12 +679,14 @@ class NonFiniteNormalizer(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        """Respell ``math.inf``, ``nan``, ``pi`` and ``e`` as their NumPy attributes."""
         self.generic_visit(node)
         if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in ("inf", "nan", "pi", "e"):
             return ast.copy_location(numpy_attribute(node.attr), node)
         return node
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Respell ``float("inf")`` and ``float("nan")`` as ``np.inf`` and ``np.nan``."""
         self.generic_visit(node)
         if not (
             isinstance(node.func, ast.Name)
@@ -722,6 +729,7 @@ class FoldParamNoneGuard(ast.NodeTransformer):
         return not decoded[1]  # IsNot -> True, Is -> False
 
     def visit_If(self, node: ast.If) -> ast.stmt | list[ast.stmt]:
+        """Replace a decided parameter None-guard with the branch it takes."""
         self.generic_visit(node)
         v = self.verdict(node.test)
         if v is True:
@@ -752,6 +760,7 @@ class SubstituteParamAliases(ast.NodeTransformer):
         self.subst: dict[str, str] = {}
 
     def collect(self, fn: ast.FunctionDef) -> None:
+        """Collect the whole-array aliases of parameters that are bound once."""
         # Census over the WHOLE function, not just its top-level statements. A name rebound inside a
         # for / while / if is still rebound, and counting only ``fn.body`` made it look bound-once:
         # cegterg-shaped kernels bind a local at the top level and rebind it inside a nested loop, so
@@ -783,6 +792,7 @@ class SubstituteParamAliases(ast.NodeTransformer):
                 self.subst[s.targets[0].id] = s.value.id
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | None:
+        """Drop a self-assignment or a collected alias assignment."""
         # Drop a no-op self-assignment ``x = x`` (the kernel author's
         # documentation alias ``z_kin_hor_e = z_kin_hor_e``): numpy treats it as
         # a no-op, but a backend that copies it into a fresh shadowing buffer
@@ -808,6 +818,7 @@ class SubstituteParamAliases(ast.NodeTransformer):
         return node
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace an alias with its parameter."""
         if node.id in self.subst:
             return ast.copy_location(ast.Name(id=self.subst[node.id], ctx=node.ctx), node)
         return node
@@ -822,6 +833,7 @@ class NewaxisToNone(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        """Rewrite ``np.newaxis`` as ``None``."""
         self.generic_visit(node)
         if is_numpy_module(node.value) and node.attr == "newaxis":
             return ast.Constant(value=None)
@@ -843,6 +855,7 @@ class UnpackedOpenMeshToGrid(ast.NodeTransformer):
         self.grids: dict[tuple[str, ...], str] = {}
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        """Bind an unpacked ``np.ix_`` to one grid name."""
         target = node.targets[0] if len(node.targets) == 1 else None
         operands = np_ix_operands(node.value)
         names = name_ids(target.elts) if isinstance(target, ast.Tuple) else None
@@ -852,6 +865,7 @@ class UnpackedOpenMeshToGrid(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Index with the grid name where the subscript names the unpacked mesh."""
         self.generic_visit(node)
         index = node.slice
         names = name_ids(index.elts) if isinstance(index, ast.Tuple) else None
@@ -904,6 +918,7 @@ class FoldTupleLocals(ast.NodeTransformer):
         self.subst: dict[str, ast.Tuple] = {}
 
     def collect(self, fn: ast.FunctionDef) -> None:
+        """Collect the tuple locals that are bound once and are not loop variables."""
         loop_vars = {
             n.id
             for node in walk_nodes(fn)
@@ -937,6 +952,7 @@ class FoldTupleLocals(ast.NodeTransformer):
             self.subst[s.targets[0].id] = s.value
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | None:
+        """Drop the binding of a folded tuple local."""
         if (
             len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
@@ -948,12 +964,14 @@ class FoldTupleLocals(ast.NodeTransformer):
         return node
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace a load of a folded tuple local with its tuple."""
         repl = self.subst.get(node.id)
         if repl is not None and isinstance(node.ctx, ast.Load):
             return ast.copy_location(copy.deepcopy(repl), node)
         return node
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Fold the concatenation of two tuple literals."""
         self.generic_visit(node)
         if isinstance(node.op, ast.Add) and isinstance(node.left, ast.Tuple) and isinstance(node.right, ast.Tuple):
             return ast.copy_location(ast.Tuple(elts=[*node.left.elts, *node.right.elts], ctx=ast.Load()), node)

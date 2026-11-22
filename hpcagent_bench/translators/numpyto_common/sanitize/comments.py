@@ -26,12 +26,14 @@ __all__ = [
 
 
 def normalize_lang(lang: str) -> str:
+    """The canonical language name of an alias."""
     key = lang.strip().lower()
     aliases = {"py": "python", "c++": "cpp", "f90": "fortran", "f": "fortran"}
     return aliases.get(key, key)
 
 
 def ts_get_parser(grammar: str) -> "tree_sitter.Parser":
+    """The tree-sitter parser of ``grammar``."""
     from tree_sitter_language_pack import get_parser
 
     return get_parser(grammar)

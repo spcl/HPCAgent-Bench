@@ -302,6 +302,7 @@ class KeepdimsToNewaxis(RewritePass):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite ``keepdims=True`` as a newaxis subscript of the reduction."""
         self.generic_visit(node)
         kw = next((k for k in node.keywords if k.arg == "keepdims"), None)
         if kw is None or not node.args or numpy_call_attr(node) not in REDUCE_FNS:
@@ -474,6 +475,7 @@ class NormalizeNegativeAxis(RankedRewritePass):
     __slots__ = ()
 
     def operand_rank(self, node: ast.Call) -> int | None:
+        """The rank of a call's operand, or of a sequence operand's first element."""
         # A sequence operand (``np.stack((a, b))``) takes its first element's rank.
         if not node.args:
             return None
@@ -483,6 +485,7 @@ class NormalizeNegativeAxis(RankedRewritePass):
         return expr_rank(a0, self.ranks)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite a negative literal ``axis`` as its positive index."""
         self.generic_visit(node)
         op = numpy_call_attr(node)
         adding = op in AXIS_ADDING_OPS
@@ -527,6 +530,7 @@ class UfuncReduceToReducer(RewritePass):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite ``np.<ufunc>.reduce`` as the reducer function."""
         self.generic_visit(node)
         f = node.func
         if (

@@ -215,6 +215,7 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         return node
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.expr:
+        """Flatten a chained subscript into one."""
         self.generic_visit(node)  # bottom-up: a longer chain arrives with its inner already rewritten
         if not isinstance(node.value, ast.Subscript):
             return node

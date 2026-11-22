@@ -43,6 +43,7 @@ class CallFixups(RankedRewritePass):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
+        """Rewrite the call forms numba and pythran do not support."""
         self.generic_visit(node)
         if (
             isinstance(node.func, ast.Name)
@@ -197,6 +198,7 @@ class FillDiagonalInline(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
+        """Inline ``np.fill_diagonal`` as a loop."""
         call = node.value
         if not (
             isinstance(call, ast.Call)
@@ -241,6 +243,7 @@ class UfuncOutInline(ast.NodeTransformer):
     __slots__ = ()
 
     def rewrite_(self, call: ast.expr) -> ast.stmt | None:
+        """The assignment a ufunc call with ``out=`` stands for, or None."""
         if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and len(call.args) == 2):
             return None
         # ``np.<ufunc>.outer(a, b, out=c)``: an outer product has no BinOp spelling, so the call is
@@ -273,6 +276,7 @@ class UfuncOutInline(ast.NodeTransformer):
         return ast.copy_location(ast.Assign(targets=[target], value=value), call)
 
     def visit_Expr(self, node: ast.Expr) -> ast.stmt:
+        """Rewrite a ufunc call with ``out=`` as an assignment."""
         rw = self.rewrite_(node.value)
         return rw if rw is not None else node
 
@@ -291,6 +295,7 @@ class ComplexAccessorToFunc(ast.NodeTransformer):
         self.conjugate_only = conjugate_only
 
     def np_call(self, fn: str, arg: ast.expr) -> ast.expr:
+        """The call ``np.<fn>(arg)``."""
         self.changed = True
         return ast.copy_location(
             ast.Call(
@@ -302,6 +307,7 @@ class ComplexAccessorToFunc(ast.NodeTransformer):
         )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite ``z.conj()`` and ``z.conjugate()`` as ``np.conj(z)``."""
         # Handled at the Call so ``.conjugate`` is not first mistaken for an accessor below;
         # ``np.conj(x)`` (a call with args) is left as-is.
         if (
@@ -315,6 +321,7 @@ class ComplexAccessorToFunc(ast.NodeTransformer):
         return node
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        """Rewrite ``z.real`` and ``z.imag`` as ``np.real(z)`` and ``np.imag(z)``."""
         self.generic_visit(node)
         # Not the ``np.real`` / ``np.imag`` module attribute: that is the function itself.
         if (
@@ -351,6 +358,7 @@ class ElementalUfuncToPrimitive(RewritePass):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite a two-argument elemental ufunc as primitive operations."""
         self.generic_visit(node)
         f = node.func
         if not (

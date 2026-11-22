@@ -202,6 +202,7 @@ class RealConjDropper(ast.NodeTransformer):
         self.local_dtypes = local_dtypes
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Drop a conjugation of a real operand."""
         self.generic_visit(node)
         operand = is_conj_call(node)
         if operand is not None and walk_complex(operand, self.local_dtypes.get) is None:
@@ -328,10 +329,12 @@ class ComplexWorkSeed:
         return dt if dt is not None else self.array_dtypes.get(name)
 
     def known_complex(self, name: str | None) -> str | None:
+        """The dtype of ``name`` if it is complex, else None."""
         dt = self.known(name)
         return dt if dt and dt.startswith("complex") else None
 
     def dtype_for(self, value: ast.expr) -> str | None:
+        """The complex work dtype a local bound to ``value`` gets, or None."""
         if isinstance(value, ast.Call):
             return self.call_dtype(value)
         # z = A[scalar-index] -- inherit a complex array's element dtype
@@ -394,6 +397,7 @@ class PromoteMixedComplexIfExp(ast.NodeTransformer):
         self.local_dtypes = local_dtypes
 
     def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        """Promote the real branch of a mixed real and complex conditional to complex."""
         self.generic_visit(node)
         body_cplx = scalar_expr_complex(node.body, self.local_dtypes)
         else_cplx = scalar_expr_complex(node.orelse, self.local_dtypes)
@@ -405,4 +409,5 @@ class PromoteMixedComplexIfExp(ast.NodeTransformer):
 
     @staticmethod
     def to_complex(e: ast.expr) -> ast.expr:
+        """``e + 0j``."""
         return ast.copy_location(ast.BinOp(left=e, op=ast.Add(), right=ast.Constant(value=0j)), e)

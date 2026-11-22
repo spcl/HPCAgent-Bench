@@ -65,6 +65,7 @@ class MgridInline(RewritePass):
     __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Replace an unpacked ``np.mgrid`` with ``arange`` broadcasts."""
         self.generic_visit(node)
         val = node.value
         if not (
@@ -171,15 +172,18 @@ class ScalarizeMask(ast.NodeTransformer):
         self.ranks = ranks
 
     def sub_(self, value_node: ast.expr) -> ast.Subscript:
+        """``value_node`` indexed by the loop iterators."""
         return ast.Subscript(value=value_node, slice=copy.deepcopy(self.idx_slice), ctx=ast.Load())
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.expr:
+        """Replace ``X[mask]`` with ``X`` at the loop iterators."""
         if isinstance(node.ctx, ast.Load) and ast.dump(node.slice) == self.maskdump:
             return self.sub_(node.value)  # X[mask] -> X[idx]; do not recurse into it
         self.generic_visit(node)
         return node
 
     def visit_Name(self, node: ast.Name) -> ast.expr:
+        """Index a full-rank array name by the loop iterators."""
         if isinstance(node.ctx, ast.Load) and self.ranks.get(node.id) == self.arank:
             return self.sub_(node)
         return node
@@ -204,6 +208,7 @@ class MaskedAssignToLoop(ast.NodeTransformer):
         self._ctr = 0
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Lower a multi-dimensional masked assignment into a guarded loop."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
@@ -261,10 +266,12 @@ class DecomposeRollSlice(ast.NodeTransformer):
         self._n = 0
 
     def fresh_(self) -> str:
+        """A fresh roll temporary name."""
         self._n += 1
         return f"__roll_{self._n}"
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Route a subscripted ``np.roll`` operand or target through bare-name temporaries."""
         self.generic_visit(node)
         v = node.value
         # ``expand_roll`` reads a positional shift from args[1]; a keyword ``shift=`` roll is
@@ -387,6 +394,7 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
     def lower_(
         self, node: ast.Assign | ast.AugAssign, target: ast.expr, value: ast.expr, op: str
     ) -> ast.stmt | list[ast.stmt]:
+        """Lower a store through one index array and slices into a loop over the index."""
         if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
             return node
         lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
@@ -408,12 +416,14 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Lower a fancy slice assignment into a loop."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
         return self.lower_(node, node.targets[0], node.value, "=")
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        """Lower a fancy slice augmented assignment into a loop."""
         self.generic_visit(node)
         op = AUG_OP_SRC.get(type(node.op))
         return node if op is None else self.lower_(node, node.target, node.value, op)
@@ -440,6 +450,7 @@ class IxWriteToLoop(ast.NodeTransformer):
         self.unpacked: dict[int, list[ast.expr]] | None = None
 
     def lower_(self, node: ast.Assign | ast.AugAssign, target: ast.expr, op: str) -> ast.stmt | list[ast.stmt]:
+        """Lower a store through ``np.ix_`` into one loop per index vector."""
         if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
             return node
         # Built lazily, after every earlier pass has rewritten the whole body.
@@ -477,12 +488,14 @@ class IxWriteToLoop(ast.NodeTransformer):
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Lower an ``np.ix_`` assignment into loops."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
         return self.lower_(node, node.targets[0], "=")
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        """Lower an ``np.ix_`` augmented assignment into loops."""
         self.generic_visit(node)
         op = AUG_OP_SRC.get(type(node.op))
         return node if op is None else self.lower_(node, node.target, op)

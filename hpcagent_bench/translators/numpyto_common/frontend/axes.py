@@ -50,6 +50,7 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
         self.scalars = scalars
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite an axis-structural NumPy call into the indexing form it equals."""
         self.generic_visit(node)
         name = np_attr_name(node) if isinstance(node.func, ast.Attribute) else None
         if name in AXIS_STRUCTURAL_FNS or name == "norm":
@@ -168,6 +169,7 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
         return self.rewrite_(f"np.sqrt(np.sum(np.abs({operand}) ** 2, axis={ast.unparse(kw['axis'])}{keep}))", node)
 
     def literal_axes(self, node: ast.Call) -> list[int] | None:
+        """The call's literal axis arguments, or None if one is not literal."""
         kw = {k.arg: k.value for k in node.keywords if k.arg is not None}
         given = list(node.args[1:]) + ([kw["axis"]] if "axis" in kw else [])
         out: list[int] = []
@@ -239,6 +241,7 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
         return merged
 
     def rewrite_(self, source: str, node: ast.Call) -> ast.expr:
+        """The parsed ``source`` at ``node``'s location."""
         return ast.copy_location(ast.parse(source, mode="eval").body, node)
 
 
@@ -381,10 +384,12 @@ class FoldConstantSymbols(ast.NodeTransformer):
         self.const_syms = const_syms
 
     def apply(self, fn: ast.FunctionDef) -> None:
+        """Fold the constants that ``fn`` never rebinds."""
         self.const_syms = {k: v for k, v in self.const_syms.items() if k not in rebound_names(fn)}
         self.visit(fn)
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace a load of a structural constant with its value."""
         if not isinstance(node.ctx, ast.Load) or node.id not in self.const_syms:
             return node
         return ast.copy_location(ast.Constant(value=self.const_syms[node.id]), node)

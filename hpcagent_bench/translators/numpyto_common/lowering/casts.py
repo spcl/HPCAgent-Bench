@@ -33,6 +33,7 @@ class BuiltinCastRewriter(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Keep a ``float(x)`` operand of a true division as an explicit cast."""
         # True-division barrier: a ``float(x)`` operand of ``/`` must be
         # PRESERVED, not dropped -- numpy ``/`` is true division, so an int/int
         # ``float(a) / b`` must stay floating. Rewrite the ``float(x)`` cast to a
@@ -46,6 +47,7 @@ class BuiltinCastRewriter(ast.NodeTransformer):
 
     @staticmethod
     def keep_float_as_cast(operand: ast.expr) -> ast.expr:
+        """``float(x)`` respelled as ``np.float64(x)``; any other operand unchanged."""
         if (
             isinstance(operand, ast.Call)
             and isinstance(operand.func, ast.Name)
@@ -63,6 +65,7 @@ class BuiltinCastRewriter(ast.NodeTransformer):
         return operand
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Drop a ``float(x)`` cast."""
         self.generic_visit(node)
         if isinstance(node.func, ast.Name) and node.func.id == "float" and len(node.args) == 1:
             return node.args[0]
@@ -89,6 +92,7 @@ class ScalarFloatTagger(ast.NodeVisitor):
         self.array_names = array_names
 
     def visit_Assign(self, node: ast.Assign) -> None:
+        """Tag a local scalar as float when its defining expression is not integer."""
         self.generic_visit(node)
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             return
@@ -129,6 +133,7 @@ class TrueDivisionPromoter(ast.NodeTransformer):
 
     @staticmethod
     def as_f64(node: ast.expr) -> ast.expr:
+        """``node`` wrapped in ``np.float64``."""
         return ast.copy_location(
             ast.Call(
                 func=numpy_attribute("float64"),
@@ -139,6 +144,7 @@ class TrueDivisionPromoter(ast.NodeTransformer):
         )
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Promote an integer by integer division to float64."""
         self.generic_visit(node)
         if (
             isinstance(node.op, ast.Div)

@@ -210,6 +210,7 @@ class SsaRenamer:
         version: dict[str, dict[tuple[str, ...], str]],
         scope: SsaScope,
     ) -> None:
+        """Rename the reassigned arrays of a statement list, one version per shape."""
         for i, stmt in enumerate(stmts):
             # Rewrite Load-context Names on the RHS / iter / test BEFORE the version-mint decision
             # (the assignment's RHS reads the old version's storage).
@@ -391,6 +392,7 @@ def rename_reads(stmt: ast.stmt, rename_map: dict[str, str]) -> None:
 
 
 def apply_renames(node: ast.expr, rename_map: dict[str, str]) -> None:
+    """Rename the loads under ``node`` per ``rename_map``, in place."""
     if not rename_map:
         return
     for sub in walk_nodes(node):

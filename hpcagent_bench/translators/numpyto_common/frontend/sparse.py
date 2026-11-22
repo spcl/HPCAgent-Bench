@@ -114,6 +114,7 @@ class PruneSparseDispatch(ast.NodeTransformer):
 
     @staticmethod
     def statically_false(test: ast.expr) -> bool:
+        """Whether ``test`` is false for every dense argument."""
         if PruneSparseDispatch.asks_if_sparse(test):
             return True
         if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
@@ -121,6 +122,7 @@ class PruneSparseDispatch(ast.NodeTransformer):
         return False
 
     def visit_If(self, node: ast.If) -> ast.stmt | list[ast.stmt]:
+        """Drop the sparse branch of an ``if``."""
         self.generic_visit(node)
         if self.statically_false(node.test):
             return node.orelse  # drop the dead (sparse) branch, keep else/[]

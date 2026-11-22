@@ -74,6 +74,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
 
     @staticmethod
     def is_ufunc_at(func: ast.AST) -> str | None:
+        """The ufunc name of ``np.<op>.at``, or None."""
         # Attribute chain ``np.<op>.at`` -> Attribute(Attribute(Name('np'), op), 'at')
         if (
             isinstance(func, ast.Attribute)
@@ -141,6 +142,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         return expr if base is None else base
 
     def refuse_boolean_index(self, idx: ast.expr, op: str) -> None:
+        """Refuse a scatter index that reads a boolean array."""
         for n in walk_nodes(idx):
             if isinstance(n, ast.Name) and n.id in self.bool_names:
                 raise NotImplementedError(
@@ -164,6 +166,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         return peeled, tuple(ast.unparse(e) for e in ext)
 
     def val_at(self, vals: ast.expr, iters: Sequence[ast.expr]) -> ast.expr:
+        """The value of one scatter iteration: a literal as is, an array read at ``iters``."""
         if isinstance(vals, ast.UnaryOp) and isinstance(vals.op, ast.USub):
             return ast.UnaryOp(op=ast.USub(), operand=self.val_at(vals.operand, iters))
         if isinstance(vals, ast.Constant):
@@ -220,6 +223,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         return ast.Subscript(value=copy.deepcopy(target.value), slice=slot, ctx=ctx)
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
+        """Lower an ``np.<op>.at`` statement into an indexed loop."""
         call = node.value
         if not isinstance(call, ast.Call):
             return node

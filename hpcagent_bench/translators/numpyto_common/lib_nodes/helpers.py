@@ -44,6 +44,7 @@ __all__ = [
 
 
 def const_(v: Any) -> ast.Constant:  # noqa: ANN401 -- any literal an ast.Constant holds, or a numpy scalar
+    """A constant node of ``v``, a NumPy scalar converted to its Python value."""
     # numpy scalars (np.int64(0)) aren't Python int, so Fortran emit misclassifies
     # a size symbol built from one as REAL, and numpy 2.0's repr unparses it as
     # ``np.int64(0)``, breaking dace's sympy range parse. Coerce so every backend
@@ -60,6 +61,7 @@ def first_name(args: Sequence[ast.expr]) -> ast.Name | None:
 
 
 def attr_call(mod: str, attr: str, args: list[ast.expr]) -> ast.Call:
+    """The call ``mod.attr(*args)``."""
     return ast.Call(func=ast.Attribute(value=name_(mod), attr=attr, ctx=ast.Load()), args=args, keywords=[])
 
 
@@ -67,6 +69,7 @@ def attr_call(mod: str, attr: str, args: list[ast.expr]) -> ast.Call:
 
 
 def make_iter_name(prefix: str, depth: int) -> str:
+    """The loop iterator name of ``depth``."""
     return f"{prefix}{depth}"
 
 
@@ -314,10 +317,12 @@ def is_reduction_call(call: ast.Call) -> bool:
 
 
 def is_const_one(node: ast.expr) -> bool:
+    """Whether ``node`` is the constant 1."""
     return isinstance(node, ast.Constant) and node.value == 1
 
 
 def name_id(node: ast.AST) -> str | None:
+    """The name's id, or None if ``node`` is not a name."""
     return node.id if isinstance(node, ast.Name) else None
 
 
@@ -328,6 +333,7 @@ def truthy(x: ast.expr) -> ast.Compare:
 
 
 def falsy(x: ast.expr) -> ast.Compare:
+    """The comparison ``x == 0``."""
     return ast.Compare(left=x, ops=[ast.Eq()], comparators=[const_(0)])
 
 
@@ -346,6 +352,7 @@ def if_set(
 
 
 def resolve_shape(arr_node: ast.expr, shape_table: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """The shape of a named reduction operand; anything else is refused."""
     if not isinstance(arr_node, ast.Name):
         raise NotImplementedError("reduction operand is not a bare Name")
     shape = shape_table.get(arr_node.id)

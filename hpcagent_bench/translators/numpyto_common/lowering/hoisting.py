@@ -45,6 +45,7 @@ class StmtHoister(ast.NodeTransformer):
         return name_(name)
 
     def flush(self, node: ast.stmt) -> ast.AST | list[ast.stmt]:
+        """Visit ``node`` and emit its hoisted statements before it."""
         saved = self.pre_stmts
         self.pre_stmts = []
         self.generic_visit(node)
@@ -58,24 +59,31 @@ class StmtHoister(ast.NodeTransformer):
         return [*pre, node]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Hoist out of an assignment."""
         return self.flush(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        """Hoist out of an augmented assignment."""
         return self.flush(node)
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST | list[ast.stmt]:
+        """Hoist out of an expression statement."""
         return self.flush(node)
 
     def visit_Return(self, node: ast.Return) -> ast.AST | list[ast.stmt]:
+        """Hoist out of a return."""
         return self.flush(node)
 
     def visit_If(self, node: ast.If) -> ast.AST | list[ast.stmt]:
+        """Hoist out of an ``if``."""
         return self.flush(node)
 
     def visit_While(self, node: ast.While) -> ast.AST | list[ast.stmt]:
+        """Hoist out of a while loop."""
         return self.flush(node)
 
     def visit_For(self, node: ast.For) -> ast.AST | list[ast.stmt]:
+        """Hoist out of a for loop."""
         return self.flush(node)
 
 
@@ -97,6 +105,7 @@ class MethodCallRewriter(StmtHoister):
     MODULE_NAMES = frozenset({"np", "numpy", "math", "scipy"})
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite an array method call as its NumPy function."""
         self.generic_visit(node)
         func = node.func
         # ``a.ravel()`` / ``a.flatten()`` -> ``np.reshape(a, (-1,))``: a 1-D view /
@@ -177,12 +186,14 @@ class ComputedIndexCallHoister(StmtHoister):
     ARG_REDUCTIONS = frozenset({"argmax", "argmin"})
 
     def should_hoist(self, e: ast.expr) -> bool:
+        """Whether an index expression is a call to hoist."""
         if not isinstance(e, ast.Call):
             return False
         f = e.func
         return not (isinstance(f, ast.Name) and f.id in self.INLINE_INDEX_BUILTINS)
 
     def is_arg_reduction(self, call: ast.Call) -> bool:
+        """Whether ``call`` is a NumPy arg-reduction."""
         f = call.func
         return isinstance(f, ast.Attribute) and f.attr in self.ARG_REDUCTIONS and is_numpy_module(f.value)
 
@@ -195,6 +206,7 @@ class ComputedIndexCallHoister(StmtHoister):
         return self.spill(e, "__ix")
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Hoist the call indices of a subscript into temporaries."""
         self.generic_visit(node)
         sl = node.slice
         is_tuple = isinstance(sl, ast.Tuple)

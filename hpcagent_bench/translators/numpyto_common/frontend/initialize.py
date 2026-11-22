@@ -305,6 +305,7 @@ def elementwise_operands(node: ast.expr) -> list[ast.expr] | None:
 
 
 def call_name(func: ast.expr) -> str | None:
+    """The name a call's function expression ends in, or None."""
     return func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
 
 

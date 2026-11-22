@@ -243,6 +243,7 @@ class SubscriptIndexer:
         self.axes: list[ast.expr] = []
 
     def axis_len(self) -> ast.expr | None:
+        """The length of the current source axis, or None."""
         if self.shape and self.src_axis < len(self.shape):
             return const_or_name(self.shape[self.src_axis])
         return None

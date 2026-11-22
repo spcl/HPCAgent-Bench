@@ -458,6 +458,7 @@ class LoopVarSubst(ast.NodeTransformer):
         self.single = target.id if isinstance(target, ast.Name) else None
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Splat a substituted literal tuple or list into the call's positional arguments."""
         self.generic_visit(node)
         # After substitution ``*f`` has become ``*(c0, c1, ...)`` (a Starred over a
         # literal tuple/list) -- splat it into the call's positional args.
@@ -472,6 +473,7 @@ class LoopVarSubst(ast.NodeTransformer):
         return node
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace a load of the loop variable with its element."""
         if isinstance(node.ctx, ast.Load):
             if node.id in self.map:
                 return copy.deepcopy(self.map[node.id])
@@ -513,6 +515,7 @@ class ConstListLoopUnroller(ast.NodeTransformer):
         self.consumed: set[str] = set()
 
     def visit_For(self, node: ast.For) -> ast.stmt | list[ast.stmt]:
+        """Unroll a for loop over a constant list into one body per element."""
         self.generic_visit(node)
         if node.orelse or has_loop_control(node.body):
             return node
@@ -544,12 +547,15 @@ class ConstListLoopUnroller(ast.NodeTransformer):
 
 
 class DropListBindings(ast.NodeTransformer):
+    """Drop the bindings of unrolled constant lists."""
+
     __slots__ = ("names",)
 
     def __init__(self, names: set[str]) -> None:
         self.names = names
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | None:
+        """Drop a constant-list binding of one of ``names``."""
         if (
             len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
@@ -601,11 +607,13 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
         self._taken: set[str] = set()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        """Reserve the function's names, then hoist the helper calls of its body."""
         self._taken |= {n.id for n in walk_nodes(node) if isinstance(n, ast.Name)}
         node.body = self.rewrite_stmt_list(node.body)
         return node
 
     def visit_For(self, node: ast.For | ast.While) -> ast.AST:
+        """Hoist the helper calls of the loop bodies."""
         node.body = self.rewrite_stmt_list(node.body)
         node.orelse = self.rewrite_stmt_list(node.orelse)
         return node
@@ -613,6 +621,7 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
     visit_While = visit_For
 
     def visit_If(self, node: ast.If) -> ast.AST:
+        """Hoist the helper calls of the test, placed before the ``if``, and of the branches."""
         node.test = self.rewrite_expr(node.test)
         # The test's hoisted ``__hcall<n> = helper(..)`` Assigns are queued in
         # ``self._pending`` for the CALLER's rewrite_stmt_list to place BEFORE this
@@ -628,6 +637,7 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
         return node
 
     def rewrite_stmt_list(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
+        """Hoist the nested helper calls of a statement list, each before its statement."""
         out: list[ast.stmt] = []
         for stmt in stmts:
             # Skip the "Assign of a direct helper Call" form -- the
@@ -740,6 +750,7 @@ class InlineHelpers(ast.NodeTransformer):
         self._counter = counter if counter is not None else [0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Inline a helper call assigned to a target."""
         self.generic_visit(node)
         if (
             len(node.targets) == 1
@@ -826,6 +837,7 @@ class InlineHelpers(ast.NodeTransformer):
         return node
 
     def visit_Expr(self, node: ast.Expr) -> ast.stmt | list[ast.stmt] | None:
+        """Inline a void helper called as a statement."""
         # Void helper call as a statement -- ``helper(arr, ...)`` with
         # no return value. Inline the helper body (parameters renamed)
         # in place of the call statement.
@@ -892,6 +904,7 @@ class InlineHelpers(ast.NodeTransformer):
         return new_body
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | None:
+        """Inline the calls in a function, and drop a helper definition once inlined."""
         # Recurse so calls inside the def (and the kernel body) are inlined,
         # then DROP any nested helper def whose calls we just inlined -- a
         # backend cannot emit a Python ``def``. The kernel itself is never in
@@ -902,6 +915,7 @@ class InlineHelpers(ast.NodeTransformer):
         return node
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Inline a single-expression helper call in place."""
         self.generic_visit(node)
         if not (isinstance(node.func, ast.Name) and node.func.id in self.helpers):
             return node
@@ -937,6 +951,7 @@ class InlineHelpers(ast.NodeTransformer):
 
 
 def is_store(node: ast.Name | ast.Subscript) -> bool:
+    """Whether ``node`` is stored to."""
     return isinstance(node.ctx, ast.Store)
 
 
@@ -988,6 +1003,7 @@ class SubstNames(ast.NodeTransformer):
         self.subst = subst
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace a parameter reference with its call-site expression or renamed local."""
         if node.id not in self.subst:
             return node
         repl = self.subst[node.id]

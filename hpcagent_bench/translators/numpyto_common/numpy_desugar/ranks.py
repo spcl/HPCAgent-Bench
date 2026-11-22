@@ -131,19 +131,23 @@ def expr_rank(value: ast.AST, ranks: dict[str, int]) -> int | None:
 
 
 def name_rank(value: ast.Name, ranks: dict[str, int]) -> int | None:
+    """The rank of a name from the table."""
     return ranks.get(value.id)
 
 
 def constant_rank(value: ast.Constant, ranks: dict[str, int]) -> int | None:
+    """The rank of a number literal: 0."""
     return 0 if isinstance(value.value, (bool, int, float, complex)) else None
 
 
 def attribute_rank(value: ast.Attribute, ranks: dict[str, int]) -> int | None:
+    """The rank of ``A.T``: the rank of ``A``."""
     # ``A.T`` reverses the axes, keeping the rank.
     return expr_rank(value.value, ranks) if value.attr == "T" else None
 
 
 def binop_rank(value: ast.BinOp, ranks: dict[str, int]) -> int | None:
+    """The rank of a binary operation, by matmul or broadcast rules."""
     lr = expr_rank(value.left, ranks)
     rr = expr_rank(value.right, ranks)
     if isinstance(value.op, ast.MatMult):
@@ -156,21 +160,25 @@ def binop_rank(value: ast.BinOp, ranks: dict[str, int]) -> int | None:
 
 
 def unaryop_rank(value: ast.UnaryOp, ranks: dict[str, int]) -> int | None:
+    """The rank of a unary operation: its operand's."""
     return expr_rank(value.operand, ranks)
 
 
 def list_rank(value: ast.List, ranks: dict[str, int]) -> int | None:
+    """The rank of a list literal: one more than its elements'."""
     # ``np.array([a, b])``: a list literal adds one axis over its elements' rank.
     return 1 + max((expr_rank(e, ranks) or 0) for e in value.elts) if value.elts else 1
 
 
 def compare_rank(value: ast.Compare, ranks: dict[str, int]) -> int | None:
+    """The rank of a comparison: its operands' largest."""
     # A boolean mask keeps its operands' rank.
     rs = [expr_rank(value.left, ranks)] + [expr_rank(c, ranks) for c in value.comparators]
     return max([r for r in rs if r is not None], default=None)
 
 
 def boolop_rank(value: ast.BoolOp, ranks: dict[str, int]) -> int | None:
+    """The rank of a boolean operation: its operands' largest."""
     rs = [expr_rank(v, ranks) for v in value.values]
     return max([r for r in rs if r is not None], default=None)
 
@@ -217,6 +225,7 @@ def name_index_rank(base: int, index: ast.Name, ranks: dict[str, int]) -> int | 
 
 
 def subscript_rank(value: ast.Subscript, ranks: dict[str, int]) -> int | None:
+    """The rank of a subscript."""
     base = expr_rank(value.value, ranks)
     if base is None:
         return None
@@ -237,6 +246,7 @@ def subscript_rank(value: ast.Subscript, ranks: dict[str, int]) -> int | None:
 
 
 def call_rank(value: ast.Call, ranks: dict[str, int]) -> int | None:
+    """The rank of a call."""
     func = value.func
     is_abs = isinstance(func, ast.Name) and func.id == "abs"
     if value.args and (is_abs or numpy_submodule_attr(value, "fft")):
@@ -249,6 +259,7 @@ def call_rank(value: ast.Call, ranks: dict[str, int]) -> int | None:
 
 
 def ufunc_rank(value: ast.Call, ranks: dict[str, int]) -> int | None:
+    """The rank of an elementwise ufunc call: its arguments' largest."""
     # Remaining np.<fn>(...) are elementwise/broadcasting ufuncs (abs, sqrt, exp, less, minimum,
     # where, conj, ...) -> max of arg ranks. Rank-changing ops have their own handler.
     rs = [expr_rank(a, ranks) for a in value.args]
@@ -307,10 +318,12 @@ def reshape_args_rank(value: ast.Call, undecided: Callable[[], int | None]) -> i
 
 
 def one_axis_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of ``np.arange`` or ``np.linspace``: 1."""
     return 1  # np.arange / np.linspace are always 1-D
 
 
 def reduce_call_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of a reduction, by its axis and ``keepdims``."""
     if not value.args:
         return np_fallthrough_rank(value, attr, ranks)
     base = expr_rank(value.args[0], ranks)
@@ -330,6 +343,7 @@ def reduce_call_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int |
 
 
 def shape_ctor_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of a shape constructor such as ``np.zeros``."""
     if value.args:
         a0 = value.args[0]
         n = tuple_len(a0)
@@ -348,6 +362,7 @@ def first_arg_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | N
 
 
 def np_reshape_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of ``np.reshape``."""
     n = tuple_len(value.args[1]) if len(value.args) >= 2 else None
     if n is None and len(value.args) >= 2 and const_int(value.args[1]) is not None:
         n = 1  # ``np.reshape(a, -1)``: one integer extent is one axis
@@ -355,6 +370,7 @@ def np_reshape_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | 
 
 
 def diag_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of ``np.diag``: 2 from 1, 1 from 2."""
     # 2-D in extracts the diagonal (1-D out), 1-D in builds the matrix (2-D out).
     if not value.args:
         return np_fallthrough_rank(value, attr, ranks)
@@ -363,6 +379,7 @@ def diag_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
 
 
 def take_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of ``np.take``."""
     # ``np.take(a, idx, axis=k)`` replaces axis k by the INDEX's own rank, so a scalar index drops it.
     if len(value.args) < 2:
         return np_fallthrough_rank(value, attr, ranks)
@@ -376,6 +393,7 @@ def take_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
 
 
 def expand_dims_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of ``np.expand_dims``."""
     if not value.args:
         return np_fallthrough_rank(value, attr, ranks)
     base = expr_rank(value.args[0], ranks)
@@ -383,6 +401,7 @@ def expand_dims_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int |
 
 
 def squeeze_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of ``np.squeeze``."""
     if not value.args:
         return np_fallthrough_rank(value, attr, ranks)
     base = expr_rank(value.args[0], ranks)
@@ -391,12 +410,14 @@ def squeeze_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | Non
 
 
 def matmul_call_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of ``np.matmul``."""
     if len(value.args) != 2:
         return np_fallthrough_rank(value, attr, ranks)
     return expr_rank(ast.BinOp(left=value.args[0], op=ast.MatMult(), right=value.args[1]), ranks)
 
 
 def tensordot_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
+    """The rank of ``np.tensordot``."""
     # A contraction, not a broadcast: each operand loses its contracted axes.
     if len(value.args) < 2:
         return np_fallthrough_rank(value, attr, ranks)

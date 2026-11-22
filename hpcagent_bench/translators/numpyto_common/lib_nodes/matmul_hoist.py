@@ -628,6 +628,7 @@ class MatmulHoister(ast.NodeTransformer):
         self.pre_stmts: list[ast.stmt] = []
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Hoist a dense or sparse ``A @ B`` into a temporary filled by its loop nest."""
         self.generic_visit(node)
         if isinstance(node.op, ast.MatMult):
             # Sparse path: both operands are logical sparse arrays.

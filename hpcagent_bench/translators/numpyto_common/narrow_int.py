@@ -87,6 +87,7 @@ NameDtype = Callable[[str], str | None]
 
 
 def is_float_or_complex(dtype: str) -> bool:
+    """Whether ``dtype`` is a float or complex dtype."""
     try:
         c = dtypes.canonical(dtype)
     except KeyError:

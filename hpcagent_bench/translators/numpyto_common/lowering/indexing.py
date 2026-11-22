@@ -94,6 +94,7 @@ def basic_axis_count(dims: Sequence[ast.expr]) -> int:
 
 
 def name_of_subscript(node: ast.Subscript) -> str | None:
+    """The name a subscript indexes, or None."""
     return node.value.id if isinstance(node.value, ast.Name) else None
 
 
@@ -122,6 +123,7 @@ def np_func_name(func: ast.AST) -> str | None:
 
 
 def binop(left: ast.expr, op: ast.operator, right: ast.expr) -> ast.BinOp:
+    """The binary operation ``left op right``."""
     return ast.BinOp(left=left, op=op, right=right)
 
 

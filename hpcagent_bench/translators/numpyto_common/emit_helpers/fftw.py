@@ -36,10 +36,12 @@ class FftTransform:
 
     @property
     def sign(self) -> str:
+        """The FFTW direction constant."""
         return "FFTW_BACKWARD" if self.inverse else "FFTW_FORWARD"
 
     @property
     def ortho(self) -> bool:
+        """Whether the transform is orthonormally scaled."""
         return self.norm_kind == NORM_ORTHO
 
     @property

@@ -74,6 +74,7 @@ def linalg_operand(node: ast.expr, p: str, tag: str, hoist: ValueHoist) -> str:
 
 
 def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
+    """Hoist ``np.linalg.solve`` into loops; None if the operand ranks are unknown."""
     if len(node.args) < 2:
         return None
     a, b = node.args[0], node.args[1]

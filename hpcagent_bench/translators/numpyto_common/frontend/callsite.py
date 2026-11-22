@@ -429,6 +429,7 @@ class ReplaceStmts(ast.NodeTransformer):
         self.mapping = mapping
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Replace a mapped assignment with its statements."""
         repl = self.mapping.get(id(node))
         if repl is None:
             return node

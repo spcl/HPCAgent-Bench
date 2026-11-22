@@ -47,6 +47,7 @@ def matmul_pairs(node: ast.expr) -> list[ast.expr]:
 
 
 def matmul_operands(mm: ast.expr) -> tuple[ast.expr, ast.expr]:
+    """The operands of a matmul operator or call."""
     if isinstance(mm, ast.BinOp):
         return mm.left, mm.right
     if isinstance(mm, ast.Call):
@@ -65,6 +66,7 @@ class IndexLeadingAxis(ast.NodeTransformer):
         self.ranks = ranks
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Index a rank-3-or-higher name by the batch iterator."""
         if isinstance(node.ctx, ast.Load) and (self.ranks.get(node.id, 0) or 0) > 2:
             return ast.copy_location(
                 ast.Subscript(
@@ -97,6 +99,7 @@ class MatmulLoopPass(RankedRewritePass):
         self.widths = widths
 
     def result_dtype(self, aid: str, bid: str) -> str:
+        """The result dtype of a matmul of ``aid`` and ``bid``."""
         return matmul_result_dtype(aid, bid, self.widths.get(aid), self.widths.get(bid))
 
 
@@ -163,6 +166,7 @@ class BatchedMatmulToLoop(MatmulLoopPass):
         return ast.parse(f"{name} = np.empty(({', '.join(dims)}), {self.result_dtype(a.id, b.id)})").body[0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Lower a batched matmul assignment into a loop of 2-D products."""
         self.generic_visit(node)
         if len(node.targets) != 1 or not self.is_batched(node.value):
             return node
@@ -312,14 +316,17 @@ class ReshapeContiguousInline(ast.NodeTransformer):
         self.changed = False
 
     def noncontig_(self, x: ast.expr) -> bool:
+        """Whether ``x`` is a transpose or a name derived from one."""
         return (isinstance(x, ast.Name) and x.id in self.noncontig) or is_transpose_expr(x)
 
     def wrap(self, x: ast.expr) -> ast.Call:
+        """``x`` wrapped in ``np.ascontiguousarray``."""
         self.changed = True
         acont = numpy_attribute("ascontiguousarray")
         return ast.Call(func=acont, args=[x], keywords=[])
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
+        """Make the operand of a reshape of a transpose contiguous."""
         self.generic_visit(node)
         if numpy_call_attr(node) == "reshape" and node.args and self.noncontig_(node.args[0]):
             node.args[0] = self.wrap(node.args[0])
@@ -363,6 +370,7 @@ class ReshapeMatmulInline(MatmulLoopPass):
     __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Lower a reshape-matmul-reshape assignment into a contraction loop."""
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node

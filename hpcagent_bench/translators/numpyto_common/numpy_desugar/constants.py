@@ -68,6 +68,7 @@ class FinfoEpsFold(ast.NodeTransformer):
         self.eps = dtypes.float_eps(working_float_dtype(precision))
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        """Fold ``np.finfo(...).eps`` to the working dtype's epsilon."""
         self.generic_visit(node)
         call = node.value
         if (
@@ -197,6 +198,7 @@ class ConstComprehensionFold(ast.NodeTransformer):
         self.changed = False
 
     def foldable(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> bool:
+        """Whether the comprehension reads only constants and its own targets."""
         bound = {n.id for g in node.generators for n in walk_nodes(g.target) if isinstance(n, ast.Name)}
         for n in walk_nodes(node):
             if isinstance(
@@ -223,6 +225,7 @@ class ConstComprehensionFold(ast.NodeTransformer):
         return True
 
     def fold_(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> ast.expr:
+        """Fold a constant comprehension into its literal value."""
         if not self.foldable(node):
             return node
         try:
@@ -238,6 +241,7 @@ class ConstComprehensionFold(ast.NodeTransformer):
         return ast.copy_location(lit, node)
 
     def visit_ListComp(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> ast.AST:
+        """Fold a constant comprehension."""
         self.generic_visit(node)
         return self.fold_(node)
 
@@ -293,6 +297,7 @@ class ConstEvaluator:
         self.names = names
 
     def value(self, node: ast.expr, scope: dict[str, Value]) -> Value:
+        """Evaluate an expression in ``scope``."""
         if isinstance(node, ast.Constant):
             return node.value
         if isinstance(node, ast.Name):
@@ -320,6 +325,7 @@ class ConstEvaluator:
         raise NotImplementedError(type(node).__name__)
 
     def display_dict(self, node: ast.Dict, scope: dict[str, Value]) -> dict[Value, Value]:
+        """Evaluate a dict display."""
         result: dict[Value, Value] = {}
         for key, item in zip(node.keys, node.values, strict=False):
             if key is None:
@@ -329,6 +335,7 @@ class ConstEvaluator:
         return result
 
     def boolop(self, node: ast.BoolOp, scope: dict[str, Value]) -> Value:
+        """Evaluate a boolean operation with short-circuiting."""
         result: Value = None
         for operand in node.values:
             result = self.value(operand, scope)
@@ -337,6 +344,7 @@ class ConstEvaluator:
         return result
 
     def compare(self, node: ast.Compare, scope: dict[str, Value]) -> Value:
+        """Evaluate a chained comparison."""
         left = self.value(node.left, scope)
         result: Value = True
         for op, comparator in zip(node.ops, node.comparators, strict=False):
@@ -348,6 +356,7 @@ class ConstEvaluator:
         return result
 
     def call(self, node: ast.Call, scope: dict[str, Value]) -> Value:
+        """Evaluate a call."""
         func = self.value(node.func, scope)
         args = [self.value(a, scope) for a in node.args]
         kwargs: dict[str, Value] = {}
@@ -361,6 +370,7 @@ class ConstEvaluator:
     def comprehension(
         self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp, scope: dict[str, Value]
     ) -> Value:
+        """Evaluate a comprehension."""
         # The first iterable is evaluated in the enclosing scope, before the comprehension runs.
         first = iter(self.value(node.generators[0].iter, scope))
         if isinstance(node, ast.DictComp):
@@ -389,6 +399,7 @@ class ConstEvaluator:
                 )
 
     def bind(self, target: ast.expr, item: Value, scope: dict[str, Value]) -> None:
+        """Bind a comprehension target to ``item`` in ``scope``."""
         if isinstance(target, ast.Name):
             scope[target.id] = item
             return
@@ -451,6 +462,7 @@ class ListCompUnroll(ast.NodeTransformer):
         self.changed = False
 
     def visit_ListComp(self, node: ast.ListComp) -> ast.AST:
+        """Unroll a comprehension over a constant iterable into a list literal."""
         self.generic_visit(node)  # an inner comprehension folds/unrolls first
         if len(node.generators) != 1:
             return node

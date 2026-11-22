@@ -125,6 +125,7 @@ def literal_arange_is_empty(args: Sequence[ast.expr]) -> bool:
 
 
 def is_numeric_literal(node: ast.expr) -> bool:
+    """Whether ``node`` is a signed or unsigned number literal."""
     operand = node.operand if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)) else node
     return isinstance(operand, ast.Constant) and isinstance(operand.value, (int, float))
 

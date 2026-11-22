@@ -61,6 +61,7 @@ def is_scalar_literal(node: ast.AST) -> bool:
 
 
 def load(name: str) -> ast.Name:
+    """A load of ``name``."""
     return name_(name)
 
 
@@ -101,6 +102,7 @@ STATEMENT_FIELDS = ("body", "handlers", "orelse", "finalbody", "cases")
 
 
 def statement_blocks(node: ast.AST) -> list[list[ast.stmt]]:
+    """The statement lists of ``node``."""
     return [block for name, block in ast.iter_fields(node) if name in STATEMENT_FIELDS and isinstance(block, list)]
 
 
@@ -110,6 +112,7 @@ class StatementTransformer(ast.NodeTransformer):
     __slots__ = ()
 
     def generic_visit(self, node: ast.AST) -> ast.AST:
+        """Visit the statements of each statement list of ``node``."""
         for block in statement_blocks(node):
             block[:] = [self.visit(child) for child in block]
         return node
@@ -133,6 +136,7 @@ class DesugarArrayIteration(StatementTransformer):
         self.var_to_array: dict[str, str] = {}
 
     def visit_For(self, node: ast.For) -> ast.For:
+        """Desugar a loop over an array into a range loop."""
         self.generic_visit(node)
         if not (isinstance(node.iter, ast.Name) and isinstance(node.target, ast.Name)):
             return node
@@ -146,6 +150,7 @@ class DesugarArrayIteration(StatementTransformer):
 
 
 def placed(origin: ast.stmt, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
+    """``stmts`` placed at ``origin``'s location."""
     return [ast.fix_missing_locations(ast.copy_location(stmt, origin)) for stmt in stmts]
 
 
@@ -253,26 +258,31 @@ class SplitChainedAssign(StatementTransformer):
         self.ranks: dict[str, int] | None = None
 
     def visit_Module(self, node: ast.Module) -> ast.Module:
+        """Split the chained assignments of the module."""
         self.enter(node)
         return node
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+        """Split the chained assignments of a function."""
         self.enter(node)
         return node
 
     def enter(self, node: ast.Module | ast.FunctionDef) -> None:
+        """Split the chained assignments of a scope with its own rank table."""
         outer_scope, outer_ranks = self.scope, self.ranks
         self.scope, self.ranks = node, None
         self.generic_visit(node)
         self.scope, self.ranks = outer_scope, outer_ranks
 
     def generic_visit(self, node: ast.AST) -> ast.AST:
+        """Split the chained assignments of each statement list of ``node``."""
         for name, block in ast.iter_fields(node):
             if name in STATEMENT_LISTS and isinstance(block, list):
                 self.split_block(block, node is self.scope)
         return super().generic_visit(node)
 
     def rank_of(self, value: ast.expr) -> int | None:
+        """The rank of ``value``, the scope's rank table built on first use."""
         if isinstance(value, ast.Constant):
             return 0
         if self.ranks is None:
@@ -280,6 +290,7 @@ class SplitChainedAssign(StatementTransformer):
         return expr_rank(value, self.ranks)
 
     def split_block(self, block: list[ast.stmt], scope_body: bool) -> None:
+        """Split the chained assignments of one statement list in place."""
         position = 0
         while position < len(block):
             stmt = block[position]
@@ -428,6 +439,7 @@ class SplitTupleUnpack(StatementTransformer):
         return None
 
     def generic_visit(self, node: ast.AST) -> ast.AST:
+        """Split the tuple unpacks of each statement list of ``node``."""
         for block in statement_blocks(node):
             spliced: list[ast.stmt] = []
             for stmt in block:

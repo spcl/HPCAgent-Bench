@@ -146,6 +146,7 @@ class SubstituteLoads(ast.NodeTransformer):
         self.values = values
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Replace a load of a substituted name with a copy of its expression."""
         if isinstance(node.ctx, ast.Load) and node.id in self.values:
             return ast.copy_location(copy.deepcopy(self.values[node.id]), node)
         return node
@@ -158,6 +159,7 @@ class InlineDefinitions(SubstituteLoads):
     __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
+        """Drop the definition of an inlined name."""
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.values:
             return None
         self.generic_visit(node)
@@ -183,10 +185,12 @@ class RenameNames(ast.NodeTransformer):
         self.renames = renames
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Rename a name."""
         new = self.renames.get(node.id)
         return node if new is None else ast.copy_location(ast.Name(id=new, ctx=node.ctx), node)
 
     def visit_arg(self, node: ast.arg) -> ast.AST:
+        """Rename a parameter."""
         node.arg = self.renames.get(node.arg, node.arg)
         return node
 

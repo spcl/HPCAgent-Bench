@@ -54,6 +54,7 @@ __all__ = [
 
 
 def has_bounded_slice(node: ast.Subscript) -> bool:
+    """Whether the subscript has a slice with a bound."""
     axes = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
     return any(isinstance(e, ast.Slice) and (e.lower or e.upper) for e in axes)
 
@@ -116,18 +117,22 @@ def expand_elementwise(
 
 
 def expand_minimum(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.minimum`` into loops."""
     return expand_elementwise(t, a, s, lambda x, y: ast.Call(func=name_("min"), args=[x, y], keywords=[]))
 
 
 def expand_maximum(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.maximum`` into loops."""
     return expand_elementwise(t, a, s, lambda x, y: ast.Call(func=name_("max"), args=[x, y], keywords=[]))
 
 
 def expand_add(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.add`` into loops."""
     return expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Add(), right=y))
 
 
 def expand_multiply(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.multiply`` into loops."""
     return expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Mult(), right=y))
 
 
@@ -142,6 +147,7 @@ def expand_power(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...
 
 
 def expand_subtract(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.subtract`` into loops."""
     return expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Sub(), right=y))
 
 
@@ -168,34 +174,42 @@ def expand_divide(
 
 
 def expand_less(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.less`` into loops."""
     return expand_elementwise(t, a, s, cmp_(ast.Lt))
 
 
 def expand_less_equal(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.less_equal`` into loops."""
     return expand_elementwise(t, a, s, cmp_(ast.LtE))
 
 
 def expand_greater(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.greater`` into loops."""
     return expand_elementwise(t, a, s, cmp_(ast.Gt))
 
 
 def expand_greater_equal(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.greater_equal`` into loops."""
     return expand_elementwise(t, a, s, cmp_(ast.GtE))
 
 
 def expand_equal(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.equal`` into loops."""
     return expand_elementwise(t, a, s, cmp_(ast.Eq))
 
 
 def expand_not_equal(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.not_equal`` into loops."""
     return expand_elementwise(t, a, s, cmp_(ast.NotEq))
 
 
 def expand_logical_and(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.logical_and`` into loops."""
     return expand_elementwise(t, a, s, lambda x, y: ast.BoolOp(op=ast.And(), values=[x, y]))
 
 
 def expand_logical_or(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.logical_or`` into loops."""
     return expand_elementwise(t, a, s, lambda x, y: ast.BoolOp(op=ast.Or(), values=[x, y]))
 
 
@@ -214,26 +228,32 @@ def expand_negative(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, 
 
 
 def expand_tanh(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.tanh`` into loops."""
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("tanh"), args=[x], keywords=[]))
 
 
 def expand_sin_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.sin`` of an array into loops."""
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("sin"), args=[x], keywords=[]))
 
 
 def expand_cos_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.cos`` of an array into loops."""
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("cos"), args=[x], keywords=[]))
 
 
 def expand_exp_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.exp`` of an array into loops."""
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("exp"), args=[x], keywords=[]))
 
 
 def expand_log_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.log`` of an array into loops."""
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("log"), args=[x], keywords=[]))
 
 
 def expand_sqrt_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    """Expand ``np.sqrt`` of an array into loops."""
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("sqrt"), args=[x], keywords=[]))
 
 

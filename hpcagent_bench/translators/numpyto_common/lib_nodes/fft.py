@@ -252,6 +252,7 @@ def expand_fftn(
     library: bool = False,
     library_nd: bool = False,
 ) -> list[ast.stmt]:
+    """Expand ``np.fft.fftn``."""
     return expand_dftn(
         target, args, shape_table, inverse=False, is_n=True, kwargs=kwargs, library=library, library_nd=library_nd
     )
@@ -265,6 +266,7 @@ def expand_ifftn(
     library: bool = False,
     library_nd: bool = False,
 ) -> list[ast.stmt]:
+    """Expand ``np.fft.ifftn``."""
     return expand_dftn(
         target, args, shape_table, inverse=True, is_n=True, kwargs=kwargs, library=library, library_nd=library_nd
     )
@@ -278,6 +280,7 @@ def expand_fft(
     library: bool = False,
     library_nd: bool = False,
 ) -> list[ast.stmt]:
+    """Expand ``np.fft.fft``."""
     # 1-D DFT along a single ``axis`` (default last); for a 1-D input == fftn.
     return expand_dftn(
         target, args, shape_table, inverse=False, is_n=False, kwargs=kwargs, library=library, library_nd=library_nd
@@ -292,6 +295,7 @@ def expand_ifft(
     library: bool = False,
     library_nd: bool = False,
 ) -> list[ast.stmt]:
+    """Expand ``np.fft.ifft``."""
     return expand_dftn(
         target, args, shape_table, inverse=True, is_n=False, kwargs=kwargs, library=library, library_nd=library_nd
     )

@@ -51,6 +51,7 @@ class AstypeRewriter(ast.NodeTransformer):
         self.default_float = default_float
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Lower ``.astype(dtype)`` on any receiver."""
         self.generic_visit(node)
         f = node.func
         if not (isinstance(f, ast.Attribute) and f.attr == "astype" and node.args):
@@ -128,6 +129,7 @@ class ReshapeMethodRewriter(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite ``X.reshape(...)`` as ``np.reshape(X, ...)``."""
         self.generic_visit(node)
         if not (isinstance(node.func, ast.Attribute) and node.func.attr == "reshape"):
             return node
@@ -175,6 +177,7 @@ class NpAliasRewriter(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rename a NumPy alias to its canonical function."""
         self.generic_visit(node)
         f = node.func
         if isinstance(f, ast.Attribute) and is_numpy_module(f.value) and f.attr in NP_FUNC_ALIASES:
@@ -202,6 +205,7 @@ class ConditionalNoneAllocRewriter(ast.NodeTransformer):
         self._none_checked: set[str] = set()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        """Record the names whose None-ness is tested, then rewrite the function."""
         # Names whose None-ness is observed (``x is None`` / ``x is not None``): a
         # conditional alloc into one of these must NOT be forced, so record them first.
         checked = set()
@@ -218,6 +222,7 @@ class ConditionalNoneAllocRewriter(ast.NodeTransformer):
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        """Drop the None branch of a conditional allocation of an untested name."""
         self.generic_visit(node)
         if not (
             len(node.targets) == 1
@@ -244,6 +249,7 @@ class MatmulCallRewriter(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite ``np.matmul(a, b)`` as ``a @ b``."""
         self.generic_visit(node)
         f = node.func
         if (
@@ -282,6 +288,7 @@ class ScalarTimesMatmulRewriter(ast.NodeTransformer):
         self.pre_stmts: list[ast.stmt] = []
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Restructure ``alpha * A @ B`` so the matmul can be hoisted."""
         self.generic_visit(node)
         # Pattern: ``(scalar * Name) @ B`` -- left is BinOp(Mult), right is anything.
         if isinstance(node.op, ast.MatMult) and isinstance(node.left, ast.BinOp) and isinstance(node.left.op, ast.Mult):
@@ -354,6 +361,7 @@ class EnumerateZipRewriter(ast.NodeTransformer):
         return ast.Constant(value=0)
 
     def visit_For(self, node: ast.For) -> ast.AST | list[ast.stmt]:
+        """Desugar a loop over ``enumerate`` or ``zip`` into a range loop."""
         self.generic_visit(node)
         it = node.iter
         pair = pair_names(node.target)
@@ -423,6 +431,7 @@ class TransposeRewriter(ast.NodeTransformer):
         self.sparse_names = set(sparse_names or ())
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        """Rewrite ``A.T`` as ``np.transpose(A)``."""
         self.generic_visit(node)
         if node.attr != "T":
             return node
@@ -452,6 +461,7 @@ class TransposeRewriter(ast.NodeTransformer):
         )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite ``A.transpose(...)`` as ``np.transpose(A, ...)``."""
         self.generic_visit(node)
         f = node.func
         if not (isinstance(f, ast.Attribute) and f.attr == "transpose"):

@@ -95,12 +95,14 @@ class SsaRename(ast.NodeTransformer):
         self.changed = False
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Read the current version of a renamed name."""
         current = self.version.get(node.id)
         if current is None or not isinstance(node.ctx, ast.Load):
             return node
         return ast.copy_location(ast.Name(id=current, ctx=node.ctx), node)
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        """Bind a versionable name's reassignment to a new version."""
         if self.versionable is None:
             # Scanned lazily: the driver replaces ``fn.body`` after every earlier pass.
             self.versionable = ssa_versionable(self.fn, self.pinned)

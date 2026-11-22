@@ -39,9 +39,11 @@ class OrderedSet[T]:
         self.items: dict[T, None] = dict.fromkeys(iterable)
 
     def add(self, item: T) -> None:
+        """Add ``item`` at the end, if absent."""
         self.items[item] = None
 
     def discard(self, item: T) -> None:
+        """Remove ``item`` if present."""
         self.items.pop(item, None)
 
     def __contains__(self, item: object) -> bool:
@@ -54,6 +56,7 @@ class OrderedSet[T]:
         return len(self.items)
 
     def update(self, iterable: Iterable[T]) -> None:
+        """Add each item of ``iterable``."""
         for item in iterable:
             self.items[item] = None
 

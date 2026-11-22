@@ -175,6 +175,7 @@ class CurveFitRewriter(ast.NodeTransformer):
         self.fitted: list[tuple[str, str]] = []
 
     def find_model(self, name: str) -> ast.FunctionDef | None:
+        """The model function ``name`` in the kernel or the module, or None."""
         for scope in (self.kernel, self.tree):
             for node in walk_nodes(scope):
                 if isinstance(node, ast.FunctionDef) and node.name == name and node is not self.kernel:
@@ -203,6 +204,7 @@ class CurveFitRewriter(ast.NodeTransformer):
         ast.fix_missing_locations(fdef)
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        """Rewrite a ``curve_fit`` assignment into the LM loop nest."""
         call = curve_fit_call(node.value)
         if call is None or len(node.targets) != 1:
             return node
@@ -262,6 +264,7 @@ class NegParamIndexFold(ast.NodeTransformer):
         self.nexpr = nexpr
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.expr:
+        """Rewrite a negative constant index of the parameter vector as a positive one."""
         self.generic_visit(node)
         if (
             isinstance(node.value, ast.Name)

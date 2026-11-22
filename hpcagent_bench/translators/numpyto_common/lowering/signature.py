@@ -425,6 +425,7 @@ class ArrayUseScan:
         self.scalars_used_as_index: set[str] = set()
 
     def visit(self, node: ast.AST) -> None:
+        """Record what ``node`` and its children do with the arrays."""
         if isinstance(node, (ast.Assign, ast.AugAssign)):
             self.note_assign(node)
         if isinstance(node, ast.Subscript):

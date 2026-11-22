@@ -69,11 +69,13 @@ __all__ = [
 
 
 def range_call(start: ast.expr | None, stop: ast.expr) -> ast.Call:
+    """The call ``range(start, stop)``."""
     args = [start, stop] if start is not None else [stop]
     return ast.Call(func=name_("range"), args=args, keywords=[])
 
 
 def subscript_(base: str, *axes: ast.expr, ctx: ast.expr_context | None = None) -> ast.Subscript:
+    """The subscript ``base[axes]``."""
     if not axes:
         raise ValueError(f"_subscript: empty axes for {base}")
     sl = axes[0] if len(axes) == 1 else ast.Tuple(elts=list(axes), ctx=ast.Load())
@@ -81,14 +83,17 @@ def subscript_(base: str, *axes: ast.expr, ctx: ast.expr_context | None = None) 
 
 
 def add(a: ast.expr, b: ast.expr) -> ast.BinOp:
+    """``a + b``."""
     return ast.BinOp(left=a, op=ast.Add(), right=b)
 
 
 def sub_(a: ast.expr, b: ast.expr) -> ast.BinOp:
+    """``a - b``."""
     return ast.BinOp(left=a, op=ast.Sub(), right=b)
 
 
 def mul(a: ast.expr, b: ast.expr) -> ast.BinOp:
+    """``a * b``."""
     return ast.BinOp(left=a, op=ast.Mult(), right=b)
 
 
@@ -1025,6 +1030,7 @@ class EntryExtents:
 
 
 def assign(name: str, value: ast.expr) -> ast.Assign:
+    """``name = value``."""
     return ast.Assign(targets=[store_(name)], value=value)
 
 
@@ -1034,6 +1040,7 @@ def bind_entry(row: ast.expr, col: ast.expr, value: ast.expr) -> list[ast.stmt]:
 
 
 def csr_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    """The loop over a CSR matrix's stored entries around ``inner``."""
     stored = range_for(
         "__ek",
         [subscript_(bufs["indptr"], name_("__ei")), subscript_(bufs["indptr"], add(name_("__ei"), const_(1)))],
@@ -1044,6 +1051,7 @@ def csr_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) 
 
 
 def csc_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    """The loop over a CSC matrix's stored entries around ``inner``."""
     stored = range_for(
         "__ek",
         [subscript_(bufs["indptr"], name_("__ej")), subscript_(bufs["indptr"], add(name_("__ej"), const_(1)))],
@@ -1054,12 +1062,14 @@ def csc_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) 
 
 
 def coo_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    """The loop over a COO matrix's stored entries around ``inner``."""
     k = name_("__ek")
     body = bind_entry(subscript_(bufs["row"], k), subscript_(bufs["col"], k), subscript_(bufs["data"], k)) + inner
     return [range_for("__ek", [expr_of(ext.count)], body)]
 
 
 def bcsr_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    """The loop over a BCSR matrix's stored entries around ``inner``."""
     r, c = expr_of(ext.block_rows), expr_of(ext.block_cols)
     entry = bind_entry(
         add(mul(name_("__eb"), r), name_("__ea")),
@@ -1076,6 +1086,7 @@ def bcsr_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt])
 
 
 def dia_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    """The loop over a DIA matrix's on-matrix entries around ``inner``."""
     column = add(name_("__ei"), name_("__eo"))
     on_matrix = ast.Compare(
         left=const_(0), ops=[ast.LtE(), ast.Lt()], comparators=[name_(ENTRY_COL), expr_of(ext.cols)]
@@ -1096,6 +1107,7 @@ def dia_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) 
 
 
 def ell_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    """The loop over an ELL matrix's used entries around ``inner``."""
     used = ast.Compare(left=name_(ENTRY_COL), ops=[ast.GtE()], comparators=[const_(0)])
     guarded = ast.If(
         test=used,

@@ -58,6 +58,7 @@ class ArrayMethodRewriter(ast.NodeTransformer):
         self.sparse_names = set(sparse_names or ())
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Rewrite an array method call as the NumPy function call."""
         self.generic_visit(node)
         func = node.func
         if not (isinstance(func, ast.Attribute) and func.attr in ARRAY_METHOD_REDUCTIONS):

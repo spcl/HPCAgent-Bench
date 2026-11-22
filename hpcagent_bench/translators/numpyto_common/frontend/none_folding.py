@@ -61,13 +61,16 @@ class FoldStaticNoneBranches(ast.NodeTransformer):
 
     @staticmethod
     def is_static_none(node: ast.expr) -> bool:
+        """Whether ``node`` is the literal None."""
         return isinstance(node, ast.Constant) and node.value is None
 
     @classmethod
     def never_none(cls, node: ast.expr) -> bool:
+        """Whether ``node`` can never be None."""
         return isinstance(node, cls.NEVER_NONE) or (isinstance(node, ast.Constant) and node.value is not None)
 
     def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        """Fold a decidable ``is None`` or ``is not None`` comparison to a boolean."""
         self.generic_visit(node)
         if not (len(node.ops) == 1 and isinstance(node.ops[0], (ast.Is, ast.IsNot))):
             return node
@@ -83,12 +86,14 @@ class FoldStaticNoneBranches(ast.NodeTransformer):
         return ast.copy_location(ast.Constant(value=isinstance(node.ops[0], ast.IsNot)), node)
 
     def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        """Replace a conditional expression on a boolean literal with its live branch."""
         self.generic_visit(node)
         if isinstance(node.test, ast.Constant) and isinstance(node.test.value, bool):
             return node.body if node.test.value else node.orelse
         return node
 
     def visit_If(self, node: ast.If) -> ast.stmt | list[ast.stmt]:
+        """Replace an ``if`` on a boolean literal with its live branch."""
         self.generic_visit(node)
         if isinstance(node.test, ast.Constant) and isinstance(node.test.value, bool):
             # Splice in the live branch (a stmt list); an empty branch -> drop.
@@ -160,6 +165,7 @@ def flag_guard(flag: str, seed_when_none: bool) -> ast.Compare:
 
 
 def flag_set_stmt(flag: str) -> ast.Assign:
+    """``flag = 1``."""
     return ast.Assign(targets=[store_(flag)], value=ast.Constant(value=1))
 
 
@@ -251,12 +257,14 @@ class PeelNoneSeededAccumulators(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        """Peel the None-seeded accumulators of the function."""
         self.generic_visit(node)
         taken = OrderedSet(n.id for n in walk_nodes(node) if isinstance(n, ast.Name))
         self.rewrite_block(node.body, taken)
         return node
 
     def rewrite_block(self, stmts: list[ast.stmt], taken: OrderedSet[str]) -> None:
+        """Peel the None-seeded accumulators of one statement list."""
         i = 0
         while i < len(stmts):
             stmt = stmts[i]

@@ -58,6 +58,7 @@ class SubstituteLen(ast.NodeTransformer):
         self.index = index
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Replace ``len(name)`` with the fill index."""
         self.generic_visit(node)
         return name_(self.index) if is_len_of(node, self.name) else node
 
@@ -175,6 +176,7 @@ def mutation_count(node: ast.AST, name: str) -> int:
 
 
 def name_count(node: ast.AST, name: str) -> int:
+    """How often ``name`` occurs under ``node``."""
     return sum(1 for sub in walk_nodes(node) if isinstance(sub, ast.Name) and sub.id == name)
 
 

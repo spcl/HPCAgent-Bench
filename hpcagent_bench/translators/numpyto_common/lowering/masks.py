@@ -64,14 +64,17 @@ class BooleanMaskRewriter(ast.NodeTransformer):
         self.bool_names = bool_names
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Lower a masked assignment into a guarded loop."""
         self.generic_visit(node)
         return self.rewrite_(node.targets[0] if len(node.targets) == 1 else None, node.value, aug_op=None) or node
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        """Lower a masked augmented assignment into a guarded loop."""
         self.generic_visit(node)
         return self.rewrite_(node.target, node.value, aug_op=node.op) or node
 
     def rewrite_(self, target: ast.expr | None, value: ast.expr, aug_op: ast.operator | None) -> list[ast.stmt] | None:
+        """The guarded loop of a store through a boolean mask, or None if ``target`` is not one."""
         if not isinstance(target, ast.Subscript) or not isinstance(target.value, ast.Name):
             return None
         arr_name = target.value.id
@@ -347,14 +350,6 @@ def reads_before_rebind(stmts: Sequence[ast.stmt], name: str) -> bool:
 
 
 class BooleanMaskReductionRewriter(ast.NodeTransformer):
-    __slots__ = ("bool_names", "shape_table")
-
-    def __init__(
-        self, shape_table: dict[str, tuple[str, ...]] | None = None, bool_names: set[str] | None = None
-    ) -> None:
-        self.shape_table = shape_table or {}
-        self.bool_names = bool_names or set()
-
     """Peephole: rewrite ``tmp = arr[mask]; X = np.<reduction>(tmp)``
     into a single masked-iteration form that skips materialising the
     compacted view.
@@ -370,7 +365,16 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
     same loop we avoid the dynamic shape.
     """
 
+    __slots__ = ("bool_names", "shape_table")
+
+    def __init__(
+        self, shape_table: dict[str, tuple[str, ...]] | None = None, bool_names: set[str] | None = None
+    ) -> None:
+        self.shape_table = shape_table or {}
+        self.bool_names = bool_names or set()
+
     def walk_body(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+        """Lower the masked reductions of a statement list."""
         out: list[ast.stmt] = []
         i = 0
         while i < len(stmts):
@@ -595,6 +599,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         return None
 
     def emit_masked(self, res_name: str, arr: str | ast.expr, mask: str, op: str) -> list[ast.stmt] | None:
+        """The guarded loop that reduces ``arr`` under ``mask`` into ``res_name``, or None."""
         i_name = f"__msk_i_{res_name}"
         sum_name = f"__msk_acc_{res_name}"
         cnt_name = f"__msk_cnt_{res_name}"
@@ -659,5 +664,6 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         return out
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.stmt:
+        """Lower the masked reductions of the function body."""
         node.body = self.walk_body(node.body)
         return node

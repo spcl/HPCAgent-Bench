@@ -464,6 +464,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         return self.blas_float if self.blas else None
 
     def hoist_value(self, value: ast.expr) -> tuple[ast.expr, list[ast.stmt]]:
+        """Hoist the library calls and matmuls out of ``value``; return it and the hoisted statements."""
         # First hoist registered library-node calls, so e.g. ``A[i, j] -=
         # np.dot(A[i, :j], A[j, :j])`` becomes ``__cb1 = np.dot(...); A[i, j]
         # -= __cb1`` -- the next matmul hoist + expansion passes then handle
@@ -587,6 +588,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             self.local_dtypes[target_id] = "complex128"
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Lower an assignment whose value holds library calls."""
         # Captured BEFORE any rewriting: once the RHS is hoisted its arguments are temps, and the
         # note is meant to read as the numpy the kernel was written in.
         numpy_text = ast.unparse(node.value)
@@ -786,9 +788,11 @@ class LibNodeRewriter(ast.NodeTransformer):
         return out
 
     def visit_If(self, node: ast.If) -> ast.AST | list[ast.stmt]:
+        """Hoist a library call out of an ``if`` test."""
         return self.hoist_test_call(node)
 
     def visit_While(self, node: ast.While) -> ast.AST | list[ast.stmt]:
+        """Refuse a while test that would hoist a library call above the loop."""
         hoisted = self.hoist_test_call(node)
         if isinstance(hoisted, list):
             raise NotImplementedError(
@@ -811,6 +815,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         return node
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        """Lower an augmented assignment whose value holds library calls."""
         self.generic_visit(node)
         node.value, prelude = self.hoist_value(node.value)
         prelude = self.lower_prelude_calls(prelude)

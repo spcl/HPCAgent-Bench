@@ -191,6 +191,7 @@ class RenameNames(ast.NodeTransformer):
         self.renames = renames
 
     def visit_Name(self, node: ast.Name) -> ast.Name:
+        """Rename a name."""
         if node.id in self.renames:
             return ast.copy_location(ast.Name(id=self.renames[node.id], ctx=node.ctx), node)
         return node

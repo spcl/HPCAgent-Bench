@@ -116,6 +116,7 @@ class FormRewriter(ast.NodeTransformer):
         return rewritten
 
     def visit(self, node: ast.AST) -> ast.AST:
+        """Rewrite bottom-up, tracking the names bound by enclosing comprehensions and lambdas."""
         if isinstance(node, BINDING_EXPRESSIONS):
             enclosing = self.bound
             self.bound = enclosing | scope_bound_names(node)
@@ -145,6 +146,7 @@ class ValueHoist:
         self.changed = False
 
     def visit(self, node: ast.stmt) -> list[ast.stmt]:
+        """Hoist the form out of one statement."""
         return self.block([node]) if self.live else [node]
 
     def queue(self, lines: list[str]) -> None:
@@ -152,6 +154,7 @@ class ValueHoist:
         self.pre.extend(ast.parse("\n".join(lines)).body)
 
     def block(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
+        """Hoist the form out of a statement list."""
         out: list[ast.stmt] = []
         for stmt in stmts:
             if isinstance(stmt, VALUE_STATEMENTS):
@@ -173,6 +176,7 @@ class ValueHoist:
                     self.descend(owner)
 
     def statement(self, stmt: ast.Assign | ast.AugAssign | ast.Return | ast.Expr) -> list[ast.stmt]:
+        """Hoist the form out of one value statement; return it with its computing statements."""
         if self.form.drop(stmt, self.tables):
             self.changed = True
             return []

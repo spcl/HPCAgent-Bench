@@ -300,6 +300,7 @@ class HelperKirBuilder:
         self.generation = 0
 
     def build(self) -> list[KernelIR]:
+        """Build the kernel IR of each helper that survives inlining."""
         self.helper_defs = collect_called_helper_defs(self.tree, self.kernel_fn)
         if not self.helper_defs:
             return []
@@ -406,6 +407,7 @@ class HelperKirBuilder:
         osca_by: dict[str, ScalarDesc],
         osym_by: dict[str, SymbolDesc],
     ) -> dict[str, ArrayDesc]:
+        """The local arrays of the helper calls in ``owner_fn``, cached per owner structure and scope."""
         key = (structure_key(owner_fn), self.generation, desc_key(oarr_by), desc_key(osca_by), desc_key(osym_by))
         chased = self.local_arrays.get(key)
         if chased is None:
@@ -414,6 +416,7 @@ class HelperKirBuilder:
         return chased
 
     def build_helper(self, site: Site) -> None:
+        """Build the kernel IR of the helper called at ``site``, its shapes taken from that call."""
         returned = helper_return_array_shape(site.lhs, site.oarr_by, site.owner_fn)
         # Every extent comes off the first call site, so an argument rebound to another shape
         # elsewhere makes the inference unsound.
@@ -522,6 +525,7 @@ class HelperKirBuilder:
         ]
 
     def scope_of(self, owner: ast.FunctionDef) -> tuple[list[ArrayDesc], list[ScalarDesc], list[SymbolDesc]]:
+        """The arrays, scalars and symbols in scope of ``owner``."""
         for fn, a, sc, sy in self.scopes:
             if fn is owner:
                 return a, sc, sy

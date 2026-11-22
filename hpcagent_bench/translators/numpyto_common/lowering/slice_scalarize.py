@@ -66,11 +66,13 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         ]
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Scalarize the operands of a binary operation."""
         node.left = self.maybe_subscriptify(self.visit(node.left))
         node.right = self.maybe_subscriptify(self.visit(node.right))
         return node
 
     def visit_UnaryOp(self, node: ast.UnaryOp) -> ast.AST:
+        """Scalarize the operand of a unary operation."""
         # A bare array Name nested in a unary op (``-ft_e``) must be
         # subscriptified too -- otherwise it stays a whole-array operand inside
         # the per-element store (ICON ddt_vn_cor's ``clin * (-ft_e)``).
@@ -78,6 +80,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         return node
 
     def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        """Scalarize the operands of a comparison."""
         # Same rule as BinOp: ``(cj_list == ci_sh)[:, None, None]`` left ``cj_list`` a whole-array
         # operand inside a per-element store, which C++ rejects outright as a pointer/integer
         # comparison and C compiles into a silent pointer compare.
@@ -86,10 +89,12 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         return node
 
     def visit_BoolOp(self, node: ast.BoolOp) -> ast.AST:
+        """Scalarize the operands of a boolean operation."""
         node.values = [self.maybe_subscriptify(self.visit(v)) for v in node.values]
         return node
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Scalarize the arguments of an elementwise call."""
         # Same rule as BinOp/UnaryOp for the ARGUMENTS of an elementwise ufunc:
         # ``out[:] = np.maximum(y, 0)`` on a whole-array ``y`` emitted
         # ``__npb_fmax(y, 0)`` -- the array POINTER where the element belongs, which
@@ -265,6 +270,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         return binop(iv, ast.Sub(), copy.deepcopy(start))
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        """Replace a slice subscript with its scalar subscript at the loop iterators."""
         if not isinstance(node.value, ast.Name):
             reshaped = self.computed_base_reshape(node)
             if reshaped is not None:

@@ -284,6 +284,7 @@ def iter_extent_of(expr: ast.expr, shape_table: ShapeTable) -> Extent | None:
 
 
 def name_extent(expr: ast.Name, shape_table: ShapeTable) -> Extent | None:
+    """The extent of a named array from the shape table, or None."""
     shape = shape_table.get(expr.id)
     return None if shape is None else tuple(const_or_name(s) for s in shape)
 
@@ -334,6 +335,7 @@ def matmul_extent(expr: ast.BinOp, shape_table: ShapeTable) -> Extent | None:
 
 
 def unaryop_extent(expr: ast.UnaryOp, shape_table: ShapeTable) -> Extent | None:
+    """The extent of a unary operation: its operand's."""
     return iter_extent_of(expr.operand, shape_table)
 
 
@@ -344,10 +346,12 @@ def compare_extent(expr: ast.Compare, shape_table: ShapeTable) -> Extent | None:
 
 
 def boolop_extent(expr: ast.BoolOp, shape_table: ShapeTable) -> Extent | None:
+    """The broadcast extent of a boolean operation's operands."""
     return broadcast_children(expr.values, shape_table)
 
 
 def ifexp_extent(expr: ast.IfExp, shape_table: ShapeTable) -> Extent | None:
+    """The broadcast extent of a conditional expression's branches."""
     return broadcast_children([expr.body, expr.orelse], shape_table)
 
 
@@ -542,6 +546,7 @@ def eye_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
 
 
 def arange_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
+    """The extent of a one-argument ``np.arange``."""
     return (copy.deepcopy(expr.args[0]),) if len(expr.args) == 1 else UNHANDLED
 
 
@@ -609,6 +614,7 @@ def transpose_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> Call
 
 
 def swapaxes_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
+    """The extent of ``np.swapaxes``."""
     if len(expr.args) < 3:
         return UNHANDLED
     base = iter_extent_of(expr.args[0], shape_table)
@@ -639,6 +645,7 @@ def moveaxis_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallS
 
 
 def expand_dims_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
+    """The extent of ``np.expand_dims``."""
     if not expr.args:
         return UNHANDLED
     base = iter_extent_of(expr.args[0], shape_table)
@@ -653,6 +660,7 @@ def expand_dims_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> Ca
 
 
 def squeeze_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
+    """The extent of ``np.squeeze``."""
     if not expr.args:
         return UNHANDLED
     base = iter_extent_of(expr.args[0], shape_table)
@@ -726,6 +734,7 @@ def contraction_call_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) 
 
 
 def diagonal_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
+    """The extent of ``np.diagonal``."""
     if not expr.args:
         return UNHANDLED
     base = iter_extent_of(expr.args[0], shape_table)

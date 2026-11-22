@@ -25,6 +25,7 @@ class MembershipToComparisons(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        """Rewrite a membership test in a literal sequence as comparisons."""
         self.generic_visit(node)
         if len(node.ops) != 1 or not isinstance(node.ops[0], (ast.In, ast.NotIn)):
             return node
@@ -54,6 +55,7 @@ class UnrollConstRangeComprehension(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_ListComp(self, node: ast.ListComp) -> ast.AST:
+        """Unroll a comprehension over constant ranges into a list literal."""
         self.generic_visit(node)
         names, ranges = [], []
         for gen in node.generators:

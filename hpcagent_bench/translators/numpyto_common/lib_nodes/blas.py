@@ -186,6 +186,7 @@ def expand_outer(
 def expand_add_outer(
     target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
 ) -> list[ast.stmt]:
+    """Expand ``np.add.outer`` into loops."""
     return expand_outer(target, args, shape_table, op=ast.Add())
 
 

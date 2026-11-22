@@ -248,6 +248,7 @@ def expand_cumsum(
     local_dtypes: dict[str, str] | None = None,
     opmath: bool = False,
 ) -> list[ast.stmt]:
+    """Expand ``np.cumsum`` into loops."""
     return expand_cumulative(
         target,
         args,
@@ -269,6 +270,7 @@ def expand_cumprod(
     local_dtypes: dict[str, str] | None = None,
     opmath: bool = False,
 ) -> list[ast.stmt]:
+    """Expand ``np.cumprod`` into loops."""
     return expand_cumulative(
         target,
         args,

@@ -347,6 +347,7 @@ def expand_sum(
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
 ) -> list[ast.stmt]:
+    """Expand ``np.sum`` into loops."""
     is_int = reduction_elem_is_integer(args, local_dtypes)
     if is_int and local_dtypes is not None and isinstance(target, ast.Name):
         local_dtypes[target.id] = "int64"
@@ -366,6 +367,7 @@ def expand_max(
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
+    """Expand ``np.max`` into loops; a zero-size reduction is refused."""
     arr = args[0]
     reject_zero_size_reduction(args, kwargs, shape_table)
     return expand_axis_reduction(
@@ -384,6 +386,7 @@ def expand_min(
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
+    """Expand ``np.min`` into loops; a zero-size reduction is refused."""
     arr = args[0]
     reject_zero_size_reduction(args, kwargs, shape_table)
     return expand_axis_reduction(
@@ -422,6 +425,7 @@ def expand_mean(
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
+    """Expand ``np.mean`` into loops, including the masked form ``np.mean(arr[mask])``."""
     # Special form ``np.mean(arr[mask])``, ``mask`` a same-length boolean array:
     # boolean fancy indexing produces a dynamic-length compacted view we don't
     # materialise, so emit a masked-sum + count loop directly.
@@ -480,6 +484,7 @@ def expand_prod(
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
 ) -> list[ast.stmt]:
+    """Expand ``np.prod`` into loops."""
     is_int = reduction_elem_is_integer(args, local_dtypes)
     if is_int and local_dtypes is not None and isinstance(target, ast.Name):
         local_dtypes[target.id] = "int64"
@@ -563,6 +568,7 @@ def expand_argmin(
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
+    """Expand ``np.argmin`` into loops."""
     return expand_arg_reduction(target, args, shape_table, kwargs, op="argmin")
 
 

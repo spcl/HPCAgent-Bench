@@ -109,6 +109,7 @@ class SpliceNoneGuardedCalls:
         self.fn_: ast.FunctionDef | None = None
 
     def apply(self, fn: ast.FunctionDef) -> bool:
+        """Splice the None-guarded helper calls of ``fn``; return whether any changed."""
         self.fn_ = fn
         return self.rewrite_block(fn.body)
 
@@ -183,6 +184,7 @@ class SpliceNoneGuardedCalls:
         return unpacks[0]
 
     def rewrite_block(self, stmts: list[ast.stmt]) -> bool:
+        """Splice the None-guarded helper calls of one statement list; return whether any changed."""
         changed = False
         i = 0
         while i < len(stmts):
@@ -256,6 +258,7 @@ class SpliceNoneGuardedCalls:
     def try_splice(
         self, stmts: Sequence[ast.stmt], i: int
     ) -> tuple[list[ast.stmt], int, ast.Assign | None, ast.Assign] | None:
+        """Splice the call at ``stmts[i]`` with its guard, or None if it does not match."""
         shape = self.call_shape(stmts, i)
         if shape is None:
             return None

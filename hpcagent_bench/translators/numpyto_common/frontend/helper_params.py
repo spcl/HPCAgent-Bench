@@ -54,6 +54,7 @@ DescKey = tuple[tuple[str, str], ...]
 def resolved_array_param(
     fn: ast.FunctionDef | None, arg: ast.expr, pname: str, arr_by: dict[str, ArrayDesc]
 ) -> DescEntry | None:
+    """The array descriptor of helper parameter ``pname`` when ``arg`` resolves to an array, else None."""
     res = resolve_array_ref(fn, arg, arr_by) if fn is not None else None
     if res is None:
         return None
@@ -69,6 +70,7 @@ def name_param(
     sym_by: dict[str, SymbolDesc],
     fn: ast.FunctionDef | None,
 ) -> DescEntry | None:
+    """The descriptor of helper parameter ``pname`` bound to the name ``arg``."""
     if arg.id in arr_by:
         a = arr_by[arg.id]
         return ArrayDesc(name=pname, dtype=a.dtype, shape=a.shape, is_output=False, is_index=a.is_index)
@@ -82,6 +84,7 @@ def name_param(
 def subscript_param(
     arg: ast.Subscript, base: str, pname: str, arr_by: dict[str, ArrayDesc], fn: ast.FunctionDef | None
 ) -> DescEntry | None:
+    """The descriptor of helper parameter ``pname`` bound to a subscript of ``base``."""
     resolved = resolved_array_param(fn, arg, pname, arr_by)
     if resolved is not None:
         return resolved
@@ -92,6 +95,7 @@ def subscript_param(
 
 
 def constant_param(arg: ast.Constant, pname: str) -> DescEntry:
+    """The scalar descriptor of helper parameter ``pname`` bound to a literal."""
     if isinstance(arg.value, bool):
         return ScalarDesc(name=pname, dtype="bool")
     if isinstance(arg.value, int):

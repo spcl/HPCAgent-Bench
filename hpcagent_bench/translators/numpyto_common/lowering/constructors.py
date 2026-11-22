@@ -42,6 +42,7 @@ class FullCallHoister(StmtHoister):
 
     @staticmethod
     def is_full_call(v: ast.expr) -> bool:
+        """Whether ``v`` is an ``np.full`` or ``np.full_like`` call."""
         return (
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
@@ -51,12 +52,14 @@ class FullCallHoister(StmtHoister):
         )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Hoist a nested ``np.full`` call into a temporary."""
         self.generic_visit(node)
         if self.is_full_call(node):
             return self.spill(node, "__full")
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Keep a direct ``np.full`` assignment; flush the hoists of any other."""
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self.is_full_call(node.value):
             return node
         return self.flush(node)
@@ -73,6 +76,7 @@ class FullLikeRewriter(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Rewrite ``np.full`` and ``np.full_like`` assignments as an allocation and a fill."""
         self.generic_visit(node)
         v = node.value
         if not (
@@ -127,6 +131,7 @@ class EyeCallHoister(StmtHoister):
 
     @staticmethod
     def is_eye_call(v: ast.expr) -> bool:
+        """Whether ``v`` is an ``np.eye`` or ``np.identity`` call."""
         return (
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
@@ -136,12 +141,14 @@ class EyeCallHoister(StmtHoister):
         )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Hoist a nested ``np.eye`` call into a temporary."""
         self.generic_visit(node)
         if self.is_eye_call(node):
             return self.spill(node, "__eye")
         return node
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Keep a direct ``np.eye`` assignment; flush the hoists of any other."""
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self.is_eye_call(node.value):
             return node
         return self.flush(node)
@@ -165,6 +172,7 @@ class CopyToAllocAndFill(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Rewrite an array copy as an allocation and a fill."""
         self.generic_visit(node)
         src = copied_name(node)
         if src is None or not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
@@ -220,6 +228,7 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
         self._n = 0
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Rewrite ``np.eye`` and ``np.identity`` as a zeros allocation and a diagonal fill."""
         self.generic_visit(node)
         v = node.value
         if not (
@@ -367,6 +376,7 @@ class ZerosRewriter(ast.NodeTransformer):
         self.shape_table = shape_table or {}
 
     def visit_Assign(self, node: ast.Assign) -> ast.stmt:
+        """Record a zeros-family allocation in the side table."""
         self.generic_visit(node)
         if (
             len(node.targets) == 1
@@ -480,6 +490,7 @@ class MgridLowering(ast.NodeTransformer):
     __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Lower an unpacked ``np.mgrid`` into one filled index array per name."""
         self.generic_visit(node)
         if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple)):
             return node
