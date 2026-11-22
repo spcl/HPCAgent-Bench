@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Sphinx configuration: the Markdown files in this directory, rendered with MyST and Furo."""
+"""Sphinx configuration: the Markdown files in this directory, rendered with MyST and the Read the Docs theme."""
 
 import re
 from pathlib import Path
@@ -11,10 +11,10 @@ project = "HPCAgent-Bench"
 copyright = "2026 ETH Zurich and the HPCAgent-Bench authors"  # noqa: A001
 author = "SPCL @ ETH Zurich"
 
-extensions = ["myst_parser"]
+extensions = ["myst_parser", "sphinx_rtd_theme"]
 myst_heading_anchors = 4
 exclude_patterns = ["_build"]
-html_theme = "furo"
+html_theme = "sphinx_rtd_theme"
 
 REPO_URL = "https://github.com/spcl/HPCAgent-Bench/blob/main"
 LINK = re.compile(r"\]\((?!https?:|mailto:|#)([^)\s]+)\)")
