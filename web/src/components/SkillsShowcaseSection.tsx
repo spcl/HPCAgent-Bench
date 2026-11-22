@@ -12,8 +12,7 @@ export function SkillsShowcaseSection({ ablations }: { ablations: AblationEntry[
       id="skills"
       band
       eyebrow="Finding 3"
-      title="A skill pays when it hands the agent facts, not when it trims words."
-      lead="A skill earns its place if it improves speed or solve rate, or lowers token cost while speed and solve rate stay equivalent."
+      title="Skills compared"
     >
       <div className="mt-7 grid gap-6 lg:grid-cols-2">
         {skills.map((ab) => (

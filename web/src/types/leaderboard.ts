@@ -57,7 +57,6 @@ export interface TrackMeta {
   kernel_count: number;
   rank_corr_low: number;
   rank_corr_high: number;
-  agreement_note: string;
   baseline_rule: string;
   accent_hex: string;
   docs_href: string;
@@ -86,7 +85,6 @@ export interface TrackMetrics {
 export interface ModelEntry extends ModelMeta {
   id: string;
   setup: string;
-  overall: TrackMetrics;
   tracks: Record<string, TrackMetrics | undefined>;
 }
 
@@ -102,7 +100,6 @@ export interface AblationEntry {
   cost_ratio: string;
   verdict: Verdict;
   verdict_label: string;
-  takeaway: string;
   /** What the skill gives the agent; set for the skills compared side by side. */
   skill?: string;
 }
@@ -127,15 +124,11 @@ export interface LeaderboardData {
   models: ModelEntry[];
   /** The export the models came from; null when the page has none yet. */
   board: ExportBoard | null;
-  /** The export's own cost card, the default weighting of the table. */
+  /** The export's own cost card, which weights the token columns. */
   token_weights: TokenWeights;
 }
-
-export type WeightProfileId = "export_card" | "output_5x" | "uncached";
 
 /** Weighted tokens per task (M) of one track. */
 export function weightedTokens(tm: TrackMetrics, w: TokenWeights): number {
   return w.in * tm.mean_t_in_m + w.cache * tm.mean_t_cache_m + w.out * tm.mean_t_out_m;
 }
-
-export const formatWeights = (w: TokenWeights) => `${w.in} : ${w.cache} : ${w.out}`;

@@ -24,15 +24,8 @@ export function AblationStudySection({ ablations, docsUrl }: { ablations: Ablati
     <Section
       id="ablations"
       eyebrow="Finding 2"
-      title="Paired ablations"
-      lead={
-        <>
-          Each comparison runs two setups on the same kernels under equal token limits, corrects for multiplicity
-          (Benjamini–Hochberg), and reports one of <strong className="font-medium text-zinc-800">different</strong>,{" "}
-          <strong className="font-medium text-zinc-800">equivalent</strong> (TOST, ±20%) or{" "}
-          <strong className="font-medium text-zinc-800">inconclusive</strong>.
-        </>
-      }
+      title="What helps an agent"
+      lead="Two setups on the same kernels under equal token limits: different, equivalent (±20%) or inconclusive."
       aside={<ArrowLink href={`${docsUrl}extending/protocol.html`}>The statistical protocol</ArrowLink>}
     >
       <div className="mt-6 overflow-x-auto rounded-lg border border-stone-200 bg-white">
@@ -51,8 +44,7 @@ export function AblationStudySection({ ablations, docsUrl }: { ablations: Ablati
               <tr key={ab.id} className="align-top transition hover:bg-stone-50/70">
                 <td className="px-4 py-3.5">
                   <div className="font-medium text-zinc-950">{ab.intervention}</div>
-                  <div className="mt-0.5 text-[11px] text-zinc-500">{ab.scope}</div>
-                  <p className="mt-1.5 text-xs leading-relaxed text-zinc-600">{ab.takeaway}</p>
+                  <div className="text-xs text-zinc-500">{ab.scope}</div>
                 </td>
                 <td className="px-4 py-3.5 whitespace-nowrap">
                   <div className="font-mono-num font-semibold text-zinc-900">{ab.speed_ratio}</div>

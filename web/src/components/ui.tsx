@@ -28,8 +28,8 @@ export function Section({
         <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
           <div>
             {eyebrow && <p className="font-mono-num text-xs font-medium tracking-wide text-blue-700 uppercase">{eyebrow}</p>}
-            <h2 className="font-editorial mt-1.5 text-2xl font-medium text-zinc-950">{title}</h2>
-            {lead && <p className="mt-2 max-w-3xl text-sm leading-relaxed text-zinc-600">{lead}</p>}
+            <h2 className="mt-1.5 text-2xl font-bold tracking-tight text-zinc-950">{title}</h2>
+            {lead && <p className="mt-2 max-w-3xl text-base leading-relaxed text-zinc-600">{lead}</p>}
           </div>
           {aside}
         </div>
@@ -59,7 +59,7 @@ export function CopyBlock({ title, text }: { title: string; text: string }) {
   return (
     <div className="rounded-lg border border-stone-200 bg-paper p-5">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="font-editorial text-xl font-medium text-zinc-950">{title}</h3>
+        <h3 className="text-lg font-semibold text-zinc-950">{title}</h3>
         <button
           type="button"
           onClick={copy}

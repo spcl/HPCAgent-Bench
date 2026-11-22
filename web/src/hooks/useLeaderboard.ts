@@ -2,18 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useState } from "react";
 import { ABLATIONS, MODELS, PAPER, TRACKS } from "../content";
-import type { ExportBoard, ExportKernel, ExportScore, LeaderboardData, ModelEntry, TrackMetrics } from "../types/leaderboard";
+import type { ExportBoard, ExportScore, LeaderboardData, ModelEntry, TrackMetrics } from "../types/leaderboard";
 
 const MILLION = 1e6;
-
-function geomean(values: number[]): number | null {
-  return values.length ? Math.exp(values.reduce((sum, v) => sum + Math.log(v), 0) / values.length) : null;
-}
-
-function mean(values: number[]): number {
-  const finite = values.filter(Number.isFinite);
-  return finite.length ? finite.reduce((a, b) => a + b, 0) / finite.length : NaN;
-}
 
 function trackMetrics(score: ExportScore): TrackMetrics {
   return {
@@ -29,26 +20,7 @@ function trackMetrics(score: ExportScore): TrackMetrics {
   };
 }
 
-/** All tracks pooled: the geometric mean over every kernel (no interval: the export gives one per track), token
- * means weighted by each track's kernel count. */
-function pooled(scores: ExportScore[]): TrackMetrics {
-  const kernels: ExportKernel[] = scores.flatMap((s) => s.per_kernel);
-  const weighted = (pick: (s: ExportScore) => number) =>
-    mean(scores.flatMap((s) => Array<number>(s.kernels).fill(pick(s)))) / MILLION;
-  return {
-    geomean_speedup: geomean(kernels.map((k) => k.speedup)),
-    ci_low: null,
-    ci_high: null,
-    success_rate: kernels.length ? kernels.filter((k) => k.solved).length / kernels.length : 0,
-    kernels: kernels.length,
-    mean_t_in_m: weighted((s) => s.fresh_input_per_task),
-    mean_t_cache_m: weighted((s) => s.cached_input_per_task),
-    mean_t_out_m: weighted((s) => s.output_per_task),
-    per_kernel: kernels,
-  };
-}
-
-/** One entry per control setup (no condition): the table compares models, the ablations compare conditions. */
+/** One entry per control setup (no condition): the score panels compare models, the ablations compare conditions. */
 export function modelsOf(board: ExportBoard): ModelEntry[] {
   const bySetup = new Map<string, ExportScore[]>();
   for (const score of board.scores.filter((s) => s.condition === "")) {
@@ -62,7 +34,7 @@ export function modelsOf(board: ExportBoard): ModelEntry[] {
       const score = scores.find((s) => s.track === track.track);
       if (score) tracks[track.id] = trackMetrics(score);
     }
-    return { ...meta, id: token, setup, overall: pooled(scores), tracks };
+    return { ...meta, id: token, setup, tracks };
   });
 }
 
