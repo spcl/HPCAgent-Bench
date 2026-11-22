@@ -183,6 +183,7 @@ INT_CONV_INTRINSIC: dict[str, str] = {"int": "INT"}
 
 
 def fortran_type(dtype: str) -> str:
+    """The Fortran type of NumPy ``dtype``; ``real(c_double)`` for one without a kind."""
     # Single dtype registry (numpyto_common.dtypes); int is int64 (canonical).
     # Dtypes with no Fortran kind (float16/128, complex256) fall back to double.
     try:
@@ -628,6 +629,7 @@ def gemm_helper(ftype: str) -> str:
 
 
 def double_kind() -> str:
+    """The ISO_C_BINDING kind of a 64-bit real."""
     # ISO_C_BINDING kind token for a 64-bit real, pulled from the registry (never
     # hardcoded); forces the FloorDiv divide into double regardless of kernel kind.
     rest = fortran_type("float64").partition("(")[2]
@@ -723,6 +725,7 @@ BITWISE_INT_CALL_NAMES = frozenset({"IAND", "IOR", "IEOR", "ISHFT", "NOT"})
 
 
 def array_decl(arr: ArrayDesc) -> str:
+    """The Fortran declaration of an array dummy, its shape reversed."""
     intent = "intent(inout)" if arr.is_output else "intent(in)"
     base = fortran_type(arr.dtype)
     # Fortran rank-N array declaration a(N), aa(N, M), with REVERSED shape so
@@ -735,6 +738,7 @@ def array_decl(arr: ArrayDesc) -> str:
 
 
 def scalar_decl(name: str, dtype: str, is_output: bool, assigned: bool = False) -> str:
+    """The Fortran declaration of a scalar dummy, by value unless it is an output."""
     base = fortran_type(dtype)
     # Input scalars are passed BY VALUE so the C-ABI matches C/C++ (a bind(C)
     # scalar without value would be a C pointer). An output scalar stays by reference.
@@ -792,6 +796,7 @@ def fortran_literal(value: float) -> str:
 
 
 def symbol_decl(name: str, assigned: bool = False) -> str:
+    """The Fortran declaration of a size symbol dummy."""
     # Shape symbols are int64 passed by value, normally intent(in); but a kernel
     # may recompute a size symbol it also receives, and Fortran forbids intent(in)
     # on the LHS, so drop it -- the value attribute keeps the ABI unchanged.
@@ -1152,6 +1157,7 @@ class FortranBodyEmitter(BaseEmitter):
     fp8_names = FORTRAN_FP8_NAMES
 
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:
+        """Emit one statement; a helper subroutine call statement becomes ``call``."""
         # A bare helper-subroutine call statement (an out-param call, or a VOID helper that writes
         # only through its array dummies) emits as call h(args); a scalar helper's X = h(...) still
         # routes through emit_assign.
@@ -1235,6 +1241,7 @@ class FortranBodyEmitter(BaseEmitter):
         return f"{indent}call {sort_helper_name(sort.argsort, ftype)}({out}, {src}, {rows}, {n})"
 
     def emit_return(self, node: ast.Return, indent: str) -> str:
+        """Emit a return: in a helper, the value goes to the out-parameter first."""
         # In a HELPER subroutine the returned value is written to the out-param
         # return_mode (Fortran has no by-value return in this scheme), then a bare return.
         mode = self.return_mode
@@ -1374,6 +1381,7 @@ class FortranBodyEmitter(BaseEmitter):
         self._int_kinds: dict[str, str] = {}
 
     def emit_for(self, node: ast.For, indent: str) -> str:
+        """Emit a range loop as a Fortran ``do`` loop."""
         target = node.target
         if not isinstance(target, ast.Name):
             raise NotImplementedError("only single-name for-target supported")
@@ -1425,10 +1433,12 @@ class FortranBodyEmitter(BaseEmitter):
         return f"{omp_prefix}{indent}do {var} = {lo}, {upper}, {step}\n{body}\n{indent}end do"
 
     def emit_while(self, node: ast.While, indent: str) -> str:
+        """Emit a Fortran ``do while`` loop."""
         body = self.emit_block(node.body, indent + "    ")
         return f"{indent}do while ({self.emit_expr(node.test)})\n{body}\n{indent}end do"
 
     def emit_if(self, node: ast.If, indent: str) -> str:
+        """Emit a Fortran ``if`` with its ``else if`` chain."""
         cond = self.emit_logical_test(node.test)
         then = self.emit_block(node.body, indent + "    ")
         out = [f"{indent}if ({cond}) then", then]
@@ -1573,6 +1583,7 @@ class FortranBodyEmitter(BaseEmitter):
         return cond
 
     def emit_assign(self, node: ast.Assign, indent: str) -> str:
+        """Emit one assignment as Fortran statements."""
         if len(node.targets) != 1:
             raise NotImplementedError("chained assignment not supported")
         target = node.targets[0]
@@ -1710,6 +1721,7 @@ class FortranBodyEmitter(BaseEmitter):
         return ""  # local declared in prelude (empty / scratch)
 
     def emit_augassign(self, node: ast.AugAssign, indent: str) -> str:
+        """Emit an augmented assignment as ``x = x op v``."""
         lhs = self.emit_expr(node.target)
         rhs = self.emit_expr(node.value)
         fp8 = self.store_fns(node.target)
@@ -1882,6 +1894,7 @@ class FortranBodyEmitter(BaseEmitter):
         return None
 
     def emit_expr_inner(self, node: ast.expr) -> str:
+        """Emit one expression as Fortran."""
         if isinstance(node, ast.Constant):
             return self.emit_constant(node.value)
         if isinstance(node, ast.Name):
@@ -1917,6 +1930,7 @@ class FortranBodyEmitter(BaseEmitter):
         raise NotImplementedError(f"expression {type(node).__name__} (line {line_of(node)})")
 
     def emit_constant(self, v: object) -> str:
+        """Emit a literal with the kernel's real kind."""
         if isinstance(v, bool):
             return ".true." if v else ".false."
         # Parenthesise NEGATIVE literals: gfortran rejects a unary minus immediately following a
@@ -1944,6 +1958,7 @@ class FortranBodyEmitter(BaseEmitter):
         raise NotImplementedError(f"literal {v!r}")
 
     def emit_name_read(self, node: ast.Name) -> str:
+        """Emit a name read; ``INFINITY`` and ``NAN`` become ``ieee_value``."""
         # np.inf/np.nan were lowered to the C99 INFINITY/NAN names; Fortran has
         # no such macro, so express them as the kind-matched ieee_value.
         if node.id == "INFINITY":
@@ -1958,6 +1973,7 @@ class FortranBodyEmitter(BaseEmitter):
         return self.promote_name_read(node, access)
 
     def emit_unaryop(self, node: ast.UnaryOp) -> str:
+        """Emit a unary operation; ``~`` on a logical is ``.not.``."""
         if isinstance(node.op, ast.Invert):
             # ~x on a boolean operand is numpy logical negation, not bitwise NOT
             # -- emit .not.; on an integer operand it stays Fortran NOT(x).
@@ -1975,6 +1991,7 @@ class FortranBodyEmitter(BaseEmitter):
         raise NotImplementedError(f"unary {type(node.op).__name__}")
 
     def emit_binop(self, node: ast.BinOp) -> str:
+        """Emit a binary operation with NumPy semantics for power, floor division and modulo."""
         # Pow: Fortran has ** for both integer and real exponents.
         if isinstance(node.op, ast.Pow):
             if self.expr_is_integer(node.left) and self.expr_is_integer(node.right):
@@ -2028,6 +2045,7 @@ class FortranBodyEmitter(BaseEmitter):
         return f"({self.as_numeric_operand(node.left)} {op} {self.as_numeric_operand(node.right)})"
 
     def emit_floordiv(self, node: ast.BinOp) -> str:
+        """Emit ``a // b`` with NumPy's flooring semantics."""
         if self.expr_is_integer(node.left) and self.expr_is_integer(node.right):
             # Integer //: Fortran / truncates toward zero but numpy // floors
             # toward -inf. Cast both operands to one kind, then correct the
@@ -2098,6 +2116,7 @@ class FortranBodyEmitter(BaseEmitter):
         return n.id not in self.kir.zeros_locals
 
     def emit_compare(self, node: ast.Compare) -> str:
+        """Emit a comparison; a logical compared with 0 becomes the logical itself."""
         # <LOGICAL> != 0 / == 0 is a truthiness test on a boolean operand.
         # Fortran has no LOGICAL-vs-0 comparison, so emit the logical directly/negated.
         if len(node.ops) == 1 and isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
@@ -2202,6 +2221,7 @@ class FortranBodyEmitter(BaseEmitter):
         return False
 
     def emit_subscript(self, node: ast.Subscript) -> str:
+        """Emit a subscript with 1-based, reversed indices; a boolean mask becomes ``PACK``."""
         # Boolean-mask indexing arr[mask] -> Fortran PACK(arr, mask). Detect by
         # looking at the slice slot for a Name resolving to a known-logical local.
         if (
@@ -2407,6 +2427,7 @@ class FortranBodyEmitter(BaseEmitter):
         return None
 
     def emit_call(self, node: ast.Call) -> str:
+        """Emit a call as its Fortran intrinsic or helper call."""
         if isinstance(node.func, ast.Name):
             return self.emit_name_call(node)
         # np.X(args) / arr.X(args): map common numpy calls to Fortran intrinsics so
@@ -2604,6 +2625,7 @@ class FortranBodyEmitter(BaseEmitter):
         return f"MERGE({self.real_promoted(args_e[1], lit1, cast1)}, {self.real_promoted(args_e[2], lit2, cast2)}, {args_e[0]})"
 
     def real_promoted(self, arg_emit: str, lit: int | None, cast: ast.expr | None) -> str:
+        """An intrinsic argument promoted to the real kind."""
         if lit is not None:
             return f"{lit}.0_{self._rk}"
         if cast is not None:
@@ -3071,6 +3093,7 @@ class HoistIfExpVisitor(ast.NodeTransformer):
         self.temps: dict[str, tuple[ast.expr, ast.expr]] = {}
 
     def visit_IfExp(self, node: ast.IfExp) -> ast.Name:
+        """Hoist a conditional expression into a temporary assigned by an ``if``."""
         self.generic_visit(node)  # hoist a NESTED IfExp (in test/body/orelse) before this one
         name = f"__ifexp{self.counter}"
         self.counter += 1
@@ -3279,6 +3302,7 @@ class FortranRenameTemps(ast.NodeTransformer):
         self.marker_loop_scopes: dict[str, list[tuple[str, str]]] = {}
 
     def safe_(self, name: str) -> str:
+        """The Fortran-safe spelling of ``name``, case-insensitive collisions resolved."""
         renamed = fortran_safe(name)
         # Apply case-insensitive collision rewrite AFTER the leading-underscore strip.
         renamed_ci = renamed.lower()
@@ -3290,6 +3314,7 @@ class FortranRenameTemps(ast.NodeTransformer):
         return renamed
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        """Respell a name, resolving a loop target to its innermost unique loop variable."""
         # Inside an active loop body, references to the loop target name resolve to the
         # innermost binding (Fortran does not allow the same DO variable in nested loops).
         #
@@ -3301,6 +3326,7 @@ class FortranRenameTemps(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=self.safe_(node.id), ctx=node.ctx), node)
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        """Respell an assignment, recording the loop scopes of an allocation marker."""
         marker = is_alloc_marker(node)
         self.generic_visit(node)
         if marker and isinstance(node.targets[0], ast.Name):
@@ -3308,6 +3334,7 @@ class FortranRenameTemps(ast.NodeTransformer):
         return node
 
     def visit_For(self, node: ast.For) -> ast.AST:
+        """Give a for loop's variable a unique name for its body."""
         # Visit the iterable before the loop variable is in scope.
         self.visit(node.iter)
         if isinstance(node.target, ast.Name):
@@ -3338,6 +3365,7 @@ def emit_fortran_omp(kir: KernelIR, fn_name: str | None = None) -> str:
 
 
 def is_uint64(dtype: str) -> bool:
+    """Whether ``dtype`` is uint64."""
     try:
         return dtypes.canonical(dtype.removesuffix("_")) == "uint64"
     except KeyError:
@@ -4072,6 +4100,7 @@ class HoistHelperCallVisitor(ast.NodeTransformer):
         self.temps: dict[str, str] = {}
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
+        """Hoist a kept-helper call into a temporary."""
         # Children first, so a helper call nested in another helper's arguments is hoisted ahead
         # of the outer one and the two temps are assigned in evaluation order.
         self.generic_visit(node)
@@ -4404,6 +4433,7 @@ def format_subroutine(
     use_ieee: bool = False,
     contained: str = "",
 ) -> str:
+    """The text of the Fortran subroutine with its declarations, body and contained helpers."""
     param_list = ", ".join(params)
     decl_block = "\n".join(f"    {d}" for d in decls)
     iter_block = "\n".join(iter_decls)
