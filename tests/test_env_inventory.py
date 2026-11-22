@@ -50,7 +50,8 @@ def test_the_inventory_of_this_tree(tmp_path: pathlib.Path, capsys: pytest.Captu
     assert scoped is not None, f"no F10-scope totals in the summary: {summary}"
     # 191 on 11-20: XLA_PYTHON_CLIENT_PREALLOCATE (JAX must not take 75% of an MI300A node's memory per process)
     assert 140 <= int(scoped.group(1)) <= 195, "distinct python names of hpcagent_bench/ + agent/ (the scan said 164)"
-    assert 110 <= int(scoped.group(2)) <= 145, (
+    # 146 on 11-22: INFERENCE_POOL_DIR (launch_fused inference pools, f15ccab9b)
+    assert 110 <= int(scoped.group(2)) <= 150, (
         "project-specific python names of hpcagent_bench/ + agent/ (the scan said 127)"
     )
     shell = re.search(r"shell, whole tree: (\d+) distinct", summary)
