@@ -265,14 +265,16 @@ RUN set -eux; \
     ofi_version="$(/opt/ofi-sdk/bin/fi_info --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"; \
     test -n "${ofi_version}"; \
     # libfabric: ours, external AND required at environment scope (judge-agent-amd step 4, 630049 and 630267: a
-    # site-scope declaration or a cached spack build let MPICH link spack's own, cxi-less libfabric).
+    # site-scope declaration or a cached spack build let MPICH link spack's own, cxi-less libfabric). The version
+    # alone does not exclude the cache: its libfabric is 2.6.0 too (fabrics:=sockets,tcp,udp) and buildable:false
+    # still allows reuse, so MPICH came back RPATH-bound to it (5428897). The exact fabric set is ours alone.
     printf '%s\n' 'spack:' \
       '  concretizer:' '    unify: true' \
       '  packages:' \
       '    libfabric:' \
-      "      require: [\"@${ofi_version}\"]" \
+      "      require: [\"@${ofi_version} fabrics:=sockets,tcp\"]" \
       '      externals:' \
-      "      - spec: \"libfabric@${ofi_version}\"" \
+      "      - spec: \"libfabric@${ofi_version} fabrics:=sockets,tcp\"" \
       '        prefix: /opt/ofi-sdk' \
       '      buildable: false' \
       '  specs:' \
