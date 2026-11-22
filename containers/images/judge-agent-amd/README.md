@@ -81,14 +81,22 @@ image must carry is in [IMAGE_REQUIREMENTS.md](../IMAGE_REQUIREMENTS.md); the NC
 - **Fix.** likwid is built from a pinned master commit (653ba0a01) with `ACCESSMODE=perf_event`, since a container
   reaches no MSR (2674fa73c). In job 750681 it detects Zen4, lists its groups and counts `FLOPS_DP`.
 
-### A verify timeout left no evidence
+### rocprofv3 hung when run from a read-only directory
 
-- **Symptom.** In the full `verify_image.py` run of the v1.0 candidates (757798, 758027), the `rocprofv3` trace,
-  `rocprofv3 --pmc` and `rocprof-compute` checks failed as `rc=127` with only `Command [...] timed out` as their
-  note. The same probes pass in about one second when run alone in the same image, EDF, CPU count and core-file
-  limit, also after every check that precedes them in the verify order (758035).
-- **Fix.** A timed-out check now reports rc 124, as coreutils `timeout` does, and its note ends with the child's
-  last line of output; `have_exe` still counts a hang as not runnable (b3f3fe421).
+- **Symptom.** In the full `verify_image.py` run of the v1.0 candidates (757798, 758027, 758676), the `rocprofv3`
+  trace, `rocprofv3 --pmc` and `rocprof-compute` checks timed out (600 s, 600 s and 1500 s). The same probe passed
+  in about one second in a separate job (758035).
+- **Cause.** The verify EDF sets `workdir = "/"`, which is read-only in the container, and the three checks ran
+  their tool from there. From an unwritable working directory, rocprofv3's ring buffer fails to mmap at exit
+  (`ring_buffer.cpp:106`, errno 22); rocprofv3 aborts (signal 6) and its signal handler hangs, as under the
+  preload above. The 758035 probe ran from a writable directory. In job 758676 the same probe fails from `/` and
+  passes from `/tmp`, with and without `LD_PRELOAD` and with a minimal environment. The harness was not
+  affected: `rocprof_record` and the `rocprof-compute` profile always run in their work directory.
+- **Fix.** The checks run in their probe's temporary directory, as the harness does. All three pass from `/` in
+  job 758676 (3 s, 2 s and 31 s).
+- **Diagnosis.** A timed-out check used to report `rc=127` with only `Command [...] timed out`. It now reports rc
+  124, as coreutils `timeout` does, and its note ends with the child's last line of output (b3f3fe421); that line
+  named rocprofv3's signal handler.
 
 ## Image builds
 
@@ -135,9 +143,8 @@ These are procedures, not image defects. Each one cost a verify or suite run on 
 
 ## Open at the time of writing
 
-- **The rocprof checks of the full verify run** (see above): the rc 124 note of the next verify names where the
-  child stopped.
-- **`test_npbench_triton_references.py::test_triton_reference_matches_numpy[resnet-S]`.** Its worker died in the
-  in-image suite of job 758042, and later Triton tests on that node failed with `hipGetDeviceCount()` error 719
-  (unspecified launch failure) until the run hung. Job 758676 runs it alone on one GPU to separate a kernel fault
-  from 16 workers sharing four GPUs.
+- **`test_npbench_triton_references.py::test_triton_reference_matches_numpy`.** In the in-image suite of job
+  758042 a worker died on `resnet-S`, and later Triton tests failed with `hipGetDeviceCount()` error 719
+  (unspecified launch failure) until the run hung. In job 758676 `resnet-S` passes alone (58 s), no GPU error
+  appears, and a worker died on `azimint_naive-S` with "Not properly terminated" and no stack, which is how a
+  pytest-timeout `os._exit` looks. The next run times the file alone, with four workers.

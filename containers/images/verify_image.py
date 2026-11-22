@@ -1056,7 +1056,9 @@ ROCPROF_CHILD_ENV = {"OMP_TOOL": "disabled"}
 
 def rocprof_env() -> dict[str, str]:
     """A traced child's environment as the harness builds it (gpu_profiling.rocprof_env): no ``LD_PRELOAD``, whose
-    mimalloc makes rocprofv3 abort at exit and hang."""
+    mimalloc makes rocprofv3 abort at exit and hang. Run it, as the harness does, in a writable directory: from the
+    verify EDF's read-only ``/``, rocprofv3's ring buffer fails to mmap at exit (errno 22) and the tool hangs the
+    same way."""
     return {**{k: v for k, v in os.environ.items() if k != "LD_PRELOAD"}, **ROCPROF_CHILD_ENV}
 
 
@@ -1212,7 +1214,7 @@ def rocprofv3_trace_run(tmp: pathlib.Path) -> tuple[bool, str]:
     out_dir = tmp / "rocprof"
     trace = ["rocprofv3", "--kernel-trace", "--memory-copy-trace", "--marker-trace", "--stats"]
     trace += ["--output-format", "csv", "--output-directory", str(out_dir), "--output-file", "verify"]
-    code, out = run([*trace, "--", str(exe)], timeout=600.0, env=rocprof_env())
+    code, out = run([*trace, "--", str(exe)], timeout=600.0, cwd=str(tmp), env=rocprof_env())
     rows = [row for row in csv_rows(out_dir, "_kernel_stats.csv") if "verify_probe_kernel" in row.get("Name", "")]
     if code == 0 and rows and int(rows[0].get("Calls", "0") or 0) == 5:
         return True, f"kernel_stats: verify_probe_kernel calls=5 total_ns={rows[0].get('TotalDurationNs')}"
@@ -1224,7 +1226,7 @@ def rocprofv3_pmc_run(tmp: pathlib.Path) -> tuple[bool, str]:
     exe = hip_probe(tmp)
     out_dir = tmp / "pmc"
     pmc = ["rocprofv3", "--pmc", "SQ_WAVES", "--output-format", "csv", "--output-directory", str(out_dir)]
-    code, out = run([*pmc, "--output-file", "verify", "--", str(exe)], timeout=600.0, env=rocprof_env())
+    code, out = run([*pmc, "--output-file", "verify", "--", str(exe)], timeout=600.0, cwd=str(tmp), env=rocprof_env())
     waves = [
         float(row.get("Counter_Value") or 0)
         for row in csv_rows(out_dir, "_counter_collection.csv")
@@ -1240,7 +1242,7 @@ def rocprof_compute_run(tmp: pathlib.Path) -> tuple[bool, str]:
     exe = hip_probe(tmp)
     workload = tmp / "workload"
     record = ["rocprof-compute", "profile", "-n", "verify", "-p", str(workload), "--no-roof", "--", str(exe)]
-    code, out = run(record, timeout=1500.0, env=rocprof_env())
+    code, out = run(record, timeout=1500.0, cwd=str(tmp), env=rocprof_env())
     if not (workload / "pmc_perf.csv").is_file():
         return False, f"profile rc={code} wrote no pmc_perf.csv: {last_line(out)}"
     analyze = ["rocprof-compute", "analyze", "-p", str(workload), "--output-format", "csv", "--output-name", "tables"]
