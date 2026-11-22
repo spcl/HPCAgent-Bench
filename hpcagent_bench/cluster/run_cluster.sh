@@ -80,7 +80,8 @@ if (( $# == 0 )); then
     # A deprecated short name the setup .env or the submitting shell still sets (AGENT_EFFORT, JUDGE_INPUT_MODE, ...;
     # agent/hpcagent_agent/env_aliases.py) is exported under its current name, which this script and every step it
     # starts read; a current name already set wins.
-    eval "$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_agent.env_aliases)"
+    aliases="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_agent.env_aliases)" || exit 1
+    eval "${aliases}"
 fi
 
 INFERENCE_NODES="${INFERENCE_NODES:-2}"
@@ -412,7 +413,10 @@ PY
         # generation_config.json (SGLang's chat path fills it before --preferred-sampling-params
         # applies). Serve a node-local view of the snapshot whose generation config differs only in
         # temperature; each engine logs the defaults it loaded at startup.
-        model_path="$(OVERLAY="${TMPDIR:-/tmp}/hb-sampling-${SLURM_JOB_ID:-local}-${node_rank:-0}" \
+        # Keyed by run: a fused run that gets this node after another must not keep its links (another model's files).
+        local overlay="${TMPDIR:-/tmp}/hb-sampling-${HPCAGENT_BENCH_RUN_ID:-${SLURM_JOB_ID:-local}}-${node_rank:-0}"
+        rm -rf -- "${overlay}"
+        model_path="$(OVERLAY="${overlay}" \
             "${HPCAGENT_BENCH_IMAGE_PYTHON}" - "${model_path}" "${INFERENCE_TEMPERATURE}" <<'PY'
 import json
 import os
@@ -593,11 +597,11 @@ PY
     if [[ "${HPCAGENT_BENCH_JIT_LOCAL:-1}" == "1" && ! -x "${layer}" ]]; then
         echo "jit cache: ${layer} missing; the engine writes the shared tree directly" >&2
     elif [[ "${HPCAGENT_BENCH_JIT_LOCAL:-1}" == "1" ]]; then
-        # Keyed by job AND rank: two jobs sharing a node must not share a write layer. vLLM records
+        # Keyed by run AND rank: two jobs (or two runs of a fused job) sharing a node must not share a write layer. vLLM records
         # each compiled artifact by ABSOLUTE path, so an entry published from here names this job's
         # root; jit_cache_layer.sh seed drops such entries in the next job (they recompile) instead
         # of letting the engine die on FileNotFoundError.
-        local local_root="${TMPDIR:-/tmp}/hpcagent-bench-jit-${SLURM_JOB_ID:-$$}-${node_rank}"
+        local local_root="${TMPDIR:-/tmp}/hpcagent-bench-jit-${HPCAGENT_BENCH_RUN_ID:-${SLURM_JOB_ID:-$$}}-${node_rank}"
         local -a shared_dirs=("${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}" "${VLLM_CACHE_ROOT}")
         local -a local_dirs=("${local_root}/triton" "${local_root}/inductor" "${local_root}/vllm")
         local i
@@ -913,7 +917,10 @@ EOF
     # Unset, the last two cut every non-first-party stream at 4-5 min of silence ("API Error: The
     # operation timed out.").
     # Transport only: nothing the model is sent or samples changes.
-    export CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS="${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS:-$("${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_agent.driver.stream_idle_timeout)}"
+    if [[ -z "${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS:-}" ]]; then
+        CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS="$("${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_agent.driver.stream_idle_timeout)" || exit 1
+    fi
+    export CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS
     export CLAUDE_STREAM_IDLE_TIMEOUT_MS="${CLAUDE_STREAM_IDLE_TIMEOUT_MS:-${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS}}"
     export API_FORCE_IDLE_TIMEOUT="${API_FORCE_IDLE_TIMEOUT:-0}"
     # The whole-request cap above it: one hour, so a request that keeps producing bytes is never
@@ -928,7 +935,8 @@ EOF
     # where the ladder has it, else its top rung, else no field. Authoritative over whatever the
     # submitting shell exported. A setup env without HPCAGENT_BENCH_AGENT_EFFORT_LADDER keeps its own value.
     if [[ -n "${HPCAGENT_BENCH_AGENT_EFFORT_LADDER:-}" ]]; then
-        export HPCAGENT_BENCH_AGENT_EFFORT="$("${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_agent.driver.effort)"
+        HPCAGENT_BENCH_AGENT_EFFORT="$("${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_agent.driver.effort)" || exit 1
+        export HPCAGENT_BENCH_AGENT_EFFORT
     fi
     export JUDGE_URL="${JUDGE_BASE_URL}"
     export AGENT_NODE_RANK="${agent_rank}"
@@ -1032,7 +1040,7 @@ if [[ -z "${HPCAGENT_BENCH_IMAGE_SHA:-}" ]] && judge_edf="$(edf_file "${JUDGE_CE
     export_image_sha "${judge_edf}"
 fi
 export JUDGE_CE_ENV
-CLUSTER_ENV_FILE_ABS="$(cd -- "$(dirname -- "${CLUSTER_ENV_FILE}")" && pwd)/$(basename -- "${CLUSTER_ENV_FILE}")"
+CLUSTER_ENV_FILE_ABS="$(cd -- "$(dirname -- "${ENV_FILE}")" && pwd)/$(basename -- "${ENV_FILE}")"
 # SNAPSHOT, then run the snapshot. bash reads a script incrementally by byte offset, so editing one
 # in place while it runs makes the interpreter resume at a stale offset and execute garbage.
 # Copying into RUN_DIR gives the job its own inode and records which preparation ran.
@@ -1130,7 +1138,8 @@ elif [[ "${INFERENCE_SOURCE}" == "service" ]]; then
     # (HPCAGENT_BENCH_AGENT_NETWORK none or allowlist, the default) is relayed plain http:// endpoints only, so
     # an https:// service needs HPCAGENT_BENCH_AGENT_NETWORK=open in the setup, stated in the message.
     "${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/inference_service.py" --check-free --check-network || exit 1
-    eval "$("${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/inference_service.py" --export)"
+    service_env="$("${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/inference_service.py" --export)" || exit 1
+    eval "${service_env}"
     VLLM_API_KEY="${!INFERENCE_KEY_ENV}"
     export INFERENCE_KEY_ENV INFERENCE_CLAUDE_KEY_VARIABLE VLLM_API_KEY
     # Every model the claude CLI would otherwise choose by itself, pinned to the setup's model by the
@@ -1218,13 +1227,8 @@ AGENT_LAUNCH_FILES=(run_cluster.sh node_monitor.sh)
 # AGENT_LAUNCH_DIR. The setup's env lands as .env, the name run_cluster.sh falls back to without
 # CLUSTER_ENV_FILE, and PROBLEMS_FILE is restated there as the staged basename.
 #
-# Built in a PRIVATE sibling dir, then renamed into place: every role (inference, agent, judge)
-# runs its own copy of run_cluster.sh and each calls this on the SAME AGENT_LAUNCH_DIR (keyed by
-# SLURM_JOB_ID, not by role or node), so two callers land here concurrently. In-place rm-rf +
-# populate + chmod let one caller's chmod a-w (making .env read-only) land between another
-# caller's cp and its later `>>` append to that same .env ("Permission denied"). `mv` between two directories
-# on the same filesystem is a single rename(2): whichever caller finishes and renames last wins
-# outright, but no caller ever observes a half-built or already-locked-down directory.
+# Built in a private sibling dir, then renamed into place (the batch shell stages it once, before any step starts), so
+# a reader never sees a half-built directory.
 stage_agent_launch() {
     local env_file="$1" problems="$2" name
     mkdir -p -- "$(dirname -- "${AGENT_LAUNCH_DIR}")"
@@ -1254,26 +1258,16 @@ stage_agent_launch() {
         mkdir -p "${tmp}/setups"
         cp -- "${RUN_DIR}/setups"/*.resolved "${RUN_DIR}/setups"/*.env "${RUN_DIR}/setups"/*.jsonl \
             "${tmp}/setups/"
-        chmod a-w "${tmp}/setups"/*
     fi
-    chmod a-w "${tmp}"/* "${tmp}/.env"
-    # rename(2) replaces an EMPTY or absent target atomically, not a populated one (ENOTEMPTY), so
-    # a stale AGENT_LAUNCH_DIR from an earlier attempt in this same job (a requeue) is cleared
-    # first. A concurrent sibling doing the same two steps races on that clear-then-rename pair
-    # too -- its rm can hit ours mid-removal ("Directory not empty") or land between our rm and our
-    # mv (ENOTEMPTY again) -- so both are retried a bounded number of times rather than treated as
-    # fatal. Every sibling writes byte-identical content (same env_file/problems), so whichever one
-    # finally wins the rename changes nothing a reader observes.
-    local tries=0
-    until mv -T -- "${tmp}" "${AGENT_LAUNCH_DIR}" 2>/dev/null; do
-        tries=$((tries + 1))
-        if (( tries > 50 )); then
-            rm -rf -- "${tmp}"
-            echo "stage_agent_launch: could not rename ${tmp} into ${AGENT_LAUNCH_DIR}" >&2
-            return 2
-        fi
-        rm -rf -- "${AGENT_LAUNCH_DIR}" 2>/dev/null || true
-    done
+    # The files only: a read-only setups/ made the next attempt's rm -rf fail (EACCES).
+    find "${tmp}" -type f -exec chmod a-w {} +
+    # rename(2) replaces an empty or absent target only: an earlier attempt's directory (a requeue) goes first.
+    rm -rf -- "${AGENT_LAUNCH_DIR}"
+    mv -T -- "${tmp}" "${AGENT_LAUNCH_DIR}" || {
+        rm -rf -- "${tmp}"
+        echo "stage_agent_launch: could not rename ${tmp} into ${AGENT_LAUNCH_DIR}" >&2
+        return 2
+    }
 }
 
 # export_staged_problems <problems file or empty>: PROBLEMS_FILE, for every step this batch step
@@ -1429,21 +1423,9 @@ cleanup_steps_on_exit() {
     done
     wait 2>/dev/null || true
 }
-# On an INT/TERM this script did not raise itself (scancel, or the job's own time limit): the SAME
-# kill loop as cleanup_steps_on_exit. A scancel per step (signal_step) does not help here: Slurm's
-# job-cancellation signal already reaches the srun FRONTENDS directly. Without any kill loop the
-# `wait` can hang past KillWait.
-cleanup_steps_on_signal() {
-    local pid
-    for pid in "${step_pids[@]:-}" "${gang_relay_pid:-}" "${job_end_watch_pid:-}"; do
-        if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-            kill "${pid}" 2>/dev/null || true
-        fi
-    done
-    wait 2>/dev/null || true
-}
-trap cleanup_steps_on_exit EXIT
-trap cleanup_steps_on_signal INT TERM
+# On an INT/TERM this script did not raise itself (scancel, or the job's own time limit), the same kill loop: Slurm's
+# cancellation signal already reaches the srun frontends, but without the loop the `wait` can hang past KillWait.
+trap cleanup_steps_on_exit EXIT INT TERM
 
 # COLOCATE DRY_RUN=1 prints the steps only, so nothing is staged either.
 if [[ "${COLOCATE:-0}" != 1 || "${DRY_RUN:-0}" != 1 ]]; then
@@ -1511,7 +1493,7 @@ step_pids+=("${agent_step_pid}")
 # and the supervision stops the run as it does for a dead service step. The judge files keep a
 # wall-clock tail alive while the judges still grade the promotions.
 stall_watch() {
-    local limit="$1" quiet_minutes=$(( $1 / 60 ))
+    local limit="$1" quiet_minutes=$(( ($1 + 59) / 60 ))  # rounded up: -mmin -0 matches nothing
     while sleep 60; do
         [[ -n "$(find "${RUN_DIR}/${LAYOUT_AGENTS_DIRNAME}" -name "${LAYOUT_CLAUDE_LOG}" -print -quit 2>/dev/null)" ]] || continue
         [[ -z "$(find "${RUN_DIR}/${LAYOUT_AGENTS_DIRNAME}" "${RUN_DIR}/${LAYOUT_JUDGE_DIRNAME}" \( -name "${LAYOUT_CLAUDE_LOG}" -o -name 'upstream-*.log' \
@@ -1523,7 +1505,8 @@ stall_watch() {
 }
 if (( ${AGENT_STALL_ABORT_SECONDS:-3600} > 0 )) && [[ "${DRY_RUN:-0}" != 1 ]]; then
     stall_watch "${AGENT_STALL_ABORT_SECONDS:-3600}" &
-    step_pids+=("$!")
+    stall_watch_pid="$!"
+    step_pids+=("${stall_watch_pid}")
 fi
 
 # The KV pool the server allocates against what its agents need (serve_guard.py, KV_TOKENS_PER_AGENT of the model):
@@ -1688,6 +1671,8 @@ if kill -0 "${agent_step_pid}" 2>/dev/null; then
     # judge's node -- it shares it with --overlap -- never the judge step's own process, so stopping
     # it here too is safe.
     signal_step ""
+    # The watch is no Slurm step, so signal_step never reaches it: wait_step_bounded would sit out its grace.
+    [[ -z "${stall_watch_pid:-}" ]] || kill "${stall_watch_pid}" 2>/dev/null || true
     for step_pid in "${step_pids[@]:-}"; do
         if [[ -n "${step_pid}" ]]; then
             wait_step_bounded "${step_pid}"

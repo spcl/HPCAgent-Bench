@@ -3,11 +3,11 @@
 """``run_cluster.sh`` must end promptly with the gang relay running.
 
 The relay (``hpcagent_bench/cluster/gang_relay.py``) runs as a background child of the batch shell and exits only
-once that shell is gone. ``cleanup_steps_on_exit`` / ``cleanup_steps_on_signal`` end in a bare
+once that shell is gone. ``cleanup_steps_on_exit`` (the EXIT, INT and TERM trap) ends in a bare
 ``wait``, which reaps every child, the relay included: without stopping the relay first the two wait
 on each other and the job idles to its time limit (2.5-5 h).
 
-The script cannot be sourced, so the relay start block and both cleanup handlers are lifted from its
+The script cannot be sourced, so the relay start block and the cleanup handler are lifted from its
 shipped text and run against the real relay.
 """
 
@@ -23,7 +23,7 @@ from hpcagent_bench import paths
 REPO = paths.ROOT
 TEXT = (REPO / "hpcagent_bench" / "cluster" / "run_cluster.sh").read_text()
 
-CLEANUP_END = "trap cleanup_steps_on_signal INT TERM\n"
+CLEANUP_END = "trap cleanup_steps_on_exit EXIT INT TERM\n"
 CLEANUP_BLOCK = TEXT[TEXT.index("step_pids=()\n") : TEXT.index(CLEANUP_END) + len(CLEANUP_END)]
 RELAY_START = "if gang_judge; then\n    export HPCAGENT_BENCH_GANG_RELAY_DIR="
 RELAY_BLOCK = TEXT[TEXT.index(RELAY_START) : TEXT.index("fi\n", TEXT.index(RELAY_START)) + len("fi\n")]
@@ -33,7 +33,7 @@ DEADLINE_S = 20.0
 
 
 def build(tmp_path: pathlib.Path, tail: str) -> pathlib.Path:
-    """A script: the real cleanup handlers, a stand-in role step, the real relay start, then ``tail``."""
+    """A script: the real cleanup handler, a stand-in role step, the real relay start, then ``tail``."""
     script = tmp_path / "relay_teardown.sh"
     script.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"

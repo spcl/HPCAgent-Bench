@@ -315,3 +315,42 @@ if __name__ == "__main__":
     test_edf_with_checkout_refuses_an_edf_with_no_package_mount(fresh())
     test_only_the_agent_container_is_read_only_and_it_gets_the_nodes_tmp(fresh())
     test_a_plugin_with_an_install_root_binds_that_root_and_names_itself_inside_it(pathlib.Path(tempfile.mkdtemp()))
+
+
+def test_parallel_callers_in_one_shell_write_separate_temporaries(tmp_path: pathlib.Path) -> None:
+    """run_cluster.sh grades deferred submits with one backgrounded judge-container call per rank; every subshell
+    shares $$, so a temporary named by it was one file for all of them and the ranks cut each other's EDF."""
+    edf_dir = tmp_path / "edf"
+    write_edf(edf_dir, "bench", MULTILINE_EDF)
+    run_dir = tmp_path / "run"
+    script = "\n".join(
+        [
+            "set -uo pipefail",
+            f"RUN_DIR={shlex.quote(str(run_dir))}",
+            f"SHARED_HOST_DIR={shlex.quote(str(run_dir / 'shared'))}",
+            "SHARED_MOUNT=/shared",
+            f"EDF_PATH={shlex.quote(str(edf_dir))}",
+            f"HPCAGENT_BENCH_REPO={shlex.quote(str(REPO_ROOT))}",
+            f"SCRIPT_DIR={shlex.quote(str(REPO_ROOT / 'hpcagent_bench' / 'cluster'))}",
+            f"RUN_ROOT={shlex.quote(str(run_dir))}",
+            f"SCRATCH={shlex.quote(str(tmp_path))}",
+            f"FAST_SCRATCH={shlex.quote(str(tmp_path / 'fast'))}",
+            f"JIT_CACHE_ROOT={shlex.quote(str(tmp_path / '.hpcagentbench-cache'))}",
+            "AGENT_PAYLOAD_MOUNT=/opt/hpcagent-bench-agent",
+            f"AGENT_LAUNCH_DIR={shlex.quote(str(run_dir / '.agent-launch'))}",
+            'CONTAINER_MOUNTS=""',
+            f"GENERATED_CACHE_HOST={shlex.quote(str(run_dir / 'generated'))}",
+            "GENERATED_CACHE_MOUNT=/opt/generated",
+            f". {shlex.quote(str(SCRIPT))}",
+            "fails=0",
+            "for round in $(seq 10); do",
+            "    for i in 1 2 3 4; do (derived_edf bench judge >/dev/null 2>&1) & done",
+            "    for job in $(jobs -p); do wait \"${job}\" || fails=$((fails + 1)); done",
+            "done",
+            'echo "${fails}"',
+        ]
+    )
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+    assert proc.stdout.strip() == "0", proc.stderr
+    parsed = tomllib.loads((run_dir / "edf/bench.judge.toml").read_text())
+    assert f"{run_dir / 'shared'}:/shared" in parsed["mounts"]

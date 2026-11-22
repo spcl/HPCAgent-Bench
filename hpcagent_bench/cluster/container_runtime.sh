@@ -386,7 +386,7 @@ derived_edf() {
     EDF_FILE="${RUN_DIR}/edf/${name}.${role}.toml"
     src="$(edf_file "${name}")" || exit 2
     mkdir -p "${RUN_DIR}/edf"
-    tmp="${EDF_FILE}.$$.tmp"
+    tmp="${EDF_FILE}.${BASHPID}.tmp"  # BASHPID: parallel judge-rank subshells share $$
     # The agent tools are the checkout's, bound at launch -- no image carries them -- so they stay in
     # lockstep with the repo the other roles run from.
     # REPLACE the mount block for EVERY role, never add to it: the registered EDFs mount two entire
@@ -530,7 +530,11 @@ container_wrap() {
     [[ -n "${image}" ]] || { echo "CONTAINER_RUNTIME=${CONTAINER_RUNTIME} needs an image for ${role}" >&2; return 2; }
     [[ -z "${CONTAINER_GPU_FLAGS}" ]] || read -r -a gpu_flags <<<"${CONTAINER_GPU_FLAGS}"
     [[ -z "${SHARED_HOST_DIR:-}" ]] || volumes+=("${SHARED_HOST_DIR}:${SHARED_MOUNT:?SHARED_MOUNT}")
-    for mount in $(role_mounts "${role}") "$@"; do
+    # One mount per line, as role_binds below: a path with a space stays one mount.
+    while IFS= read -r mount; do
+        [[ -z "${mount}" ]] || volumes+=("${mount}:${mount}")
+    done < <(role_mounts "${role}")
+    for mount in "$@"; do
         volumes+=("${mount}:${mount}")
     done
     # One bind per line: a path with a space stays one bind.
