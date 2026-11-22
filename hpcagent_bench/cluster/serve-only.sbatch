@@ -219,6 +219,11 @@ export RUN_ROOT RUN_DIR SHARED_HOST_DIR="${RUN_DIR}/shared" SHARED_MOUNT=/shared
 GENERATED_CACHE_HOST="${HPCAGENT_BENCH_GENERATED_CACHE_HOST:-${HPCAGENT_BENCH_REPO}/.cache/generated}"
 . "${SCRIPT_DIR}/container_runtime.sh"
 container_wrap vllm-node "${INFERENCE_CE_ENV}" "" || exit 2
+# run_cluster.sh --vllm-node compares the commit the server was staged at with this one. `job submit` sets it
+# (jobs.py); a run of a fused allocation starts this script without it, and every pool server stopped with
+# "the checkout is at no commit" (758936).
+: "${HPCAGENT_BENCH_SNAPSHOT_COMMIT:=$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || true)}"
+export HPCAGENT_BENCH_SNAPSHOT_COMMIT
 
 # Without --cpus-per-task the step claims ONE core of 192 and the engine's host-side work degrades
 # with load rather than failing.
