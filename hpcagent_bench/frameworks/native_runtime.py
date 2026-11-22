@@ -11,7 +11,8 @@ import time
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
-from hpcagent_bench import modules, phase_clock
+from hpcagent_bench import framework_cache, modules, phase_clock
+from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.categories import Language
 from hpcagent_bench.columns import FRAMEWORKS
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework, ToolMissing
@@ -150,10 +151,13 @@ def ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> pathl
             f"{so_name} (generation from {short}_numpy.py did not run or failed)"
         )
     if so.exists() and so.stat().st_mtime >= max(p.stat().st_mtime for _, p in sources):
+        # A reused library is credited the seconds its build took, as every framework cache hit is.
+        framework_cache.credit_production(so, phase_clock.Phase.COMPILE)
         return so
     bd.mkdir(exist_ok=True)
     extra = framework_extra_flags(framework)
     # Built in a private directory and renamed into place, so a concurrent dlopen never sees a half-linked file.
+    started = time.perf_counter()
     with tempfile.TemporaryDirectory(dir=bd) as private, phase_clock.phase(phase_clock.Phase.COMPILE):
         staged = pathlib.Path(private) / so_name
         for cmd in build_kernel_lib_commands(
@@ -165,6 +169,7 @@ def ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> pathl
         ):
             subprocess.check_call(cmd)
         os.replace(staged, so)
+    write_atomic(framework_cache.seconds_path(so), f"{time.perf_counter() - started:.6f}".encode())
     return so
 
 
