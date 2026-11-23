@@ -9,10 +9,14 @@ runs that repository's own script, which uploads to PyPI with twine and then cre
 
 * dace-extended: helpers/scripts/dace_extended_release.sh, when spcl/dace@extended moved past the last release;
 * the libraries and plugins: helpers/release_patch.sh in a fresh clone of main. It first moves the pins of our
-  packages to their newest releases; when one moved it pushes that and stops, and this script waits for CI on the
-  new head and runs it again, so a dependency's release always reaches its dependents;
-* hpcagent-bench: in this checkout, pins.sh --bump (pushed and CI-gated the same way), then
+  packages to their newest releases; when one moved it opens a pins/* pull request and stops. This script waits for
+  that PR's CI, merges it when green and runs the release again, so a dependency's release always reaches its
+  dependents, tested where it lands;
+* hpcagent-bench: in this checkout, pins.sh --bump (a pull request, CI-gated and merged the same way), then
   release_patch.sh --skip-libraries.
+
+A pin-bump PR whose CI fails stops the script: the dependency's release broke this repository, so the fix goes into the
+dependency, which releases again; then rerun.
 
 Before every step the script waits until all CI runs on the repository's main head are green; a failed run stops it.
 A rerun after a failure resumes: an unchanged package has nothing to release and is skipped.
@@ -120,11 +124,11 @@ def pending(name: str) -> str:
     return f"{count} commits since {tag}" if count != "0" else f"nothing since {tag} (unless a dependency releases)"
 
 
-def wait_green(slug: str) -> str:
-    """Wait until every CI run on ``slug``'s main head is green and return that head. A newer push (which cancels the
-    older runs) moves the wait to the new head; a failed run on the head stops the script."""
+def wait_green(slug: str, sha: str = "") -> str:
+    """Wait until every CI run on ``sha`` (default: ``slug``'s main head, followed across newer pushes, which cancel
+    the older runs) is green and return that commit; a failed run on it stops the script."""
     while True:
-        head = main_head(slug)
+        head = sha or main_head(slug)
         runs = run(
             [
                 "gh",
@@ -148,7 +152,7 @@ def wait_green(slug: str) -> str:
             for line, state in zip(runs, states, strict=True)
             if state[0] == "completed" and state[1] not in ("success", "skipped")
         ]
-        if bad and main_head(slug) == head:
+        if bad and (sha or main_head(slug)) == head:
             sys.exit(f"release_all.py: CI on {slug}@{head[:9]} is not green:\n  " + "\n  ".join(bad))
         if states and not bad and all(state[0] == "completed" for state in states):
             return head
@@ -156,39 +160,71 @@ def wait_green(slug: str) -> str:
         time.sleep(POLL_SECONDS)
 
 
-def is_tagged(slug: str, sha: str) -> bool:
-    """True when a release tag names ``sha`` (the head a release just pushed)."""
-    lines = run(["git", "ls-remote", "--tags", f"https://github.com/{slug}.git"]).splitlines()
-    return any(line.startswith(sha) and "refs/tags/" in line for line in lines)
+def pins_pr(slug: str) -> str:
+    """The URL of ``slug``'s open pins/* pull request, or ""."""
+    return run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "-R",
+            slug,
+            "--state",
+            "open",
+            "--json",
+            "headRefName,url",
+            "-q",
+            '.[] | select(.headRefName | startswith("pins/")) | .url',
+        ]
+    ).split("\n")[0]
+
+
+def merge_pins_pr(slug: str) -> bool:
+    """Wait for green CI on ``slug``'s open pins/* PR and merge it; False when none is open."""
+    url = pins_pr(slug)
+    if not url:
+        return False
+    sha = run(["gh", "pr", "view", url, "--json", "headRefOid", "-q", ".headRefOid"])
+    print(f"pin bump {url}: waiting for its CI", flush=True)
+    wait_green(slug, sha)
+    step(["gh", "pr", "merge", url, "--merge", "--delete-branch"])
+    return True
 
 
 def release_library(name: str) -> None:
     """Run ``name``'s helpers/release_patch.sh until it releases or has nothing to release."""
     slug = SLUGS[name]
     while True:
-        head = wait_green(slug)
+        wait_green(slug)
+        if merge_pins_pr(slug):
+            continue
         with tempfile.TemporaryDirectory(prefix="release-all.") as work:
             clone = pathlib.Path(work) / "repo"
             step(["git", "clone", "-q", "--branch", "main", f"https://github.com/{slug}.git", str(clone)])
             step(["helpers/release_patch.sh"], cwd=clone)
-        after = main_head(slug)
-        if after == head or is_tagged(slug, after):
+        if not pins_pr(slug):
             return
-        print(f"{name}: pins moved to {after[:9]}; its CI gates the release", flush=True)
 
 
 def release_bench() -> None:
-    """Bump this checkout's pins (pushed and CI-gated), then release hpcagent-bench and hpcagent-agent."""
+    """Bump this checkout's pins (a pull request, CI-gated and merged), then release hpcagent-bench and
+    hpcagent-agent."""
     slug = SLUGS[BENCH]
     while True:
         wait_green(slug)
+        if merge_pins_pr(slug):
+            continue
         step(["git", "pull", "-q", "--ff-only", "origin", "main"])
         step(["helpers/scripts/pins.sh", "--bump"])
         if not run(["git", "status", "--porcelain"]):
             break
+        branch = f"pins/{time.strftime('%Y%m%d-%H%M%S')}"
+        step(["git", "switch", "-q", "-c", branch])
         step(["git", "add", "-A"])
         step(["git", "commit", "-q", "-m", "Pin the newest releases of our packages"])
-        step(["git", "push", "-q", "origin", "main"])
+        step(["git", "push", "-q", "origin", branch])
+        step(["gh", "pr", "create", "-R", slug, "--base", "main", "--head", branch, "--fill"])
+        step(["git", "switch", "-q", "main"])
     step(["helpers/scripts/release_patch.sh", "--skip-libraries"])
 
 

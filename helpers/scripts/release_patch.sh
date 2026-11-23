@@ -5,8 +5,8 @@
 # origin/main:
 #   helpers/scripts/release_patch.sh                   # 1. patch-release what the bench imports (DaCe extended,
 #                                                      #    dace-relayout) and move every pin to its newest release
-#                                                      #    (pins.sh --release); when a pin moved, commit and push that
-#                                                      #    and stop, so CI tests the new pins
+#                                                      #    (pins.sh --release); when a pin moved, open a pins/* PR
+#                                                      #    and stop: merge it once its CI is green
 #   helpers/scripts/release_patch.sh --skip-libraries  # 2. once CI on main is green: bump the three versions, add the
 #                                                      #    CHANGELOG section, commit, tag, push, build + smoke-test +
 #                                                      #    upload (do_release.sh --upload pypi), then the GitHub
@@ -46,10 +46,15 @@ if ((libraries)); then
     released=0
     helpers/scripts/pins.sh --release || released=$?
     if [[ -n "$(git status --porcelain)" ]]; then
+        # A pin bump is tested where it lands: a pins/* pull request, merged once its CI is green.
+        branch="pins/$(date +%Y%m%d-%H%M%S)"
+        git switch -q -c "${branch}"
         git add -A
         git commit -q -m "Pin the newest releases of DaCe extended, dace-relayout and the user plugins"
-        git push -q origin main
-        echo "pushed the new pins as $(git rev-parse --short HEAD); once CI on it is green, run $0 --skip-libraries"
+        git push -q origin "${branch}"
+        pr="$(gh pr create -R "${SLUG}" --base main --head "${branch}" --fill)"
+        git switch -q main
+        echo "opened ${pr}; merge it once its CI is green, then run $0 --skip-libraries"
     else
         echo "every pin is on its newest release; run $0 --skip-libraries"
     fi
