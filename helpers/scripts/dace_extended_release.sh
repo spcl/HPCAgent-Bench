@@ -1,83 +1,134 @@
 #!/usr/bin/env bash
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Patch release of DaCe extended on the ThrudPrimrose/dace fork: sync the fork's main and extended to spcl/dace's,
-# then tag the extended head as the next extended-vX.Y.Z (extended-vX.Y.(Z+1); the first is extended-v1.0.0) and
-# create its GitHub release with a wheel and an sdist. The fork mirrors spcl/dace exactly and holds no commits of its
-# own and runs no CI (its Actions are off): the gate reads spcl/dace's own CI runs on the commit. Tags live only on the
-# fork, so spcl/dace's tag and release lists stay clean. Only a head every spcl/dace workflow passed on is released
-# (--allow-running also takes workflows still running, never a failed one); a head with a tag is left alone.
-#   helpers/scripts/dace_extended_release.sh            # release
-#   helpers/scripts/dace_extended_release.sh --dry-run  # CI gate, next tag, build + twine check, notes; change nothing
-#   helpers/scripts/dace_extended_release.sh --allow-running [--dry-run]
-# pins.sh --bump then moves the bench's dace pin to the newest release's commit; pins.sh --release runs this first.
+# Patch release of DaCe extended as the PyPI package dace-extended (import dace), from the ThrudPrimrose/dace fork.
+# The fork's main mirrors spcl/dace main exactly. Its extended is spcl/dace@extended plus ONE release commit that
+# changes only the package metadata: [project] name "dace-extended", a static version X.Y.Z, and the alloy extra
+# `dace-alloy>=0.1.0` (PyPI refuses direct URLs). The tag extended-vX.Y.Z names that commit, so a git pin of the tag
+# and the PyPI release are the same distribution. Each run releases the spcl/dace@extended head as the next patch
+# (extended-vX.Y.(Z+1); the first is extended-v1.0.0): fork sync, release commit, tag, wheel + sdist, GitHub
+# release, PyPI upload. The fork runs no CI (its Actions are off): the gate reads spcl/dace's own CI runs on the head.
+#   helpers/scripts/dace_extended_release.sh [--allow-running] [--no-upload] [--outdir DIR] [--dry-run]
+#     --allow-running  also take spcl/dace workflows still running on the head (never a failed one)
+#     --no-upload      skip the PyPI upload (TWINE_USER and TWINE_TOKEN are needed otherwise)
+#     --outdir DIR     keep the wheel and sdist in DIR (default: a temporary folder)
+#     --dry-run        gate, next tag, release commit, build + twine check, notes; push and upload nothing
+# A head that already has a release is left alone. pins.sh --bump then moves the pins to the newest release.
 set -euo pipefail
 ulimit -c 0
 FORK="ThrudPrimrose/dace"
 UPSTREAM="spcl/dace"
+die() { echo "dace_extended_release.sh: $*" >&2; exit 1; }
 dry=0
 running=0
-for arg in "$@"; do
-    case "${arg}" in
+upload=1
+outdir=""
+while (($#)); do
+    case "$1" in
         --dry-run) dry=1 ;;
         --allow-running) running=1 ;;
-        *) echo "usage: $0 [--allow-running] [--dry-run]" >&2; exit 2 ;;
+        --no-upload) upload=0 ;;
+        --outdir) outdir="$2"; shift ;;
+        *) echo "usage: $0 [--allow-running] [--no-upload] [--outdir DIR] [--dry-run]" >&2; exit 2 ;;
     esac
+    shift
 done
+((dry || !upload)) || [[ -n "${TWINE_USER:-}" && -n "${TWINE_TOKEN:-}" ]] ||
+    die "TWINE_USER and TWINE_TOKEN must be set (or pass --no-upload)"
 
 sha="$(git ls-remote "https://github.com/${UPSTREAM}.git" refs/heads/extended | cut -f1)"
-[[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "error: no extended head on ${UPSTREAM}" >&2; exit 1; }
+[[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || die "no extended head on ${UPSTREAM}"
 echo "=== ${UPSTREAM}@extended head ${sha} ==="
 
-tags="$(git ls-remote --tags "https://github.com/${FORK}.git" 'refs/tags/extended-v*' | grep -v '\^{}$' || true)"
-done_tag="$(awk -v s="${sha}" '$1 == s { sub("refs/tags/", "", $2); print $2 }' <<<"${tags}")"
-[[ -z "${done_tag}" ]] || { echo "${sha:0:9} is already ${FORK} ${done_tag}, nothing to release"; exit 0; }
+work="$(mktemp -d "${TMPDIR:-/tmp}/dace-extended-release.XXXXXX")"
+trap 'rm -rf "${work}"' EXIT
+src="${work}/src"
+git init -q "${src}"
+git -C "${src}" remote add fork "https://github.com/${FORK}.git"
+if git -C "${src}" ls-remote --exit-code --tags fork 'refs/tags/extended-v*' >/dev/null; then
+    git -C "${src}" fetch -q --depth 2 fork '+refs/tags/extended-v*:refs/tags/extended-v*'
+fi
+# The released spcl/dace commit of each tag is its release commit's parent.
+last=""
+since=""
+while read -r name; do
+    [[ -n "${name}" ]] || continue
+    parent="$(git -C "${src}" rev-parse "${name}^{commit}^")"
+    [[ "${parent}" != "${sha}" ]] || { echo "${sha:0:9} is already ${FORK} ${name}, nothing to release"; exit 0; }
+    last="${name}"
+    since="${parent}"
+done < <(git -C "${src}" tag -l 'extended-v*' | sort -V)
 
 runs="$(gh run list -R "${UPSTREAM}" -c "${sha}" -L 100 --json workflowName,status,conclusion)"
-[[ "$(jq length <<<"${runs}")" -gt 0 ]] || { echo "error: no ${UPSTREAM} CI run on ${sha:0:9}" >&2; exit 1; }
+[[ "$(jq length <<<"${runs}")" -gt 0 ]] || die "no ${UPSTREAM} CI run on ${sha:0:9}"
 open="$(jq -r --argjson running "${running}" '.[]
     | select((.status != "completed" and $running == 0)
         or (.status == "completed" and .conclusion != "success" and .conclusion != "skipped"))
     | "  \(.workflowName): \(.status) \(.conclusion)"' <<<"${runs}")"
-[[ -z "${open}" ]] || { printf 'error: %s CI on %s is not green:\n%s\n' "${UPSTREAM}" "${sha:0:9}" "${open}" >&2; exit 1; }
+[[ -z "${open}" ]] || die "${UPSTREAM} CI on ${sha:0:9} is not green:"$'\n'"${open}"
 unfinished="$(jq '[.[] | select(.status != "completed")] | length' <<<"${runs}")"
 echo "CI: $(jq length <<<"${runs}") ${UPSTREAM} workflows, none failed, ${unfinished} still running"
 
-last="$(sed -n 's#.*refs/tags/\(extended-v[0-9]*\.[0-9]*\.[0-9]*\)$#\1#p' <<<"${tags}" | sort -V | tail -1)"
 if [[ -z "${last}" ]]; then
-    tag="extended-v1.0.0"
-    since=""
+    version="1.0.0"
 else
     IFS=. read -r major minor patch <<<"${last#extended-v}"
-    tag="extended-v${major}.${minor}.$((patch + 1))"
-    since="$(awk -v t="refs/tags/${last}" '$2 == t { print $1 }' <<<"${tags}")"
+    version="${major}.${minor}.$((patch + 1))"
 fi
+tag="extended-v${version}"
 echo "tag: ${tag} (previous: ${last:-none})"
 
-# Wheel and sdist of exactly that commit, submodules (cub, moodycamel, webclient) included.
-work="$(mktemp -d "${TMPDIR:-/tmp}/dace-extended-release.XXXXXX")"
-trap 'rm -rf "${work}"' EXIT
-git -C "${work}" init -q src
-git -C "${work}/src" fetch -q --depth 1 "https://github.com/${UPSTREAM}.git" "${sha}"
-git -C "${work}/src" checkout -q FETCH_HEAD
-git -C "${work}/src" submodule update -q --init --depth 1
-(cd "${work}/src" && uv build -q -o "${work}/dist")
-uvx twine check --strict "${work}"/dist/*
+# The release commit: the head plus the PyPI metadata, nothing else.
+git -C "${src}" fetch -q --depth 1 "https://github.com/${UPSTREAM}.git" "${sha}"
+git -C "${src}" checkout -q --detach "${sha}"
+python3 - "${src}/pyproject.toml" "${version}" <<'EOF'
+import pathlib
+import re
+import sys
+
+path, version = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = path.read_text()
+edits = [
+    ('\n[project]\nname = "dace"\ndynamic = ["version"]\n', f'\n[project]\nname = "dace-extended"\nversion = "{version}"\n'),
+    ('[tool.setuptools.dynamic]\nversion = {attr = "dace.version.__version__"}\n\n', ""),
+]
+for old, new in edits:
+    if text.count(old) != 1:
+        sys.exit(f"pyproject.toml: expected one {old.strip()!r}")
+    text = text.replace(old, new)
+text, count = re.subn(r'^alloy = \["alloy @ git\+[^"]*"\]$', "alloy = [\"dace-alloy>=0.1.0 ; python_version >= '3.12'\"]",
+                      text, flags=re.MULTILINE)
+if count != 1:
+    sys.exit("pyproject.toml: expected one alloy extra with a git URL")
+if re.search(r'"[^"]* @ (git\+|https?://)', text):
+    sys.exit("pyproject.toml: a direct URL is left, which PyPI refuses")
+path.write_text(text)
+EOF
+git -C "${src}" -c user.name="$(git config user.name)" -c user.email="$(git config user.email)" commit -q -am \
+    "dace-extended ${version}: PyPI metadata for ${UPSTREAM}@extended ${sha:0:9}" \
+    -m "Name dace-extended (import dace), version ${version}, the alloy extra as dace-alloy>=0.1.0. Nothing else changes."
+release="$(git -C "${src}" rev-parse HEAD)"
+git -C "${src}" submodule update -q --init --depth 1
+dist="${outdir:-${work}/dist}"
+mkdir -p "${dist}"
+(cd "${src}" && uv build -q -o "${dist}")
+uvx twine check --strict "${dist}"/dace_extended-"${version}"*
 
 notes="${work}/notes.md"
 {
-    echo "DaCe extended snapshot: [${UPSTREAM}@extended \`${sha:0:9}\`](https://github.com/${UPSTREAM}/commit/${sha})."
+    echo "dace-extended ${version}: DaCe's extended branch at [${UPSTREAM}@extended \`${sha:0:9}\`](https://github.com/${UPSTREAM}/commit/${sha}),"
+    echo "on PyPI as [\`dace-extended\`](https://pypi.org/project/dace-extended/${version}/). The import name stays \`dace\`."
+    echo "The release commit \`${release:0:9}\` changes only the package metadata (name, version, the alloy extra)."
+    echo
+    echo '```'
+    echo "pip install dace-extended==${version}"
+    echo '```'
+    echo
     if ((unfinished == 0)); then
-        echo "This fork mirrors ${UPSTREAM}; the tag names that commit, and every ${UPSTREAM} CI workflow passed on it."
+        echo "Every ${UPSTREAM} CI workflow passed on \`${sha:0:9}\`."
     else
-        echo "This fork mirrors ${UPSTREAM}; the tag names that commit. No ${UPSTREAM} CI workflow failed on it; workflows still running at release time: ${unfinished}."
+        echo "No ${UPSTREAM} CI workflow failed on \`${sha:0:9}\`; workflows still running at release time: ${unfinished}."
     fi
-    echo
-    echo "Install by commit, or from the wheel attached below:"
-    echo
-    echo '```'
-    echo "pip install \"dace @ git+https://github.com/${UPSTREAM}.git@${sha}\""
-    echo '```'
     if [[ -n "${since}" ]]; then
         echo
         echo "## Changes since ${last}"
@@ -88,18 +139,22 @@ notes="${work}/notes.md"
 } >"${notes}"
 cat "${notes}"
 if ((dry)); then
-    echo "dry run: nothing changed; rerun without --dry-run to sync ${FORK} and release ${tag}"
+    echo "dry run: nothing pushed; rerun without --dry-run to release ${tag} (${release:0:9})"
     exit 0
 fi
 
+# Both branches first take spcl/dace's heads, so the fork holds the release commit's parent before the push.
 for branch in main extended; do
     gh repo sync "${FORK}" --source "${UPSTREAM}" --branch "${branch}" --force
 done
-status="$(gh api "repos/${FORK}/compare/${sha}...extended" -q .status)"
-[[ "${status}" == identical || "${status}" == ahead ]] || {
-    echo "error: ${sha:0:9} is not on ${FORK} extended (${status})" >&2
-    exit 1
-}
-gh release create "${tag}" -R "${FORK}" --target "${sha}" --title "DaCe extended ${tag#extended-}" \
-    --notes-file "${notes}" "${work}"/dist/*
-echo "released https://github.com/${FORK}/releases/tag/${tag}"
+git -C "${src}" push -q --force fork "${release}:refs/heads/extended"
+git -C "${src}" tag -a "${tag}" -m "dace-extended ${version}" "${release}"
+git -C "${src}" push -q fork "refs/tags/${tag}"
+gh release create "${tag}" -R "${FORK}" --verify-tag --title "dace-extended ${version}" --notes-file "${notes}" \
+    "${dist}"/dace_extended-"${version}"*
+echo "released https://github.com/${FORK}/releases/tag/${tag} (${release})"
+if ((upload)); then
+    TWINE_USERNAME="${TWINE_USER}" TWINE_PASSWORD="${TWINE_TOKEN}" \
+        uvx twine upload --non-interactive "${dist}"/dace_extended-"${version}"*
+    echo "uploaded https://pypi.org/project/dace-extended/${version}/"
+fi
