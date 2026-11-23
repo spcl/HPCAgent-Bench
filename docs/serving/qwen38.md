@@ -55,6 +55,15 @@ log lines), which is the shipped configuration ([knobs.md](knobs.md#aiter-correc
   conversation, hit 0.48), `--mamba-radix-cache-strategy no_buffer --disable-overlap-schedule` (132 tok/s,
   hit 0.79; ReplaySSM needs it), `--mamba-ssm-dtype bfloat16` (263, within noise).
 
+## Open: late-episode prefix-cache misses (2026-11-23)
+
+The llr40 server of job 759020 (40 agents, one node) ran well while contexts were short: 30-35 running requests,
+600-1700 tok/s. Once the pool reached 0.5-0.98 full (about 140k tokens per request), prefills arrived with
+`#cached-token: 0` and up to 250k pending tokens, so whole conversations were prefilled again, and decode dropped
+to 13-130 tok/s for minutes at a time. The bench above used 35k-50k prompts, so it never reached this state.
+`[bench.qwen-base]` with `BENCH_PREFIX_TOKENS="30000 120000"` and `BENCH_CONCURRENCY="40 20"` measures it; the fix
+(fewer agents per server, as Kimi K2.7 needed, or a larger pool) follows from that run.
+
 ## Measured: decode, one replica (10-29)
 
 Distinct random prompts, steady-state decode while every stream decodes.

@@ -322,6 +322,11 @@ set = { "--max-total-tokens" = "1600000" }
 model = "glm53"
 set = { "--max-total-tokens" = "1800000" }
 
+# Qwen3.8 at its experiment settings: in job 759020 its 40 agents' late turns (~140k tokens each) missed the prefix
+# cache and decode collapsed; BENCH_PREFIX_TOKENS="30000 120000" at 40 and 20 agents measures it.
+[bench.qwen-base]
+model = "qwen38"
+
 # Meta's Muse Spark, contributor tier: discounted in exchange for Meta training on the prompts and
 # completions a setup sends. muse-spark-1.3 on the standard tier is the same model.
 [model.musespark]
