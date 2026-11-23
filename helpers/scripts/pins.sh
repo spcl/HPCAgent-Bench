@@ -6,19 +6,18 @@
 #   pins.sh [dace|relayout]  print the version uv.lock holds (dace: dace-extended, the default)
 #   pins.sh --bump           raise both lower bounds to the newest PyPI versions and relock them, and move the user
 #                            plugins to their repositories' newest vX.Y.Z tags (user_plugins.py bump)
-#   pins.sh --release        first patch-release DaCe extended (dace_extended_release.sh) and every library below (its
+#   pins.sh --release        first patch-release DaCe extended (dace_extended_release.sh) and the library below (its
 #                            helpers/release_patch.sh, run in a fresh clone of main: tag, GitHub release, PyPI upload;
 #                            needs TWINE_USER and TWINE_TOKEN), then --bump. A failed release does not stop the others.
 set -euo pipefail
 ulimit -c 0
 root="$(dirname -- "${BASH_SOURCE[0]}")/../.."
 declare -A distribution=([dace]="dace-extended" [relayout]="dace-relayout")
-# Only what the bench uses: dace-relayout (a dependency) and dace-alloy (a user plugin), released after DaCe extended.
-# tactics, the other plugin, depends on hpcagent-bench, so it releases after the bench from its own
-# helpers/release_patch.sh; --bump then moves its plugin pin to that release.
+# Only what the bench imports: dace-relayout, released after DaCe extended. The user plugins (dace-alloy, tactics)
+# import hpcagent-bench, not the reverse: they release from their own helpers/release_patch.sh, and --bump moves the
+# commits the user-plugins CI job checks out to their newest release tags.
 LIBRARIES=(
     "https://github.com/ThrudPrimrose/dace-relayout.git"
-    "https://github.com/ThrudPrimrose/dace-alloy.git"
 )
 
 locked() {

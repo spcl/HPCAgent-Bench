@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Patch release vX.Y.Z -> vX.Y.(Z+1) of hpcagent-bench and hpcagent-agent, in two runs from a clean main equal to
 # origin/main:
-#   helpers/scripts/release_patch.sh                   # 1. patch-release what the bench uses (DaCe extended,
-#                                                      #    dace-relayout, dace-alloy) and move every pin to its
-#                                                      #    newest release
+#   helpers/scripts/release_patch.sh                   # 1. patch-release what the bench imports (DaCe extended,
+#                                                      #    dace-relayout) and move every pin to its newest release
 #                                                      #    (pins.sh --release); when a pin moved, commit and push that
 #                                                      #    and stop, so CI tests the new pins
 #   helpers/scripts/release_patch.sh --skip-libraries  # 2. once CI on main is green: bump the three versions, add the
@@ -13,7 +12,8 @@
 #                                                      #    upload (do_release.sh --upload pypi), GitHub release
 #   add --dry-run to either to print the plan and change nothing.
 # Needs gh (authenticated), uv, and TWINE_USER and TWINE_TOKEN in the environment.
-# tactics depends on hpcagent-bench, so it releases after run 2, from its own helpers/release_patch.sh.
+# The user plugins (dace-alloy, tactics) import hpcagent-bench: they release after run 2 from their own
+# helpers/release_patch.sh.
 set -euo pipefail
 ulimit -c 0
 die() { echo "release_patch.sh: $*" >&2; exit 1; }
