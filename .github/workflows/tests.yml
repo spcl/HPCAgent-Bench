@@ -648,8 +648,8 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: native (frameworks + pluto + e2e[pluto] + integration sweep)
     runs-on: ubuntu-24.04
-    # 41-45 min on green runs (11-23) before the fp32 sweep and references moved to integration[0]; the uncached
-    # Pluto build (8-14 min, #270) and e2e[pluto] are most of what is left.
+    # 41-45 min on green runs (11-23) before the fp32 sweep and references moved to integration[0]; a Pluto
+    # build (8-14 min) runs only on a cache miss (#270), and e2e[pluto] is most of what is left.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -658,9 +658,19 @@ jobs:
           # the tvm_cpu framework column
           ccache: native
 
+      # The build tree and the install prefix, cached together (polycc bakes absolute build-tree paths), keyed on
+      # the recipe (its commit pin and flags), the clang major and the GCC it is pinned to.
+      - name: Setup -- restore the from-source Pluto
+        id: pluto
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.cache/pluto
+          key: pluto-${{ runner.os }}-clang17-gcc14-${{ hashFiles('containers/images/lib/build-pluto.sh') }}
+
       - name: Setup -- build Pluto against LLVM/clang 17
         # The judge-agent images' recipe. clang 17 cannot read GCC 15+ libstdc++ headers, so it is
-        # pinned to the runner's GCC 14; kernels are compiled by the normal toolchain.
+        # pinned to the runner's GCC 14; kernels are compiled by the normal toolchain. On a cache hit
+        # the recipe installs its apt packages and smoke-runs the restored polycc; it builds nothing.
         timeout-minutes: 14
         run: |
           set -euo pipefail
@@ -672,8 +682,19 @@ jobs:
             [ "$attempt" = 4 ] && exit 1
             sleep $((attempt * 15))
           done
-          sudo env PLUTO_SRC="$RUNNER_TEMP/pluto" PLUTO_GCC_INSTALL_DIR=/usr/lib/gcc/x86_64-linux-gnu/14 \
-            sh containers/images/lib/build-pluto.sh
+          pluto="$HOME/.cache/pluto"
+          sudo env PLUTO_SRC="$pluto/src" PLUTO_PREFIX="$pluto/prefix" \
+            PLUTO_GCC_INSTALL_DIR=/usr/lib/gcc/x86_64-linux-gnu/14 sh containers/images/lib/build-pluto.sh
+          # Built as root: the runner user's cache save has to read every file.
+          sudo chown -R "$(id -u):$(id -g)" "$pluto"
+          echo "$pluto/prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Save the from-source Pluto
+        if: ${{ steps.pluto.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/pluto
+          key: pluto-${{ runner.os }}-clang17-gcc14-${{ hashFiles('containers/images/lib/build-pluto.sh') }}
 
       - name: Phase 4 -- codegen frameworks + fp16 (build + run + validate a kernel)
         if: ${{ !cancelled() }}
