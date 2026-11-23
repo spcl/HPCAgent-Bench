@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0 (unreleased)
+
+### Hugging Face dataset
+
+- The dataset card documents every column (generated from the `ExportRow` field descriptions), the license and the
+  paper's BibTeX entry (#267).
+- `export-hf --release-tag vX.Y.Z` without `--push` is a dry run of that release: it writes and validates the folder
+  with the tag named in the card and uploads nothing (#267).
+
 ## 1.0.0 (2026-11)
 
 The first stable release. This section lists everything that changed since 0.5.0, grouped by area; the 1.0a1 record
