@@ -3,12 +3,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Patch release of DaCe extended as the PyPI package dace-extended (import dace), from the ThrudPrimrose/dace fork.
 # The fork's main mirrors spcl/dace main exactly. Its extended is spcl/dace@extended plus ONE release commit that
-# changes only the package metadata: [project] name "dace-extended", a static version X.Y.Z, and the alloy extra
+# changes only the package metadata: [project] name "dace-extended", dace.__version__ = X.Y.Z, Python >=3.12 and the alloy extra
 # `dace-alloy>=0.1.0` (PyPI refuses direct URLs). The tag extended-vX.Y.Z names that commit, so a git pin of the tag
 # and the PyPI release are the same distribution. Each run releases the spcl/dace@extended head as the next patch
 # (extended-vX.Y.(Z+1); the first is extended-v1.0.0): fork sync, release commit, tag, wheel + sdist, GitHub
 # release, PyPI upload. The fork runs no CI (its Actions are off): the gate reads spcl/dace's own CI runs on the head.
-#   helpers/scripts/dace_extended_release.sh [--allow-running] [--no-upload] [--outdir DIR] [--dry-run]
+# Versions are dace-extended's own line: each release bumps the patch (1.0.0, 1.0.1, ...); --upstream-release bumps
+# the minor and resets the patch (1.1.0) when spcl/dace has made a release since. Each release's notes name the
+# upstream DaCe version (dace/version.py at the released commit) it builds on.
+#   helpers/scripts/dace_extended_release.sh [--upstream-release] [--allow-running] [--no-upload] [--outdir DIR] [--dry-run]
+#     --upstream-release  the release follows a new spcl/dace release: bump the minor, not the patch
 #     --allow-running  also take spcl/dace workflows still running on the head (never a failed one)
 #     --no-upload      skip the PyPI upload (TWINE_USER and TWINE_TOKEN are needed otherwise)
 #     --outdir DIR     keep the wheel and sdist in DIR (default: a temporary folder)
@@ -22,14 +26,16 @@ die() { echo "dace_extended_release.sh: $*" >&2; exit 1; }
 dry=0
 running=0
 upload=1
+upstream=0
 outdir=""
 while (($#)); do
     case "$1" in
         --dry-run) dry=1 ;;
         --allow-running) running=1 ;;
         --no-upload) upload=0 ;;
+        --upstream-release) upstream=1 ;;
         --outdir) outdir="$2"; shift ;;
-        *) echo "usage: $0 [--allow-running] [--no-upload] [--outdir DIR] [--dry-run]" >&2; exit 2 ;;
+        *) echo "usage: $0 [--upstream-release] [--allow-running] [--no-upload] [--outdir DIR] [--dry-run]" >&2; exit 2 ;;
     esac
     shift
 done
@@ -73,7 +79,11 @@ if [[ -z "${last}" ]]; then
     version="1.0.0"
 else
     IFS=. read -r major minor patch <<<"${last#extended-v}"
-    version="${major}.${minor}.$((patch + 1))"
+    if ((upstream)); then
+        version="${major}.$((minor + 1)).0"
+    else
+        version="${major}.${minor}.$((patch + 1))"
+    fi
 fi
 tag="extended-v${version}"
 echo "tag: ${tag} (previous: ${last:-none})"
@@ -81,32 +91,41 @@ echo "tag: ${tag} (previous: ${last:-none})"
 # The release commit: the head plus the PyPI metadata, nothing else.
 git -C "${src}" fetch -q --depth 1 "https://github.com/${UPSTREAM}.git" "${sha}"
 git -C "${src}" checkout -q --detach "${sha}"
-python3 - "${src}/pyproject.toml" "${version}" <<'EOF'
+base="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "${src}/dace/version.py")"
+[[ -n "${base}" ]] || die "no __version__ in dace/version.py"
+echo "upstream DaCe version: ${base}"
+python3 - "${src}" "${version}" <<'EOF'
 import pathlib
 import re
 import sys
 
-path, version = pathlib.Path(sys.argv[1]), sys.argv[2]
+root, version = pathlib.Path(sys.argv[1]), sys.argv[2]
+path = root / "pyproject.toml"
 text = path.read_text()
 edits = [
-    ('\n[project]\nname = "dace"\ndynamic = ["version"]\n', f'\n[project]\nname = "dace-extended"\nversion = "{version}"\n'),
-    ('[tool.setuptools.dynamic]\nversion = {attr = "dace.version.__version__"}\n\n', ""),
+    ('\n[project]\nname = "dace"\n', '\n[project]\nname = "dace-extended"\n'),
+    ('requires-python = ">=3.10, <3.15"\n', 'requires-python = ">=3.12"\n'),
 ]
 for old, new in edits:
     if text.count(old) != 1:
         sys.exit(f"pyproject.toml: expected one {old.strip()!r}")
     text = text.replace(old, new)
-text, count = re.subn(r'^alloy = \["alloy @ git\+[^"]*"\]$', "alloy = [\"dace-alloy>=0.1.0 ; python_version >= '3.12'\"]",
-                      text, flags=re.MULTILINE)
+text, count = re.subn(r'^alloy = \["alloy @ git\+[^"]*"\]$', 'alloy = ["dace-alloy>=0.1.0"]', text, flags=re.MULTILINE)
 if count != 1:
     sys.exit("pyproject.toml: expected one alloy extra with a git URL")
 if re.search(r'"[^"]* @ (git\+|https?://)', text):
     sys.exit("pyproject.toml: a direct URL is left, which PyPI refuses")
 path.write_text(text)
+# setuptools reads the package version from dace.__version__, so the two always agree.
+module = root / "dace" / "version.py"
+source, count = re.subn(r'^__version__ = "[^"]*"$', f'__version__ = "{version}"', module.read_text(), flags=re.MULTILINE)
+if count != 1:
+    sys.exit("dace/version.py: expected one __version__ line")
+module.write_text(source)
 EOF
 git -C "${src}" -c user.name="$(git config user.name)" -c user.email="$(git config user.email)" commit -q -am \
     "dace-extended ${version}: PyPI metadata for ${UPSTREAM}@extended ${sha:0:9}" \
-    -m "Name dace-extended (import dace), version ${version}, the alloy extra as dace-alloy>=0.1.0. Nothing else changes."
+    -m "Name dace-extended (import dace), version ${version} (dace.__version__), Python >=3.12, the alloy extra as dace-alloy>=0.1.0. Nothing else changes."
 release="$(git -C "${src}" rev-parse HEAD)"
 git -C "${src}" submodule update -q --init --depth 1
 dist="${outdir:-${work}/dist}"
@@ -117,8 +136,9 @@ uvx twine check --strict "${dist}"/dace_extended-"${version}"*
 notes="${work}/notes.md"
 {
     echo "dace-extended ${version}: DaCe's extended branch at [${UPSTREAM}@extended \`${sha:0:9}\`](https://github.com/${UPSTREAM}/commit/${sha}),"
+    echo "built on upstream DaCe ${base} (dace-extended ${version%.*}.x follows DaCe ${base}),"
     echo "on PyPI as [\`dace-extended\`](https://pypi.org/project/dace-extended/${version}/). The import name stays \`dace\`."
-    echo "The release commit \`${release:0:9}\` changes only the package metadata (name, version, the alloy extra)."
+    echo "The release commit \`${release:0:9}\` changes only the package metadata (name, version, Python >=3.12, the alloy extra)."
     echo
     echo '```'
     echo "pip install dace-extended==${version}"
