@@ -111,16 +111,27 @@ for file in "${VERSIONED[@]}"; do
     grep -q "^version = \"${new}\"$" "${file}" || die "could not set version ${new} in ${file}"
 done
 uv lock -q
-section="## ${new} ($(date +%F))"$'\n\n'"${commits}"$'\n'
-python3 - "${section}" <<'EOF'
+# Notes written ahead under "## X.Y.Z (unreleased)" become the release's section, dated, with the commit list after
+# them; otherwise the section is the commit list alone.
+python3 - "${new}" "$(date +%F)" "${commits}" <<'EOF'
 import pathlib
 import sys
 
+new, day, commits = sys.argv[1:]
 path = pathlib.Path("CHANGELOG.md")
 text = path.read_text()
-at = text.find("\n## ")
-at = len(text) if at < 0 else at + 1
-path.write_text(text[:at] + sys.argv[1] + "\n" + text[at:])
+pending = f"## {new} (unreleased)\n"
+if pending in text:
+    start = text.index(pending)
+    end = text.find("\n## ", start + len(pending))
+    end = len(text) if end < 0 else end + 1
+    body = text[start + len(pending) : end].rstrip("\n")
+    section = f"## {new} ({day})\n{body}\n\n### Commits\n\n{commits}\n\n"
+    path.write_text(text[:start] + section + text[end:])
+else:
+    at = text.find("\n## ")
+    at = len(text) if at < 0 else at + 1
+    path.write_text(text[:at] + f"## {new} ({day})\n\n{commits}\n\n" + text[at:])
 EOF
 git add -A
 git commit -q -m "Release ${tag}"
