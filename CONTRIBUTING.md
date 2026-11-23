@@ -36,7 +36,7 @@ pre-commit install
 To develop against a dace checkout of your own, change the `dace` line of `[tool.uv.sources]` in your working copy to
 `dace = { path = "/path/to/dace", editable = true }` and `uv sync --extra cpu` (without `--frozen`, since the lock names
 the pin). That is a local edit: do not commit it or the `uv.lock` it rewrites (`git checkout pyproject.toml uv.lock`
-restores both). After changing a dependency, run `uv lock` and commit `uv.lock` with it; `helpers/scripts/pins.sh --bump` moves the dace and relayout pins to the spcl/dace@extended and relayout@main heads and relocks both.
+restores both). After changing a dependency, run `uv lock` and commit `uv.lock` with it; `helpers/scripts/pins.sh --bump` moves every pin to its newest release and relocks: dace to the newest `extended-vX.Y.Z` on the ThrudPrimrose/dace fork, dace-relayout to its newest `vX.Y.Z`, and the user plugins to theirs. `helpers/scripts/pins.sh --release` first cuts the patch releases: DaCe extended (`helpers/scripts/dace_extended_release.sh`, the spcl/dace@extended head once every spcl/dace workflow passed on it) and each library (its `helpers/release_patch.sh`: tag, GitHub release, PyPI upload with `TWINE_USER` and `TWINE_TOKEN`). A patch release of the bench itself (vX.Y.Z to vX.Y.(Z+1)) is `helpers/scripts/release_patch.sh`: the first run does `pins.sh --release` and pushes the moved pins; once CI on them is green, `helpers/scripts/release_patch.sh --skip-libraries` bumps the versions, tags, uploads both packages and creates the GitHub release.
 
 On a cluster, source `hpcagent_bench/cluster/env.sh`: it loads the site layer, names the host interpreter
 (`HPCAGENT_BENCH_HOST_PYTHON`) and sets `PYTHONHASHSEED=0` ([docs/configuration.md](docs/configuration.md)).

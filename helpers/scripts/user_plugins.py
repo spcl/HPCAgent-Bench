@@ -5,7 +5,8 @@
 commit and the plugin folder inside it. Nothing else of them is part of the benchmark.
 
 ``checkout DEST [NAME ...]``: clone each (default: all) into ``DEST/<name>`` at its commit and print the plugin
-folders, ``:``-joined (``HPCAGENT_BENCH_USER_PLUGIN_DIRS``). ``bump [NAME ...]``: move the commit of each (default: all) to the tip of its main.
+folders, ``:``-joined (``HPCAGENT_BENCH_USER_PLUGIN_DIRS``). ``bump [NAME ...]``: move the commit of each (default: all) to its repository's newest ``vX.Y.Z``
+release tag; a repository without one keeps its commit.
 """
 
 import argparse
@@ -49,18 +50,40 @@ def checkout(dest: pathlib.Path, names: list[str]) -> str:
     return ":".join(folders)
 
 
+RELEASE_TAG = re.compile(r"^refs/tags/v(\d+)\.(\d+)\.(\d+)(\^\{\})?$")
+
+
+def newest_release(repository: str) -> tuple[str, str] | None:
+    """The newest ``vX.Y.Z`` tag of ``repository`` and the commit it names, or None when it has none."""
+    commits: dict[tuple[int, int, int], str] = {}
+    for line in git("ls-remote", "--tags", repository, "refs/tags/v*").splitlines():
+        sha, ref = line.split()
+        match = RELEASE_TAG.match(ref)
+        if match is None:
+            continue
+        version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        # An annotated tag lists its tag object first and the commit as ``^{}``; the commit wins.
+        if match.group(4) is not None or version not in commits:
+            commits[version] = sha
+    if not commits:
+        return None
+    version = max(commits)
+    return "v" + ".".join(map(str, version)), commits[version]
+
+
 def bump(names: list[str]) -> None:
     text = PINS.read_text(encoding="utf-8")
     for name, pin in pins(names).items():
-        remote = git("ls-remote", pin["repository"], "refs/heads/main").split()
-        if not remote:
-            raise SystemExit(f"{pin['repository']}: no branch main")
-        tip = remote[0]
+        release = newest_release(pin["repository"])
+        if release is None:
+            print(f"{name}: {pin['repository']} has no vX.Y.Z release; keeps {pin['commit']}")
+            continue
+        tag, tip = release
         block = re.compile(rf'(\[plugins\.{re.escape(name)}\][^\[]*?commit = ")[0-9a-f]{{40}}(")', re.S)
         text, count = block.subn(rf"\g<1>{tip}\g<2>", text)
         if count != 1:
             raise SystemExit(f"{PINS}: no commit line for plugin {name!r}")
-        print(f"{name}: {tip}")
+        print(f"{name}: {tag} {tip}")
     PINS.write_text(text, encoding="utf-8")
 
 
