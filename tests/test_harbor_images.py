@@ -19,20 +19,26 @@ from hpcagent_bench.export import harbor as A
 REPO = paths.ROOT
 IMAGES_ENV = REPO / "containers" / "images" / "images.env"
 
-#: images.env role prefix -> the config.yaml image it publishes. cpu has no row: its images are
-#: built outside the registry table.
-PUBLISHED: dict[str, str] = {
-    "JUDGE_AGENT_AMD": "images.amd.agent",
-    "VERIFIER_AMD": "images.amd.verifier",
-    "JUDGE_AGENT_CUDA": "images.nvidia.agent",
-    "VERIFIER_CUDA": "images.nvidia.verifier",
-}
+#: (CPU family that builds it, images.env role prefix, the config.yaml image it publishes). The cpu rows name their
+#: tag by the build node's family (CE_ARCH), so each family's pair is checked as that family's node sources the table.
+PUBLISHED: tuple[tuple[str, str, str], ...] = (
+    ("x86_64", "JUDGE_AGENT_AMD", "images.amd.agent"),
+    ("x86_64", "VERIFIER_AMD", "images.amd.verifier"),
+    ("aarch64", "JUDGE_AGENT_CUDA", "images.nvidia.agent"),
+    ("aarch64", "VERIFIER_CUDA", "images.nvidia.verifier"),
+    ("x86_64", "JUDGE_AGENT_CPU", "images.cpu.agent"),
+    ("x86_64", "VERIFIER_CPU", "images.cpu.verifier"),
+    ("aarch64", "JUDGE_AGENT_CPU", "images.cpu_aarch64.agent"),
+    ("aarch64", "VERIFIER_CPU", "images.cpu_aarch64.verifier"),
+    ("x86_64", "JUDGE_AGENT_CUDA_X86_64", "images.nvidia_x86_64.agent"),
+    ("x86_64", "VERIFIER_CUDA_X86_64", "images.nvidia_x86_64.verifier"),
+)
 FORBIDDEN_KEYS = A.HOST_REACHING_KEYS
 
 
-def images_env() -> dict[str, str]:
-    """Every variable images.env defines, as a shell that sources it sees them."""
-    script = f'set -a; SCRATCH=/nonexistent; . "{IMAGES_ENV}"; set +a; env'
+def images_env(arch: str = "x86_64") -> dict[str, str]:
+    """Every variable images.env defines, as a shell on an ``arch`` node that sources it sees them."""
+    script = f'uname() {{ echo {arch}; }}; set -a; SCRATCH=/nonexistent; . "{IMAGES_ENV}"; set +a; env'
     out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout
     return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
 
@@ -50,10 +56,15 @@ def test_every_hardware_names_fully_qualified_registry_images(hardware: Hardware
     assert agent != verifier, "the agent image never carries the harness the verifier needs"
 
 
-def test_the_registry_table_publishes_the_tags_config_names() -> None:
-    env = images_env()
-    for prefix, key in PUBLISHED.items():
-        assert f"{env['REGISTRY_REPO']}:{env[f'{prefix}_TAG']}" == config.get(key), prefix
+@pytest.mark.parametrize(("arch", "prefix", "key"), PUBLISHED, ids=lambda value: str(value))
+def test_the_registry_table_publishes_the_tags_config_names(arch: str, prefix: str, key: str) -> None:
+    env = images_env(arch)
+    assert f"{env['REGISTRY_REPO']}:{env[f'{prefix}_TAG']}" == config.get(key)
+
+
+def test_every_image_pair_is_published_by_the_registry_table() -> None:
+    pairs = {row[2].rpartition(".")[0] for row in PUBLISHED}
+    assert pairs == {f"images.{field}" for field in config.Images.model_fields} - {"images.mpi"}
 
 
 def generated(tmp_path: pathlib.Path, hardware: Hardware) -> pathlib.Path:
@@ -89,6 +100,8 @@ def test_the_agent_compose_builds_the_task_into_the_agent_image(tmp_path: pathli
         (Hardware.CPU, None, None),
         (Hardware.AMD, ["/dev/kfd", "/dev/dri"], ["video", "render"]),
         (Hardware.NVIDIA, ["nvidia.com/gpu=all"], None),
+        (Hardware.CPU_AARCH64, None, None),
+        (Hardware.NVIDIA_X86_64, ["nvidia.com/gpu=all"], None),
     ],
 )
 def test_the_gpu_reaches_both_containers_exactly_on_a_gpu_target(

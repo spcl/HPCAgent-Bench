@@ -324,11 +324,11 @@ def discover() -> Report:
 
 
 def missing_for_target(report: Report, target: Hardware) -> list[str]:
-    """The tools ``target`` requires that the report did not find."""
+    """The tools ``target``'s device family requires that the report did not find."""
     miss: list[str] = []
     for cat in report["categories"].values():
         for tool, res in cat.items():
-            if target.text in res.get("required_on", []) and not res["found"]:
+            if target.device.text in res.get("required_on", []) and not res["found"]:
                 miss.append(tool)
     return miss
 

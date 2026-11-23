@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build Pluto (polycc, the polyhedral source-to-source tool the `pluto` framework shells out to)
-# against a distro clang and install it into /usr/local. Run as root: the judge-agent Dockerfiles
+# against a distro clang and install it into PLUTO_PREFIX. Run as root: the judge-agent Dockerfiles
 # COPY and run it (and drop the apt lists after it), CI runs it under sudo.
 #
 #   https://github.com/bondhugula/pluto
@@ -10,8 +10,10 @@
 # output the graded toolchain compiles afterwards, so which clang parsed the scop is not a property
 # of any graded number.
 #
-# Env: PLUTO_COMMIT (pin), PLUTO_CLANG_MAJOR (17), PLUTO_SRC (/opt/pluto), PLUTO_GCC_INSTALL_DIR
-# (optional: the gcc whose libstdc++ clang uses; a clang this old cannot parse gcc 15+ headers).
+# Env: PLUTO_COMMIT (pin), PLUTO_CLANG_MAJOR (17), PLUTO_SRC (/opt/pluto), PLUTO_PREFIX (/usr/local),
+# PLUTO_GCC_INSTALL_DIR (optional: the gcc whose libstdc++ clang uses; a clang this old cannot parse gcc 15+
+# headers). A PLUTO_PREFIX that already holds polycc (CI's restored cache, with PLUTO_SRC beside it) skips the
+# build: only the packages, the loader path and the smoke run.
 set -eu
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
@@ -21,6 +23,7 @@ ulimit -c 0
 PLUTO_COMMIT="${PLUTO_COMMIT:-dc462163c8b4fc97d378a4d245d1a64741cb4111}"
 PLUTO_CLANG_MAJOR="${PLUTO_CLANG_MAJOR:-17}"
 PLUTO_SRC="${PLUTO_SRC:-/opt/pluto}"
+PLUTO_PREFIX="${PLUTO_PREFIX:-/usr/local}"
 llvm="/usr/lib/llvm-${PLUTO_CLANG_MAJOR}"
 # gitretry (git_mirror.sh setup) inside an image build, plain git elsewhere.
 git_net="$(command -v gitretry || command -v git)"
@@ -33,6 +36,9 @@ apt-get install -y --no-install-recommends \
     "libclang-${PLUTO_CLANG_MAJOR}-dev" libltdl-dev \
     autoconf automake libtool pkg-config libgmp-dev libyaml-dev flex bison texinfo
 
+if [ -x "${PLUTO_PREFIX}/bin/polycc" ] && [ -d "${PLUTO_SRC}" ]; then
+    echo "build-pluto.sh: reusing the Pluto build in ${PLUTO_PREFIX} and ${PLUTO_SRC}"
+else
 # pet prefers the monolithic -lclang-cpp and Ubuntu ships only the versioned .so.NN; without this
 # link configure falls back to enumerating -lclang* and misses -lclangASTMatchers.
 ln -sf "${llvm}/lib/libclang-cpp.so.${PLUTO_CLANG_MAJOR}" "${llvm}/lib/libclang-cpp.so"
@@ -61,15 +67,20 @@ git -C "${PLUTO_SRC}" checkout "${PLUTO_COMMIT}"
 cd "${PLUTO_SRC}"
 ./autogen.sh
 # The gcc pin rides on CC/CXX because pet's configure overwrites CXXFLAGS.
-./configure --with-clang-prefix="${llvm}" \
+./configure --prefix="${PLUTO_PREFIX}" --with-clang-prefix="${llvm}" \
     CC="clang-${PLUTO_CLANG_MAJOR}${gcc_dir}" CXX="clang++-${PLUTO_CLANG_MAJOR}${gcc_dir}" \
     CXXFLAGS='-std=c++17 -include cstdint' \
     || { grep -B5 -A15 -iE '\berror\b' pet/config.log 2>/dev/null | tail -150 >&2; exit 1; }
 make -j"$(nproc)"
 make install
-ldconfig
 # The build tree stays: polycc bakes absolute build-tree paths (its pluto binary, inscop and
 # getversion's .git) that `make install` does not relocate.
+fi
+# /usr/local/lib is on the loader path already; another prefix is added.
+if [ "${PLUTO_PREFIX}" != /usr/local ]; then
+    echo "${PLUTO_PREFIX}/lib" > /etc/ld.so.conf.d/pluto.conf
+fi
+ldconfig
 
 # polycc must transform a scop, not only install.
 smoke="$(mktemp -d)"
@@ -80,6 +91,6 @@ printf '%s\n' \
     '  for (int64_t i=0;i<N;i++) for (int64_t j=0;j<N;j++) for (int64_t k=0;k<N;k++) C[i][j]+=A[i][k]*B[k][j];' \
     '#pragma endscop' \
     '}' > "${smoke}/smoke.c"
-(cd "${smoke}" && polycc --pet smoke.c -o smoke_out.c && test -s smoke_out.c)
+(cd "${smoke}" && "${PLUTO_PREFIX}/bin/polycc" --pet smoke.c -o smoke_out.c && test -s smoke_out.c)
 rm -rf "${smoke}"
-echo "polycc OK: $(command -v polycc)"
+echo "polycc OK: ${PLUTO_PREFIX}/bin/polycc"
