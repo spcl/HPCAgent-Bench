@@ -2575,7 +2575,9 @@ def native_call_worker(
     if CLOCK is not None:
         CLOCK.arm()
     # The baseline is the child's current RSS, not the high-water mark the fork inherited: a peak above the
-    # current RSS would swallow a call's allocation below it.
+    # current RSS would swallow a call's allocation below it. Freed heap the fork inherited is released first:
+    # still resident, it would serve the call's allocation without any RSS growth.
+    reclaim_memory()
     reset_peak_rss()
     entry_rss = peak_rss()
     after_first: list[int] = []
