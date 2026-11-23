@@ -626,7 +626,9 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: native (frameworks + pluto + e2e[pluto] + e2e[c,cpp,fortran] fp32 + references + integration sweep)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # 41-45 min on green runs (11-23), most of it the uncached Pluto build (8-14 min, #270) and the two e2e sweeps;
+    # 45 cancelled a passing run 30 s before its last step.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
