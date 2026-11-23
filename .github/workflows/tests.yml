@@ -10,14 +10,14 @@ name: CI
 # the finish step still runs. The whole run fits one wave of hosted runners (13 jobs, then `coverage`),
 # each filled to about 35-40 minutes: short work rides as extra steps on a runner with room (one step
 # per corpus slice where a sweep is split), rather than as its own job that pays a setup and a runner.
-# A rider is a matrix-leg field (`perf`, `native_fp64`, `floor`) its steps test.
+# A rider is a matrix-leg field (`perf`, `native_fp64`, `native_fp32`, `floor`) its steps test.
 #
 # The unit sweep DISCOVERS its files: `ls tests/test_*.py` minus .github/dedicated_tests.txt, which
 # lists the files a dedicated phase below runs instead. tests/test_ci_coverage.py fails when a file
 # runs nowhere.
 #
-# tests/test_e2e_numerical.py is split by HPCAGENT_BENCH_E2E_BACKENDS: numba on `e2e`, pluto and
-# c/cpp/fortran fp32 on `native`, c/cpp/fortran fp64 on integration[1]. Its runs use --dist loadgroup because a stem's backends share one
+# tests/test_e2e_numerical.py is split by HPCAGENT_BENCH_E2E_BACKENDS: numba on `e2e`, pluto on `native`,
+# c/cpp/fortran fp32 on integration[0], c/cpp/fortran fp64 on integration[1]. Its runs use --dist loadgroup because a stem's backends share one
 # per-process build.
 #
 # --timeout-method=thread on sweeps that fork: the signal method cannot leave a with-block whose child is wedged, or a C call.
@@ -357,11 +357,12 @@ jobs:
   # each). Shard 0 names test_kernelbench_translation.py and carries the container launch and
   # packaging steps; shard 2 names the every-kernel public-answer sweep (xdist); shard 1 sweeps tests/
   # with both files --ignore'd,
-  # builds OpenBLAS, and carries the c/cpp/fortran fp64 e2e sweep in two halves (about 9 min each)
+  # builds OpenBLAS, and carries the c/cpp/fortran fp64 e2e sweep in two halves (about 9 min each).
+  # Shard 0 (about 6 min) also carries `native`'s c/cpp/fortran fp32 sweep and the emitted references
   # (test_ci_coverage.py::test_the_integration_shards_partition_tests_dir).
   integration:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: integration[${{ matrix.shard.id }}]${{ matrix.shard.native_fp64 && ' + e2e[c,cpp,fortran] fp64' || '' }} (build/run real artifacts)
+    name: integration[${{ matrix.shard.id }}]${{ matrix.shard.native_fp64 && ' + e2e[c,cpp,fortran] fp64' || '' }}${{ matrix.shard.native_fp32 && ' + e2e[c,cpp,fortran] fp32 + references' || '' }} (build/run real artifacts)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -369,6 +370,7 @@ jobs:
         shard:
           - id: 0
             openblas: false
+            native_fp32: true
             select: >-
               tests/test_kernelbench_translation.py
           - id: 1
@@ -467,6 +469,26 @@ jobs:
             (cd "$venv.tests" && PYTEST_ADDOPTS= HPCAGENT_BENCH_RUNNER_SMOKE="$harness" "$venv/bin/python" -m pytest -q \
               -p no:cacheprovider -rfEs --rootdir . -k "$harness" test_runner_resume_smoke.py)
           done
+
+      # fp64 leaves apply_precision a no-op; fp32 exercises the narrow-float lowering. The coverage
+      # slice suffices because it is chosen by emitter paths reached. fp16 stays in test_fp16.py.
+      - name: Phase 5b -- e2e numerical sweep [c, cpp, fortran] @ S, fp32
+        if: ${{ matrix.shard.native_fp32 && !cancelled() }}
+        timeout-minutes: 9
+        env:
+          HPCAGENT_BENCH_E2E_BACKENDS: "c,cpp,fortran"
+          HPCAGENT_BENCH_E2E_PRECISION: "fp32"
+          # The per-push slice on a dispatched run too: the e2e job's fp64 legs sweep the whole corpus.
+          HPCAGENT_BENCH_E2E_SUBSET: "1"
+        run: |
+          python -m pytest -q -p no:cacheprovider -rfEs -n auto --dist loadgroup --timeout=600 tests/test_e2e_numerical.py
+
+      - name: Phase 5e -- emitted references are well-formed and share one ABI
+        if: ${{ matrix.shard.native_fp32 && !cancelled() }}
+        # 8 minutes cut it off on a slow runner (one xdist group, so it runs serially); 7 measured.
+        timeout-minutes: 12
+        run: |
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=900 tests/test_generated_references.py
 
       - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran] @ S, fp64, WHOLE gated corpus [shard 0/2]
         if: ${{ matrix.shard.native_fp64 && !cancelled() }}
@@ -619,16 +641,16 @@ jobs:
           coverage: dace-frontend-${{ matrix.index }}
 
   # Native codegen: the only runner that builds Pluto (codegen frameworks + fp16, the polycc-gated
-  # tests, e2e[pluto], opt reports), then the two-unit build line, the CLI -> DB -> plot integration
-  # sweep, the c/cpp/fortran fp32 e2e sweep and the emitted references (their fp64 sweep rides on
-  # integration[1]). About 38 minutes; the step caps leave a hung step room for the finish step.
+  # tests, e2e[pluto], opt reports), then the two-unit build line and the CLI -> DB -> plot integration
+  # sweep (its polly column uses the clang the Pluto build installs). The c/cpp/fortran fp32 sweep and
+  # the emitted references ride on integration[0], the fp64 sweep on integration[1]. About 34 minutes.
   native:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: native (frameworks + pluto + e2e[pluto] + e2e[c,cpp,fortran] fp32 + references + integration sweep)
+    name: native (frameworks + pluto + e2e[pluto] + integration sweep)
     runs-on: ubuntu-24.04
-    # 41-45 min on green runs (11-23), most of it the uncached Pluto build (8-14 min, #270) and the two e2e sweeps;
-    # 45 cancelled a passing run 30 s before its last step.
-    timeout-minutes: 60
+    # 41-45 min on green runs (11-23) before the fp32 sweep and references moved to integration[0]; the uncached
+    # Pluto build (8-14 min, #270) and e2e[pluto] are most of what is left.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
@@ -707,19 +729,6 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=1800 tests/test_integration_sweep.py
 
-      # fp64 leaves apply_precision a no-op; fp32 exercises the narrow-float lowering. The coverage
-      # slice suffices because it is chosen by emitter paths reached. fp16 stays in test_fp16.py.
-      - name: Phase 5b -- e2e numerical sweep [c, cpp, fortran] @ S, fp32
-        if: ${{ !cancelled() }}
-        timeout-minutes: 9
-        env:
-          HPCAGENT_BENCH_E2E_BACKENDS: "c,cpp,fortran"
-          HPCAGENT_BENCH_E2E_PRECISION: "fp32"
-          # The per-push slice on a dispatched run too: the e2e job's fp64 legs sweep the whole corpus.
-          HPCAGENT_BENCH_E2E_SUBSET: "1"
-        run: |
-          python -m pytest -q -p no:cacheprovider -rfEs -n auto --dist loadgroup --timeout=600 tests/test_e2e_numerical.py
-
       # The KernelBench ratchet itself is integration-marked and runs in `integration`.
       - name: Phase 5c -- kernelbench corpus size pin
         if: ${{ !cancelled() }}
@@ -727,13 +736,6 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=2400 -m "not integration" \
             tests/test_kernelbench_translation.py
-
-      - name: Phase 5e -- emitted references are well-formed and share one ABI
-        if: ${{ !cancelled() }}
-        # 8 minutes cut it off on a slow runner (one xdist group, so it runs serially); 7 measured.
-        timeout-minutes: 12
-        run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=900 tests/test_generated_references.py
 
       - uses: ./.github/actions/finish
         if: always()
