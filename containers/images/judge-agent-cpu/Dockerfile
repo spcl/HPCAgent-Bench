@@ -10,8 +10,8 @@
 # hpcagent_bench is installed from the checkout at job start.
 #
 # LIGHTWEIGHT means minutes, not hours: every compiler and numerical library is a BINARY package,
-# except the MPI stack (step 1c), which spack builds once into the shared buildcache.
-#   compilers  gcc/g++/gfortran 16 (ubuntu-toolchain-r PPA) and clang/flang ${LLVM_MAJOR} with Polly
+# except gcc and the MPI stack (step 1c), which spack builds once into the shared buildcache.
+#   compilers  gcc/g++/gfortran ${GCC_VERSION} (spack, as the GPU images) and clang/flang ${LLVM_MAJOR} with Polly
 #              (apt.llvm.org). HOST OpenMP only.
 #   numerics   OpenBLAS (openmp flavour) + LAPACKE, BLIS, FFTW, SuiteSparse, SuperLU, METIS, SLEEF,
 #              ARPACK, GSL, TBB, Eigen, mimalloc
@@ -21,8 +21,8 @@
 #   absent     ROCm, CUDA, GPU libraries, GPU-aware MPI, PETSc/SLEPc/hypre/MAGMA and the
 #              other distributed solvers, NVHPC, ppcg (GPU-only), cupy, triton
 #
-# CPU baselines are this image's own gcc 16, not judge-agent-amd's: different snapshot, different
-# machine, do not compare across images.
+# The same gcc release as judge-agent-amd and judge-agent-cuda (GCC_VERSION, built by spack), so a CPU baseline
+# names one compiler on every machine; timings still do not compare across machines.
 #
 # Pinned by digest: ubuntu:24.04's multi-arch index, so each architecture resolves its own manifest.
 ARG BASE_IMAGE=docker.io/library/ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
@@ -94,27 +94,25 @@ LABEL org.opencontainers.image.title="hpcagent-bench-judge-agent-cpu" \
 ARG DEBIAN_FRONTEND=noninteractive
 # Set by podman; only likwid and msr-tools (x86) depend on it.
 ARG TARGETARCH
-# gcc 16 from the ubuntu-toolchain-r PPA, the only gcc 16 packaged for noble. Pinned to the exact
-# package version so a PPA that moves on fails the build instead of silently changing the compiler;
-# bump GCC_PPA_VERSION on purpose. Distro gcc 13 (build-essential) stays only for Pluto's clang 17:
-# its auto-vectorizer mislowers a masked select on gcc 16 headers, so no bare name may resolve to it.
-ARG GCC_MAJOR=16
-ARG GCC_PPA_VERSION=16-20260315-1ubuntu1~24~ppa1
-# PPA signing key, fetched by fingerprint and checked.
-ARG GCC_PPA_KEY=C8EC952E2A0E1FBDC5090F6A2C277A0A352154E5
+# gcc: the release the GPU images build (judge-agent-amd and judge-agent-cuda, GCC_VERSION), built by spack in
+# step 1c behind the fixed /opt/gcc symlink; no apt archive packages it for noble. Distro gcc 13 (build-essential)
+# builds it and stays only for Pluto's clang 17: its auto-vectorizer mislowers a masked select on gcc 16 headers, so
+# no bare name may resolve to it.
+ARG GCC_VERSION=16.2.0
 ARG LLVM_MAJOR=22
 
 # /usr/lib/llvm-${LLVM_MAJOR}/bin puts clang, flang and llvm-objdump on PATH under their bare names,
-# which is what languages.resolve_compiler probes; bare gcc names are symlinked into /usr/local/bin,
-# ahead of the distro's gcc-13 ones.
+# which is what languages.resolve_compiler probes; /opt/gcc/bin comes first, ahead of the distro's gcc-13 names.
 ENV LC_ALL=C \
     VIRTUAL_ENV=/opt/venv \
-    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/lib/llvm-${LLVM_MAJOR}/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    CC=/usr/bin/gcc-${GCC_MAJOR} \
-    CXX=/usr/bin/g++-${GCC_MAJOR} \
-    FC=/usr/bin/gfortran-${GCC_MAJOR} \
-    F77=/usr/bin/gfortran-${GCC_MAJOR} \
-    DACE_compiler_cpu_executable=/usr/bin/g++-${GCC_MAJOR} \
+    PATH=/opt/gcc/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/lib/llvm-${LLVM_MAJOR}/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    CC=/opt/gcc/bin/gcc \
+    CXX=/opt/gcc/bin/g++ \
+    FC=/opt/gcc/bin/gfortran \
+    F77=/opt/gcc/bin/gfortran \
+    DACE_compiler_cpu_executable=/opt/gcc/bin/g++ \
+    LD_LIBRARY_PATH=/opt/gcc/lib64:/opt/gcc/lib \
+    LIBRARY_PATH=/opt/gcc/lib64 \
     HPTT_ROOT=/usr/local \
     TBLIS_ROOT=/usr/local
 
@@ -170,39 +168,8 @@ RUN set -eux; \
     fi
 
 # ---------------------------------------------------------------------------------------------
-# 1b. gcc 16 from the ubuntu-toolchain-r PPA, pinned to one package version, bare names onto it.
-#
-# The PPA source is REMOVED again once gcc is in: every later apt step resolves against noble and
-# apt.llvm.org alone, so nothing else quietly comes from a snapshot archive. gcc 16's runtime
-# libraries (libstdc++6, libgomp1, libgfortran5) still come from it, via its own dependencies.
-RUN set -eux; \
-    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${GCC_PPA_KEY}" -o /tmp/ppa.asc; \
-    got="$(gpg --show-keys --with-colons /tmp/ppa.asc | awk -F: '/^fpr/ {print $10; exit}')"; \
-    [ "${got}" = "${GCC_PPA_KEY}" ] || { echo "toolchain PPA key is ${got}, want ${GCC_PPA_KEY}" >&2; exit 1; }; \
-    gpg --dearmor < /tmp/ppa.asc > /etc/apt/trusted.gpg.d/ubuntu-toolchain-r.gpg; \
-    rm -f /tmp/ppa.asc; \
-    codename="$(. /etc/os-release; echo "${VERSION_CODENAME}")"; \
-    echo "deb https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu ${codename} main" \
-      > /etc/apt/sources.list.d/ubuntu-toolchain-r.list; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      "gcc-${GCC_MAJOR}=${GCC_PPA_VERSION}" "g++-${GCC_MAJOR}=${GCC_PPA_VERSION}" \
-      "gfortran-${GCC_MAJOR}=${GCC_PPA_VERSION}" "cpp-${GCC_MAJOR}=${GCC_PPA_VERSION}"; \
-    rm -f /etc/apt/sources.list.d/ubuntu-toolchain-r.list; \
-    rm -rf /var/lib/apt/lists/*; \
-    for tool in gcc g++ gfortran cpp gcov gcc-ar gcc-nm gcc-ranlib; do \
-      ln -sf "/usr/bin/${tool}-${GCC_MAJOR}" "/usr/local/bin/${tool}"; \
-    done; \
-    ln -sf "/usr/bin/gcc-${GCC_MAJOR}" /usr/local/bin/cc; \
-    ln -sf "/usr/bin/g++-${GCC_MAJOR}" /usr/local/bin/c++; \
-    for pkg in "gcc-${GCC_MAJOR}" "g++-${GCC_MAJOR}" "gfortran-${GCC_MAJOR}"; do \
-      [ "$(dpkg-query -W -f='${Version}' "${pkg}")" = "${GCC_PPA_VERSION}" ] \
-        || { echo "${pkg} is not ${GCC_PPA_VERSION}" >&2; exit 1; }; \
-    done
-
-# ---------------------------------------------------------------------------------------------
-# 1c. The MPI stack from spack, built by the gcc above into /opt/view (link: roots, so only these
-# specs are in the view; their dependencies stay rpath'd under /opt/spack-install). MPICH has no
+# 1c. gcc ${GCC_VERSION} from spack (behind /opt/gcc, as judge-agent-amd step 4), then the MPI stack built by it
+# into /opt/view (link: roots, so only these specs are in the view; their dependencies stay rpath'd under /opt/spack-install). MPICH has no
 # +slurm: its built-in PMI-1/2 client serves any host srun --mpi=pmi2, and netmod=ofi lets a site
 # bind its own libfabric (containers/README.md, "Running outside CSCS"). OpenBLAS is spack's too, the
 # same pinned build as the GPU images (0.3.30, 0.3.33 on aarch64, OpenMP, 512 threads, locking, runtime dispatch through
@@ -245,8 +212,8 @@ RUN set -eux; \
       '  build_stage: /var/spack-stage' "  build_jobs: ${build_jobs}" '  connect_timeout: 60' \
       > "${SPACK_ROOT}/etc/spack/config.yaml"; \
     printf '%s\n' 'packages:' \
-      '  c:' "    prefer: [gcc@${GCC_MAJOR}]" '  cxx:' "    prefer: [gcc@${GCC_MAJOR}]" \
-      '  fortran:' "    prefer: [gcc@${GCC_MAJOR}]" \
+      '  c:' "    prefer: [gcc@${GCC_VERSION}]" '  cxx:' "    prefer: [gcc@${GCC_VERSION}]" \
+      '  fortran:' "    prefer: [gcc@${GCC_VERSION}]" \
       '  blas:' '    require: [openblas]' '  lapack:' '    require: [openblas]' \
       > "${SPACK_ROOT}/etc/spack/packages.yaml"; \
     if [ -n "${SPACK_TARGET}" ]; then \
@@ -262,6 +229,15 @@ RUN set -eux; \
     if [ -d /spack-buildcache ]; then \
       "${spack}" mirror add --scope site --unsigned --autopush localcache /spack-buildcache; \
     fi; \
+    # gcc outside the environment, reached through /opt/gcc (judge-agent-amd step 4 says why); the spec names the
+    # variants, because a bare gcc@ also matches the distro gcc spack detected.
+    gcc_spec="gcc@${GCC_VERSION} +graphite +binutils"; \
+    "${spack}" install --fail-fast "${gcc_spec}"; \
+    gcc_prefix="$("${spack}" location -i "${gcc_spec}")"; \
+    "${spack}" compiler find --scope site "${gcc_prefix}"; \
+    ln -sfn "${gcc_prefix}" /opt/gcc; \
+    ln -sf /opt/gcc/bin/gcc /usr/local/bin/cc; \
+    ln -sf /opt/gcc/bin/g++ /usr/local/bin/c++; \
     ofi_version="$(/opt/ofi-sdk/bin/fi_info --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"; \
     test -n "${ofi_version}"; \
     # libfabric: ours, external AND required at environment scope (judge-agent-amd step 4, 630049 and 630267: a
@@ -364,10 +340,10 @@ RUN set -eux; \
 # loadable and proves it). No offload is claimed.
 RUN set -eux; \
     work="$(mktemp -d)"; \
-    gcc -dumpversion | cut -d. -f1 | grep -qx "${GCC_MAJOR}" \
-      || { echo "bare gcc is $(gcc -dumpfullversion) at $(command -v gcc), not gcc ${GCC_MAJOR}" >&2; exit 1; }; \
-    g++ -dumpversion | cut -d. -f1 | grep -qx "${GCC_MAJOR}"; \
-    gfortran -dumpversion | cut -d. -f1 | grep -qx "${GCC_MAJOR}"; \
+    gcc -dumpfullversion | grep -qx "${GCC_VERSION}" \
+      || { echo "bare gcc is $(gcc -dumpfullversion) at $(command -v gcc), not gcc ${GCC_VERSION}" >&2; exit 1; }; \
+    g++ -dumpfullversion | grep -qx "${GCC_VERSION}"; \
+    gfortran -dumpfullversion | grep -qx "${GCC_VERSION}"; \
     for driver in clang clang++ flang opt mlir-opt mlir-translate; do \
       case "$(command -v "${driver}")" in \
         "/usr/lib/llvm-${LLVM_MAJOR}/bin/"*) ;; \

@@ -9,8 +9,8 @@ description = "BibTeX entries and the repository's known non-secrets"
 paths = ['''\.bib$''']
 regexTarget = "match"
 regexes = [
-    # A pinned upstream commit and a public signing-key fingerprint, both checked at build time.
-    '''^(PAPI_COMMIT|GCC_PPA_KEY)=[0-9A-Fa-f]{40}$''',
+    # A pinned upstream commit, checked at build time.
+    '''^PAPI_COMMIT=[0-9A-Fa-f]{40}$''',
     # Test fixtures: dummy endpoint keys, a leak-canary string and the pinned cache-key digest.
     '''^KEY = "(0123456789abcdef|fedcba9876543210)"$''',
     '''^SECRET = "sk-test-[0-9a-z-]+"$''',
