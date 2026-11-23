@@ -473,6 +473,9 @@ def test_the_costed_kernels_exist() -> None:
 
 
 @pytest.mark.dace_frontend
+# Its own limit, the repo default: one parse may take PARSE_TIMEOUT_S, so a runner's shorter --timeout (900 s in
+# the in-image round of #264) would cut a passing run short.
+@pytest.mark.timeout(3600)
 def test_every_generated_dace_program_parses_or_is_a_known_refusal() -> None:
     """The ratchet. A NEW refusal fails; a refusal that started parsing fails too, so the list can
     only shrink, and it shrinks by fixing the generator. Exception: a :data:`TIMEOUT_REASONS` entry
