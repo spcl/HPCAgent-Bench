@@ -12,7 +12,10 @@
 #                                                      #    upload (do_release.sh --upload pypi), then the GitHub
 #                                                      #    release with the same dists; no workflow uploads
 #   add --dry-run to either to print the plan and change nothing.
-# Needs gh (authenticated), uv, and TWINE_USER and TWINE_TOKEN in the environment (never in a file).
+#   add --github-only to either for everything but the PyPI uploads: the GitHub releases carry the wheels and
+#   sdists (no TWINE_* needed). The next run without it first uploads exactly those attached dists to PyPI.
+# Needs gh (authenticated), uv, and (unless --github-only) TWINE_USER and TWINE_TOKEN in the environment (never in
+# a file).
 # The user plugins (dace-alloy, tactics) import hpcagent-bench: they release after run 2 from their own
 # helpers/release_patch.sh.
 set -euo pipefail
@@ -24,11 +27,13 @@ SLUG="spcl/HPCAgent-Bench"
 VERSIONED=(pyproject.toml agent/pyproject.toml adapters/hpcagent_bench/pyproject.toml)
 libraries=1
 dry=0
+github_only=0
 for arg in "$@"; do
     case "${arg}" in
         --skip-libraries) libraries=0 ;;
         --dry-run) dry=1 ;;
-        *) echo "usage: $0 [--skip-libraries] [--dry-run]" >&2; exit 2 ;;
+        --github-only) github_only=1 ;;
+        *) echo "usage: $0 [--skip-libraries] [--github-only] [--dry-run]" >&2; exit 2 ;;
     esac
 done
 
@@ -36,7 +41,8 @@ done
 [[ -z "$(git status --porcelain)" ]] || die "the working tree has uncommitted changes"
 git fetch -q origin main --tags
 [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || die "main is not origin/main; pull or push first"
-((dry)) || [[ -n "${TWINE_USER:-}" && -n "${TWINE_TOKEN:-}" ]] || die "TWINE_USER and TWINE_TOKEN must be set"
+((dry || github_only)) || [[ -n "${TWINE_USER:-}" && -n "${TWINE_TOKEN:-}" ]] ||
+    die "TWINE_USER and TWINE_TOKEN must be set (or pass --github-only)"
 
 if ((libraries)); then
     if ((dry)); then
@@ -44,7 +50,9 @@ if ((libraries)); then
         exit 0
     fi
     released=0
-    helpers/scripts/pins.sh --release || released=$?
+    release_flags=()
+    ((!github_only)) || release_flags=(--github-only)
+    helpers/scripts/pins.sh --release "${release_flags[@]}" || released=$?
     if [[ -n "$(git status --porcelain)" ]]; then
         # A pin bump is tested where it lands: a pins/* pull request, merged once its CI is green.
         branch="pins/$(date +%Y%m%d-%H%M%S)"
@@ -71,6 +79,22 @@ old="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb
 new="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
 tag="v${new}"
 previous="v${old}"
+
+# A release made with --github-only reaches PyPI on the next run without it: exactly the dists its GitHub release
+# carries (both packages), before anything new is released.
+if [[ "$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/hpcagent-bench/${old}/json")" == 404 ]] &&
+    gh release view "${previous}" -R "${SLUG}" >/dev/null 2>&1; then
+    if ((dry || github_only)); then
+        echo "${previous} is on GitHub only; a run without --github-only uploads its dists to PyPI first"
+    else
+        pending="$(mktemp -d "${TMPDIR:-/tmp}/bench-pending.XXXXXX")"
+        gh release download "${previous}" -R "${SLUG}" -D "${pending}" -p '*.whl' -p '*.tar.gz'
+        TWINE_USERNAME="${TWINE_USER}" TWINE_PASSWORD="${TWINE_TOKEN}" \
+            uvx twine upload --non-interactive --skip-existing "${pending}"/*
+        rm -rf "${pending}"
+        echo "uploaded the GitHub-only ${previous} to PyPI"
+    fi
+fi
 git rev-parse -q --verify "refs/tags/${tag}" >/dev/null && die "tag ${tag} exists already"
 git rev-parse -q --verify "refs/tags/${previous}" >/dev/null || die "no tag ${previous} for the current version"
 commits="$(git log --no-merges --format='- %s (%h)' "${previous}..HEAD")"
@@ -104,7 +128,13 @@ git tag -a "${tag}" -m "hpcagent-bench ${new}"
 git push -q origin main "${tag}"
 
 outdir="$(mktemp -d "${TMPDIR:-/tmp}/bench-release.XXXXXX")"
-TWINE_USERNAME="${TWINE_USER}" TWINE_PASSWORD="${TWINE_TOKEN}" \
-    helpers/scripts/do_release.sh --outdir "${outdir}" --upload pypi
+if ((github_only)); then
+    helpers/scripts/do_release.sh --outdir "${outdir}"
+else
+    TWINE_USERNAME="${TWINE_USER}" TWINE_PASSWORD="${TWINE_TOKEN}" \
+        helpers/scripts/do_release.sh --outdir "${outdir}" --upload pypi
+fi
 gh release create "${tag}" -R "${SLUG}" --verify-tag --title "HPCAgent-Bench ${new}" --generate-notes "${outdir}"/*
-echo "released https://github.com/${SLUG}/releases/tag/${tag} and https://pypi.org/project/hpcagent-bench/${new}/"
+echo "released https://github.com/${SLUG}/releases/tag/${tag}"
+((github_only)) && echo "GitHub only: rerun $0 --skip-libraries without --github-only to upload ${tag}'s dists to PyPI" ||
+    echo "and https://pypi.org/project/hpcagent-bench/${new}/"

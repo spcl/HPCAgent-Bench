@@ -23,6 +23,10 @@ A rerun after a failure resumes: an unchanged package has nothing to release and
 
     uv run helpers/scripts/release_all.py --dry-run   # the tree, the order and what each package has pending; change nothing
     uv run helpers/scripts/release_all.py             # release; needs gh (authenticated), uv, TWINE_USER and TWINE_TOKEN
+    uv run helpers/scripts/release_all.py --github-only  # everything but the PyPI uploads (no TWINE_*); the next run
+                                                         # without it first uploads exactly the dists GitHub carries
+
+A dependent's pins move only to versions on PyPI, so a --github-only release reaches its dependents after that upload.
 """
 
 import argparse
@@ -191,8 +195,8 @@ def merge_pins_pr(slug: str) -> bool:
     return True
 
 
-def release_library(name: str) -> None:
-    """Run ``name``'s helpers/release_patch.sh until it releases or has nothing to release."""
+def release_library(name: str, flags: list[str]) -> None:
+    """Run ``name``'s helpers/release_patch.sh (with ``flags``) until it releases or has nothing to release."""
     slug = SLUGS[name]
     while True:
         wait_green(slug)
@@ -201,14 +205,14 @@ def release_library(name: str) -> None:
         with tempfile.TemporaryDirectory(prefix="release-all.") as work:
             clone = pathlib.Path(work) / "repo"
             step(["git", "clone", "-q", "--branch", "main", f"https://github.com/{slug}.git", str(clone)])
-            step(["helpers/release_patch.sh"], cwd=clone)
+            step(["helpers/release_patch.sh", *flags], cwd=clone)
         if not pins_pr(slug):
             return
 
 
-def release_bench() -> None:
+def release_bench(flags: list[str]) -> None:
     """Bump this checkout's pins (a pull request, CI-gated and merged), then release hpcagent-bench and
-    hpcagent-agent."""
+    hpcagent-agent (``flags`` go to release_patch.sh)."""
     slug = SLUGS[BENCH]
     while True:
         wait_green(slug)
@@ -225,14 +229,17 @@ def release_bench() -> None:
         step(["git", "push", "-q", "origin", branch])
         step(["gh", "pr", "create", "-R", slug, "--base", "main", "--head", branch, "--fill"])
         step(["git", "switch", "-q", "main"])
-    step(["helpers/scripts/release_patch.sh", "--skip-libraries"])
+    step(["helpers/scripts/release_patch.sh", "--skip-libraries", *flags])
 
 
 def main() -> int:
     """Print the tree and the order; release each package in that order unless --dry-run."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--dry-run", action="store_true", help="print the tree, the order and what is pending")
-    dry = parser.parse_args().dry_run
+    parser.add_argument("--github-only", action="store_true", help="release on GitHub only; no PyPI upload")
+    args = parser.parse_args()
+    dry = args.dry_run
+    flags = ["--github-only"] if args.github_only else []
     tree = dependency_tree()
     order = list(graphlib.TopologicalSorter(tree).static_order())
     print("dependency tree (package: what it pins of ours):")
@@ -243,18 +250,18 @@ def main() -> int:
         for name in order:
             print(f"  {name}: {pending(name)}")
         return 0
-    if not (os.environ.get("TWINE_USER") and os.environ.get("TWINE_TOKEN")):
+    if not flags and not (os.environ.get("TWINE_USER") and os.environ.get("TWINE_TOKEN")):
         sys.exit("release_all.py: TWINE_USER and TWINE_TOKEN must be set")
     if run(["git", "branch", "--show-current"]) != "main" or run(["git", "status", "--porcelain"]):
         sys.exit("release_all.py: this checkout must be a clean main")
     for name in order:
         print(f"=== {name} ===", flush=True)
         if name == FORK:
-            step(["helpers/scripts/dace_extended_release.sh"])
+            step(["helpers/scripts/dace_extended_release.sh", *flags])
         elif name == BENCH:
-            release_bench()
+            release_bench(flags)
         else:
-            release_library(name)
+            release_library(name, flags)
     print("done: every package with changes is released")
     return 0
 

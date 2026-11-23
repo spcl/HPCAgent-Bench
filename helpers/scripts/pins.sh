@@ -9,7 +9,7 @@
 #   pins.sh --release        first patch-release DaCe extended (dace_extended_release.sh) and the library below (its
 #                            helpers/release_patch.sh, run in a fresh clone of main: tag, PyPI upload, GitHub release;
 #                            both need TWINE_USER and TWINE_TOKEN), then --bump. A failed release does not stop the
-#                            others.
+#                            others. --release --github-only passes --github-only to each release.
 set -euo pipefail
 ulimit -c 0
 root="$(dirname -- "${BASH_SOURCE[0]}")/../.."
@@ -36,7 +36,7 @@ EOF
 
 release() {
     local failed=() url work
-    "${root}/helpers/scripts/dace_extended_release.sh" || failed+=("DaCe extended")
+    "${root}/helpers/scripts/dace_extended_release.sh" "$@" || failed+=("DaCe extended")
     for url in "${LIBRARIES[@]}"; do
         echo "=== ${url} ==="
         work="$(mktemp -d "${TMPDIR:-/tmp}/pins-release.XXXXXX")"
@@ -45,7 +45,7 @@ release() {
         elif [[ ! -x "${work}/repo/helpers/release_patch.sh" ]]; then
             failed+=("${url} (no helpers/release_patch.sh)")
         else
-            "${work}/repo/helpers/release_patch.sh" || failed+=("${url}")
+            "${work}/repo/helpers/release_patch.sh" "$@" || failed+=("${url}")
         fi
         rm -rf "${work}"
     done
@@ -81,7 +81,9 @@ bump() {
 released=0
 case "${1:-}" in
     --release)
-        release || released=$?
+        shift
+        [[ "${1:-}" == "" || "${1:-}" == --github-only ]] || { echo "pins.sh: --release takes only --github-only" >&2; exit 2; }
+        release "$@" || released=$?
         bump
         exit "${released}"
         ;;
