@@ -32,10 +32,6 @@ print(versions[0])
 EOF
 }
 
-newest() {
-    curl -fsS "https://pypi.org/pypi/$1/json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["info"]["version"])'
-}
-
 release() {
     local failed=() url work
     "${root}/helpers/scripts/dace_extended_release.sh" || failed+=("DaCe extended")
@@ -57,23 +53,27 @@ release() {
 
 bump() {
     local name version before plugins_before
-    # A failed relock puts both files back, so pyproject.toml never disagrees with uv.lock beside it.
+    # A failed step puts both files back, so pyproject.toml never disagrees with uv.lock beside it.
     before="$(cat "${root}/pyproject.toml"; echo x)"
     plugins_before="$(cat "${root}/.github/user-plugins.toml"; echo x)"
-    for name in "${distribution[@]}"; do
-        version="$(newest "${name}")"
-        [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "pins.sh: no PyPI release of ${name}" >&2; exit 2; }
-        sed -i "s/\"${name}>=[0-9.]*\"/\"${name}>=${version}\"/" "${root}/pyproject.toml"
-        grep -q "\"${name}>=${version}\"" "${root}/pyproject.toml" || { echo "pins.sh: no ${name}>= bound" >&2; exit 2; }
-        echo "${name}>=${version}"
-    done
-    if ! (cd "${root}" && uv run --frozen --no-sync python helpers/scripts/user_plugins.py bump &&
-        uv lock -q --upgrade-package dace-extended --upgrade-package dace-relayout); then
+    restore() {
         printf '%s' "${before%x}" >"${root}/pyproject.toml"
         printf '%s' "${plugins_before%x}" >"${root}/.github/user-plugins.toml"
         echo "pins.sh: the bump failed; pyproject.toml and user-plugins.toml keep the previous pins" >&2
         exit 1
-    fi
+    }
+    # uv finds the newest releases (PyPI's JSON pages lag an upload; the index uv reads is what installs), and
+    # each lower bound then rises to the version it locked, so pip never resolves an older release than uv.
+    (cd "${root}" && uv run --frozen --no-sync python helpers/scripts/user_plugins.py bump &&
+        uv lock -q --refresh-package dace-extended --refresh-package dace-relayout \
+            --upgrade-package dace-extended --upgrade-package dace-relayout) || restore
+    for name in "${distribution[@]}"; do
+        version="$(locked "${name}")"
+        sed -i "s/\"${name}>=[0-9.]*\"/\"${name}>=${version}\"/" "${root}/pyproject.toml"
+        grep -q "\"${name}>=${version}\"" "${root}/pyproject.toml" || restore
+        echo "${name}>=${version}"
+    done
+    (cd "${root}" && uv lock -q) || restore
 }
 
 released=0
