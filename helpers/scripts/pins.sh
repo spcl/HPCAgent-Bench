@@ -8,12 +8,14 @@
 set -euo pipefail
 ulimit -c 0
 root="$(dirname -- "${BASH_SOURCE[0]}")/../.."
-declare -A repo=([dace]="https://github.com/spcl/dace.git" [relayout]="https://github.com/ThrudPrimrose/relayout.git")
+# relayout is published as dace-relayout: its [tool.uv.sources] key and uv package name.
+declare -A key=([dace]="dace" [relayout]="dace-relayout")
+declare -A repo=([dace]="https://github.com/spcl/dace.git" [relayout]="https://github.com/ThrudPrimrose/dace-relayout.git")
 declare -A branch=([dace]="extended" [relayout]="main")
 
 pinned() {
     local url="${repo[$1]//\//\\/}"
-    sed -n "s/^$1 = { git = \"${url}\", rev = \"\([0-9a-f]\{40\}\)\" }$/\1/p" "${root}/pyproject.toml"
+    sed -n "s/^${key[$1]} = { git = \"${url}\", rev = \"\([0-9a-f]\{40\}\)\" }$/\1/p" "${root}/pyproject.toml"
 }
 
 bump=0
@@ -37,7 +39,7 @@ if ((bump)); then
         # The rev in [tool.uv.sources] and dace's override-dependencies URL (which wins over a plugin's pin) move together.
         sed -i "s/rev = \"${pin}\"/rev = \"${heads[${pin}]}\"/; s/@${pin}\"/@${heads[${pin}]}\"/" "${root}/pyproject.toml"
     done
-    (cd "${root}" && uv lock -q --upgrade-package dace --upgrade-package relayout) || {
+    (cd "${root}" && uv lock -q --upgrade-package dace --upgrade-package dace-relayout) || {
         printf '%s' "${before%x}" >"${root}/pyproject.toml"
         echo "pins.sh: uv lock failed; pyproject.toml keeps the previous pins" >&2
         exit 1

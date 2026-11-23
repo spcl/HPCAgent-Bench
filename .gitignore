@@ -221,3 +221,5 @@ experiments/mwd-final-*/
 # The static site (web/): npm install and vite build output.
 web/node_modules/
 web/dist/
+# Written by helpers/scripts/do_release.sh for the build only (hpcagent_bench.setup_dace.PIN_FILE).
+hpcagent_bench/dace_pin.txt

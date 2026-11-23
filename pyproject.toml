@@ -58,8 +58,8 @@ dependencies = [
     # BLAS at one thread around a numba kernel that calls it inside prange (harness/nested_blas.py).
     "threadpoolctl",
     "dace",
-    # The request schema (requests: startup + operations) and its lowering: relayout.
-    "relayout",
+    # The request schema (requests: startup + operations) and its lowering: relayout, published as dace-relayout.
+    "dace-relayout>=0.1.0",
     "hpcagent-agent",
     # The grading stack, judge, HF export and agent clients every framework set shares.
     "pygount",
@@ -212,7 +212,7 @@ members = ["agent", "adapters/hpcagent_bench"]
 # The spcl/dace@extended and relayout@main commits this release is tested with, and the ONE place each is
 # written: uv.lock records them, and the image builds and jobs read them through helpers/scripts/pins.sh.
 dace = { git = "https://github.com/spcl/dace.git", rev = "69626c5b0ae9bc9ae0a5c3c8a5c2d7bd85b3682a" }
-relayout = { git = "https://github.com/ThrudPrimrose/relayout.git", rev = "1b60d8abd46761202a0b4c9918aedae0c5c85adb" }
+dace-relayout = { git = "https://github.com/ThrudPrimrose/dace-relayout.git", rev = "bec607d55076fbab455b498649030c1f4cc8caa2" }
 hpcagent-agent = { workspace = true }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
@@ -282,6 +282,8 @@ exclude = ["*.build", "*.build.*", "*.__pycache__", "*.__pycache__.*"]
 hpcagent_bench = [
     # Every setting's default (hpcagent_bench.config reads it at first use).
     "config.yaml",
+    # The pinned spcl/dace@extended commit `hpcagent-bench setup` installs; do_release.sh writes it for the build.
+    "dace_pin.txt",
     # The shipped skill packets (hpcagent_bench.skill_packets).
     "packets.toml",
     "container_backends.txt",

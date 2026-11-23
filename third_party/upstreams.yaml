@@ -373,7 +373,7 @@ upstreams:
     citation: QUEST, arXiv:2406.10774.
   relayout:
     name: relayout (data-layout transformation plugin and kernel corpus)
-    url: https://github.com/ThrudPrimrose/relayout
+    url: https://github.com/ThrudPrimrose/dace-relayout
     license: NOASSERTION
     note: The cloudsc_* corpus kernels were ported through relayout's Fortran corpus.
   rfc3629:
