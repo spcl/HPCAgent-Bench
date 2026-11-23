@@ -8,12 +8,11 @@
 #                                                      #    (pins.sh --release); when a pin moved, commit and push that
 #                                                      #    and stop, so CI tests the new pins
 #   helpers/scripts/release_patch.sh --skip-libraries  # 2. once CI on main is green: bump the three versions, add the
-#                                                      #    CHANGELOG section, commit, tag, push, build + smoke-test
-#                                                      #    (do_release.sh), GitHub release; publishing the release
-#                                                      #    fires .github/workflows/publish.yml, which uploads to PyPI
+#                                                      #    CHANGELOG section, commit, tag, push, build + smoke-test +
+#                                                      #    upload (do_release.sh --upload pypi), then the GitHub
+#                                                      #    release with the same dists; no workflow uploads
 #   add --dry-run to either to print the plan and change nothing.
-# Needs gh (authenticated) and uv; run 1 also TWINE_USER and TWINE_TOKEN (the DaCe fork has no Actions, so
-# dace_extended_release.sh uploads with twine).
+# Needs gh (authenticated), uv, and TWINE_USER and TWINE_TOKEN in the environment (never in a file).
 # The user plugins (dace-alloy, tactics) import hpcagent-bench: they release after run 2 from their own
 # helpers/release_patch.sh.
 set -euo pipefail
@@ -37,7 +36,7 @@ done
 [[ -z "$(git status --porcelain)" ]] || die "the working tree has uncommitted changes"
 git fetch -q origin main --tags
 [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || die "main is not origin/main; pull or push first"
-((dry || !libraries)) || [[ -n "${TWINE_USER:-}" && -n "${TWINE_TOKEN:-}" ]] || die "TWINE_USER and TWINE_TOKEN must be set"
+((dry)) || [[ -n "${TWINE_USER:-}" && -n "${TWINE_TOKEN:-}" ]] || die "TWINE_USER and TWINE_TOKEN must be set"
 
 if ((libraries)); then
     if ((dry)); then
@@ -100,7 +99,8 @@ git tag -a "${tag}" -m "hpcagent-bench ${new}"
 git push -q origin main "${tag}"
 
 outdir="$(mktemp -d "${TMPDIR:-/tmp}/bench-release.XXXXXX")"
-helpers/scripts/do_release.sh --outdir "${outdir}"
+TWINE_USERNAME="${TWINE_USER}" TWINE_PASSWORD="${TWINE_TOKEN}" \
+    helpers/scripts/do_release.sh --outdir "${outdir}" --upload pypi
 gh release create "${tag}" -R "${SLUG}" --verify-tag --title "HPCAgent-Bench ${new}" --generate-notes \
-    --notes "Patch release. Changes since ${previous}:"$'\n\n'"${commits}"
-echo "released https://github.com/${SLUG}/releases/tag/${tag}; the Publish workflow uploads it to https://pypi.org/project/hpcagent-bench/${new}/"
+    --notes "Patch release. Changes since ${previous}:"$'\n\n'"${commits}" "${outdir}"/*
+echo "released https://github.com/${SLUG}/releases/tag/${tag} and https://pypi.org/project/hpcagent-bench/${new}/"
