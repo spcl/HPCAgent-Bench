@@ -1384,7 +1384,7 @@ wheels = [
 
 [[package]]
 name = "dace-relayout"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dace-extended" },
@@ -1393,9 +1393,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "z3-solver" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e7/3d/d8b96e14478d0f8c1a6a85435fcbf0a64a14d21c542df7388dbde2d000ca/dace_relayout-0.1.1.tar.gz", hash = "sha256:cf65bddfcec39665c4946958942f0cf71a95aa7c0ddbb69e510df3d5318263e4", size = 275981, upload-time = "2026-11-23T16:38:06.119Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9b/ed/648ab70c20ea51dccf91ae6f9a63db1af7ed6072e9a6a37304b47dfdf33b/dace_relayout-0.1.2.tar.gz", hash = "sha256:714a3bfa5693da606980877d1dbad40fdfd66326cb26914f346422cccf9ea72a", size = 276161, upload-time = "2026-11-23T16:53:53.996Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/49/70/8c08fec0548f665d61c623b925284e07c4780bffbb1af4b1753ce623806f/dace_relayout-0.1.1-py3-none-any.whl", hash = "sha256:b6b508cb25e57d8acd313780f22c5b30b61be65705cfde15378c33bdd6726720", size = 209017, upload-time = "2026-11-23T16:38:04.556Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/ab/9fd7374d23f6fe5b447df048b12c83a86ae3d7b8c3dbc2bd0f467f24bb75/dace_relayout-0.1.2-py3-none-any.whl", hash = "sha256:a34f4383b4c52eaec5da7ddf0631b81574c9e2915c5cac665bea5b1899e2a91c", size = 208985, upload-time = "2026-11-23T16:53:52.638Z" },
 ]
 
 [[package]]
@@ -2436,7 +2436,7 @@ requires-dist = [
     { name = "cupy", marker = "platform_machine == 'x86_64' and extra == 'amdgpu'" },
     { name = "cupy-cuda13x", marker = "extra == 'nvgpu'" },
     { name = "dace-extended", specifier = ">=1.0.0" },
-    { name = "dace-relayout", specifier = ">=0.1.1" },
+    { name = "dace-relayout", specifier = ">=0.1.2" },
     { name = "datasets", specifier = ">=2.17" },
     { name = "einops" },
     { name = "fastapi" },
