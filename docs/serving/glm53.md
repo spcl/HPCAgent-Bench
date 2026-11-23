@@ -41,6 +41,25 @@ first 20-agent runs at a 1.8 M pool broke the rule that the heaviest stage stays
 every run since 2026-10-13 served until its job ended, 15 to 24 h
 ([known issue 1](known-issues.md#1-glm-53-rccl-ncclinternalerror-on-the-pipeline-send)).
 
+Job 760480 (2026-11-23) measured the pool sizes on one 4-node server each, 20 concurrent agents with a shared
+prefix of 30k and then 120k tokens (`BENCH_PREFIX_TOKENS`), about 15 min per leg:
+
+| Pool | Prefix | Output tok/s | Per agent | Decode tok/s (median) | TTFT p50 / p90 (s) | Peak node memory (GB of 501) |
+|---|---|---|---|---|---|---|
+| 1.5 M | 30k | 95.5 | 4.8 | 6.4 | 9.0 / 29.2 | 467 |
+| 1.5 M | 120k | 16.9 | 0.8 | 2.3 | 131.6 / 487.9 | |
+| 1.6 M | 30k | 94.3 | 4.7 | 6.0 | 2.5 / 19.2 | 453 |
+| 1.6 M | 120k | 28.2 | 1.4 | 2.5 | 96.2 / 162.3 | |
+| 1.8 M | 30k | 83.6 | 4.2 | 5.3 | 2.3 / 14.0 | 455 |
+| 1.8 M | 120k | 30.7 | 1.5 | 2.2 | 48.1 / 98.0 | |
+
+At 120k tokens per agent, 20 agents need 2.4 M tokens, so every pool queues requests and the larger pool cuts the
+wait for a first token (p50 132 s at 1.5 M, 48 s at 1.8 M). Decode speed does not depend on the pool. Peak node
+memory did not grow with the pool, but these legs served about 35 min, and 677837 reached 508 GB only after 3 h. The
+experiment therefore keeps 1.5 M until a soak of at least 4 h at 1.8 M stays below about 480 GB on every stage.
+Weights loaded from capstor in this job (15-54 min per rank, a worktree without `experiments/site.env`); from
+iopsstor they load in minutes.
+
 The fraction caps weights plus KV, so `pool(f) = 39.0M * (f - 0.4838)` tokens:
 
 | `f` | Outcome |
