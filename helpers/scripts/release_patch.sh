@@ -101,6 +101,5 @@ git push -q origin main "${tag}"
 outdir="$(mktemp -d "${TMPDIR:-/tmp}/bench-release.XXXXXX")"
 TWINE_USERNAME="${TWINE_USER}" TWINE_PASSWORD="${TWINE_TOKEN}" \
     helpers/scripts/do_release.sh --outdir "${outdir}" --upload pypi
-gh release create "${tag}" -R "${SLUG}" --verify-tag --title "HPCAgent-Bench ${new}" --generate-notes \
-    --notes "Patch release. Changes since ${previous}:"$'\n\n'"${commits}" "${outdir}"/*
+gh release create "${tag}" -R "${SLUG}" --verify-tag --title "HPCAgent-Bench ${new}" --generate-notes "${outdir}"/*
 echo "released https://github.com/${SLUG}/releases/tag/${tag} and https://pypi.org/project/hpcagent-bench/${new}/"
