@@ -26,7 +26,7 @@ Near the top of the file, one or two machine-readable lines state what is proven
 | line | what it tells you |
 | --- | --- |
 | `// cpf: proven: all` | every loop or kernel is proven parallel or a proven recurrence (reductions, scans and runtime-checked loop or kernels included). The parallelism is settled; scheduling and tuning remain |
-| `// cpf: proven: partial; open: i, i2` | the named loops are not proven: `unknown` loops, whose comment says under which condition each would be parallel, and loops `kept in order: only a few iterations`, which were not analyzed. They run in order. Every other loop or kernel is proven |
+| `// cpf: proven: partial; open: i, i2` | the named loops are `unknown`: they run in order, and the comment above each says under which condition it would be parallel. Every other loop or kernel is proven |
 | `// cpf: guarded: i3, j` | present only when the form checks a condition at runtime: the named loops run in parallel when the check holds, and a fallback copy keeps the original order when it fails |
 
 Loop variables are unique in the file (`i`, `i2`, `i3`), so these lines, and you, can name a loop by its
@@ -53,7 +53,6 @@ each class means.
 | `sequential -- ordered call: <name> must run in iteration order`, `sequential -- early exit (break): ...` | the program itself needs the order: a call with an ordered side effect, or a `break` or `return` after which no iteration may run |
 | `sequential -- wavefront step ...`, `sequential -- wavefront of tiles ...`, `sequential -- inside one wavefront tile ...` | the axes of a skewed nest that carry its dependences |
 | `sequential -- kept in order by an earlier pass; ...` | the dependence test finds it independent; an earlier pass chose the order |
-| `sequential -- kept in order: only a few iterations ...` | a short loop over small fixed sizes, kept in order because forking would not pay; not analyzed for dependences |
 | `sequential -- while loop: ...` | each test of the condition reads what the previous iteration computed |
 | `unknown -- <what could not be shown>; parallel if <condition>; otherwise <what goes wrong>`, or `... parallel only as a scan`, `... parallel only as a first-hit search` | not proven either way, so it runs in order. Parallelize it only if the condition holds for every input, or by the rewrite it names. The header's `open:` list names these loops |
 
