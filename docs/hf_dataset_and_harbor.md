@@ -53,7 +53,8 @@ missing sub-benchmark from an unbindable one.
 
 The exporter is a pure regenerator over the manifest tree; nothing is cached in the repo. One commit exports the
 same bytes. The dataset card (`README.md` of the folder) carries the config table with each data file's SHA-256, a
-schema table generated from the `ExportRow` field descriptions, the license and the paper's BibTeX entry
+schema table generated from the `ExportRow` field descriptions, the license (GPL-3.0-or-later; the repository's
+`NOTICE` is copied beside the card because MIT- and BSD-licensed references require their notice) and the paper's BibTeX entry
 (`hf.CITATION`, kept equal to the one in [index.md](index.md) by `tests/test_hf_export.py`).
 
 ```bash
