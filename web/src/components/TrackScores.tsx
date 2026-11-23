@@ -33,6 +33,7 @@ function TrackPanel({ data, track }: { data: LeaderboardData; track: TrackMeta }
               <li key={m.setup} className="flex items-baseline justify-between gap-3 py-2.5">
                 <div className="min-w-0">
                   <div className="truncate font-medium text-zinc-950">{m.name}</div>
+                  {m.params_label && <div className="truncate text-xs text-zinc-500">{m.params_label}</div>}
                   <div className="font-mono-num text-xs text-zinc-500">
                     {Math.round(tm.success_rate * tm.kernels)} /{tm.kernels} solved
                     {Number.isFinite(tokens) && ` · ${tokens.toFixed(1)}M tok`}
