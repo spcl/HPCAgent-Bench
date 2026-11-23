@@ -14,8 +14,12 @@
 
 ### Serving
 
-- Model weights downloaded under `HF_HOME/hub` span every OST in 16 MiB stripes past their first 64 MiB (was 16
-  stripes of 4 MiB); restripe an existing cache with `lfs migrate -c -1 -S 16M`.
+- Model weights span every OST in 16 MiB stripes past their first 64 MiB (was 16 stripes of 4 MiB). The layout is
+  configurable in the site layer or on the submit line (`WEIGHTS_STRIPE_COUNT`, default -1 for every OST;
+  `WEIGHTS_STRIPE_SIZE`, default 16M) and one definition in `cache_env.sh` serves `run_cluster.sh` and
+  `fetch_weights.sbatch`, which restripes and verifies both the count and the stripe size.
+- `fetch_weights.sbatch` refuses to download when no site layer sets `FAST_SCRATCH` (`ALLOW_SLOW_SCRATCH=1` accepts
+  `$SCRATCH`).
 - `cache_env.sh` warns when no site layer sets `FAST_SCRATCH`, so a checkout without `experiments/site.env` (such as a
   git worktree) no longer loads weights from `$SCRATCH` unannounced. On 11-23, GLM-5.3 servers started that way took
   15-54 min per rank to read their weights from capstor while a copy sat on iopsstor.

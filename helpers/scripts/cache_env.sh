@@ -30,7 +30,9 @@ hb_cache_dirname=".hpcagentbench-cache"
 # A dump lands in the crashing process's CWD (the checkout) and Slurm propagates the SUBMITTER's
 # core limit, so the floor has to be set here.
 ulimit -S -c 0  # sourced: the soft limit only, so a judge-core setup can still raise it
+FAST_SCRATCH_FROM_SITE=1
 if [[ -z "${FAST_SCRATCH:-}" && -n "${SCRATCH:-}" ]]; then
+    FAST_SCRATCH_FROM_SITE=0
     # No site layer named a flash tier (a checkout without experiments/site.env, e.g. a git worktree): weights load
     # from $SCRATCH, which on a capacity tier gates every server's start on its slowest rank's read.
     echo "cache_env: FAST_SCRATCH unset, model weights load from \$SCRATCH (${SCRATCH}); set it in experiments/site.env" \
@@ -46,6 +48,27 @@ fi
 # the ONLY name for them -- a separate "weights dir" variable would be a second spelling of the
 # same path, free to drift from the one the server loads from.
 [[ -z "${HPCAGENT_BENCH_CACHE:-}" ]] || export HF_HOME="${HF_HOME:-${HPCAGENT_BENCH_CACHE}/hf}"
+
+# Their Lustre layout, set by the site layer or the caller: past the first 64 MiB a weight blob spans
+# WEIGHTS_STRIPE_COUNT OSTs (-1: every OST) in WEIGHTS_STRIPE_SIZE stripes, so the many ranks that read one shard at
+# load draw on the whole file system. Files under 64 MiB (configs, tokenizers) stay on one OST.
+: "${WEIGHTS_STRIPE_COUNT:=-1}" "${WEIGHTS_STRIPE_SIZE:=16M}"
+export WEIGHTS_STRIPE_COUNT WEIGHTS_STRIPE_SIZE FAST_SCRATCH_FROM_SITE
+
+# weights_layout_default DIR: the PFL default every file later created in DIR inherits (Lustre only).
+weights_layout_default() {
+    lfs setstripe -E 64M -c 1 -E -1 -c "${WEIGHTS_STRIPE_COUNT}" -S "${WEIGHTS_STRIPE_SIZE}" "$1"
+}
+
+# weights_min_stripes DIR: the stripe count a blob in DIR must reach. For -1 it is 3/4 of the file system's OSTs: the
+# MDS leaves out an OST it considers full or degraded when it lays a file over "every" OST (19 of 20 seen on iopsstor).
+weights_min_stripes() {
+    if [[ "${WEIGHTS_STRIPE_COUNT}" == -1 ]]; then
+        echo $(( ($(lfs df "$1" </dev/null | grep -c 'OST:') * 3 + 3) / 4 ))
+    else
+        echo "${WEIGHTS_STRIPE_COUNT}"
+    fi
+}
 
 # JIT build artefacts. run_cluster.sh appends /${INFERENCE_CE_ENV} and derives the seven knobs.
 # An unset SCRATCH falls back to HPCAGENT_BENCH_REPO -- the checkout's own root, which every caller
