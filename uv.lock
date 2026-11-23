@@ -1381,7 +1381,7 @@ dependencies = [
 [[package]]
 name = "dace-relayout"
 version = "0.1.0"
-source = { git = "https://github.com/ThrudPrimrose/dace-relayout.git?rev=bec607d55076fbab455b498649030c1f4cc8caa2#bec607d55076fbab455b498649030c1f4cc8caa2" }
+source = { git = "https://github.com/ThrudPrimrose/dace-relayout.git?rev=0b0e7c736e98d36477e081501996807a3199b9e1#0b0e7c736e98d36477e081501996807a3199b9e1" }
 dependencies = [
     { name = "dace" },
     { name = "islpy" },
@@ -2428,7 +2428,7 @@ requires-dist = [
     { name = "cupy", marker = "platform_machine == 'x86_64' and extra == 'amdgpu'" },
     { name = "cupy-cuda13x", marker = "extra == 'nvgpu'" },
     { name = "dace", git = "https://github.com/spcl/dace.git?rev=69626c5b0ae9bc9ae0a5c3c8a5c2d7bd85b3682a" },
-    { name = "dace-relayout", git = "https://github.com/ThrudPrimrose/dace-relayout.git?rev=bec607d55076fbab455b498649030c1f4cc8caa2" },
+    { name = "dace-relayout", git = "https://github.com/ThrudPrimrose/dace-relayout.git?rev=0b0e7c736e98d36477e081501996807a3199b9e1" },
     { name = "datasets", specifier = ">=2.17" },
     { name = "einops" },
     { name = "fastapi" },
