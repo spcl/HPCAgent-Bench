@@ -24,7 +24,7 @@ Near the top of the file, one or two machine-readable lines state what is proven
 | line | what it tells you |
 | --- | --- |
 | `// cpf: proven: all` | every loop is proven parallel or a proven recurrence (reductions, scans and runtime-checked loops included). The parallelism is settled; scheduling and tuning remain |
-| `// cpf: proven: partial; open: i, i2` | the named loops are `unknown`: they run in order, and the comment above each says under which condition it would be parallel. Every other loop is proven |
+| `// cpf: proven: partial; open: i, i2` | the named loops are not proven: `unknown` loops, whose comment says under which condition each would be parallel, and loops `kept in order: only a few iterations`, which were not analyzed. They run in order. Every other loop is proven |
 | `// cpf: guarded: i3, j` | present only when the form checks a condition at runtime: the named loops run in parallel when the check holds, and a fallback copy keeps the original order when it fails |
 
 Loop variables are unique in the file (`i`, `i2`, `i3`), so these lines, and you, can name a loop by its
