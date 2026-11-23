@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Patch release vX.Y.Z -> vX.Y.(Z+1) of hpcagent-bench and hpcagent-agent, in two runs from a clean main equal to
 # origin/main:
-#   helpers/scripts/release_patch.sh                   # 1. patch-release DaCe extended, fp-arena, dace-relayout and
-#                                                      #    dace-alloy and move every pin to its newest release
+#   helpers/scripts/release_patch.sh                   # 1. patch-release what the bench uses (DaCe extended,
+#                                                      #    dace-relayout, dace-alloy) and move every pin to its
+#                                                      #    newest release
 #                                                      #    (pins.sh --release); when a pin moved, commit and push that
 #                                                      #    and stop, so CI tests the new pins
 #   helpers/scripts/release_patch.sh --skip-libraries  # 2. once CI on main is green: bump the three versions, add the
