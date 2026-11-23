@@ -392,18 +392,32 @@ run_vllm_node() {
 
     # Serve the resolved snapshot path, as the roundtrip gate did: with a bare repo id the engine
     # keeps consulting the HF hub during startup (observed 44 s stalls + rate-limit warnings).
+    # Only the step's task 0 fetches the snapshot; the other server tasks wait for its marker. Every node
+    # downloading into the one shared cache let a node load a shard another was still writing (job 747685,
+    # GLM-5.3: "file size <67108864> is smaller than the required mapping size").
     : "${VLLM_MODEL:?VLLM_MODEL must be set}"
     local model_path
-    model_path="$("${HPCAGENT_BENCH_IMAGE_PYTHON}" - <<'PY'
+    model_path="$(SNAPSHOT_TASK="${SLURM_PROCID:-0}" SNAPSHOT_STEP="${SLURM_JOB_ID:-local}.${SLURM_STEP_ID:-$$}" \
+        "${HPCAGENT_BENCH_IMAGE_PYTHON}" - <<'PY'
 import os
+import pathlib
+import time
 
-from huggingface_hub import snapshot_download
+from huggingface_hub import constants, snapshot_download
 
 repo = os.environ["VLLM_MODEL"]
-try:
-    print(snapshot_download(repo_id=repo, local_files_only=True))
-except Exception:
-    print(snapshot_download(repo_id=repo, max_workers=8))
+marker = pathlib.Path(constants.HF_HUB_CACHE) / f".hb-ready-{repo.replace('/', '--')}-{os.environ['SNAPSHOT_STEP']}"
+if os.environ["SNAPSHOT_TASK"] == "0":
+    try:
+        path = snapshot_download(repo_id=repo, max_workers=8)  # checks every file; a complete cache downloads nothing
+    except Exception:
+        path = snapshot_download(repo_id=repo, local_files_only=True)  # offline: the cache as it is
+    marker.write_text(path)
+else:
+    while not marker.is_file() or not marker.read_text():
+        time.sleep(10)
+    path = marker.read_text()
+print(path)
 PY
 )"
     model_path="$(printf '%s\n' "${model_path}" | tail -n 1)"

@@ -249,6 +249,9 @@ SGLANG_ATTENTION_BACKEND = ''
 SGLANG_UNBALANCED_MODEL_LOADING_TIMEOUT_S = 5400
 # 24 request slots and decode graphs: 20 agents per pipeline (docs/serving/glm53.md), checked by setup_nodes
 AGENTS_PER_PIPELINE = 20
+# The KV pool one agent needs, as Kimi K2.7's guard (serve_guard.py): the 1.5M pool over 20 agents. A launch whose
+# pool falls below 20 x this fails instead of evicting conversations all run (issue #193).
+KV_TOKENS_PER_AGENT = 75000
 # The server's allocator alone (run_cluster.sh): expandable segments stop variable-length prefills
 # fragmenting it, whose high-water mark otherwise ratchets up over hours of agent load (host memory
 # on MI300A; docs/serving/glm53.md)
@@ -304,6 +307,10 @@ set = { "--ep-size" = "4", "--moe-runner-backend" = "triton" }
 [bench.kimi-triton-attention]
 model = "kimi27sglang"
 set = { "--attention-backend" = "triton" }
+
+# GLM-5.3 at its experiment settings (fraction 0.57, pool 1.5M), the Kimi K2.7 load: 20 agents, then 40.
+[bench.glm-base]
+model = "glm53"
 
 # Meta's Muse Spark, contributor tier: discounted in exchange for Meta training on the prompts and
 # completions a setup sends. muse-spark-1.3 on the standard tier is the same model.
