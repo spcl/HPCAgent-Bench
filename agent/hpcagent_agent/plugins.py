@@ -37,6 +37,7 @@ from hpcagent_agent.tools import registry
 __all__ = [
     "ENTRY_POINT_GROUP",
     "HARNESS_DIR",
+    "INTERPRETER_PATH_ENV",
     "JOB_INIT_ENV",
     "JOB_INIT_ENV_VAR",
     "JOB_INIT_PLUGINS",
@@ -61,6 +62,7 @@ __all__ = [
     "digest",
     "entry_point_dirs",
     "find",
+    "harness_environ",
     "import_hook",
     "import_package",
     "import_tools",
@@ -104,6 +106,10 @@ JOB_INIT_PLUGINS = "job-init.plugins"
 JOB_INIT_ENV_VAR = "HPCAGENT_BENCH_JOB_INIT"
 #: Where a launch venv keeps each Python harness's own venv, ``<launch venv>/harness/<name>`` (the built-in ones too).
 HARNESS_DIR = "harness"
+#: The variables that put folders outside a venv on its interpreter's path. The driver passes none of them to a
+#: harness runner (``agent_driver.AGENT_ENV_NAMES``), so a harness venv is built and checked without them too: a
+#: launcher's ``PYTHONPATH`` naming the checkout made every harness venv of a test sweep import ``hpcagent_bench``.
+INTERPRETER_PATH_ENV = ("PYTHONPATH", "PYTHONHOME")
 #: :func:`run_job_init`'s exit code when a ``job_init_required`` hook failed: the entrypoint stops the launch on it
 #: (1 is any other failed hook, 2 the argument parser's).
 JOB_INIT_REQUIRED_FAILED = 3
@@ -565,53 +571,66 @@ def install(found: Iterable[Plugin], python: str = sys.executable, role: Role = 
     return installed
 
 
-def checked_run(plugin: Plugin, argv: list[str], cwd: pathlib.Path | None = None) -> str:
-    """Run ``argv`` for ``plugin``; its stdout.
+def harness_environ(environ: Mapping[str, str] = os.environ) -> dict[str, str]:
+    """``environ`` without :data:`INTERPRETER_PATH_ENV`: the environment a harness venv is built, checked and run in."""
+    return {key: value for key, value in environ.items() if key not in INTERPRETER_PATH_ENV}
+
+
+def checked_run(
+    plugin: Plugin, argv: list[str], cwd: pathlib.Path | None = None, env: Mapping[str, str] | None = None
+) -> str:
+    """Run ``argv`` for ``plugin`` in ``env`` (default: this process's); its stdout.
 
     :raises RuntimeError: it failed; the message names the plugin and carries its output.
     """
-    done = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
+    done = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, check=False)
     if done.returncode:
         raise RuntimeError(f"plugin {plugin.name!r}: {shlex.join(argv)} failed:\n{done.stdout}{done.stderr}")
     return done.stdout
 
 
-def run_command(plugin: Plugin, root: pathlib.Path, command: tuple[str, ...], python: str) -> None:
+def run_command(
+    plugin: Plugin, root: pathlib.Path, command: tuple[str, ...], python: str, env: Mapping[str, str] | None = None
+) -> None:
     """Run an install ``command`` of ``plugin`` in a writable copy of ``root`` (``{root}``) for the interpreter
-    ``python`` (``{python}``).
+    ``python`` (``{python}``), in ``env`` (default: this process's).
 
     :raises RuntimeError: it failed (:func:`checked_run`).
     """
     with tempfile.TemporaryDirectory(prefix=f"plugin-{plugin.name}-") as stage:
         copy = pathlib.Path(stage) / root.name
         shutil.copytree(root, copy, ignore=copied_without(root), symlinks=True)
-        checked_run(plugin, [arg.replace("{python}", python).replace("{root}", str(copy)) for arg in command], copy)
+        argv = [arg.replace("{python}", python).replace("{root}", str(copy)) for arg in command]
+        checked_run(plugin, argv, copy, env)
 
 
 def install_harnesses(found: Iterable[Plugin], venv: pathlib.Path, python: str, agent: pathlib.Path) -> list[str]:
     """Build ``<venv>/harness/<name>`` for every harness of ``found``: a fresh venv on the interpreter ``python``, the
     checkout's ``agent`` folder on its path, the block's ``install`` run into it, then every module of its ``imports``
     and ``hpcagent_agent.harness.runner_common`` imported, and ``hpcagent_bench`` out of its reach (what
-    ``launch_venv.sh`` checks of a built-in harness). Returns the harnesses built, by name.
+    ``launch_venv.sh`` checks of a built-in harness). Every step runs in :func:`harness_environ`, as the runner
+    does. Returns the harnesses built, by name.
 
     :raises RuntimeError: a step failed (:func:`checked_run`).
     """
     built: list[str] = []
+    env = harness_environ()
     for plugin in found:
         for name, block in plugin.manifest.harnesses.items():
             target = venv / HARNESS_DIR / name
             shutil.rmtree(target, ignore_errors=True)
-            checked_run(plugin, ["uv", "venv", "-q", "--python", python, str(target)])
+            checked_run(plugin, ["uv", "venv", "-q", "--python", python, str(target)], env=env)
             interpreter = str(target / "bin" / "python")
-            site = checked_run(plugin, [interpreter, "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"])
+            purelib = "import sysconfig; print(sysconfig.get_paths()['purelib'])"
+            site = checked_run(plugin, [interpreter, "-c", purelib], env=env)
             (pathlib.Path(site.strip()) / "zz-agent.pth").write_text(f"{agent}\n", encoding="utf-8")
-            run_command(plugin, plugin.root, block.install, interpreter)
+            run_command(plugin, plugin.root, block.install, interpreter, env)
             modules = ", ".join(("importlib.util", "hpcagent_agent.harness.runner_common", *block.imports))
             probe = (
                 f"import {modules}\nspec = importlib.util.find_spec('hpcagent_bench')\n"
                 "assert spec is None, f'hpcagent_bench importable from {spec.origin}'"
             )
-            checked_run(plugin, [interpreter, "-c", probe], target)  # out of a checkout, whose folders import
+            checked_run(plugin, [interpreter, "-c", probe], target, env)  # out of a checkout, whose folders import
             built.append(name)
     return built
 
