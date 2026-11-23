@@ -13,10 +13,12 @@ set -euo pipefail
 ulimit -c 0
 root="$(dirname -- "${BASH_SOURCE[0]}")/../.."
 declare -A distribution=([dace]="dace-extended" [relayout]="dace-relayout")
+# Released in this order after DaCe extended (dependencies first). tactics depends on hpcagent-bench, so it releases
+# after the bench (its own helpers/release_patch.sh), never from here.
 LIBRARIES=(
+    "https://github.com/spcl/FP-Arena.git"
     "https://github.com/ThrudPrimrose/dace-relayout.git"
     "https://github.com/ThrudPrimrose/dace-alloy.git"
-    "https://github.com/spcl/tactics.git"
 )
 
 locked() {
