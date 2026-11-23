@@ -9,14 +9,17 @@ and heap caps, the timeout row, the managed work dir (shard DB redirection, an e
 build tree cleared) and the tag resolution -- not ``run-framework``'s row correctness.
 """
 
+import contextlib
 import dataclasses
 import os
 import pathlib
 import re
 import resource
 import shutil
+import sqlite3
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -514,3 +517,34 @@ def test_a_device_column_with_no_gpu_behind_it_says_so(
     assert "ppcg_hip builds for a device but the step holds no GPU" in capsys.readouterr().err
     assert baseline.run(sweep, jobs.Rank(0, 1)) == 0
     assert "holds no GPU" not in capsys.readouterr().err, "a CPU column is not told to hold GPUs"
+
+
+def test_canon_db_writes_wait_for_the_cross_node_lock_and_use_a_rollback_journal(tmp_path: pathlib.Path) -> None:
+    """Ranks on several nodes share ``canon.db``. WAL keeps its locks in one host's shared memory, so the file
+    uses a rollback journal, and a write waits for the ``<db>.lock`` another process holds."""
+    db = tmp_path / "canon.db"
+    holder = subprocess.Popen(
+        [sys.executable, "-c", (
+            "import fcntl, sys\n"
+            f"lock = open({str(db) + '.lock'!r}, 'a')\n"
+            "fcntl.lockf(lock, fcntl.LOCK_EX)\n"
+            "print('held', flush=True)\n"
+            "sys.stdin.readline()\n"
+        )],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    )  # fmt: skip
+    assert holder.stdout is not None and holder.stdin is not None
+    assert holder.stdout.readline().strip() == "held"
+    row = {"run": "r", "column": "numba", "kernel": "k", "preset": "S", "datatype": "float64", "status": "ok"}
+    writer = threading.Thread(target=canon_db.record, args=(db, [row]))
+    writer.start()
+    writer.join(timeout=1.0)
+    assert writer.is_alive(), "a write went ahead while another process held the canon lock"
+    holder.stdin.write("\n")
+    holder.stdin.flush()
+    assert holder.wait(timeout=30) == 0
+    writer.join(timeout=60)
+    assert not writer.is_alive()
+    assert [r["kernel"] for r in canon_db.read(db, run="r")] == ["k"]
+    with contextlib.closing(sqlite3.connect(db)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"

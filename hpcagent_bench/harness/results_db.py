@@ -398,16 +398,17 @@ def create_schema(conn: sqlite3.Connection, where: str) -> None:
                 statement = ""
 
 
-def open_db(path: str | pathlib.Path) -> sqlite3.Connection:
-    """Open ``path`` for writing (WAL, busy timeout, foreign keys), creating the schema in a new file and any
-    :data:`LAZY_TABLES` an older file lacks."""
+def open_db(path: str | pathlib.Path, journal: str = "WAL") -> sqlite3.Connection:
+    """Open ``path`` for writing (``journal`` mode, busy timeout, foreign keys), creating the schema in a new file and
+    any :data:`LAZY_TABLES` an older file lacks. WAL keeps its lock state in shared memory of one host, so a file that
+    processes on several nodes write passes ``journal="DELETE"`` (:mod:`hpcagent_bench.support.collect.canon_db`)."""
     target = pathlib.Path(path).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     # A URI connection, so :func:`merge` can ATTACH its sources read-only.
     conn = sqlite3.connect(target.as_uri(), uri=True, timeout=BUSY_TIMEOUT_S)
     try:
         with OPEN_LOCK:
-            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute(f"PRAGMA journal_mode = {journal}")
             if not check_schema(conn, str(target), upgrade=True):
                 create_schema(conn, str(target))
             elif missing := [table for table in LAZY_TABLES if table not in table_names(conn)]:
