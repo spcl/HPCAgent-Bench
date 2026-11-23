@@ -118,7 +118,9 @@ runs:
         # so a retry only downloads the missing ones.
         for attempt in 1 2 3 4 5; do
           [ "$installed" = 1 ] && break
-          sudo apt-get update
+          # A PPA answering 503 makes `apt-get update` exit 100 under set -e, which ended the step before any retry
+          # or the cached debs (dace-numeric[1] of e1fdef7d7); the install below fails on its own if the index is short.
+          sudo apt-get update || true
           sudo apt-get install -y -o Acquire::Retries=5 -o APT::Keep-Downloaded-Packages=true "gcc-${GCC_MAJOR}" "g++-${GCC_MAJOR}" \
             "gfortran-${GCC_MAJOR}" "libstdc++-${GCC_MAJOR}-dev" && installed=1 && break
           if [ "$attempt" = 5 ]; then
