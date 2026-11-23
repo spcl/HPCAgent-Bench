@@ -1,0 +1,43 @@
+name: Publish
+
+# A published GitHub release (helpers/release_patch.sh creates it on the tag, with the commit changelog as its notes)
+# uploads that tag's wheel and sdist to PyPI through Trusted Publishing (OIDC: no token anywhere) and attaches the same
+# files to the release, so the tag, the release and PyPI hold one build. PyPI trusts this repository, this file and the
+# `pypi` environment (pypi.org: project -> Settings -> Publishing). A version the release script already uploaded with
+# twine is skipped, never uploaded twice. PACKAGES lists the directories holding a pyproject.toml to publish.
+
+on:
+  release:
+    types: [published]
+
+env:
+  PACKAGES: ". agent"
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: astral-sh/setup-uv@v6
+      - name: Build and check
+        run: |
+          for package in ${PACKAGES}; do
+            version="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' "${package}/pyproject.toml")"
+            [[ "${{ github.event.release.tag_name }}" == *"v${version}" ]] || { echo "${package}: tag does not name version ${version}" >&2; exit 1; }
+            uv build "${package}" -o dist
+          done
+          uvx twine check --strict dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+      - name: Attach the uploaded files to the release
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
