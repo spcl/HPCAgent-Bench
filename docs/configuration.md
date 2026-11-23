@@ -36,6 +36,12 @@ To keep the layer outside the checkout, point `HPCAGENT_BENCH_SITE_ENV` at it. W
 takes its generic default, which runs wherever `SCRATCH` is set. `experiments/site-cscs.env` is the layer
 of the CSCS Alps MI300A partition, the reference setup of this repository's experiments.
 
+Model weights live under `FAST_SCRATCH` (`HF_HOME` derives from it). On Lustre, past its first 64 MiB a weight file
+spans `WEIGHTS_STRIPE_COUNT` OSTs (default -1, every OST) in `WEIGHTS_STRIPE_SIZE` stripes (default 16M), so the many
+ranks that read one shard at load draw on the whole file system. Set either in the site layer;
+`containers/inference/fetch_weights.sbatch` downloads, restripes and verifies to that layout, and refuses to run when
+no site layer sets `FAST_SCRATCH`.
+
 | Where | What it resolves |
 |---|---|
 | `experiments/site-<name>.env`, loaded by `helpers/scripts/site_env.sh` | this cluster's values: account, partition, fast storage, node exclusions, the host interpreter |

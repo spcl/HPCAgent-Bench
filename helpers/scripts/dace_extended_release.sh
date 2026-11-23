@@ -12,10 +12,11 @@
 # Versions are dace-extended's own line: each release bumps the patch (1.0.0, 1.0.1, ...); --upstream-release bumps
 # the minor and resets the patch (1.1.0) when spcl/dace has made a release since. Each release's notes name the
 # upstream DaCe version (dace/version.py at the released commit) it builds on.
-#   helpers/scripts/dace_extended_release.sh [--upstream-release] [--allow-running] [--no-upload] [--outdir DIR] [--dry-run]
+#   helpers/scripts/dace_extended_release.sh [--upstream-release] [--allow-running] [--github-only] [--outdir DIR] [--dry-run]
 #     --upstream-release  the release follows a new spcl/dace release: bump the minor, not the patch
 #     --allow-running  also take spcl/dace workflows still running on the head (never a failed one)
-#     --no-upload      skip the PyPI upload (TWINE_USER and TWINE_TOKEN are needed otherwise)
+#     --github-only    everything but the PyPI upload: the GitHub release carries the wheel and sdist (no TWINE_*
+#                      needed). The next run without it first uploads exactly those attached dists to PyPI.
 #     --outdir DIR     keep the wheel and sdist in DIR (default: a temporary folder)
 #     --dry-run        gate, next tag, release commit, build + twine check, notes; push and upload nothing
 # A head that already has a release is left alone. pins.sh --bump then moves the pins to the newest release.
@@ -33,15 +34,15 @@ while (($#)); do
     case "$1" in
         --dry-run) dry=1 ;;
         --allow-running) running=1 ;;
-        --no-upload) upload=0 ;;
+        --github-only) upload=0 ;;
         --upstream-release) upstream=1 ;;
         --outdir) outdir="$2"; shift ;;
-        *) echo "usage: $0 [--upstream-release] [--allow-running] [--no-upload] [--outdir DIR] [--dry-run]" >&2; exit 2 ;;
+        *) echo "usage: $0 [--upstream-release] [--allow-running] [--github-only] [--outdir DIR] [--dry-run]" >&2; exit 2 ;;
     esac
     shift
 done
 ((dry || !upload)) || [[ -n "${TWINE_USER:-}" && -n "${TWINE_TOKEN:-}" ]] ||
-    die "TWINE_USER and TWINE_TOKEN must be set (or pass --no-upload)"
+    die "TWINE_USER and TWINE_TOKEN must be set (or pass --github-only)"
 
 sha="$(git ls-remote "https://github.com/${UPSTREAM}.git" refs/heads/extended | cut -f1)"
 [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || die "no extended head on ${UPSTREAM}"
@@ -58,13 +59,30 @@ fi
 # The released spcl/dace commit of each tag is its release commit's parent.
 last=""
 since=""
+current=""
 while read -r name; do
     [[ -n "${name}" ]] || continue
     parent="$(git -C "${src}" rev-parse "${name}^{commit}^")"
-    [[ "${parent}" != "${sha}" ]] || { echo "${sha:0:9} is already ${FORK} ${name}, nothing to release"; exit 0; }
+    [[ "${parent}" != "${sha}" ]] || current="${name}"
     last="${name}"
     since="${parent}"
 done < <(git -C "${src}" tag -l 'extended-v*' | sort -V)
+
+# A release made with --github-only reaches PyPI on the next run without it: exactly the dists its GitHub release
+# carries, before anything new is released.
+if [[ -n "${last}" ]] &&
+    [[ "$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/dace-extended/${last#extended-v}/json")" == 404 ]]; then
+    if ((dry || !upload)); then
+        echo "${last} is on GitHub only; a run without --github-only uploads its dists to PyPI first"
+    else
+        pending="${work}/pending"
+        gh release download "${last}" -R "${FORK}" -D "${pending}" -p '*.whl' -p '*.tar.gz'
+        TWINE_USERNAME="${TWINE_USER}" TWINE_PASSWORD="${TWINE_TOKEN}" \
+            uvx twine upload --non-interactive --skip-existing "${pending}"/*
+        echo "uploaded the GitHub-only ${last}: https://pypi.org/project/dace-extended/${last#extended-v}/"
+    fi
+fi
+[[ -z "${current}" ]] || { echo "${sha:0:9} is already ${FORK} ${current}, nothing to release"; exit 0; }
 
 runs="$(gh run list -R "${UPSTREAM}" -c "${sha}" -L 100 --json workflowName,status,conclusion)"
 [[ "$(jq length <<<"${runs}")" -gt 0 ]] || die "no ${UPSTREAM} CI run on ${sha:0:9}"

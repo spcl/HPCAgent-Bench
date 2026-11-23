@@ -139,6 +139,9 @@ PUBLISHED_PACKET_COLORS = {
     "cpf-src-bare": "#8ca252",
     "cpf-cpu-src-bare": "#8ca252",
     "cpf-gpu-src-bare": "#bd9e39",
+    "cpf-src-v2": "#a55194",
+    "cpf-cpu-src-v2": "#a55194",
+    "cpf-gpu-src-v2": "#9c9ede",
 }
 
 #: Models are assigned from the front of `markers`, standalone optimizers from the back, so a new

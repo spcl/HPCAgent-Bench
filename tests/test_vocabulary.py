@@ -91,6 +91,8 @@ PINNED_PACKETS = (
     "cpf-gpu-src-bare",
     "llm-friendly",
     # a plugin's packet registers after every shipped one, so a new shipped packet moves its slot
+    "cpf-cpu-src-v2",
+    "cpf-gpu-src-v2",
     "autokernel",
 )
 

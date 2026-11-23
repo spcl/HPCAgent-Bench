@@ -6,10 +6,14 @@
 # download leaves the layout unfixed and nothing notices -- iopsstor delivers 9.45 GB/s at 16
 # readers, but only if the blobs are actually striped.
 #
-# The PFL default on the hub dir is NOT sufficient: run_cluster.sh sets
-# `lfs setstripe -E 64M -c 1 -E -1 -c 16 -S 4M` on ${HF_HOME}/hub, yet GLM-5.3, downloaded into
-# that same directory, came down with all 141 blobs at stripe_count 1 / 1 MiB. Inheritance is not
+# The PFL default on the hub dir is NOT sufficient: run_cluster.sh sets it on ${HF_HOME}/hub, yet GLM-5.3,
+# downloaded into that same directory, came down with all 141 blobs at stripe_count 1 / 1 MiB. Inheritance is not
 # a property of hf download. RESTRIPE EVERY NEW MODEL AND VERIFY; never assume.
+#
+# WHERE AND HOW. Weights land under FAST_SCRATCH (the site layer's flash tier; HF_HOME derives from it in
+# cache_env.sh), and the job refuses to run when no site layer set FAST_SCRATCH, unless ALLOW_SLOW_SCRATCH=1. The
+# layout is cache_env.sh's: past 64 MiB a blob spans WEIGHTS_STRIPE_COUNT OSTs (default -1, every OST) in
+# WEIGHTS_STRIPE_SIZE stripes (default 16M); set either in the site layer or on the submit line.
 #
 # The download's image is EDF (an EDF name or .toml path), else ${INFERENCE_CE_ENV}.toml in the first EDF_PATH
 # directory (helpers/scripts/site_env.sh); AUDIT_ONLY=1 needs neither:
@@ -18,6 +22,7 @@
 #   INFERENCE_CE_ENV=hpcagent-bench-sglang-mi300-latest sbatch fetch_weights.sbatch   # the four served models
 #   MODELS="zai-org/GLM-5.3" INFERENCE_CE_ENV=... sbatch fetch_weights.sbatch
 #   AUDIT_ONLY=1 sbatch fetch_weights.sbatch        # check layout, change nothing
+#   WEIGHTS_STRIPE_SIZE=32M sbatch fetch_weights.sbatch   # another stripe size (count: WEIGHTS_STRIPE_COUNT)
 #
 # Under plain sbatch the partition is SBATCH_PARTITION (site layer). On Daint (GH200) the partition and the
 # image differ; -p (job submit --system daint.alps) overrides it:
@@ -43,18 +48,23 @@ REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2
 [[ -n "${REPO}" && -f "${REPO}/helpers/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
 . "${REPO}/helpers/scripts/cache_env.sh"
 AUDIT_ONLY="${AUDIT_ONLY:-0}"
+if [[ "${FAST_SCRATCH_FROM_SITE}" != 1 && "${ALLOW_SLOW_SCRATCH:-0}" != 1 ]]; then
+    echo "FAIL: no site layer sets FAST_SCRATCH, so weights would land on \$SCRATCH (${SCRATCH}); set it in" \
+        "experiments/site.env or HPCAGENT_BENCH_SITE_ENV (ALLOW_SLOW_SCRATCH=1 to accept \$SCRATCH)" >&2
+    exit 1
+fi
 
 # Every model the experiment serves. Weights are ~1.5 TB in total, so the default is the full set
 # only because a partial one is the thing that bites six hours into an experiment.
 MODELS="${MODELS:-moonshotai/Kimi-K2.7-Code zai-org/GLM-5.3 Qwen/Qwen3.8-27B openai/gpt-oss-120b}"
 
-STRIPE_COUNT="${STRIPE_COUNT:-16}"
-STRIPE_SIZE="${STRIPE_SIZE:-4M}"
+STRIPE_SIZE_BYTES="$(numfmt --from=iec "${WEIGHTS_STRIPE_SIZE}")"
 MIN_BLOB_BYTES="${MIN_BLOB_BYTES:-1073741824}"   # only wide-stripe what is worth striping
 
 mkdir -p "${HF_HOME}/hub" "${SCRATCH}/ce-images/logs"
 echo "job:     ${SLURM_JOB_ID}"
 echo "HF_HOME: ${HF_HOME}"
+echo "layout:  past 64 MiB, ${WEIGHTS_STRIPE_COUNT} OSTs (-1: every OST) in ${WEIGHTS_STRIPE_SIZE} stripes"
 echo "models:  ${MODELS}"
 echo "mode:    $([ "${AUDIT_ONLY}" = 1 ] && echo 'AUDIT ONLY' || echo 'download + restripe')"
 echo
@@ -62,7 +72,7 @@ echo
 # The PFL default. Harmless when it does not take (see the header) and correct for anything that
 # does honour it, so it stays -- it is just not TRUSTED.
 if command -v lfs >/dev/null 2>&1; then
-    lfs setstripe -E 64M -c 1 -E -1 -c "${STRIPE_COUNT}" -S "${STRIPE_SIZE}" "${HF_HOME}/hub" 2>/dev/null \
+    weights_layout_default "${HF_HOME}/hub" 2>/dev/null \
         && echo "PFL default set on ${HF_HOME}/hub" \
         || echo "note: setstripe failed on ${HF_HOME}/hub (non-Lustre?) -- continuing"
 else
@@ -94,6 +104,7 @@ fi
 command -v lfs >/dev/null 2>&1 || { echo "no lfs: skipping layout audit"; exit 0; }
 
 rc=0
+MIN_STRIPES="$(weights_min_stripes "${HF_HOME}/hub")"
 for repo in ${MODELS}; do
     dir="${HF_HOME}/hub/models--${repo//\//--}"
     if [ ! -d "${dir}" ]; then
@@ -109,20 +120,21 @@ for repo in ${MODELS}; do
     # prints done in the same second, and exits 0.
     while read -r blob; do
         total=$((total + 1))
-        # head -1, never tail -1: lfs getstripe -c prints the count then a TRAILING BLANK LINE,
-        # and tail -1 yields "" which every numeric guard reads as narrow. That single mistake
-        # produced two entirely wrong audit tables in one session.
-        sc="$(lfs getstripe -c "${blob}" </dev/null 2>/dev/null | head -1)"
+        # Digits only, then the last: lfs getstripe prints a TRAILING BLANK LINE (a bare tail -1 reads "" and every
+        # numeric guard then calls the blob narrow), and a PFL file prints one value per instantiated component.
+        sc="$(lfs getstripe -c "${blob}" </dev/null 2>/dev/null | grep -E '^[0-9]+$' | tail -1)"
+        ss="$(lfs getstripe -S "${blob}" </dev/null 2>/dev/null | grep -E '^[0-9]+$' | tail -1)"
         case "${sc}" in ''|*[!0-9]*) sc=0 ;; esac
-        [ "${sc}" -ge "${STRIPE_COUNT}" ] && continue
+        [ "${sc}" -ge "${MIN_STRIPES}" ] && [ "${ss:-0}" = "${STRIPE_SIZE_BYTES}" ] && continue
         narrow=$((narrow + 1))
         if [ "${AUDIT_ONLY}" = 1 ]; then continue; fi
         # Safe ONLY because nothing is serving this model right now. A migrate under a running
         # server is what the "while nothing reads them" warning in run_cluster.sh is about.
-        lfs migrate -c "${STRIPE_COUNT}" -S "${STRIPE_SIZE}" "${blob}" </dev/null >/dev/null 2>&1 || true
-        sc2="$(lfs getstripe -c "${blob}" </dev/null 2>/dev/null | head -1)"
+        lfs migrate -c "${WEIGHTS_STRIPE_COUNT}" -S "${WEIGHTS_STRIPE_SIZE}" "${blob}" </dev/null >/dev/null 2>&1 || true
+        sc2="$(lfs getstripe -c "${blob}" </dev/null 2>/dev/null | grep -E '^[0-9]+$' | tail -1)"
+        ss2="$(lfs getstripe -S "${blob}" </dev/null 2>/dev/null | grep -E '^[0-9]+$' | tail -1)"
         case "${sc2}" in ''|*[!0-9]*) sc2=0 ;; esac
-        if [ "${sc2}" -ge "${STRIPE_COUNT}" ]; then fixed=$((fixed + 1)); else still=$((still + 1)); fi
+        if [ "${sc2}" -ge "${MIN_STRIPES}" ] && [ "${ss2:-0}" = "${STRIPE_SIZE_BYTES}" ]; then fixed=$((fixed + 1)); else still=$((still + 1)); fi
     # -L + readlink -f: a blob may be a link into a shared content store (hub/blobs/<xx>/), which
     # -type f alone never lists; the store file is what gets audited and restriped.
     done < <(find -L "${dir}/snapshots" -type f -size +"${MIN_BLOB_BYTES}"c -exec readlink -f {} + 2>/dev/null | sort -u)
@@ -131,13 +143,13 @@ for repo in ${MODELS}; do
            "${total}" "${narrow}" "${fixed}" "${still}"
     # VERIFY rather than trust the migrate exit code, which is 0 even when it moved nothing.
     if [ "${still}" -gt 0 ]; then
-        echo "  FAIL: ${still} blob(s) did not reach stripe_count ${STRIPE_COUNT}" >&2
+        echo "  FAIL: ${still} blob(s) did not reach ${MIN_STRIPES} stripes of ${WEIGHTS_STRIPE_SIZE}" >&2
         rc=1
     elif [ "${total}" -eq 0 ]; then
         echo "  FAIL: no blobs over 1G found -- the download did not land here" >&2
         rc=1
     else
-        echo "  OK: every blob >1G is stripe_count >= ${STRIPE_COUNT}"
+        echo "  OK: every blob >1G spans >= ${MIN_STRIPES} OSTs in ${WEIGHTS_STRIPE_SIZE} stripes"
     fi
 done
 

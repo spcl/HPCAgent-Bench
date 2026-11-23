@@ -1020,11 +1020,12 @@ write_launch_stamp || echo "WARNING: ${RUN_DIR}/${LAYOUT_LAUNCH_STAMP_NAME} not 
 # (measured: kimi's 554 GiB at 55 min). A PFL default on the HF hub dir makes every future
 # download stripe wide past 64 MiB while small files stay narrow. Set from the batch host
 # (the containers have no lfs); existing files keep their layout -- restripe those with
-# `lfs migrate -c 16 -S 4M` while nothing reads them. Best-effort: a non-Lustre HF_HOME
-# (or no lustre client) must not fail the run.
+# containers/inference/fetch_weights.sbatch, which restripes and verifies, while nothing reads them. The layout is
+# cache_env.sh's (WEIGHTS_STRIPE_COUNT, default every OST; WEIGHTS_STRIPE_SIZE, default 16M). Best-effort: a
+# non-Lustre HF_HOME (or no lustre client) must not fail the run.
 if command -v lfs >/dev/null 2>&1; then
     mkdir -p "${HF_HOME:-${FAST_SCRATCH}/hf}/hub"
-    lfs setstripe -E 64M -c 1 -E -1 -c 16 -S 4M "${HF_HOME:-${FAST_SCRATCH}/hf}/hub" 2>/dev/null \
+    weights_layout_default "${HF_HOME:-${FAST_SCRATCH}/hf}/hub" 2>/dev/null \
         || echo "note: lfs setstripe on ${HF_HOME:-${FAST_SCRATCH}/hf}/hub failed (non-Lustre?)"
 fi
 
