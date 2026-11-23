@@ -12,7 +12,6 @@ BASE_IMAGE="${BASE_IMAGE:-docker.io/library/ubuntu:24.04@sha256:008173c23f95b170
 ce_image_args() {
     ce_spack_target
     ce_march
-    ce_pin_commits
     ce_lock_keys
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
     ce_spack_jobs
@@ -25,8 +24,6 @@ ce_image_args() {
 # Base cache, spack buildcache and uv cache per CPU family: an x86_64 layer is no use to aarch64.
 ce_image_inputs() {
     ce_mirror_args
-    ce_require_mirror_commit "spcl/dace.git" "${DACE_COMMIT}"
-    ce_require_mirror_commit "ThrudPrimrose/relayout.git" "${RELAYOUT_COMMIT}"
     ce_require_mirror_commit "ofiwg/libfabric.git" "${LIBFABRIC_COMMIT}"
     BASE_CACHE="${BASE_CACHE:-${SCRATCH:?}/base-images-$(uname -m)}"
     ce_cache_base_image

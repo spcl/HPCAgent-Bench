@@ -43,7 +43,7 @@ of the CSCS Alps MI300A partition, the reference setup of this repository's expe
 | `helpers/scripts/host_python.sh` | the host-side interpreter (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.12 |
 | each image's EDF | the interpreter of every step inside it (`HPCAGENT_BENCH_IMAGE_PYTHON`) and `PYTHONHASHSEED=0` |
 | `hpcagent_bench/cluster/env.sh` | the checkout, `PYTHONHASHSEED=0`, the OpenMP launch environment; sources the two scripts above |
-| `pyproject.toml` (`[tool.uv.sources] dace`) | the dace commit a release installs, bakes and runs ([below](#dace)) |
+| `pyproject.toml` (`dace-extended>=`), `uv.lock` | the DaCe extended release a checkout installs and runs ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots |
 
 Experiment knobs (models, agents, judges, budgets) are not site values: they are set in `experiments/experiments.toml`,
@@ -194,12 +194,14 @@ Defaults are in `containers/images/images.env` and `build_common.sh`; `IMAGE_REQ
 
 ### dace
 
-DaCe comes from the spcl/dace `extended` branch, pinned by the `dace` entry of `[tool.uv.sources]` in
-`pyproject.toml` (the one place it is written; the published metadata says plain `dace`). `uv sync` installs the pin
-(point `[tool.uv.sources]` at a checkout of your own for development); no image carries it: every job installs the
-pin of its own checkout at start (`containers/images/lib/launch_venv.sh`), so moving the pin (only to an extended commit
-whose CI is green) needs no rebuild. The installed dace records its commit in its PEP 610 `direct_url.json`, which the judge prints into the job log;
-canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build` column.
+DaCe comes from the spcl/dace `extended` branch, released on PyPI as `dace-extended` (import `dace`; tags
+`extended-vX.Y.Z` on github.com/ThrudPrimrose/dace, cut by `helpers/scripts/dace_extended_release.sh` once every
+spcl/dace workflow passed). `pyproject.toml` holds the lower bound and `uv.lock` the exact release, so pip and `uv sync`
+install the same code; `helpers/scripts/pins.sh --bump` moves both. For development, install a DaCe checkout of your own
+in place of dace-extended. No image carries DaCe: every job installs its checkout's lock at start
+(`containers/images/lib/launch_venv.sh`), so a new release needs no rebuild. A release records the spcl/dace commit it
+was cut from as `dace.__commit__` (a git or editable install: its PEP 610 `direct_url.json`); the judge prints it into the
+job log, and canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build` column.
 
 ## Hardware is not a site value
 

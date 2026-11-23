@@ -24,7 +24,6 @@ BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:26.09-py3@sha256:6e8ccc607fc2a5
 ce_image_args() {
     ce_spack_target
     ce_march
-    ce_pin_commits
     ce_lock_keys
     ce_libfabric_commit
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
@@ -39,8 +38,6 @@ ce_image_args() {
 # cache directory on the shared scratch would hand one family's layers to the other.
 ce_image_inputs() {
     ce_mirror_args
-    ce_require_mirror_commit "spcl/dace.git" "${DACE_COMMIT}"
-    ce_require_mirror_commit "ThrudPrimrose/relayout.git" "${RELAYOUT_COMMIT}"
     ce_require_mirror_commit "ofiwg/libfabric.git" "${LIBFABRIC_COMMIT}"
     BASE_CACHE="${BASE_CACHE:-${SCRATCH:?}/base-images-$(uname -m)}"
     ce_cache_base_image

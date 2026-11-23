@@ -1,7 +1,7 @@
 name: "HPCAgent-Bench CI setup"
 description: >
   Python, the native toolchain (GCC 16, LLVM 22, OpenBLAS, FFTW, LAPACKE), and the project's `cpu`
-  environment from uv.lock (dace at the pinned spcl/dace@extended commit), one `uv sync` per job.
+  environment from uv.lock (DaCe extended as the locked dace-extended release), one `uv sync` per job.
   Optionally a per-job ccache and the vendor compilers. Pair with ./.github/actions/finish at the end of a job.
 
 inputs:
@@ -254,20 +254,24 @@ runs:
       run: |
         set -euo pipefail
         # Everything the tests import: the `cpu` extra (frameworks, judge, agent clients, dev tools; torch from
-        # PyTorch's CPU index, dace at the pinned commit), the `gym` extra and the `harbor` group, exactly as uv.lock
+        # PyTorch's CPU index, dace-extended from PyPI), the `gym` extra and the `harbor` group, exactly as uv.lock
         # records them. A missing one turns its tests into silent skips.
         # shellcheck disable=SC2086 -- sync-args is a flag list
         uv sync --frozen --extra cpu --extra gym --group harbor --all-packages --python "$(command -v python)" ${{ inputs.sync-args }}
         echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
         echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-        # dace must be the pinned commit: a dependency that caps dace would otherwise swap in a PyPI release.
+        # DaCe must be the locked dace-extended release alone: upstream dace in its place would grade on other code.
         .venv/bin/python - "$(helpers/scripts/pins.sh)" <<'PY'
         import sys
+        from importlib import metadata
+        from hpcagent_bench import dace_guard
         from hpcagent_bench.cpf import canonical as cpf_canonical
-        got = cpf_canonical.dace_commit()
+        if problem := dace_guard.dace_problem():
+            sys.exit(problem)
+        got = metadata.version("dace-extended")
         if got != sys.argv[1]:
-            sys.exit(f"dace is {got}, not the pin {sys.argv[1]}")
-        print(f"dace @ {got}")
+            sys.exit(f"dace-extended is {got}, not the locked {sys.argv[1]}")
+        print(f"dace-extended {got} @ {cpf_canonical.dace_commit()}")
         PY
 
     # One OpenMP runtime per process, as in the images: a wheel's bundled libgomp (torch, scikit-learn)

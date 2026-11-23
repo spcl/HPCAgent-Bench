@@ -6,6 +6,7 @@ this module's bytes) and cached; a hit and a fresh entry are both loaded from th
 import importlib
 import os
 import pathlib
+import re
 import tempfile
 import time
 import urllib.parse
@@ -144,12 +145,38 @@ def commit_of(record: DirectUrl | Mapping[str, Any]) -> str:
     return ""
 
 
+#: DaCe extended's distribution, then a developer's DaCe checkout (spcl/dace installs as ``dace``).
+DACE_DISTRIBUTIONS = ("dace-extended", "dace")
+RELEASED_COMMIT = re.compile(r'^__commit__ = "([0-9a-f]{40})"$', re.MULTILINE)
+
+
+def installed_dace() -> metadata.Distribution:
+    """The installed DaCe: the dace-extended release, else a ``dace`` checkout; PackageNotFoundError when neither."""
+    for name in DACE_DISTRIBUTIONS:
+        try:
+            return metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            continue
+    raise metadata.PackageNotFoundError(DACE_DISTRIBUTIONS[0])
+
+
+def released_commit(dist: metadata.Distribution) -> str:
+    """The spcl/dace commit a dace-extended release records as ``dace.__commit__``, or "" (a checkout records none)."""
+    version_file = pathlib.Path(str(dist.locate_file("dace/version.py")))
+    if not version_file.is_file():
+        return ""
+    match = RELEASED_COMMIT.search(version_file.read_text())
+    return "" if match is None else match.group(1)
+
+
 def dace_commit() -> str:
-    """The installed dace's commit (keys every cache entry); refused when none is recorded."""
-    record = metadata.distribution("dace").read_text("direct_url.json")
-    commit = commit_of(DirectUrl.model_validate_json(record)) if record else ""
+    """The installed DaCe's spcl/dace commit (keys every cache entry): what a release records, else the commit its
+    ``direct_url.json`` names (a git install, or an editable checkout's HEAD); refused when neither names one."""
+    dist = installed_dace()
+    record = dist.read_text("direct_url.json")
+    commit = released_commit(dist) or (commit_of(DirectUrl.model_validate_json(record)) if record else "")
     if not commit:
-        raise RuntimeError("the installed dace names no git commit (direct_url.json); the CPF cache keys on its commit")
+        raise RuntimeError("the installed DaCe names no spcl/dace commit; the CPF cache keys on it")
     return commit
 
 

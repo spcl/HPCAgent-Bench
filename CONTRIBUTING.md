@@ -25,7 +25,7 @@ docs in the same commit (see [Documentation](#documentation)).
 ## Development Setup
 
 Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). Every framework extra includes the dev tools (the
-`dev` extra); `uv.lock` pins every dependency, dace at the spcl/dace@extended commit `[tool.uv.sources]` names:
+`dev` extra); `uv.lock` pins every dependency, DaCe extended as the PyPI release `dace-extended`:
 
 ```sh
 uv sync --extra cpu --extra gym            # --extra nvgpu / --extra amdgpu on a GPU host
@@ -36,7 +36,7 @@ pre-commit install
 To develop against a dace checkout of your own, change the `dace` line of `[tool.uv.sources]` in your working copy to
 `dace = { path = "/path/to/dace", editable = true }` and `uv sync --extra cpu` (without `--frozen`, since the lock names
 the pin). That is a local edit: do not commit it or the `uv.lock` it rewrites (`git checkout pyproject.toml uv.lock`
-restores both). After changing a dependency, run `uv lock` and commit `uv.lock` with it; `helpers/scripts/pins.sh --bump` moves every pin to its newest release and relocks: dace to the newest `extended-vX.Y.Z` on the ThrudPrimrose/dace fork, dace-relayout to its newest `vX.Y.Z`, and the user plugins to theirs. `helpers/scripts/pins.sh --release` first cuts the patch releases: DaCe extended (`helpers/scripts/dace_extended_release.sh`, the spcl/dace@extended head once every spcl/dace workflow passed on it) and each library (its `helpers/release_patch.sh`: tag, GitHub release, PyPI upload with `TWINE_USER` and `TWINE_TOKEN`). A patch release of the bench itself (vX.Y.Z to vX.Y.(Z+1)) is `helpers/scripts/release_patch.sh`: the first run does `pins.sh --release` and pushes the moved pins; once CI on them is green, `helpers/scripts/release_patch.sh --skip-libraries` bumps the versions, tags, uploads both packages and creates the GitHub release.
+restores both). After changing a dependency, run `uv lock` and commit `uv.lock` with it; `helpers/scripts/pins.sh --bump` raises the `dace-extended` and `dace-relayout` lower bounds to their newest PyPI releases and relocks them (pip and uv install the same releases), and moves the user plugins to their newest `vX.Y.Z` tags. `helpers/scripts/pins.sh --release` first cuts the patch releases: DaCe extended (`helpers/scripts/dace_extended_release.sh`: the spcl/dace@extended head, once every spcl/dace workflow passed on it, as the next `dace-extended` release from the ThrudPrimrose/dace fork) and each library (its `helpers/release_patch.sh`: tag, GitHub release, PyPI upload with `TWINE_USER` and `TWINE_TOKEN`). A patch release of the bench itself (vX.Y.Z to vX.Y.(Z+1)) is `helpers/scripts/release_patch.sh`: the first run does `pins.sh --release` and pushes the moved pins; once CI on them is green, `helpers/scripts/release_patch.sh --skip-libraries` bumps the versions, tags, uploads both packages and creates the GitHub release.
 
 On a cluster, source `hpcagent_bench/cluster/env.sh`: it loads the site layer, names the host interpreter
 (`HPCAGENT_BENCH_HOST_PYTHON`) and sets `PYTHONHASHSEED=0` ([docs/configuration.md](docs/configuration.md)).

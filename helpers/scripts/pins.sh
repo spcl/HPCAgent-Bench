@@ -1,45 +1,39 @@
 #!/usr/bin/env bash
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Print the commit this release pins (pyproject.toml [tool.uv.sources] rev) of dace (the default) or relayout: the one
-# commit every image bakes and every job runs.
-#   pins.sh [dace|relayout]  print the pinned commit
-#   pins.sh --bump           move every pin to its newest release and relock dace and dace-relayout:
-#                            dace to the commit of the newest extended-vX.Y.Z on the ThrudPrimrose/dace fork;
-#                            dace-relayout to its newest vX.Y.Z tag, the commit its PyPI release was built from (the
-#                            [tool.uv.sources] rev and the dace-relayout>= floor); the user plugins to their
-#                            repositories' newest vX.Y.Z tags (user_plugins.py bump)
+# The released DaCe extended (dace-extended) and relayout (dace-relayout) this checkout runs: pip and uv install the
+# same PyPI releases, pyproject.toml holds each lower bound and uv.lock the exact version.
+#   pins.sh [dace|relayout]  print the version uv.lock holds (dace: dace-extended, the default)
+#   pins.sh --bump           raise both lower bounds to the newest PyPI versions and relock them, and move the user
+#                            plugins to their repositories' newest vX.Y.Z tags (user_plugins.py bump)
 #   pins.sh --release        first patch-release DaCe extended (dace_extended_release.sh) and every library below (its
 #                            helpers/release_patch.sh, run in a fresh clone of main: tag, GitHub release, PyPI upload;
 #                            needs TWINE_USER and TWINE_TOKEN), then --bump. A failed release does not stop the others.
 set -euo pipefail
 ulimit -c 0
 root="$(dirname -- "${BASH_SOURCE[0]}")/../.."
-# relayout is published as dace-relayout: its [tool.uv.sources] key and uv package name.
-declare -A key=([dace]="dace" [relayout]="dace-relayout")
-declare -A repo=([dace]="https://github.com/spcl/dace.git" [relayout]="https://github.com/ThrudPrimrose/dace-relayout.git")
-DACE_FORK="https://github.com/ThrudPrimrose/dace.git"
+declare -A distribution=([dace]="dace-extended" [relayout]="dace-relayout")
 LIBRARIES=(
     "https://github.com/ThrudPrimrose/dace-relayout.git"
     "https://github.com/ThrudPrimrose/dace-alloy.git"
     "https://github.com/spcl/tactics.git"
 )
 
-pinned() {
-    local url="${repo[$1]//\//\\/}"
-    sed -n "s/^${key[$1]} = { git = \"${url}\", rev = \"\([0-9a-f]\{40\}\)\" }$/\1/p" "${root}/pyproject.toml"
+locked() {
+    python3 - "${root}/uv.lock" "$1" <<'EOF'
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as lock:
+    versions = [p["version"] for p in tomllib.load(lock)["package"] if p["name"] == sys.argv[2]]
+if len(versions) != 1:
+    sys.exit(f"uv.lock: expected one {sys.argv[2]}, found {len(versions)}")
+print(versions[0])
+EOF
 }
 
-# "X.Y.Z commit" of the newest <prefix>X.Y.Z tag of a repository (an annotated tag's commit, not the tag object).
-newest_release() {
-    git ls-remote --tags "$1" "refs/tags/$2*" | awk -v prefix="refs/tags/$2" '
-        index($2, prefix) == 1 {
-            name = $2
-            peeled = sub(/\^\{\}$/, "", name)
-            version = substr(name, length(prefix) + 1)
-            if (version ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ && (peeled || !(version in commit))) commit[version] = $1
-        }
-        END { for (version in commit) print version, commit[version] }' | sort -V | tail -1
+newest() {
+    curl -fsS "https://pypi.org/pypi/$1/json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["info"]["version"])'
 }
 
 release() {
@@ -62,23 +56,19 @@ release() {
 }
 
 bump() {
-    local dace_version dace_commit relayout_version relayout_commit before plugins_before
-    read -r dace_version dace_commit <<<"$(newest_release "${DACE_FORK}" extended-v)"
-    read -r relayout_version relayout_commit <<<"$(newest_release "${repo[relayout]}" v)"
-    [[ -n "${dace_commit:-}" ]] || { echo "pins.sh: ${DACE_FORK} has no extended-vX.Y.Z release" >&2; exit 2; }
-    [[ -n "${relayout_commit:-}" ]] || { echo "pins.sh: ${repo[relayout]} has no vX.Y.Z release" >&2; exit 2; }
+    local name version before plugins_before
     # A failed relock puts both files back, so pyproject.toml never disagrees with uv.lock beside it.
     before="$(cat "${root}/pyproject.toml"; echo x)"
     plugins_before="$(cat "${root}/.github/user-plugins.toml"; echo x)"
-    # The rev in [tool.uv.sources] and dace's override-dependencies URL (which wins over a plugin's pin) move together.
-    sed -i "s/rev = \"$(pinned dace)\"/rev = \"${dace_commit}\"/; s/@$(pinned dace)\"/@${dace_commit}\"/" \
-        "${root}/pyproject.toml"
-    sed -i "s/rev = \"$(pinned relayout)\"/rev = \"${relayout_commit}\"/; s/\"dace-relayout>=[0-9.]*\"/\"dace-relayout>=${relayout_version}\"/" \
-        "${root}/pyproject.toml"
-    echo "dace: extended-v${dace_version} ${dace_commit}"
-    echo "dace-relayout: v${relayout_version} ${relayout_commit}"
+    for name in "${distribution[@]}"; do
+        version="$(newest "${name}")"
+        [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "pins.sh: no PyPI release of ${name}" >&2; exit 2; }
+        sed -i "s/\"${name}>=[0-9.]*\"/\"${name}>=${version}\"/" "${root}/pyproject.toml"
+        grep -q "\"${name}>=${version}\"" "${root}/pyproject.toml" || { echo "pins.sh: no ${name}>= bound" >&2; exit 2; }
+        echo "${name}>=${version}"
+    done
     if ! (cd "${root}" && uv run --frozen --no-sync python helpers/scripts/user_plugins.py bump &&
-        uv lock -q --upgrade-package dace --upgrade-package dace-relayout); then
+        uv lock -q --upgrade-package dace-extended --upgrade-package dace-relayout); then
         printf '%s' "${before%x}" >"${root}/pyproject.toml"
         printf '%s' "${plugins_before%x}" >"${root}/.github/user-plugins.toml"
         echo "pins.sh: the bump failed; pyproject.toml and user-plugins.toml keep the previous pins" >&2
@@ -99,7 +89,5 @@ case "${1:-}" in
         ;;
 esac
 package="${1:-dace}"
-[[ -n "${repo[${package}]:-}" ]] || { echo "pins.sh: unknown package '${package}' (dace or relayout)" >&2; exit 2; }
-pin="$(pinned "${package}")"
-[[ -n "${pin}" ]] || { echo "pins.sh: pyproject.toml holds no 40-character ${package} rev" >&2; exit 2; }
-echo "${pin}"
+[[ -n "${distribution[${package}]:-}" ]] || { echo "pins.sh: unknown package '${package}' (dace or relayout)" >&2; exit 2; }
+locked "${distribution[${package}]}"

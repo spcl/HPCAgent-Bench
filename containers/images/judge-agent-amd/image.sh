@@ -16,7 +16,6 @@ BASE_IMAGE="${BASE_IMAGE:-docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pyto
 ce_image_args() {
     ce_amd_targets
     ce_spack_target
-    ce_pin_commits
     ce_lock_keys --only-group image-cupy-rocm
     ce_libfabric_commit
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
@@ -30,8 +29,6 @@ ce_image_args() {
 # cache is keyed by the GPU target list: uv keys a built wheel by its sdist, not HCC_AMDGPU_TARGET.
 ce_image_inputs() {
     ce_mirror_args
-    ce_require_mirror_commit "spcl/dace.git" "${DACE_COMMIT}"
-    ce_require_mirror_commit "ThrudPrimrose/relayout.git" "${RELAYOUT_COMMIT}"
     ce_require_mirror_commit "ofiwg/libfabric.git" "${LIBFABRIC_COMMIT}"
     ce_cache_base_image
     ce_cache_args spack-buildcache "uv-cache/${ROCM_ARCH//;/-}"

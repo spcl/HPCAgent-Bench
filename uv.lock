@@ -114,7 +114,7 @@ members = [
     "hpcagent-bench",
     "hpcagent-bench-harbor-adapter",
 ]
-overrides = [{ name = "dace", git = "https://github.com/spcl/dace.git?rev=69626c5b0ae9bc9ae0a5c3c8a5c2d7bd85b3682a" }]
+overrides = [{ name = "dace", marker = "sys_platform == 'never'" }]
 excludes = ["unclecode-litellm"]
 
 [[package]]
@@ -1353,9 +1353,9 @@ wheels = [
 ]
 
 [[package]]
-name = "dace"
-version = "2.0.0b2"
-source = { git = "https://github.com/spcl/dace.git?rev=69626c5b0ae9bc9ae0a5c3c8a5c2d7bd85b3682a#69626c5b0ae9bc9ae0a5c3c8a5c2d7bd85b3682a" }
+name = "dace-extended"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "astunparse" },
     { name = "click" },
@@ -1377,17 +1377,24 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "z3-solver" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/19/77/f5d22bea269bd9dbff5f26a695ec796156c35c16a7ac0086c64a5c940e09/dace_extended-1.0.0.tar.gz", hash = "sha256:e400ccd5211ec3656e3604cd5dd4895bf9d8447041a6740b949a889093784119", size = 9173389, upload-time = "2026-11-23T16:19:30.534Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/03/41/8a456422f5dc378e6d3355a1251b9c922513d9e5a341f7d65ee3e27f52fc/dace_extended-1.0.0-py3-none-any.whl", hash = "sha256:5b230e739575de45a046da881ebd458090ce098e1218655a1699ef1b6a58381a", size = 10068641, upload-time = "2026-11-23T16:19:27.675Z" },
+]
 
 [[package]]
 name = "dace-relayout"
 version = "0.1.0"
-source = { git = "https://github.com/ThrudPrimrose/dace-relayout.git?rev=0b0e7c736e98d36477e081501996807a3199b9e1#0b0e7c736e98d36477e081501996807a3199b9e1" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "dace" },
     { name = "islpy" },
     { name = "numpy" },
     { name = "pydantic" },
     { name = "z3-solver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/20/5e/c3ba1de1463b2f1d7d9b20ce8558752b5f0caf0a178ea6459fcbefbaff77/dace_relayout-0.1.0.tar.gz", hash = "sha256:c13a8da8ac97f741e9b95799a884224699b411507db43a3349ecf43cb2ea6fec", size = 272943, upload-time = "2026-11-23T15:25:47.27Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/0f/b59671b6314b9930b6edde26a3e78e221e4109531c0fd46cc8d4c050f003/dace_relayout-0.1.0-py3-none-any.whl", hash = "sha256:b97c21859d7bff89e0d81f558e0ada94864e12ce64bc9551dd10579dfe9f575d", size = 208986, upload-time = "2026-11-23T15:25:45.793Z" },
 ]
 
 [[package]]
@@ -2256,7 +2263,7 @@ dependencies = [
     { name = "apache-tvm" },
     { name = "cffi" },
     { name = "crawl4ai" },
-    { name = "dace" },
+    { name = "dace-extended" },
     { name = "dace-relayout" },
     { name = "datasets" },
     { name = "einops" },
@@ -2427,8 +2434,8 @@ requires-dist = [
     { name = "cuda-tile", marker = "extra == 'nvgpu'" },
     { name = "cupy", marker = "platform_machine == 'x86_64' and extra == 'amdgpu'" },
     { name = "cupy-cuda13x", marker = "extra == 'nvgpu'" },
-    { name = "dace", git = "https://github.com/spcl/dace.git?rev=69626c5b0ae9bc9ae0a5c3c8a5c2d7bd85b3682a" },
-    { name = "dace-relayout", git = "https://github.com/ThrudPrimrose/dace-relayout.git?rev=0b0e7c736e98d36477e081501996807a3199b9e1" },
+    { name = "dace-extended", specifier = ">=1.0.0" },
+    { name = "dace-relayout", specifier = ">=0.1.0" },
     { name = "datasets", specifier = ">=2.17" },
     { name = "einops" },
     { name = "fastapi" },

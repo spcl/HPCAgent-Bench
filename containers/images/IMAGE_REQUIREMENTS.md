@@ -99,8 +99,8 @@ and prints the locked numpy/scipy/pandas/astunparse versions.
   base's CUDA major, and AMD's ROCm 7.2 wheels (a flat index in `[tool.uv.index]`) on AMD.
 * torch and triton: the lock's, from PyTorch's index on CPU and CUDA (cpu, cu132) and AMD's repo.radeon.com ROCm 7.2
   page on AMD, whose torch links the image's `/opt/rocm` rather than bundling a second HIP runtime and RCCL.
-* dace: `spcl/dace@extended` at the release pin (`[tool.uv.sources] dace` in `pyproject.toml`), installed by the
-  launch venv: a moved pin needs no rebuild.
+* dace: DaCe extended as the PyPI release `dace-extended` that `uv.lock` holds, installed by the launch venv: a
+  moved pin needs no rebuild.
 * islpy and z3 back `WavefrontSkew` and the `LoopToMap` dependence proof. islpy is a hard import of
   `dace.sdfg.analysis.polyhedral_isl`, so importing it is the check; the z3 gate fails closed and silent, so
   the build asserts `smt_dependence.has_z3()`, not merely the import.
