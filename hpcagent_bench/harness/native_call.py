@@ -1782,11 +1782,16 @@ def host_buffer(buf: "ArrayBuffer") -> np.ndarray:
     raise TypeError("the host call path was handed a device buffer")
 
 
-def reclaim_memory() -> None:
-    """Return freed arenas to the OS between grades (``gc.collect`` + glibc ``malloc_trim``); best effort."""
-    gc.collect()
+def trim_heap() -> None:
+    """Return the heap's freed pages to the OS (glibc ``malloc_trim``); best effort."""
     with contextlib.suppress(OSError, AttributeError):
         ctypes.CDLL("libc.so.6").malloc_trim(0)
+
+
+def reclaim_memory() -> None:
+    """Return freed arenas to the OS between grades (``gc.collect`` + :func:`trim_heap`); best effort."""
+    gc.collect()
+    trim_heap()
 
 
 #: The first line of a :func:`traceback.format_exc` text's frames block.
@@ -2576,8 +2581,9 @@ def native_call_worker(
         CLOCK.arm()
     # The baseline is the child's current RSS, not the high-water mark the fork inherited: a peak above the
     # current RSS would swallow a call's allocation below it. Freed heap the fork inherited is released first:
-    # still resident, it would serve the call's allocation without any RSS growth.
-    reclaim_memory()
+    # still resident, it would serve the call's allocation without any RSS growth. No gc.collect here: in a fork it
+    # walks every object of the parent's heap and dirties each page it touches, which slowed CI's integration job by half.
+    trim_heap()
     reset_peak_rss()
     entry_rss = peak_rss()
     after_first: list[int] = []
