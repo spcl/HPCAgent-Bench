@@ -272,9 +272,15 @@ if [[ -n "${SERVE_BENCH:-}" ]]; then
     # BENCH mode: the load replaces the endpoint; the guard only reports (a starved pool is a result here).
     echo "bench: API up after ${api_up} s; config ${SERVE_BENCH}"
     rc=0
-    KV_GUARD=warn "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.serve_bench run --base "${BASE_URL}" \
-        --model "${VLLM_SERVED_MODEL}" --name "${SERVE_BENCH}" --run-dir "${RUN_DIR}" --api-up-s "${api_up}" \
-        --concurrency ${BENCH_CONCURRENCY:-20 40} --seconds "${BENCH_SECONDS:-900}" || rc=$?
+    # BENCH_PREFIX_TOKENS: one load per prefix size on the same server, e.g. "30000 120000" for the start of an episode
+    # and for its late turns, when every agent's context is long and the pool must still hold all of them.
+    for prefix in ${BENCH_PREFIX_TOKENS:-30000}; do
+        name="${SERVE_BENCH}"
+        [[ "${prefix}" == 30000 ]] || name="${SERVE_BENCH}-prefix${prefix}"
+        KV_GUARD=warn "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cluster.serve_bench run --base "${BASE_URL}" \
+            --model "${VLLM_SERVED_MODEL}" --name "${name}" --run-dir "${RUN_DIR}" --api-up-s "${api_up}" \
+            --concurrency ${BENCH_CONCURRENCY:-20 40} --seconds "${BENCH_SECONDS:-900}" --prefix-tokens "${prefix}" || rc=$?
+    done
     grep -a "PP0 TP0] Decode batch" "${RUN_DIR}"/server-0.log | tail -n 3 || true
     kill "${SERVER_PID}" 2>/dev/null || true
     wait "${SERVER_PID}" 2>/dev/null || true
