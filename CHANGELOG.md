@@ -12,6 +12,14 @@
   (`HPCAGENT_BENCH_REQUESTS_ADVERTISED`, `packets.advertised_allowance`). A CPF arm of a `requests = none` setup now
   reads the same prompt as its control apart from the CPF note and the skill index.
 
+### Serving
+
+- Model weights downloaded under `HF_HOME/hub` span every OST in 16 MiB stripes past their first 64 MiB (was 16
+  stripes of 4 MiB); restripe an existing cache with `lfs migrate -c -1 -S 16M`.
+- `cache_env.sh` warns when no site layer sets `FAST_SCRATCH`, so a checkout without `experiments/site.env` (such as a
+  git worktree) no longer loads weights from `$SCRATCH` unannounced. On 11-23, GLM-5.3 servers started that way took
+  15-54 min per rank to read their weights from capstor while a copy sat on iopsstor.
+
 ### Hugging Face dataset
 
 - The dataset card documents every column (generated from the `ExportRow` field descriptions), the license and the

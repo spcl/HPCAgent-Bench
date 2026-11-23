@@ -1006,11 +1006,12 @@ write_launch_stamp || echo "WARNING: ${RUN_DIR}/${LAYOUT_LAUNCH_STAMP_NAME} not 
 # (measured: kimi's 554 GiB at 55 min). A PFL default on the HF hub dir makes every future
 # download stripe wide past 64 MiB while small files stay narrow. Set from the batch host
 # (the containers have no lfs); existing files keep their layout -- restripe those with
-# `lfs migrate -c 16 -S 4M` while nothing reads them. Best-effort: a non-Lustre HF_HOME
-# (or no lustre client) must not fail the run.
+# `lfs migrate -c -1 -S 16M` while nothing reads them. Past 64 MiB a blob spans every OST in 16 MiB stripes: on
+# iopsstor (20 flash OSTs) every rank's shard read then draws on the whole file system. Best-effort: a non-Lustre
+# HF_HOME (or no lustre client) must not fail the run.
 if command -v lfs >/dev/null 2>&1; then
     mkdir -p "${HF_HOME:-${FAST_SCRATCH}/hf}/hub"
-    lfs setstripe -E 64M -c 1 -E -1 -c 16 -S 4M "${HF_HOME:-${FAST_SCRATCH}/hf}/hub" 2>/dev/null \
+    lfs setstripe -E 64M -c 1 -E -1 -c -1 -S 16M "${HF_HOME:-${FAST_SCRATCH}/hf}/hub" 2>/dev/null \
         || echo "note: lfs setstripe on ${HF_HOME:-${FAST_SCRATCH}/hf}/hub failed (non-Lustre?)"
 fi
 
