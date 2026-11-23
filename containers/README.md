@@ -265,6 +265,36 @@ apptainer build hpcagent_bench-judge.sif docker-archive:hpcagent_bench-judge.tar
 `hpcagent_bench/config.py` names. `nvidia` is `judge-agent-cuda` and `amd` is `judge-agent-amd`; their `image.sh`
 shows the further build args they take ([docs/containers.md](../docs/containers.md)).
 
+### Harbor verifiers (one per Harbor `--hardware`)
+
+`build_and_verify.sbatch verifier` builds the verifier of the node's platform (`ce_platform`) over that platform's
+published judge tag (`verifier/image.sh` `VERIFIED_JUDGE`). It bakes the checkout's HEAD, so build it from a clean
+checkout of the commit the tasks are generated from. Each Harbor hardware entry has its own pair
+([hf_dataset_and_harbor.md](../docs/hf_dataset_and_harbor.md#harbor-adapter)):
+
+| `--hardware` | verifier role | judge it builds over | build node |
+|---|---|---|---|
+| `cpu` | `verifier-cpu` | `judge-cpu` (x86_64) | any x86_64 node; `CE_PLATFORM=cpu` on a GPU node |
+| `amd` | `verifier-amd` | `judge` | MI300 |
+| `nvidia` | `verifier-cuda` | `judge-cuda` | GH200 |
+| `cpu-aarch64` | `verifier-cpu` | `judge-cpu` (aarch64) | any aarch64 node; `CE_PLATFORM=cpu` on a GH200 node |
+| `nvidia-x86_64` | `verifier-cuda-x86_64` | `judge-cuda-x86_64` | an x86_64 node with an NVIDIA GPU |
+
+From the checkout root (`build_and_verify.sbatch` reads the checkout from the submit directory):
+
+```bash
+# cpu-aarch64 on a GH200 node: CE_PLATFORM=cpu picks the CPU judge over the node's GPU
+CE_PLATFORM=cpu CE_PULL=0 sbatch containers/images/build_and_verify.sbatch verifier
+CE_PLATFORM=cpu containers/images/registry.sh promote verifier-cpu
+
+# nvidia-x86_64: the judge pair first, then the verifier over the judge just promoted (its tag may be older)
+CE_PULL=0 sbatch containers/images/build_and_verify.sbatch judge-agent-cuda
+containers/images/registry.sh promote judge-agent-cuda-x86_64 judge-cuda-x86_64
+BASE_IMAGE=oci-archive:${SCRATCH}/ce-images/hpcagent-bench-judge-nvidia-x86_64-latest.oci.tar \
+  CE_PULL=0 sbatch containers/images/build_and_verify.sbatch verifier
+containers/images/registry.sh promote verifier-cuda-x86_64
+```
+
 ### Serving jobs and gates (`inference/`)
 
 The MI300A serving recipes (these jobs, the `images/sglang/` and `images/vllm/` Dockerfiles and EDF
