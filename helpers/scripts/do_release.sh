@@ -133,15 +133,17 @@ PY
 
 if [ "${SMOKE}" -eq 1 ]; then
   echo "=== smoke: fresh venv + wheel install ==="
-  # A throwaway uv project: both wheels, pytest, and dace at the pin, as uv.lock resolves it for a checkout
-  # (PyPI's dace is not the extended branch). `uv sync` builds the venv at ${WORK}/smoke.
+  # A throwaway uv project: both wheels, pytest, and dace and relayout at the pins, as uv.lock resolves them for a
+  # checkout (PyPI's dace is not the extended branch, and PyPI's relayout is an unrelated project). Both are direct
+  # dependencies here because uv applies [tool.uv.sources] to direct dependencies only. `uv sync` builds the venv at
+  # ${WORK}/smoke.
   mkdir -p "${WORK}/smoke-project"
   cat > "${WORK}/smoke-project/pyproject.toml" <<TOML
 [project]
 name = "release-smoke"
 version = "0"
 requires-python = ">=3.12"
-dependencies = ["hpcagent-bench", "hpcagent-agent", "pytest", "dace"]
+dependencies = ["hpcagent-bench", "hpcagent-agent", "pytest", "dace", "relayout"]
 
 [tool.uv]
 package = false
