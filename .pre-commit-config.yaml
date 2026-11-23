@@ -12,6 +12,11 @@
 # so any skipped file pre-commit happens to pass through is left untouched -- the hook is
 # safe to run repo-wide.
 repos:
+  # Secret scan of the staged changes under .gitleaks.toml (default rules; BibTeX and known fixtures allowlisted).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
   - repo: local
     hooks:
       - id: hpcagent_bench-format
