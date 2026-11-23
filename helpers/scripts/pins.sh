@@ -7,8 +7,9 @@
 #   pins.sh --bump           raise both lower bounds to the newest PyPI versions and relock them, and move the user
 #                            plugins to their repositories' newest vX.Y.Z tags (user_plugins.py bump)
 #   pins.sh --release        first patch-release DaCe extended (dace_extended_release.sh) and the library below (its
-#                            helpers/release_patch.sh, run in a fresh clone of main: tag, GitHub release, PyPI upload;
-#                            needs TWINE_USER and TWINE_TOKEN), then --bump. A failed release does not stop the others.
+#                            helpers/release_patch.sh, run in a fresh clone of main: tag and GitHub release, whose
+#                            Publish workflow uploads to PyPI; DaCe extended needs TWINE_USER and TWINE_TOKEN), then
+#                            --bump. A failed release does not stop the others.
 set -euo pipefail
 ulimit -c 0
 root="$(dirname -- "${BASH_SOURCE[0]}")/../.."
