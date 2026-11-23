@@ -136,10 +136,14 @@ PY
             printf '%s' "${REGISTRY_TOKEN}" | "${pm[@]}" login --username "${REGISTRY_USER}" --password-stdin \
                 "${REGISTRY_REPO%%/*}"
         fi
-        # OCI manifests, forced: podman would otherwise keep the source's docker v2s2 type.
-        { "${pm[@]}" tag "${local_tag}" "${target}" && "${pm[@]}" push --format oci "${target}"; } || rc=1
+        # OCI manifests, forced: podman would otherwise keep the source's docker v2s2 type. The push compresses
+        # the layers, so the registry's manifest digest differs from the local one: the marker records the
+        # registry's, which `registry.sh pull <role> <digest>` pins.
+        { "${pm[@]}" tag "${local_tag}" "${target}" \
+            && "${pm[@]}" push --format oci --digestfile "${root}/pushed.digest" "${target}"; } || rc=1
         if [[ "${rc}" -eq 0 ]]; then
-            echo "  PUSHED ${target}"
+            digest="$(<"${root}/pushed.digest")"
+            echo "  PUSHED ${target}@${digest}"
             printf '%s %s\n' "${target}" "${digest}" > "${archive%.oci.tar}.pushed"
             rm -f -- "${archive}"
         fi
