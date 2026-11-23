@@ -100,6 +100,7 @@ def fake_mpi4py(monkeypatch: pytest.MonkeyPatch, events: list[str]) -> None:
         Init=lambda: None,
         Finalize=lambda: None,
         Wtime=lambda: events.append("wtime") or 0.0,
+        Pcontrol=lambda level: None,  # the drivers' PMPI-shim bracket; a no-op without the shim, as in MPI
         MAX="max",
     )
     mpi4py_pkg = types.ModuleType("mpi4py")

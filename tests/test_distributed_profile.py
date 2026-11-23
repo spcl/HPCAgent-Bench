@@ -15,7 +15,13 @@ from hpcagent_bench.categories import Language, Preset
 from hpcagent_bench.harness import pmpi_shim
 from hpcagent_bench.harness.distributed_profile import ranks_refusal
 from hpcagent_bench.harness.profile_wire import DistributedRun, DistributedRunsReport, profile_reply, report_kind
-from tests.mpi_launch_helpers import mpi4py_launcher, mpi4py_launcher_diagnosis, run_cmd
+from tests.mpi_launch_helpers import (
+    c_toolchain,
+    c_toolchain_diagnosis,
+    mpi4py_launcher,
+    mpi4py_launcher_diagnosis,
+    run_cmd,
+)
 
 WORKER = str(Path(__file__).parent / "pmpi_shim_worker.py")
 
@@ -51,10 +57,10 @@ def test_the_shim_counts_only_the_bracket_s_mpi_time(tmp_path: pathlib.Path) -> 
     launch = mpi4py_launcher()
     if launch is None:
         pytest.skip(f"no working mpi4py launcher in this environment: {mpi4py_launcher_diagnosis()}")
-    try:
-        library = pmpi_shim.build(tmp_path)
-    except (RuntimeError, OSError) as exc:
-        pytest.skip(f"no MPI C wrapper builds the shim here: {exc}")
+    toolchain = c_toolchain()  # the MPI C wrapper that builds and launches here, as the driver tests use
+    if toolchain is None:
+        pytest.skip(f"no working MPI C toolchain in this environment: {c_toolchain_diagnosis()}")
+    library = pmpi_shim.build(tmp_path, toolchain[0])
     out = tmp_path / "mpi_time.txt"
     r = run_cmd(
         [*launch, "2", sys.executable, WORKER],
