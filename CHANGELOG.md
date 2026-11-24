@@ -40,6 +40,13 @@
   numeric gate runs. Duplicate secret-seed and numba cases are gone, generated numba runs on 24 threads only, and
   CI prints every test slower than 5 s.
 
+### Images
+
+- judge-agent-cpu builds gcc 16.2.0 with spack into `/opt/gcc`, as judge-agent-amd and judge-agent-cuda do (was the
+  ubuntu-toolchain-r PPA snapshot 16-20260315, a gcc 16 pre-release). apt's clang 22 takes its libstdc++ through
+  `clang.cfg`/`clang++.cfg` (`--gcc-install-dir`); the EDFs name `/opt/gcc/bin` and put `/opt/gcc/lib64` first.
+  Takes effect with the next image build.
+
 ### Studies and skills
 
 - The `solvers` tag, the `solver14` study built on it (experiment, study registry, baselines, run roots, notes) and

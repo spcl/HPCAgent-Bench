@@ -248,12 +248,13 @@ cuTENSOR come from NVIDIA's arm64/sbsa apt repos; NVHPC compiles against the CUD
 Compute 2026.3.0 is installed to match the toolkit; Nsight Systems 2026.5.1 is the base's. The NGC base's
 HPC-X Open MPI stays off `PATH`. No MKL, likwid or msr-tools (x86 only).
 
-**judge-agent-cpu.** Binary packages except the MPI stack (minutes, not hours). gcc 16 from the ubuntu-toolchain-r
-PPA snapshot `16-20260315-1ubuntu1~24~ppa1`; clang/flang 22 from apt.llvm.org with Polly (host OpenMP only, no
+**judge-agent-cpu.** Binary packages except gcc and the MPI stack (minutes, not hours, from the shared buildcache).
+gcc 16.2.0 from spack in `/opt/gcc`, the GPU images' release (the ubuntu-toolchain-r PPA has only a pre-release
+snapshot for noble); clang/flang 22 from apt.llvm.org with Polly (host OpenMP only, no
 offload, no MLIR); spack builds MPICH `~slurm` with ScaLAPACK, HDF5, Scotch and MUMPS, and the same pinned OpenBLAS
 as the GPU images, into `/opt/view` once, through the shared buildcache; MPICH only (the build fails if Open MPI
 arrives); torch is the CPU wheel. Absent by design: ROCm, CUDA, GPU-aware MPI, PETSc, SLEPc, hypre, MAGMA and the
-other distributed solvers, NVHPC, ppcg (GPU-only), cupy, triton; a column that needs one declines. Its gcc 16 is a different
+other distributed solvers, NVHPC, ppcg (GPU-only), cupy, triton; a column that needs one declines. Its gcc 16.2.0 is a different
 build from beverin's: compare numbers within one image, never across the two.
 
 ## Platform differences by design

@@ -86,10 +86,11 @@ def test_an_unknown_model_or_experiment_fails_loudly() -> None:
         assert message in run.stderr, run.stderr
 
 
-def test_the_shell_and_the_module_render_every_base_identically() -> None:
-    """render_env (what the submitters call) and env_spec.render agree."""
-    for name in BASES:
-        assert layers("render", name) == rendered(name), name
+def test_the_shell_and_the_module_render_a_base_identically() -> None:
+    """render_env (what the submitters call) and env_spec.render agree. render_env runs ``env_spec render`` itself,
+    so one base checks the wiring; every base's content is checked against the module below."""
+    name = BASES[0]
+    assert layers("render", name) == rendered(name), name
 
 
 @pytest.mark.parametrize("name", BASES)
