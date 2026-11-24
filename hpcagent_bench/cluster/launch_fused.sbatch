@@ -94,7 +94,9 @@ for line in "${queue[@]}"; do
     done
 done
 queue=("${lines[@]}")
-declare -A name_of nodes_of run_of server_pool user_pool retired
+# Assigned empty: bash 4.4 (the compute nodes') counts an unassigned array as unbound under `set -u`, so a launcher
+# that starts no line died on `${#name_of[@]}` (job 762148).
+declare -A name_of=() nodes_of=() run_of=() server_pool=() user_pool=() retired=()
 # FUSED_FIRST_INDEX: a second launcher inside the same job (on the nodes the first one's ended runs freed) numbers
 # its runs on from there, so no run id repeats.
 k=$((${FUSED_FIRST_INDEX:-1} - 1))
