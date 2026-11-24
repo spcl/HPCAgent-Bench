@@ -72,3 +72,17 @@ def test_plain_reduction_without_capture_still_matches() -> None:
     # the accumulator is combined and never otherwise read in the body -> a clean reduction.
     assert loop_reduction(stmt_("for i in range(N):\n    s = s + a[i]\n")) == ("+", "s")
     assert loop_reduction(stmt_("for i in range(N):\n    m = max(m, a[i])\n")) == ("max", "m")
+
+
+# D: a store through a tuple target is a store
+def test_overlapping_stores_through_a_tuple_target_are_not_parallel_safe() -> None:
+    """dwt2d's level loop, ``out[:h, :h], out[h:2 * h, :h] = analyze(...)``: every level rewrites the corner the
+    next reads, but the tuple's stores were invisible and the loop became ``nb.prange``."""
+    loop = stmt_(
+        "for lvl in range(m):\n    h = n >> lvl\n    out[:h, :h], out[h:2 * h, :h] = f(out[: 2 * h, : 2 * h])\n"
+    )
+    assert not loop_is_parallel_safe(loop)
+
+
+def test_independent_stores_through_a_tuple_target_stay_parallel_safe() -> None:
+    assert loop_is_parallel_safe(stmt_("for i in range(n):\n    a[i], b[i] = c[i], d[i]\n"))

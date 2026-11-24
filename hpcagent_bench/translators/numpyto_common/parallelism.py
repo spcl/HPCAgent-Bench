@@ -48,6 +48,7 @@ __all__ = [
     "scalar_accumulators",
     "scalars_live_after",
     "statements_after",
+    "store_targets",
     "subscript_idx_safe",
     "written_arrays",
     "written_partition_consistent",
@@ -170,12 +171,32 @@ def subscript_idx_safe(sub: ast.Subscript, idx: str) -> bool:
     return bare
 
 
+def store_targets(node: ast.AST) -> list[ast.expr]:
+    """Every expression an Assign / AugAssign ``node`` stores to, a tuple or list target unpacked: dwt2d's
+    ``out[:h, :h], out[h:2 * h, :h] = ...`` stores ``out`` twice, which a top-level-only walk did not see."""
+    if isinstance(node, ast.Assign):
+        pending: list[ast.expr] = list(node.targets)
+    elif isinstance(node, ast.AugAssign):
+        pending = [node.target]
+    else:
+        return []
+    flat: list[ast.expr] = []
+    while pending:
+        target = pending.pop()
+        if isinstance(target, (ast.Tuple, ast.List)):
+            pending.extend(target.elts)
+        elif isinstance(target, ast.Starred):
+            pending.append(target.value)
+        else:
+            flat.append(target)
+    return flat
+
+
 def written_arrays(body: ast.AST) -> set[str]:
     """Names of arrays written (via a subscript store or aug-store) anywhere in ``body``."""
     out: set[str] = set()
     for n in walk_nodes(body):
-        targets = n.targets if isinstance(n, ast.Assign) else ([n.target] if isinstance(n, ast.AugAssign) else [])
-        for t in targets:
+        for t in store_targets(n):
             if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name):
                 out.add(t.value.id)
     return out
@@ -349,7 +370,7 @@ def loop_is_parallel_safe(node: ast.AST, root: ast.AST | None = None) -> bool:
     body = ast.Module(body=list(node.body), type_ignores=[])
     for n in walk_nodes(body):
         if isinstance(n, ast.Assign):
-            for t in n.targets:
+            for t in store_targets(n):
                 if isinstance(t, ast.Name) and reads_name(n.value, t.id):
                     return False  # self-referential carried scalar (``s = s + ...``).
         elif isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):
@@ -514,8 +535,7 @@ def has_indirect_scatter(tree: ast.AST) -> bool:
     colliding scatter, ``A[perm[i]] = ...`` / ``+=``). The parallel emitter
     refuses such a kernel rather than emit an atomic."""
     for n in walk_nodes(tree):
-        targets = n.targets if isinstance(n, ast.Assign) else ([n.target] if isinstance(n, ast.AugAssign) else [])
-        for t in targets:
+        for t in store_targets(n):
             if isinstance(t, ast.Subscript) and index_is_indirect(t):
                 return True
     return False

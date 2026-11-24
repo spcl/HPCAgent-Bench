@@ -146,6 +146,12 @@ def attribute_rank(value: ast.Attribute, ranks: dict[str, int]) -> int | None:
     return expr_rank(value.value, ranks) if value.attr in ("T", "real", "imag") else None
 
 
+def ifexp_rank(value: ast.IfExp, ranks: dict[str, int]) -> int | None:
+    """The rank of ``a if c else b``: the branches' shared rank, else unknown."""
+    body, orelse = expr_rank(value.body, ranks), expr_rank(value.orelse, ranks)
+    return body if body == orelse else None
+
+
 def binop_rank(value: ast.BinOp, ranks: dict[str, int]) -> int | None:
     """The rank of a binary operation, by matmul or broadcast rules."""
     lr = expr_rank(value.left, ranks)
@@ -473,6 +479,7 @@ RANK_HANDLERS: dict[type, Callable[..., int | None]] = {
     ast.BoolOp: boolop_rank,
     ast.Subscript: subscript_rank,
     ast.Call: call_rank,
+    ast.IfExp: ifexp_rank,
 }
 
 

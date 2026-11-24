@@ -896,16 +896,30 @@ class RollInline(RankedRewritePass):
             and isinstance(x.value, ast.Name)
             and all(isinstance(n, ARITHMETIC_NODES + (ast.Slice, ast.Tuple)) for n in walk_nodes(x.slice))
         )
-        if axis is None or rank is None or not pure or not 0 <= (axis % rank if rank else -1) < rank:
+        if rank is None or rank < 1 or not pure:
             return node
-        axis %= rank
+        if axis is None:
+            # A runtime axis by name (dwt2d's helper rolls ``axis=axis``): one literal roll per axis, picked by it.
+            if not isinstance(axis_node, ast.Name):
+                return node
+            picked = self.piece(x, shift, rank - 1)
+            for literal in range(rank - 2, -1, -1):
+                picked = f"{self.piece(x, shift, literal)} if {axis_node.id} % {rank} == {literal} else {picked}"
+            self.changed = True
+            return ast.copy_location(expr_of(f"({picked})"), node)
+        if not 0 <= axis % rank < rank:
+            return node
+        self.changed = True
+        return ast.copy_location(expr_of(self.piece(x, shift, axis % rank)), node)
+
+    def piece(self, x: ast.expr, shift: ast.expr, axis: int) -> str:
+        """``np.roll(x, shift, axis=axis)`` for a literal non-negative ``axis``: the two wrapped pieces concatenated."""
         text, extent = ast.unparse(x), f"({ast.unparse(x)}).shape[{axis}]"
         cut = f"{extent} - ({ast.unparse(shift)}) % {extent}"
         lead = ", ".join([":"] * axis)
         lead = f"{lead}, " if lead else ""
         tail, head = f"({text})[{lead}{cut}:]", f"({text})[{lead}:{cut}]"
-        self.changed = True
-        return ast.copy_location(expr_of(f"np.concatenate(({tail}, {head}), axis={axis})"), node)
+        return f"np.concatenate(({tail}, {head}), axis={axis})"
 
 
 class NumbaDtypeFixups(ast.NodeTransformer):
