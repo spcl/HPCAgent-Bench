@@ -396,14 +396,20 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           ccache: integration-${{ matrix.shard.id }}
+      # The test installs under openblas-openmp-<toolchain id>; the cache path and key must name the same directory,
+      # or the save finds no path and every run rebuilds OpenBLAS (about 600 s).
+      - name: Setup -- the from-source OpenBLAS toolchain id
+        id: blas-toolchain
+        if: ${{ matrix.shard.openblas }}
+        run: echo "id=$(python -c 'from tests.test_dace_openblas_link import toolchain_id; print(toolchain_id())')" >> "$GITHUB_OUTPUT"
       # Keyed by CPU_KEY: the build is not DYNAMIC_ARCH.
       - name: Setup -- restore the from-source OpenBLAS
         id: openblas
         if: ${{ matrix.shard.openblas }}
         uses: actions/cache/restore@v5
         with:
-          path: ${{ github.workspace }}/.openblas-cache/openblas-openmp/install
-          key: openblas-openmp-v0.3.29-${{ runner.os }}-${{ env.CPU_KEY }}
+          path: ${{ github.workspace }}/.openblas-cache/openblas-openmp-${{ steps.blas-toolchain.outputs.id }}/install
+          key: openblas-openmp-v0.3.29-${{ runner.os }}-${{ env.CPU_KEY }}-${{ steps.blas-toolchain.outputs.id }}
 
       - name: Phase 6 -- integration-marked tests under tests/
         if: ${{ !cancelled() }}
@@ -421,8 +427,8 @@ jobs:
         if: ${{ always() && matrix.shard.openblas && steps.openblas.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v5
         with:
-          path: ${{ github.workspace }}/.openblas-cache/openblas-openmp/install
-          key: openblas-openmp-v0.3.29-${{ runner.os }}-${{ env.CPU_KEY }}
+          path: ${{ github.workspace }}/.openblas-cache/openblas-openmp-${{ steps.blas-toolchain.outputs.id }}/install
+          key: openblas-openmp-v0.3.29-${{ runner.os }}-${{ env.CPU_KEY }}-${{ steps.blas-toolchain.outputs.id }}
 
       - name: Setup -- Apptainer (sudoless install script)
         if: ${{ matrix.shard.id == 0 }}
