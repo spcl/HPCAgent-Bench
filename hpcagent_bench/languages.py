@@ -2072,7 +2072,7 @@ def build_mpi_executable_commands(
     if prebuilt is not None:
         rpath = f"-Xlinker=-rpath={prebuilt.parent}" if link_block.cuda else f"-Wl,-rpath,{prebuilt.parent}"
         link_argv.extend([str(prebuilt), rpath])
-    link_argv.extend(extra_link)  # -l/-L on the link step
+    link_argv.extend(linker_flags(link_block, extra_link))  # -l/-L on the link step
     cmds.append(link_argv)
     if kernel_lib is not None:
         # The same link line over the kernel objects only (the driver object is last), as a shared library.
@@ -2081,7 +2081,7 @@ def build_mpi_executable_commands(
         lib_argv.insert(1, "-shared")
         lib_argv.append(new_dtags_flag(link_block))
         lib_argv.extend(link_block.link_extra or [])
-        lib_argv.extend(extra_link)
+        lib_argv.extend(linker_flags(link_block, extra_link))
         cmds.append(lib_argv)
     return cmds
 
@@ -2089,6 +2089,12 @@ def build_mpi_executable_commands(
 #: Position-independent code for the sharded kernel library; nvcc forwards host flags explicitly.
 PIC_FLAG = "-fPIC"
 PIC_FLAG_CUDA = "-Xcompiler=-fPIC"
+
+
+def linker_flags(block: CompilerBlock, flags: Sequence[str]) -> list[str]:
+    """``flags`` as ``block``'s link driver takes them: nvcc refuses ``-Wl,a,b`` as an unknown option and passes
+    ``-Xlinker=a,b`` (split at the commas, as gcc splits ``-Wl``) to the host linker."""
+    return [f"-Xlinker={flag[4:]}" if block.cuda and flag.startswith("-Wl,") else flag for flag in flags]
 
 
 def new_dtags_flag(block: CompilerBlock) -> str:
@@ -2217,7 +2223,7 @@ def build_shared_lib_commands(
         link_argv.extend(f for f in mimalloc_link_for_block(block, cc) if f not in link_argv)
         cmds.append(link_argv)
     if extra_link:
-        cmds[-1].extend(extra_link)  # the final argv produces the .so
+        cmds[-1].extend(linker_flags(block, extra_link))  # the final argv produces the .so
     return cmds
 
 

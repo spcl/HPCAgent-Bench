@@ -12,6 +12,8 @@
   (`HPCAGENT_BENCH_REQUESTS_ADVERTISED`, `packets.advertised_allowance`). A CPF arm of a `requests = none` setup now
   reads the same prompt as its control apart from the CPF note and the skill index.
 
+- A CUDA submission links again when the run has shared folders: nvcc refused the sandbox's `-Wl,-rpath,<lib>`, so
+  the link of a CUDA build now spells every `-Wl,` flag `-Xlinker=` (`languages.linker_flags`).
 ### Serving
 
 - Model weights span every OST in 16 MiB stripes past their first 64 MiB (was 16 stripes of 4 MiB). The layout is
