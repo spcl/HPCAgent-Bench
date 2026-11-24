@@ -257,12 +257,12 @@ def stop_measuring_coverage() -> None:
 
 
 def generated_programs() -> list[pathlib.Path]:
-    """Every kernel's canonical DaCe program, GENERATING any that a fresh checkout lacks.
+    """Every kernel's canonical DaCe program the numeric gate does not run, GENERATING any that a fresh checkout lacks.
 
-    The whole corpus, deliberately: the ratchet below is a sweep over everything that emits, and
-    the CI pre-warm step calls this so the ``-n 4`` workers that follow only ever see cache hits.
-    That is ~655 emits, so it is called from a TEST BODY and never at import time -- a run that
-    selects none of these tests must generate nothing.
+    The numeric gate (:func:`tests.test_dace_numeric_agreement.gated_kernels`) parses, lowers, builds and runs its
+    kernels, so a new refusal there already fails it; this sweep takes the rest of the corpus (the machine-learning
+    track) and every :data:`REFUSED` entry, which the numeric gate skips. That is still hundreds of emits, so it is
+    called from a TEST BODY and never at import time -- a run that selects none of these tests must generate nothing.
 
     :data:`PARSE_SHARD` narrows it to one slice, and does so at the KEY -- before the emit -- so a
     shard pays for its own kernels only, rather than emitting the whole corpus to parse a third of
@@ -280,10 +280,15 @@ def generated_programs() -> list[pathlib.Path]:
     """
     from hpcagent_bench.spec import KERNELS
 
+    # Deferred: tests.test_dace_numeric_agreement imports this module.
+    from tests.test_dace_numeric_agreement import gated_kernels
+
+    numeric = frozenset(gated_kernels())
+    keys = [key for key in sorted(KERNELS) if key.rsplit("/", 1)[-1] not in numeric]
     # forkserver: a child forked from a multithreaded xdist worker can segfault importing dace (758901).
     context = multiprocessing.get_context("forkserver")
     with ProcessPoolExecutor(max_workers=EMIT_WORKERS, mp_context=context, initializer=stop_measuring_coverage) as pool:
-        emitted = pool.map(ensure_dace_program, shard_of(sorted(KERNELS)))
+        emitted = pool.map(ensure_dace_program, shard_of(keys))
         return [path for path in emitted if path.exists()]
 
 

@@ -203,7 +203,7 @@ jobs:
           # -v names each test as it starts: a step cap is a SIGKILL and prints no summary.
           # -m "(papi or not papi) ..." selects the papi hardware group this job installed; "not integration"
           # leaves the integration-marked tests to the `integration` job, which runs every one of them.
-          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 -v \
+          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=0 --durations-min=5 -v \
             -m "(papi or not papi) and not integration" --timeout=600 --timeout-method=thread $files
 
       - uses: ./.github/actions/finish
@@ -282,7 +282,7 @@ jobs:
           HPCAGENT_BENCH_E2E_BACKENDS: ${{ matrix.leg.backend }}
           HPCAGENT_BENCH_E2E_SHARD: ${{ matrix.leg.shard || '' }}
         run: |
-          python -m pytest -p no:cacheprovider -rfEs -n ${{ matrix.leg.workers }} --dist loadgroup --durations=25 \
+          python -m pytest -p no:cacheprovider -rfEs -n ${{ matrix.leg.workers }} --dist loadgroup --durations=0 --durations-min=5 \
             --timeout=900 tests/test_e2e_numerical.py
       # The perf gate's other groups (see `perf`): reports, does not block.
       - name: Perf gate [${{ matrix.leg.perf }}]
@@ -413,7 +413,7 @@ jobs:
         env:
           PYTEST_ADDOPTS: ${{ env.PYTEST_ADDOPTS }} ${{ matrix.shard.workers }}
         run: |
-          python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
+          python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=0 --durations-min=5 \
             --ignore=tests/test_dace_numeric_agreement.py --ignore=tests/translators \
             -m integration ${{ matrix.shard.select }}
 
@@ -543,7 +543,7 @@ jobs:
         if: ${{ !cancelled() && matrix.leg.id == 'ops' }}
         timeout-minutes: 35
         run: |
-          python -m pytest -p no:cacheprovider -rfsxX -n auto --durations=25 --timeout=1500 \
+          python -m pytest -p no:cacheprovider -rfsxX -n auto --durations=0 --durations-min=5 --timeout=1500 \
             --ignore=tests/translators/test_pluto_no_helper_calls_in_scop.py \
             -m "not integration" tests/translators/
       - name: Phase 6t -- integration-marked tests under the translator tree
@@ -552,7 +552,7 @@ jobs:
         env:
           HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD: ${{ matrix.leg.shard }}
         run: |
-          python -m pytest -p no:cacheprovider -rfEs -v --timeout=1300 --timeout-method=thread --durations=25 \
+          python -m pytest -p no:cacheprovider -rfEs -v --timeout=1300 --timeout-method=thread --durations=0 --durations-min=5 \
             -m integration ${{ matrix.leg.select }}
       - name: Phase 3 -- agent-bench (tools + no-op/BLAS optimizers, both modes, in-proc judge)
         if: ${{ !cancelled() && matrix.leg.id == 'tree' }}
@@ -573,7 +573,7 @@ jobs:
         if: ${{ !cancelled() && matrix.leg.id == 'tree' }}
         timeout-minutes: 20
         run: |
-          python -m pytest -p no:cacheprovider -rfEs -n auto --durations=10 --timeout=600 --timeout-method=thread \
+          python -m pytest -p no:cacheprovider -rfEs -n auto --durations=0 --durations-min=5 --timeout=600 --timeout-method=thread \
             tests/test_numba_generated_llr40_solvers.py
       - uses: ./.github/actions/finish
         if: always()
@@ -895,7 +895,7 @@ jobs:
           # Uninstrumented: the job's coverage addopts stay out of this step.
           PYTEST_ADDOPTS: ""
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs -n auto --durations=25 \
+          python -m pytest -q -p no:cacheprovider -rfEs -n auto --durations=0 --durations-min=5 \
             --timeout=900 --forked tests/ports/cegterg/
 
       - name: Phase 2c -- benchmark reference validation (numpy vs naive loop / GT4Py DSL / physics)
