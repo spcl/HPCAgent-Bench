@@ -42,8 +42,8 @@ tests/test_noop_optimizer.py
 tests/test_optimizer_plugin.py
 tests/test_token_usage.py
 
-# --- translators [tree]: the generated numba of llr40 + solvers vs numpy (8-10 min) ----------------
-tests/test_numba_generated_llr40_solvers.py
+# --- translators [tree]: the generated numba of llr40 vs numpy (8-10 min) ----------------
+tests/test_numba_generated_llr40.py
 
 # --- integration[0]: the image launch and packaging -----------------------------------------------
 tests/test_packaging.py

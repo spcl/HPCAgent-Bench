@@ -240,12 +240,12 @@ def test_resolve_all_in_composes_cpf_src_dc_profiling_and_lang() -> None:
 
 
 def test_resolve_an_implicit_single_skill_packet() -> None:
-    resolved = packets.resolve("solver", "c")
-    assert resolved.key == "solver"
-    assert resolved.label == "solver"
-    assert resolved.skills == ("solver",)
+    resolved = packets.resolve("caveman", "c")
+    assert resolved.key == "caveman"
+    assert resolved.label == "caveman"
+    assert resolved.skills == ("caveman",)
     assert resolved.env == ()
-    assert resolved.parts == ("solver",)
+    assert resolved.parts == ("caveman",)
 
 
 def test_resolve_an_ad_hoc_semicolon_list() -> None:

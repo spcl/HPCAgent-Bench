@@ -33,6 +33,11 @@
   `bump` (run by `pins.sh --bump`) moves each pin to the newest PyPI release. NestForge (tactics) keeps its
   commit pin until its first PyPI release.
 
+### Studies and skills
+
+- The `solvers` tag, the `solver14` study built on it (experiment, study registry, baselines, run roots, notes) and
+  the `solver` skill page and packet are removed. The fourteen solver kernels stay in the corpus.
+
 ### Baselines and translators
 
 These fixes follow the fuzzed baseline sweep of the CPF paper (jobs 760899 and 760901, rerun in 761626).
