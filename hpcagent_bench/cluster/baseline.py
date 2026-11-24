@@ -295,7 +295,7 @@ def rank_environment(sweep: Sweep, rank: jobs.Rank, cpus: set[int]) -> dict[str,
     env.setdefault("HPCAGENT_BENCH_RECORD_BUILD", f"dace {sha}")
     harness = paths.git_head(sweep.opt, short=True)
     print(f"canon {sweep.column} rank {rank.index}: dace @{sha} harness {harness or 'notree'}")
-    env["DACE_BUILD_CACHE_DIR"] = str(paths.scratch_root(f"dace_bc_{sweep.column}_{sha}"))
+    env["DACE_BUILD_CACHE_DIR"] = str(pathlib.Path(env["JIT_CACHE_ROOT"]) / f"dace_bc_{sweep.column}_{sha}")
     build = sweep.out_root / f"dacecache-{sweep.column}"
     env["DACE_default_build_folder"] = str(build)
     build.mkdir(parents=True, exist_ok=True)

@@ -24,8 +24,8 @@
   git worktree) no longer loads weights from `$SCRATCH` unannounced. On 11-23, GLM-5.3 servers started that way took
   15-54 min per rank to read their weights from capstor while a copy sat on iopsstor.
 
-- DaCe's build cache (`DACE_BUILD_CACHE_DIR`) and the numerical oracle's DaCe builds go to a disk folder,
-  `$SCRATCH/<name>` or `<checkout>/.cache/<name>` (was `/dev/shm/$USER` and the system temp dir). Both are RAM on
+- DaCe's build cache (`DACE_BUILD_CACHE_DIR`) and the numerical oracle's DaCe builds go under
+  `$JIT_CACHE_ROOT` (was `/dev/shm/$USER` and the system temp dir). Both are RAM on
   the nodes and laptops, so the caches competed with the run for memory. `HPCAGENT_BENCH_NODE_TMPFS` is gone.
 
 ### Baselines and translators

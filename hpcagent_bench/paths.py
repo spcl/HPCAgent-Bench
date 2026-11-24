@@ -22,6 +22,7 @@ __all__ = [
     "SCRATCH_ENV",
     "git_dirty",
     "git_head",
+    "jit_cache_root",
     "repo_root",
     "rocm_root",
     "scratch_dir",
@@ -115,6 +116,14 @@ def scratch_or_repo() -> pathlib.Path:
     it -- see :func:`scratch_root` for that case."""
     scratch = os.environ.get("SCRATCH")
     return pathlib.Path(scratch) if scratch else repo_root()
+
+
+def jit_cache_root() -> pathlib.Path:
+    """``$JIT_CACHE_ROOT`` (``helpers/scripts/cache_env.sh`` exports it), else ``<repo_root>/.cache/jit``, its own
+    no-``$SCRATCH`` default. Build trees go here: on disk, swept with the rest of the JIT caches, never in
+    ``/dev/shm`` or a tmpfs ``/tmp`` (RAM) and never as a bare ``$SCRATCH/<name>`` that nothing sweeps (inodes)."""
+    root = os.environ.get("JIT_CACHE_ROOT")
+    return pathlib.Path(root) if root else repo_root() / ".cache" / "jit"
 
 
 def scratch_root(name: str) -> pathlib.Path:
