@@ -28,6 +28,11 @@
   `$JIT_CACHE_ROOT` (was `/dev/shm/$USER` and the system temp dir). Both are RAM on
   the nodes and laptops, so the caches competed with the run for memory. `HPCAGENT_BENCH_NODE_TMPFS` is gone.
 
+- The user plugins (`.github/user-plugins.toml`) are pinned to PyPI releases (`package`, `version`; Alloy is
+  dace-alloy 0.1.1) instead of git commits of release tags. `user_plugins.py checkout` unpacks the sdist and
+  `bump` (run by `pins.sh --bump`) moves each pin to the newest PyPI release. NestForge (tactics) keeps its
+  commit pin until its first PyPI release.
+
 ### Baselines and translators
 
 These fixes follow the fuzzed baseline sweep of the CPF paper (jobs 760899 and 760901, rerun in 761626).

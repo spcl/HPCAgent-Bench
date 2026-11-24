@@ -1,14 +1,16 @@
 # The first-class user plugins the user-plugins CI job installs and runs (tests/test_user_plugin_episodes.py): a
-# repository's main at a commit, and the plugin folder inside it. CI and a study's launch
-# (`python helpers/scripts/user_plugins.py checkout DEST NAME`) check out these commits;
-# `python helpers/scripts/user_plugins.py bump` moves the commits to each repository's newest vX.Y.Z release.
+# released PyPI distribution (package, version) and the plugin folder inside its sdist. CI and a study's launch
+# (`python helpers/scripts/user_plugins.py checkout DEST NAME`) unpack these releases;
+# `python helpers/scripts/user_plugins.py bump` moves each to its distribution's newest PyPI release.
+# A plugin with no PyPI release yet is pinned to a commit of its repository until its first release.
 
 [plugins.nestforge]
+package = "tactics"
 repository = "https://github.com/spcl/NestForge.git"
 commit = "51f721b853842861a5ee6ea76f88182d3d9084d2"
 folder = "plugin/nestforge"
 
 [plugins.alloy]
-repository = "https://github.com/ThrudPrimrose/alloy.git"
-commit = "f54cae3b751fecc19a20b73625d43d3ad18b37a5"
+package = "dace-alloy"
+version = "0.1.1"
 folder = "alloy/hb_plugin"
