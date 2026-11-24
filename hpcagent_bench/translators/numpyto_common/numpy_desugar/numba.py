@@ -35,6 +35,7 @@ __all__ = [
     "BroadcastAugAssignSpellOut",
     "NdimFold",
     "NonePlaceholderDrop",
+    "NumbaCallFixups",
     "NumbaDtypeFixups",
     "OuterBroadcastPeel",
     "ReshapeFortranOrderInline",
@@ -844,6 +845,29 @@ class BroadcastAugAssignSpellOut(RankedRewritePass):
         value = ast.BinOp(left=load, op=node.op, right=node.value)
         self.changed = True
         return ast.fix_missing_locations(ast.copy_location(ast.Assign(targets=[store], value=value), node))
+
+
+class NumbaCallFixups(RankedRewritePass):
+    """numpy calls numba does not type, spelled in ones it does (numba only).
+
+    ``np.array(<array>)`` -> ``np.copy(<array>)``: numba's ``np.array`` takes a sequence, not an array (vadv's
+    ``np.array(dcol[:, :, K - 1])``)."""
+
+    __slots__ = ()
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        """Respell an ``np.array`` copy of an array."""
+        self.generic_visit(node)
+        if (
+            numpy_call_attr(node) == "array"
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], (ast.Name, ast.Subscript, ast.Attribute))
+            and (expr_rank(node.args[0], self.ranks) or 0) >= 1
+        ):
+            self.changed = True
+            return ast.copy_location(expr_of(f"np.copy({ast.unparse(node.args[0])})"), node)
+        return node
 
 
 class RollInline(RankedRewritePass):

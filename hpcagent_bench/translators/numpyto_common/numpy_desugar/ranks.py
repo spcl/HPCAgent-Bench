@@ -141,9 +141,9 @@ def constant_rank(value: ast.Constant, ranks: dict[str, int]) -> int | None:
 
 
 def attribute_rank(value: ast.Attribute, ranks: dict[str, int]) -> int | None:
-    """The rank of ``A.T``: the rank of ``A``."""
-    # ``A.T`` reverses the axes, keeping the rank.
-    return expr_rank(value.value, ranks) if value.attr == "T" else None
+    """The rank of ``A.T``, ``A.real`` and ``A.imag``: the rank of ``A``."""
+    # ``A.T`` reverses the axes and the complex parts are elementwise views: each keeps the rank.
+    return expr_rank(value.value, ranks) if value.attr in ("T", "real", "imag") else None
 
 
 def binop_rank(value: ast.BinOp, ranks: dict[str, int]) -> int | None:

@@ -227,6 +227,9 @@ def hoist_reduce_axis(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     hoist.pre.extend(
         reduce_axis_stmts(temp, sname, op, axes, rank, hoist.ctr, keepdims, elem_kind == "float", ddof, elem_kind)
     )
+    # Later passes read the temps' ranks: BroadcastAugAssignSpellOut must see ``vel -= __rdo0 / N`` broadcast.
+    hoist.tables.ranks[sname] = rank
+    hoist.tables.ranks[temp] = rank if keepdims else rank - len(axes)
     hoist.ctr += 1
     return name_(temp)
 

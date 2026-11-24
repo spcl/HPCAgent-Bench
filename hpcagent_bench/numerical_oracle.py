@@ -430,8 +430,10 @@ def custom_initialize(
         val = by.get(name)
         if not isinstance(val, np.ndarray):
             continue
-        # Through the registry: numpy has no name for ``bf16``.
-        want = np.dtype(compute_dtype(canonical(declared)))
+        # Through the registry: numpy has no name for ``bf16``. A sub-byte integer (int4) is passed in its storage
+        # byte, as a grade passes it: ml_dtypes' int4 is no dtype numba or a C buffer takes.
+        sub_byte = dtypes.value_range(canonical(declared)) is not None
+        want = np.dtype(dtypes.storage_dtype(declared) if sub_byte else compute_dtype(canonical(declared)))
         if want.kind != val.dtype.kind:
             by[name] = coerce_to_dtype(val, want.type)
     return by
