@@ -45,11 +45,23 @@ def test_sparse_kernel_matches_scipy(kernel: "so.SparseKernel", config: str, see
     assert res.ok, f"{kernel.short}/{config} (seed={seed}): {res.detail}"
 
 
+#: The kernels numba runs on every layout: spmv reads A one way, bicg_solvers reads A and its transpose. Every other
+#: kernel reaches A through the same layout accessors, so numba runs it on csr alone; the numpy oracle above still
+#: runs every kernel on every layout.
+NUMBA_LAYOUT_WITNESSES = ("spmv", "bicg_solvers")
+NUMBA_CONFIGS = [(k, cfg) for k, cfg in KERNEL_CONFIGS if cfg == "csr" or k.short in NUMBA_LAYOUT_WITNESSES]
+
+
+def test_the_numba_layout_witnesses_are_sparse_kernels() -> None:
+    assert set(NUMBA_LAYOUT_WITNESSES) <= {k.short for k in KERNELS}
+
+
 @isolated
 @pytest.mark.skipif(not KERNEL_CONFIGS, reason="no sparse kernels discovered")
-@pytest.mark.parametrize(("kernel", "config"), KERNEL_CONFIGS, ids=KC_IDS)
+@pytest.mark.parametrize(("kernel", "config"), NUMBA_CONFIGS, ids=[f"{k.short}-{cfg}" for k, cfg in NUMBA_CONFIGS])
 def test_sparse_kernel_numba_matches_scipy(kernel: "so.SparseKernel", config: str) -> None:
-    """Every layout of every sparse kernel lowers to numba over its unpacked buffers and matches scipy."""
+    """Every sparse kernel lowers to numba over its unpacked buffers and matches scipy: on csr, and on every layout for
+    :data:`NUMBA_LAYOUT_WITNESSES`."""
     res = so.run_kernel(kernel, seed=0, config_name=config, backend="numba")
     assert res.ok, f"{kernel.short}/{config}: {res.detail}"
 

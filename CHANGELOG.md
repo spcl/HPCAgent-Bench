@@ -39,6 +39,11 @@
   on a dispatched run; the parse gate checks the rest statically. The lowering and parse gates skip what the
   numeric gate runs. Duplicate secret-seed and numba cases are gone, generated numba runs on 24 threads only, and
   CI prints every test slower than 5 s.
+- More cuts that keep every checked fact: the secret-seed sweep runs fp32 alone where its band covers fp64's (441
+  cases, was 882); the C++ cegterg cross-check compares with the direct solve instead of a second numpy SCF; numba
+  runs every sparse layout on spmv and bicg_solvers and csr elsewhere (17 builds, was 42); one numba compile per
+  pencil kind; the per-push numba e2e leg leaves four kernels to the one that repeats their code (NUMBA_REPEATS);
+  the submit precedence, repo-PR and tuner end-to-end tests drop runs the unit tests already pin.
 
 ### Images
 
