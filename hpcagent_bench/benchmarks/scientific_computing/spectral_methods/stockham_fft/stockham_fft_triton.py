@@ -27,12 +27,37 @@ def _generate_config():
     ]
 
 
+#: HIP refuses a launch whose grid holds 2^32 threads or more (a 64-lane wavefront per warp; 32 on CUDA, so the bound
+#: is conservative there).
+MAX_LAUNCH_THREADS = 1 << 32
+
+
+def prune_oversized_grids(configs, named_args, **kwargs):
+    """Drop the configurations whose grid exceeds the launch limit: at R = 2, K = 28 a 1 x 1 tile launches 2^27
+    programs, and autotuning one of them failed with "invalid argument"."""
+    sizes = {**named_args, **kwargs}
+    return [
+        config
+        for config in configs
+        if triton.cdiv(sizes["R_TO_KM1"], config.kwargs["BLOCK_SIZE_K"])
+        * triton.cdiv(sizes["R_TO_I"], config.kwargs["BLOCK_SIZE_N"])
+        * config.num_warps
+        * 64
+        < MAX_LAUNCH_THREADS
+    ]
+
+
 @use_grid(
     lambda meta: (
         triton.cdiv(meta["R_TO_KM1"], meta["BLOCK_SIZE_K"]) * triton.cdiv(meta["R_TO_I"], meta["BLOCK_SIZE_N"]),
     )
 )
-@triton.autotune(configs=_generate_config(), key=["R", "R_TO_I", "R_TO_KM1"], cache_results=True)
+@triton.autotune(
+    configs=_generate_config(),
+    key=["R", "R_TO_I", "R_TO_KM1"],
+    prune_configs_by={"early_config_prune": prune_oversized_grids},
+    cache_results=True,
+)
 @triton.jit
 def _kernel(
     yv,  # (R ** i, R, R ** (K - i - 1), 2)
