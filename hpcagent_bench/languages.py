@@ -2101,6 +2101,16 @@ ALWAYS_LINKED_LANGS = (Language.C, Language.CPP, Language.LLVM_IR, Language.MLIR
 ALWAYS_LINKED_LIBRARIES = ("blas",)
 
 
+def lapacke_link_tokens(lang: Language) -> tuple[str, ...]:
+    """The link tokens of LAPACKE, the C interface the translator's ``LAPACKE_?gesv`` / ``?syevd`` calls go through,
+    placed after BLAS. Ubuntu's OpenBLAS ships without it (liblapacke-dev carries it); a spack OpenBLAS has it
+    built in, so a host where ``-llapacke`` does not link gets nothing and BLAS answers the calls."""
+    libs = pkg_config_answer(("lapacke",), "--libs")
+    link = tuple(t for t in libs if t.startswith(LIBRARY_LINK_PREFIXES)) if libs else ()
+    link = link or ("-llapacke",)
+    return (*link, *rpath_tokens(link)) if library_links(lang, link) else ()
+
+
 def linked_blas(lang: Language, sources: Iterable[pathlib.Path]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """BLAS's ``(compile, link)`` tokens for a ``lang`` build of ``sources`` (:data:`ALWAYS_LINKED_LIBRARIES`).
 
@@ -2108,6 +2118,8 @@ def linked_blas(lang: Language, sources: Iterable[pathlib.Path]) -> tuple[tuple[
         with an undefined symbol, so the build stops here, naming why, instead of at ``dlopen``."""
     tokens = library_build_flags(lang, ALWAYS_LINKED_LIBRARIES)
     if tokens[1]:
+        if any(src.is_file() and "LAPACKE_" in src.read_text(encoding="utf-8", errors="replace") for src in sources):
+            return tokens[0], (*tokens[1], *lapacke_link_tokens(lang))
         return tokens
     for src in sources:
         if src.is_file() and "cblas_" in src.read_text(encoding="utf-8", errors="replace"):
