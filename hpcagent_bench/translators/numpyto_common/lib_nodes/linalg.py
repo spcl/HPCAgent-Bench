@@ -21,6 +21,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalar
 
 __all__ = [
     "LINALG_AW",
+    "SOLVE_LIBRARY_MARKER",
     "GaussJordanSide",
     "cholesky_loop",
     "classify_norm_ord",
@@ -42,6 +43,12 @@ __all__ = [
     "shifted",
     "solve_operand_dtype",
 ]
+
+
+#: ``__solve_library(aw, x, n, nrhs)``: solve ``aw @ x = x`` in place (``aw``: the n x n working copy of A, ``x``:
+#: the right-hand side, overwritten by the solution, n x nrhs or length n), which a target renders as LAPACK
+#: ``?gesv`` (LU with partial pivoting, the routine numpy's own solve calls) in place of the Gauss-Jordan nest.
+SOLVE_LIBRARY_MARKER = "__solve_library"
 
 
 def classify_norm_ord(node: ast.expr | None) -> str | None:
@@ -527,9 +534,11 @@ def expand_linalg_solve(
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
     fresh_local_allocs: dict[str, tuple[str, ...]] | None = None,
+    lapack_library: bool = False,
 ) -> list[ast.stmt]:
     """``x = np.linalg.solve(A, b)`` solves ``Ax = b`` for square A. Implemented
-    as Gauss-Jordan elimination on the augmented [A | b] matrix. Non-Name
+    as Gauss-Jordan elimination on the augmented [A | b] matrix, or under ``lapack_library`` as one
+    :data:`SOLVE_LIBRARY_MARKER` call on the same working copies. Non-Name
     arguments are materialised into fresh locals first, so callers can write
     ``np.linalg.solve(normal + damping * np.diag(scale), -gradient)``. A must
     be 2-D and b 1-D or 2-D; x is written into target with the same shape as b.
@@ -566,6 +575,13 @@ def expand_linalg_solve(
     copy_row = range_for("__sol_j", [const_or_name(b_shape[1])], [copy_rhs]) if is_2d else copy_rhs
     copy_a = ast.Assign(targets=[aw.store("i", "j")], value=GaussJordanSide("__sol", a.id).cell("i", "j"))
     out.append(range_for("__sol_i", [n_ast], [range_for("__sol_j", [n_ast], [copy_a]), copy_row]))
+    if lapack_library:
+        nrhs = const_or_name(b_shape[1]) if is_2d else const_(1)
+        marker = ast.Call(
+            func=name_(SOLVE_LIBRARY_MARKER), args=[name_(aw_name), name_(target.id), n_ast, nrhs], keywords=[]
+        )
+        out.append(ast.Expr(value=marker))
+        return out
 
     def on_a(body: list[ast.stmt]) -> ast.For:
         return range_for("__sol_c", [n_ast], body)

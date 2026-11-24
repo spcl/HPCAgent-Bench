@@ -53,6 +53,7 @@ def call_expander(
     element_dtypes: dict[str, str] | None = None,
     opmath: bool = False,
     sort_library: bool = False,
+    lapack_library: bool = False,
 ) -> list[ast.stmt]:
     """Adapter: pass ``keywords``/``local_dtypes``/``fresh_local_allocs``/``library`` to
     expanders that accept them, else call with the legacy signature. The two
@@ -93,6 +94,8 @@ def call_expander(
         extras["opmath"] = opmath
     if "sort_library" in params:
         extras["sort_library"] = sort_library
+    if "lapack_library" in params:
+        extras["lapack_library"] = lapack_library
     return expander(target, args, shape_table, **extras)
 
 
@@ -364,6 +367,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         "fft_library_nd",
         "fresh_local_allocs",
         "known_arrays",
+        "lapack_library",
         "local_dtypes",
         "matmul_temps",
         "native_call",
@@ -394,6 +398,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         blas_complex: bool = False,
         opmath: bool = False,
         sort_library: bool = False,
+        lapack_library: bool = False,
     ) -> None:
         self.shape_table = shape_table
         #: The kernel's arithmetic on narrow floats (:attr:`KernelIR.opmath`), for the expanders that read it.
@@ -421,6 +426,8 @@ class LibNodeRewriter(ast.NodeTransformer):
         self.fft_library_nd = fft_library_nd
         #: Target renders np.sort / np.argsort as SORT_LIBRARY_MARKER (C, C++, Fortran).
         self.sort_library = sort_library
+        #: Target renders np.linalg.solve as SOLVE_LIBRARY_MARKER (LAPACK ?gesv, numpyto_c only).
+        self.lapack_library = lapack_library
         #: Target's "I render this numpy call myself" predicate. A call it claims is left
         #: UNEXPANDED so the emitter can use its own intrinsic -- Fortran's SUM/MAXVAL/NORM2 --
         #: instead of the loop nest every target would otherwise get. Default: claims nothing.
@@ -708,6 +715,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             element_dtypes=self.native_dtypes,
             opmath=self.opmath,
             sort_library=self.sort_library,
+            lapack_library=self.lapack_library,
         )
 
     def target_renders(self, key: tuple[str, str] | None, call: ast.Call) -> bool:

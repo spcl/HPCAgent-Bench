@@ -107,13 +107,16 @@ class FftInline(ast.NodeTransformer):
 
     numba has no ``np.fft``; pythran lacks N-D ``fftn``, so all variants take one code path. A non-Name
     argument, or a transform nested in a larger expression or a ``return``, is bound to a temp first;
-    a non-constant axis spec leaves the call verbatim. Not applied to :data:`NATIVE_FFT_BACKENDS`."""
+    a non-constant axis spec leaves the call verbatim. Not applied to :data:`NATIVE_FFT_BACKENDS`. ``keep_call``
+    (numba) only binds each transform to its own assignment and keeps numpy's call, which the backend runs through
+    its library (numba: ``objmode``) in place of the O(N^2) loop."""
 
-    __slots__ = ("_ctr", "array_dtypes", "changed", "ranks")
+    __slots__ = ("_ctr", "array_dtypes", "changed", "keep_call", "ranks")
 
-    def __init__(self, ranks: dict[str, int], array_dtypes: dict[str, str]) -> None:
+    def __init__(self, ranks: dict[str, int], array_dtypes: dict[str, str], keep_call: bool = False) -> None:
         self.ranks = ranks
         self.array_dtypes = array_dtypes
+        self.keep_call = keep_call
         self.changed = False
         self._ctr = 0
 
@@ -145,6 +148,8 @@ class FftInline(ast.NodeTransformer):
             return node
         taxes, inverse = fft_axes(fattr, call, rank)
         if not taxes:
+            return node
+        if self.keep_call:
             return node
         pre: list[ast.stmt] = []
         if isinstance(arg, ast.Name):

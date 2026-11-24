@@ -8,10 +8,9 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, r
 
 __all__ = ["OBJMODE_FFT_FUNCS", "FftObjmodeRewriter", "rewrite_fft_to_objmode"]
 
-#: ``np.fft.<attr>`` names rewritten to an ``objmode`` call. ``fft``/``ifft`` only (the single-axis
-#: form fft_1d.yaml uses) -- ``fftn``/``ifftn`` (fft_3d, ls3df_scf, vloc_psi_k_acc,
-#: bout_hasegawa_wakatani, cegterg, vexx_k: every OTHER np.fft user in the corpus) is untouched.
-OBJMODE_FFT_FUNCS = frozenset({"fft", "ifft"})
+#: ``np.fft.<attr>`` names rewritten to an ``objmode`` call: every transform FftInline keeps for numba (the 1-D,
+#: 2-D and N-D forms), so numpy's O(N log N) FFT runs in place of an O(N^2) loop DFT.
+OBJMODE_FFT_FUNCS = frozenset({"fft", "ifft", "fft2", "ifft2", "fftn", "ifftn"})
 
 
 class FftObjmodeRewriter(ast.NodeTransformer):
@@ -23,10 +22,12 @@ class FftObjmodeRewriter(ast.NodeTransformer):
     operand ``ranks`` cannot rank stays a plain call, which numba refuses.
     """
 
-    __slots__ = ("ranks", "used")
+    __slots__ = ("complex_type", "ranks", "used")
 
-    def __init__(self, ranks: dict[str, int]) -> None:
+    def __init__(self, ranks: dict[str, int], complex_type: str = "complex128") -> None:
         self.ranks = ranks
+        #: numpy's result dtype: complex64 for a float32 kernel (NumPy 2 keeps single precision), else complex128.
+        self.complex_type = complex_type
         self.used = False
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
@@ -63,7 +64,9 @@ class FftObjmodeRewriter(ast.NodeTransformer):
                         func=name_("objmode"),
                         args=[],
                         keywords=[
-                            ast.keyword(arg=tmp, value=ast.Constant(value=f"complex128[{','.join(':' * rank)}]"))
+                            ast.keyword(
+                                arg=tmp, value=ast.Constant(value=f"{self.complex_type}[{','.join(':' * rank)}]")
+                            )
                         ],
                     ),
                     optional_vars=None,
@@ -75,12 +78,12 @@ class FftObjmodeRewriter(ast.NodeTransformer):
         return [with_block, assign_back]
 
 
-def rewrite_fft_to_objmode(src: str, ranks: dict[str, int]) -> tuple[str, bool]:
+def rewrite_fft_to_objmode(src: str, ranks: dict[str, int], complex_type: str = "complex128") -> tuple[str, bool]:
     """``src`` with every ``np.fft.fft``/``ifft`` assignment of a ranked operand routed through ``objmode`` (see
     :class:`FftObjmodeRewriter`). Returns ``(rewritten_src, used)`` -- ``used`` tells the caller
     whether to add the ``objmode`` import."""
     tree = ast.parse(src)
-    rewriter = FftObjmodeRewriter(ranks)
+    rewriter = FftObjmodeRewriter(ranks, complex_type)
     tree = rewriter.visit(tree)
     if not rewriter.used:
         return src, False

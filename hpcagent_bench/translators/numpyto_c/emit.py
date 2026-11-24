@@ -46,6 +46,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     BLAS_GEMM_STRIDED_MARKER,
     FFT_LIBRARY_MARKER,
     FFTN_LIBRARY_MARKER,
+    SOLVE_LIBRARY_MARKER,
     SORT_LIBRARY_MARKER,
 )
 from hpcagent_bench.translators.numpyto_common.limits import FIXPOINT_ROUNDS
@@ -56,6 +57,7 @@ from hpcagent_bench.translators.numpyto_common.lowering import (
     walk_complex,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import negative_literal_offset
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.eigh import EIGH_LIBRARY_MARKER
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.statement_desugar import binding_names
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
@@ -621,8 +623,13 @@ class CBodyEmitter(BaseEmitter):
             isinstance(node, ast.Expr)
             and isinstance(node.value, ast.Call)
             and isinstance(node.value.func, ast.Name)
-            and node.value.func.id in (FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER, SORT_LIBRARY_MARKER)
+            and node.value.func.id
+            in (FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER, SORT_LIBRARY_MARKER, SOLVE_LIBRARY_MARKER, EIGH_LIBRARY_MARKER)
         ):
+            if node.value.func.id == EIGH_LIBRARY_MARKER:
+                return self.emit_eigh_library(node.value, indent)
+            if node.value.func.id == SOLVE_LIBRARY_MARKER:
+                return self.emit_solve_library(node.value, indent)
             if node.value.func.id == SORT_LIBRARY_MARKER:
                 return self.emit_sort_library(node.value, indent)
             if node.value.func.id == FFTN_LIBRARY_MARKER:
@@ -1616,6 +1623,69 @@ class CBodyEmitter(BaseEmitter):
             f"{zero}, {out}, (blasint)({ldc}))"
         )
         return f"{{ {declarations}{call}; }}" if declarations else call
+
+    def emit_eigh_library(self, node: ast.Call, indent: str) -> str:
+        """Render the eigh marker (see EIGH_LIBRARY_MARKER) as one LAPACKE ``?syevd`` / ``?heevd``: ``y`` (n x n,
+        row-major) holds the Hermitian matrix and is overwritten by the eigenvector columns, ``w`` by the ascending
+        eigenvalues."""
+        w, y, n_node = node.args
+        if not isinstance(w, ast.Name) or not isinstance(y, ast.Name):
+            raise NotImplementedError("eigh library call: operands must be Names")
+        dtype = self.dtype_for_name(y.id) or ""
+        routines = {
+            "float32": ("ssyevd", "float"),
+            "float64": ("dsyevd", "double"),
+            "complex64": ("cheevd", "lapack_complex_float"),
+            "complex128": ("zheevd", "lapack_complex_double"),
+        }
+        if dtype not in routines:
+            raise NotImplementedError(f"eigh library call: no LAPACK routine for dtype {dtype!r}")
+        routine, ctype = routines[dtype]
+        n = self.emit_expr(n_node)
+        return "\n".join(
+            [
+                f"{indent}{{",
+                f"{indent}  /* {w.id}, {y.id} = eigh(A): A {y.id} = {y.id} diag({w.id}) for the Hermitian n x n A, n = {n}; "
+                f"eigenvalues ascending, eigenvectors in the columns; LAPACK {routine} (lower triangle) */",
+                f"{indent}  lapack_int __eig_n = (lapack_int)({n});",
+                f"{indent}  LAPACKE_{routine}(LAPACK_ROW_MAJOR, 'V', 'L', __eig_n, ({ctype} *)({y.id}), __eig_n, {w.id});",
+                f"{indent}}}",
+            ]
+        )
+
+    def emit_solve_library(self, node: ast.Call, indent: str) -> str:
+        """Render the solve marker (see SOLVE_LIBRARY_MARKER) as one LAPACKE ``?gesv`` on the row-major working copies:
+        ``aw`` (n x n, overwritten by its LU factors) and ``x`` (the right-hand side, overwritten by the solution)."""
+        aw, x, n_node, nrhs_node = node.args
+        if not isinstance(aw, ast.Name) or not isinstance(x, ast.Name):
+            raise NotImplementedError("np.linalg.solve library call: operands must be Names")
+        dtype = self.dtype_for_name(aw.id) or self.dtype_for_name(x.id) or ""
+        routines = {
+            "float32": ("s", "float"),
+            "float64": ("d", "double"),
+            "complex64": ("c", "lapack_complex_float"),
+            "complex128": ("z", "lapack_complex_double"),
+        }
+        if dtype not in routines:
+            raise NotImplementedError(f"np.linalg.solve library call: no LAPACK routine for dtype {dtype!r}")
+        letter, ctype = routines[dtype]
+        n, nrhs = self.emit_expr(n_node), self.emit_expr(nrhs_node)
+        return "\n".join(
+            [
+                f"{indent}{{",
+                f"{indent}  /* {x.id} = solve(A, B): A {x.id} = B for the n x n A, n = {n}, nrhs = {nrhs}; "
+                f"LAPACK {letter}gesv (LU with partial pivoting) */",
+                f"{indent}  lapack_int __sol_n = (lapack_int)({n});",
+                f"{indent}  lapack_int *__sol_ipiv = (lapack_int *)malloc((size_t)__sol_n * sizeof(lapack_int));",
+                alloc_check("__sol_ipiv", "(size_t)__sol_n * sizeof(lapack_int)", f"{indent}  "),
+                (
+                    f"{indent}  LAPACKE_{letter}gesv(LAPACK_ROW_MAJOR, __sol_n, (lapack_int)({nrhs}), ({ctype} *)({aw.id}), "
+                    f"__sol_n, __sol_ipiv, ({ctype} *)({x.id}), (lapack_int)({nrhs}));"
+                ),
+                f"{indent}  free(__sol_ipiv);",
+                f"{indent}}}",
+            ]
+        )
 
     def emit_fft_library(self, node: ast.Call, indent: str) -> str:
         """Render the 1-D FFT marker as an FFTW3 plan/execute/destroy sequence -- O(N log N).
@@ -3029,6 +3099,18 @@ def blas_include(body: str) -> str:
     return "#include <cblas.h>\n" if "cblas_" in body else ""
 
 
+def lapack_include(body: str) -> str:
+    """``#include <lapacke.h>`` when this body calls a LAPACKE routine (OpenBLAS ships it), else nothing. Its complex
+    types are the kernel's own ``_Complex`` ones (LAPACK_COMPLEX_CUSTOM): the default pulls in <complex.h>, whose bare
+    ``I`` macro would collide with a kernel variable named ``I``."""
+    if "LAPACKE_" not in body:
+        return ""
+    return (
+        "#define LAPACK_COMPLEX_CUSTOM\n#define lapack_complex_float float _Complex\n"
+        "#define lapack_complex_double double _Complex\n#include <lapacke.h>\n"
+    )
+
+
 def fftw_include(body: str) -> str:
     """``#include <fftw3.h>`` when this body calls fftw(f)_plan_dft_1d / _plan_many_dft, else nothing.
 
@@ -3854,7 +3936,7 @@ def c_family_source(
     prelude, epilogue, footer = (CPP_PRELUDE, CPP_EPILOGUE, CPP_FOOTER) if cpp else (C_PRELUDE, C_EPILOGUE, "")
     calls = helpers + body
     return (
-        f"{sort_includes(calls, cpp)}{header}{blas_include(body)}{fftw_include(body)}{fp8_prelude(kir)}"
+        f"{sort_includes(calls, cpp)}{header}{blas_include(body)}{lapack_include(body)}{fftw_include(body)}{fp8_prelude(kir)}"
         f"{sort_helpers(calls, cpp)}\n{consts}{helpers}{signature} {{\n{prelude}{body}\n{epilogue}}}\n{footer}"
     )
 

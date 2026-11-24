@@ -272,13 +272,25 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             NormalizeNegativeAxis(ranks),
             IxWriteToLoop(ranks, dtypes, fn),
             FancySliceStoreToLoop(ranks, dtypes),
-            EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes, keep_library=backend == "dace"),
+            # numba calls LAPACK through np.linalg.eigh; the Jacobi loop nest is O(N^3) per sweep (eigh_generalized timed out).
+            EighInline(
+                ranks,
+                eigh_aliases,
+                dtypes,
+                kir_array_dtypes,
+                keep_library=backend in ("dace", "numba"),
+                keep_uplo=backend == "dace",
+            ),
             ValueHoist(LINALG_HOIST, tables),
             # dace lowers batched and reshape-wrapped matmul and einsum itself, to library nodes.
             *([] if backend == "dace" else [ReshapeMatmulInline(ranks, widths), BatchedMatmulToLoop(ranks, widths)]),
             PadInline(ranks, lower_symbolic_constant=backend == "dace"),
             *([] if backend == "dace" else [ValueHoist(EINSUM_HOIST, tables)]),
-            *([] if backend in NATIVE_FFT_BACKENDS else [FftInline(ranks, kir_array_dtypes)]),
+            *(
+                []
+                if backend in NATIVE_FFT_BACKENDS
+                else [FftInline(ranks, kir_array_dtypes, keep_call=backend == "numba")]
+            ),
             MgridInline(),
             ValueHoist(FANCY_GATHER_HOIST, tables),
             ValueHoist(DACE_REDUCE_AXIS_HOIST if backend == "dace" else REDUCE_AXIS_HOIST, tables),

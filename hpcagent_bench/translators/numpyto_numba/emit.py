@@ -188,7 +188,8 @@ def emit_numba(numpy_source: str, fastmath: bool = False, kir: KernelIR | None =
             numpy_source = narrow_float_literals(numpy_source)
     numpy_source = rewrite_lstsq_rcond(numpy_source)
     ranks = {} if kir is None else {array.name: len(array.shape) for array in kir.arrays}
-    numpy_source, uses_objmode = rewrite_fft_to_objmode(numpy_source, ranks)
+    complex_type = "complex64" if kir is not None and declares_float32(kir) else "complex128"
+    numpy_source, uses_objmode = rewrite_fft_to_objmode(numpy_source, ranks, complex_type)
     numpy_source = spell_out_overlapping_augassigns(numpy_source)
     parallel = emits_parallel(numpy_source)
     copier = None

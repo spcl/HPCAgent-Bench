@@ -12,11 +12,13 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.linalg import chole
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
 __all__ = [
+    "EIGH_LIBRARY_MARKER",
     "EighCallHoister",
     "EighInline",
     "EighLoopRewriter",
     "eigh_c_stmts",
     "eigh_jacobi_lines",
+    "eigh_library_lines",
     "eigh_operand_is_real",
     "eigh_stmts",
     "eigh_w_dtype",
@@ -66,6 +68,29 @@ def eigh_w_dtype(is_real: bool, names: tuple[str, str | None], array_dtypes: dic
         except KeyError:
             return f"np.{dtypes.canonical(dtype)}"
     return "np.float64"
+
+
+#: ``__eigh_library(w, y, n)``: the Hermitian ``n`` x ``n`` matrix in ``y`` replaced by its unit eigenvector columns,
+#: ``w`` filled with the ascending eigenvalues (numpy's order), which a target renders as LAPACK ``?syevd`` /
+#: ``?heevd`` (lower triangle, numpy's default UPLO) in place of the Jacobi sweeps.
+EIGH_LIBRARY_MARKER = "__eigh_library"
+
+
+def eigh_library_lines(
+    w: str, y: str, c: str, n: str, p: str, is_real: bool = False, w_dtype: str | None = None
+) -> list[str]:
+    """The lines of :func:`eigh_jacobi_lines`'s contract (``w`` ascending eigenvalues, ``y`` eigenvector columns of
+    ``c``) as one :data:`EIGH_LIBRARY_MARKER` call on a copy of ``c``. ``is_real`` is unused: LAPACK picks the
+    routine from ``y``'s dtype."""
+    del is_real
+    return [
+        f"{y} = np.zeros(({n}, {n}), {c}.dtype)",
+        f"for {p}_li in range({n}):",
+        f"    for {p}_lj in range({n}):",
+        f"        {y}[{p}_li, {p}_lj] = {c}[{p}_li, {p}_lj]",
+        f"{w} = np.zeros({n}, {w_dtype or f'{c}.dtype'})",
+        f"{EIGH_LIBRARY_MARKER}({w}, {y}, {n})",
+    ]
 
 
 def eigh_jacobi_lines(
@@ -216,6 +241,7 @@ def eigh_c_stmts(
     eigenvalues_only: bool = False,
     is_real: bool = False,
     w_dtype: str | None = None,
+    lapack: bool = False,
 ) -> list[str]:
     """Explicit-loop lowering of standard/generalized Hermitian ``eigh`` for C/Fortran, which
     have no ``np.linalg`` and no matmul lowering for the ``L^-H`` operand.
@@ -225,7 +251,8 @@ def eigh_c_stmts(
     ``+=``-accumulated; a typed complex zero is spelled ``z - z``.
 
     ``eigenvalues_only`` (eigvalsh) binds only ``w`` and skips the back-transform; ``v`` is
-    ``None``. ``is_real`` must not be set with ``b``: the generalized ``Cm`` takes ``b.dtype``."""
+    ``None``. ``is_real`` must not be set with ``b``: the generalized ``Cm`` takes ``b.dtype``. ``lapack`` replaces
+    the Jacobi solve with :func:`eigh_library_lines` (one LAPACK call); the reduction and back-transform stay."""
     n = f"{a}.shape[0]"
     lines: list[str] = []
     Li = f"{p}_Li"
@@ -270,7 +297,8 @@ def eigh_c_stmts(
             f"    for {p}_cj in range({n}):",
             f"        {cname}[{p}_ci, {p}_cj] = {a}[{p}_ci, {p}_cj]",
         ]
-    lines += eigh_jacobi_lines(f"{p}_wa", f"{p}_ya", cname, n, p, is_real=is_real, w_dtype=w_dtype)
+    solve = eigh_library_lines if lapack else eigh_jacobi_lines
+    lines += solve(f"{p}_wa", f"{p}_ya", cname, n, p, is_real=is_real, w_dtype=w_dtype)
     if eigenvalues_only:
         lines.append(f"{w} = {p}_wa" if lo == "None" else f"{w} = {p}_wa[{lo}:{hi}]")
         return lines
@@ -336,7 +364,7 @@ class EighLoopRewriter(ast.NodeTransformer):
     helper's names are known only through ``kind_tables`` (:func:`module_kind_tables`).
     ``dtypes`` is the declared kind table (manifest arrays and preset scalars)."""
 
-    __slots__ = ("_ctr", "alias_names", "array_dtypes", "declared", "dtypes", "keep_library", "kind_tables")
+    __slots__ = ("_ctr", "alias_names", "array_dtypes", "declared", "dtypes", "keep_library", "kind_tables", "lapack")
 
     def __init__(
         self,
@@ -345,8 +373,11 @@ class EighLoopRewriter(ast.NodeTransformer):
         kind_tables: Mapping[str, dict[str, str]] | None = None,
         array_dtypes: dict[str, str] | None = None,
         keep_library: bool = False,
+        lapack: bool = False,
     ) -> None:
         self.alias_names = alias_names
+        #: The eigensolver step is one EIGH_LIBRARY_MARKER call (LAPACK) in place of the Jacobi sweeps.
+        self.lapack = lapack
         #: Leave a :func:`library_eigh_call` as it is, for a backend that lowers it to its own library node.
         self.keep_library = keep_library
         self.declared = dtypes
@@ -405,7 +436,17 @@ class EighLoopRewriter(ast.NodeTransformer):
         is_real = b_node is None and eigh_operand_is_real(a_node, b_node, self.dtypes)
         w_dtype = eigh_w_dtype(is_real, (aname, bname), self.array_dtypes)
         lines = pre + eigh_c_stmts(
-            w, v, aname, bname, lo, hi, p, eigenvalues_only=(v is None), is_real=is_real, w_dtype=w_dtype
+            w,
+            v,
+            aname,
+            bname,
+            lo,
+            hi,
+            p,
+            eigenvalues_only=(v is None),
+            is_real=is_real,
+            w_dtype=w_dtype,
+            lapack=self.lapack,
         )
         return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
 
@@ -499,7 +540,7 @@ class EighInline(ast.NodeTransformer):
     Runs before :data:`LINALG_HOIST` so the cholesky/inv it emits are lowered for pythran.
     ``dtypes`` is the per-function kind table (:func:`dtype_table_`)."""
 
-    __slots__ = ("_ctr", "alias_names", "array_dtypes", "changed", "dtypes", "keep_library", "ranks")
+    __slots__ = ("_ctr", "alias_names", "array_dtypes", "changed", "dtypes", "keep_library", "keep_uplo", "ranks")
 
     def __init__(
         self,
@@ -508,10 +549,15 @@ class EighInline(ast.NodeTransformer):
         dtypes: dict[str, str],
         array_dtypes: dict[str, str] | None = None,
         keep_library: bool = False,
+        keep_uplo: bool = True,
     ) -> None:
         self.ranks = ranks
-        #: Leave a :func:`library_eigh_call` as it is, for a backend that lowers it to its own library node.
+        #: Leave a :func:`library_eigh_call` as it is, for a backend that lowers it to its own library node or
+        #: calls LAPACK itself (numba's ``np.linalg.eigh``).
         self.keep_library = keep_library
+        #: Whether the kept call may carry ``UPLO`` (numba's ``eigh`` takes the matrix alone: one with ``UPLO`` is
+        #: lowered).
+        self.keep_uplo = keep_uplo
         self.alias_names = alias_names
         self.dtypes = dtypes
         #: Declared array dtypes, for the eigenvalue width a complex operand cannot spell.
@@ -526,7 +572,11 @@ class EighInline(ast.NodeTransformer):
         hit = eigh_call_kind(node.value, self.alias_names)
         if hit is None:
             return node
-        if self.keep_library and library_eigh_call(node.value):
+        if (
+            self.keep_library
+            and library_eigh_call(node.value)
+            and (self.keep_uplo or not isinstance(node.value, ast.Call) or not node.value.keywords)
+        ):
             self._ctr += 1
             return kept_eigh_stmts(node, f"__eighk{self._ctr - 1}_a")
         kind, a_node, b_node, kw = hit
