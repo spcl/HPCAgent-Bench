@@ -16,6 +16,7 @@ from hpcagent_bench.numerical_oracle import DACE, run_kernel
 from hpcagent_bench.spec import KERNELS, BenchSpec
 from tests.own_process import checkout_env
 from tests.test_dace_frontend_validity import REFUSED, REPO, ensure_dace_program, shard_of
+from tests.test_e2e_numerical import subset_stems
 
 #: Tracks this gate covers. ``machine_learning`` is DELIBERATELY out of scope, not truncated: its
 #: conv/transpose graphs are the heaviest ``to_sdfg`` + compile in the corpus, and the frontend
@@ -43,7 +44,7 @@ NUMERIC_ML: tuple[str, ...] = (
     "instance_norm",
 )
 
-#: A LOCAL dev subset, not a CI tier -- CI runs the full gated set on every push. Picked for dwarf
+#: A LOCAL dev subset, not a CI tier (CI runs :func:`numeric_kernels`). Picked for dwarf
 #: spread so ``HPCAGENT_BENCH_DACE_NUMERIC_SET=smoke`` gives a two-minute answer while iterating on
 #: the emitter, rather than the ten-minute one. Every entry was verified absent from ``REFUSED`` and
 #: to yield a well-formed case (the C leg is ``ok`` on all of them), so a disagreement here is
@@ -75,9 +76,12 @@ SMOKE: tuple[str, ...] = (
     "fft_1d",
 )
 
-#: ``smoke`` runs :data:`SMOKE`; anything else runs the whole gated corpus. The default is FULL, and
-#: CI never sets it -- a subset is a thing a developer opts into, never something CI silently gets.
+#: ``smoke`` runs :data:`SMOKE`; anything else runs :func:`numeric_kernels`. CI never sets it.
 NUMERIC_SET = os.environ.get("HPCAGENT_BENCH_DACE_NUMERIC_SET", "full").strip() or "full"
+
+#: ``"1"`` on a push or pull request, ``"0"`` on a dispatched run (the workflow's top-level env): the e2e sweep's
+#: per-push slice switch, which this gate follows.
+PER_PUSH_SLICE = os.environ.get("HPCAGENT_BENCH_E2E_SUBSET", "").strip() == "1"
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -118,20 +122,34 @@ def gated_kernels() -> tuple[str, ...]:
     return tuple(out)
 
 
-def selected_kernels() -> list[str]:
-    """The gated kernels this run checks: the smoke set, or this CI shard of the whole gate
-    (``HPCAGENT_BENCH_DACE_PARSE_SHARD``, the frontend's split; every kernel when unsharded)."""
+def numeric_kernels() -> tuple[str, ...]:
+    """The gated kernels this run builds and compares with numpy.
+
+    A dispatched run takes every gated kernel. A push takes the e2e sweep's per-push slice
+    (:func:`tests.test_e2e_numerical.subset_stems`: the coverage set, the pinned witnesses and every level-3
+    application), plus :data:`NUMERIC_ML` and :data:`SMOKE`; the frontend gate parses the rest
+    (:func:`tests.test_dace_frontend_validity.generated_programs`), a static check of what the generator emits.
+    """
     gated = gated_kernels()
+    if not PER_PUSH_SLICE:
+        return gated
+    keep = {*subset_stems(), *NUMERIC_ML, *SMOKE}
+    return tuple(k for k in gated if k in keep)
+
+
+def selected_kernels() -> list[str]:
+    """The kernels this run checks: the smoke set, or this CI shard of :func:`numeric_kernels`
+    (``HPCAGENT_BENCH_DACE_PARSE_SHARD``, the frontend's split; every kernel when unsharded)."""
     if NUMERIC_SET == "smoke":
-        return [k for k in gated if k in SMOKE]
-    return list(shard_of(list(gated)))
+        return [k for k in gated_kernels() if k in SMOKE]
+    return list(shard_of(list(numeric_kernels())))
 
 
 def prewarm() -> int:
     """Emit the programs THIS gate runs, once, before xdist forks; returns how many exist.
 
-    CI calls this instead of ``generated_programs()``. That one emits the whole registry, and this
-    gate opens 400 of its 661 kernels: measured, the corpus costs 596 s to emit and the
+    CI calls this instead of ``generated_programs()``. That one emits what this gate does not run, and the whole
+    gate opens 400 of the registry's 661 kernels: measured, the corpus costs 596 s to emit and the
     gated slice 111 s, so five sixths of the pre-warm was programs nothing here ever reads. The
     ``machine_learning`` track is most of the difference and most of the cost -- densenet201 alone
     is 100 s -- and :data:`GATED_TRACKS` deliberately leaves it out.

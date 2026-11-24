@@ -948,8 +948,9 @@ jobs:
         with:
           coverage: mpi
 
-  # The generated DaCe corpus still computes what numpy computes: a C++ build and a run per kernel. One runner per
-  # half of the corpus (about 20 minutes each): both halves on one runner ran past their caps.
+  # The generated DaCe corpus still computes what numpy computes: a C++ build and a run per kernel. A push runs the
+  # e2e per-push slice (about 100 kernels; dace-frontend parses the rest), a dispatched run every gated kernel. One
+  # runner per half (the whole corpus took about 20 minutes a half; both halves on one runner ran past the caps).
   dace-numeric:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: dace-numeric[${{ matrix.index }}] (the generated DaCe corpus vs numpy)

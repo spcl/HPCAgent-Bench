@@ -33,6 +33,13 @@
   `bump` (run by `pins.sh --bump`) moves each pin to the newest PyPI release. NestForge (tactics) keeps its
   commit pin until its first PyPI release.
 
+### CI
+
+- The DaCe numeric gate builds and runs the e2e per-push slice (101 of 446 kernels) on a push and every gated kernel
+  on a dispatched run; the parse gate checks the rest statically. The lowering and parse gates skip what the
+  numeric gate runs. Duplicate secret-seed and numba cases are gone, generated numba runs on 24 threads only, and
+  CI prints every test slower than 5 s.
+
 ### Studies and skills
 
 - The `solvers` tag, the `solver14` study built on it (experiment, study registry, baselines, run roots, notes) and
