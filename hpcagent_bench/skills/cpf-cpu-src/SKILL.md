@@ -21,8 +21,9 @@ heuristics, not measurements.
 
 The file opens with a header. Read it first: it is written for this file alone.
 
-- **The legend** explains every loop class and every reason that appears in this file, and nothing else.
-  When a loop comment uses a word you do not know, the legend says what it means and what it allows.
+- **The legend** says what each class means, then gives a table with one row per reason this file uses:
+  its class, its opening words, what it means, and what would make the loop parallel or what to do. A
+  summary lists each class's loops. A file whose work is only library calls has no table.
 - **`// cpf: proven: all`**: every loop's class is proven. No loop needs a check at run time beyond the
   entry preconditions. The parallelism is settled; scheduling and tuning remain.
 - **`// cpf: proven: partial; open: i, i2`**: the named loops are `unknown`. They run in order, and the
@@ -61,6 +62,8 @@ The rules below hold for every class and reason:
   `for` marks a hoisted region: every thread runs the code inside, and only the `omp for` loops share
   work. A statement you add there runs once per thread.
 - **`alt:` lines name an equivalent form the pipeline did not take.** Both forms are correct.
+- **`copy:` lines mark a copy between arrays** (`copy: b[1:N - 1] into a[1:N - 1]`); the loop below it
+  carries its own class.
 - **Each comment orders only its own loop.** Loops inside and around it keep their own comments.
 
 Operations lifted out of their loops into a helper (a reduction over axes, a library call such as
