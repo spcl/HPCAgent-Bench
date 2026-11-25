@@ -86,7 +86,9 @@ def test_every_upper_bound_or_pin_says_why(entry: Entry) -> None:
 def workspace_members() -> set[str]:
     """The packages ``[tool.uv.sources]`` takes from this workspace: released together with this one."""
     sources = tomllib.loads(source())["tool"]["uv"]["sources"]
-    return {canonicalize_name(name) for name, spec in sources.items() if isinstance(spec, dict) and spec.get("workspace")}
+    return {
+        canonicalize_name(name) for name, spec in sources.items() if isinstance(spec, dict) and spec.get("workspace")
+    }
 
 
 def test_exact_pins_live_only_in_the_dependency_groups() -> None:
