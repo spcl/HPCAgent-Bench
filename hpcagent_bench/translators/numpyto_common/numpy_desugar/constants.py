@@ -585,3 +585,81 @@ def substitute_loads(fn: ast.FunctionDef, subst: dict[str, Value]) -> bool:
     changed = any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in subst for n in walk_nodes(fn))
     literal_loads(subst).visit(fn)
     return changed
+
+
+class LiteralIfExpFold(ast.NodeTransformer):
+    """``a if 1 == 0 else b`` -> ``b``: a conditional expression whose test compares two literals."""
+
+    def visit_IfExp(self, node: ast.IfExp) -> ast.expr:
+        """The arm a literal comparison picks; other conditionals stay."""
+        self.generic_visit(node)
+        test = node.test
+        if not (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.left, ast.Constant)
+            and isinstance(test.comparators[0], ast.Constant)
+            and type(test.ops[0]) in COMPARE_OPS
+        ):
+            return node
+        taken = COMPARE_OPS[type(test.ops[0])](test.left.value, test.comparators[0].value)
+        return node.body if taken else node.orelse
+
+
+def call_literals(fn: ast.FunctionDef, call: ast.Call) -> dict[str, int] | None:
+    """The integer literals ``call`` passes ``fn``'s parameters, by name, positional or keyword; None when ``call``
+    passes a starred argument or a keyword ``fn`` does not name."""
+    names = [a.arg for a in fn.args.args]
+    if any(isinstance(a, ast.Starred) for a in call.args) or any(k.arg not in names for k in call.keywords):
+        return None
+    passed = dict(zip(names, call.args, strict=False)) | {k.arg: k.value for k in call.keywords if k.arg}
+    return {
+        name: value.value
+        for name, value in passed.items()
+        if isinstance(value, ast.Constant) and type(value.value) is int
+    }
+
+
+def specialize_helpers_by_literal(tree: ast.Module, kernel_name: str) -> bool:
+    """Clone a helper per integer literal its call sites pass one parameter differently (numba only): max_filter's
+    ``running_max(..., axis=1)`` and ``running_max(..., axis=0)``. Each clone reads its literal, so a branch on it
+    folds and numba types one arm (``np.pad`` by a ``pad_width`` the ``axis`` picks). Only a parameter every call
+    passes a literal, that the body never rebinds, and only for a helper no value or nested scope reaches."""
+    helpers = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name != kernel_name}
+    sites, escaped = helper_call_sites(tree, helpers)
+    changed = False
+    for name, fn in helpers.items():
+        calls = sites.get(name, [])
+        if len(calls) < 2 or name in escaped or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs:
+            continue
+        if any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in walk_nodes(fn)):
+            continue
+        literals = [call_literals(fn, c) for c in calls]
+        if any(lit is None for lit in literals):
+            continue
+        stores = name_store_counts(fn)
+        split = [
+            a.arg
+            for a in fn.args.args
+            if stores.get(a.arg) == 1
+            and all(lit is not None and a.arg in lit for lit in literals)
+            and len({lit[a.arg] for lit in literals if lit is not None}) > 1
+        ]
+        if not split:
+            continue
+        clones: dict[tuple[int, ...], str] = {}
+        at = tree.body.index(fn)
+        for call, lit in zip(calls, literals, strict=True):
+            assert lit is not None
+            key = tuple(lit[p] for p in split)
+            if key not in clones:
+                clone = copy.deepcopy(fn)
+                clone.name = f"{name}_{'_'.join(str(v).replace('-', 'm') for v in key)}"
+                substitute_loads(clone, {p: lit[p] for p in split})
+                LiteralIfExpFold().visit(clone)
+                clones[key] = clone.name
+                at += 1
+                tree.body.insert(at, clone)
+            call.func = ast.Name(id=clones[key], ctx=ast.Load())
+        changed = True
+    return changed

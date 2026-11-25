@@ -5,6 +5,9 @@
 One case per pattern, each from the kernel whose numba e2e check it turned into ``skip:unsupported``. The op-oracle
 emits through the desugar the real oracle uses, so ``ok`` means lowered and equal to numpy."""
 
+import importlib.util
+import pathlib
+
 import numpy as np
 
 from tests.translators.op_oracle import run_op
@@ -294,3 +297,113 @@ def test_a_helper_tuple_element_keeps_its_rank_on_numba() -> None:
     p = np.linspace(-1.0, 2.0, 12).reshape(4, 3)
     shapes = {"m": "(N, 1)", "p": "(N, 3)", "out": "(1,)"}
     assert numba(src, {"m": m, "p": p}, {"out": (1,)}, {"N": 4}, shapes) == "ok"
+
+
+def test_a_tuple_element_built_from_unranked_names_stays_unranked() -> None:
+    """The rank table gives ``8.0 * (a * b)`` rank 0 when ``a`` and ``b`` have none, so a returned tuple element of
+    rank 0 is no evidence of a scalar: ranking the unpacked name 0 would make a peel broadcast an array as one."""
+    import ast
+
+    from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import rank_table, tuple_return_ranks
+
+    fn = ast.parse("def h(x, f):\n    b = x * 2.0\n    v = 8.0 * (f(x) * f(x))\n    return b, v\n").body[0]
+    assert isinstance(fn, ast.FunctionDef)
+    assert tuple_return_ranks(fn, rank_table(fn, {"x": 2})) == [2, None]
+
+
+def test_a_comparison_against_an_inline_arange_column_matches_numpy_on_numba() -> None:
+    """cp2k_density_matrix_trs4's ``np.where(row_cols == np.arange(n)[:, None], 1, 0)``: numba asserted on the
+    same-rank broadcast, and the peel declined the computed ``np.arange`` base."""
+    src = "import numpy as np\ndef f(rc, out):\n out[:] = np.where(rc == np.arange(3)[:, None], 1, 0)\n"
+    rc = np.array([[0, 1], [1, 1], [2, 0]], dtype=np.int64)
+    shapes = {"rc": "(N, F)", "out": "(N, F)"}
+    dtypes = {"rc": "int64", "out": "int64"}
+    assert numba(src, {"rc": rc}, {"out": (3, 2)}, {"N": 3, "F": 2}, shapes, dtypes) == "ok"
+
+
+def test_a_block_product_through_a_computed_gather_matches_numpy_on_numba() -> None:
+    """cp2k_density_matrix_trs4's ``np.sum(a[:, None, :, :, None] * b[b_pos][:, :, None, :, :], axis=3)`` with
+    ``b_pos = b_base[:, None] + np.arange(f)[None, :]``: the kind table cannot tell ``b_pos`` an integer array, so the
+    peel had no axes for the gather and numba asserted on the 5-D broadcast."""
+    src = (
+        "import numpy as np\n"
+        "def f(a, b, c, out):\n"
+        " b_base = c * 2\n"
+        " b_pos = b_base[:, None] + np.arange(2)[None, :]\n"
+        " a_expand = a[:, None, :, :, None]\n"
+        " b_expand = b[b_pos][:, :, None, :, :]\n"
+        " out[:] = np.sum(a_expand * b_expand, axis=3)\n"
+    )
+    a = np.linspace(-1.0, 1.0, 12).reshape(3, 2, 2)
+    b = np.linspace(0.5, 2.0, 24).reshape(6, 2, 2)
+    c = np.array([2, 0, 1], dtype=np.int64)
+    shapes = {"a": "(N, B, B)", "b": "(M, B, B)", "c": "(N,)", "out": "(N, 2, B, B)"}
+    dtypes = {"a": "float64", "b": "float64", "c": "int64", "out": "float64"}
+    syms = {"N": 3, "B": 2, "M": 6}
+    assert numba(src, {"a": a, "b": b, "c": c}, {"out": (3, 2, 2, 2)}, syms, shapes, dtypes) == "ok"
+
+
+def test_a_constant_pad_matches_numpy_on_numba() -> None:
+    """max_filter's ``np.pad(x, ..., mode="constant", constant_values=-np.inf)``: numba has no ``np.pad``, and the
+    constant mode was lowered for dace alone."""
+    src = (
+        "import numpy as np\n"
+        "def f(x, out):\n"
+        " y = np.pad(x, ((0, 0), (1, 2)), mode='constant', constant_values=-1.0)\n"
+        " out[:] = y\n"
+    )
+    x = np.linspace(0.0, 1.0, 6).reshape(2, 3)
+    assert numba(src, {"x": x}, {"out": (2, 6)}, {"A": 2, "B": 3}, {"x": "(A, B)", "out": "(A, 6)"}) == "ok"
+
+
+def test_a_pad_width_bound_to_a_name_matches_numpy_on_numba() -> None:
+    """max_filter's ``pad_width = ((0, 0), (0, tail)); np.pad(x, pad_width, ...)``: the bare name read as one width
+    for every side, so the pad stayed and numba rejected it."""
+    src = (
+        "import numpy as np\n"
+        "def f(x, out):\n"
+        " tail = x.shape[1] - 1\n"
+        " pad_width = ((0, 0), (0, tail))\n"
+        " y = np.pad(x, pad_width, mode='constant', constant_values=-1.0)\n"
+        " out[:] = y\n"
+    )
+    x = np.linspace(0.0, 1.0, 6).reshape(2, 3)
+    assert numba(src, {"x": x}, {"out": (2, 5)}, {"A": 2, "B": 3}, {"x": "(A, B)", "out": "(A, 5)"}) == "ok"
+
+
+def test_a_helper_called_with_two_axis_literals_matches_numpy_on_numba() -> None:
+    """max_filter's ``running_max(..., axis=1)`` and ``running_max(..., axis=0)``: ``pad_width = (...) if axis == 0
+    else (...)`` has a tuple of another shape per arm, which numba cannot unify; one clone per literal folds it."""
+    src = (
+        "import numpy as np\n"
+        "def grow(x, axis):\n"
+        " pad_width = ((0, 1), (0, 0)) if axis == 0 else ((0, 0), (0, 1))\n"
+        " y = np.pad(x, pad_width, mode='constant', constant_values=0.0)\n"
+        " return y\n"
+        "def f(x, out):\n"
+        " out[:] = grow(x, axis=0) + grow(x.T, axis=1).T\n"
+    )
+    x = np.linspace(0.0, 1.0, 9).reshape(3, 3)
+    assert numba(src, {"x": x}, {"out": (4, 3)}, {"N": 3}, {"x": "(N, N)", "out": "(4, N)"}) == "ok"
+
+
+def test_a_running_maximum_along_an_axis_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """max_filter's ``np.maximum.accumulate(blocks, axis=-1)``: numba has no ``ufunc.accumulate``. Emitted the way
+    ``write_numba`` does (the parsed, unlowered IR): the op-oracle's lowering rejects the call before any desugar."""
+    from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
+    from tests.translators.op_oracle import parse_source
+
+    src = "import numpy as np\ndef f(x, out):\n out[:] = np.maximum.accumulate(x, axis=-1) - np.add.accumulate(x)\n"
+    kir = parse_source(src, "f", ["x"], ["out"], {"x": "(A, B)", "out": "(A, B)"}, {"A": 2, "B": 3})
+    emitted = emit_numba(src, kir=kir)
+    assert "accumulate" not in emitted
+    module = tmp_path / "scan_numba.py"
+    module.write_text(emitted)
+    spec = importlib.util.spec_from_file_location("scan_numba", module)
+    assert spec is not None and spec.loader is not None
+    sut = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sut)
+    x = np.array([[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]])
+    out = np.zeros((2, 3))
+    sut.f(x, out)
+    np.testing.assert_array_equal(out, np.maximum.accumulate(x, axis=-1) - np.add.accumulate(x))

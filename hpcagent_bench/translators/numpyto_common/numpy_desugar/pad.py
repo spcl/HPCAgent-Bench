@@ -4,11 +4,33 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import name_store_counts
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
-__all__ = ["PadInline", "const_pair_widths", "pad_constant_inline_stmts", "pad_inline_stmts", "widths_all_literal"]
+__all__ = [
+    "PadInline",
+    "const_pair_widths",
+    "once_bound_tuples",
+    "pad_constant_inline_stmts",
+    "pad_inline_stmts",
+    "widths_all_literal",
+]
+
+
+def once_bound_tuples(fn: ast.FunctionDef) -> dict[str, ast.Tuple]:
+    """Names ``fn`` binds exactly once, to a tuple display."""
+    counts = name_store_counts(fn)
+    return {
+        node.targets[0].id: node.value
+        for node in walk_nodes(fn)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Tuple)
+        and counts.get(node.targets[0].id) == 1
+    }
 
 
 def const_pair_widths(pad_width: ast.expr, rank: int) -> list[tuple[ast.expr, ast.expr]] | None:
@@ -75,15 +97,25 @@ def pad_constant_inline_stmts(
 class PadInline(ast.NodeTransformer):
     """``name = np.pad(x, pad_width=..., mode="edge")`` -> an inline edge-pad loop nest.
 
-    Only the bare-assign form is matched. ``mode="constant"`` is lowered only with
-    ``lower_symbolic_constant`` (dace) and a non-literal width; see :func:`pad_constant_inline_stmts`.
+    Only the bare-assign form is matched. ``mode="constant"`` is lowered with ``lower_symbolic_constant`` (dace)
+    and a non-literal width, and always with ``lower_constant`` (numba, which has no ``np.pad``); see
+    :func:`pad_constant_inline_stmts`. ``tuples`` maps a once-bound name to the width tuple it holds (max_filter's
+    ``pad_width = ((0, 0), (0, tail))``), which a bare name would otherwise read as one width for every side.
     """
 
-    __slots__ = ("_ctr", "changed", "lower_symbolic_constant", "ranks")
+    __slots__ = ("_ctr", "changed", "lower_constant", "lower_symbolic_constant", "ranks", "tuples")
 
-    def __init__(self, ranks: dict[str, int], lower_symbolic_constant: bool = False) -> None:
+    def __init__(
+        self,
+        ranks: dict[str, int],
+        lower_symbolic_constant: bool = False,
+        lower_constant: bool = False,
+        tuples: dict[str, ast.Tuple] | None = None,
+    ) -> None:
         self.ranks = ranks
         self.lower_symbolic_constant = lower_symbolic_constant
+        self.lower_constant = lower_constant
+        self.tuples = tuples or {}
         self.changed = False
         self._ctr = 0
 
@@ -108,6 +140,8 @@ class PadInline(ast.NodeTransformer):
         if rank is None or rank < 1:
             return node
         pad_width = kw.get("pad_width") or (call.args[1] if len(call.args) > 1 else None)
+        if isinstance(pad_width, ast.Name) and pad_width.id in self.tuples:
+            pad_width = self.tuples[pad_width.id]
         widths = const_pair_widths(pad_width, rank) if pad_width is not None else None
         if widths is None:
             return node
@@ -116,7 +150,8 @@ class PadInline(ast.NodeTransformer):
             stmts = pad_inline_stmts(node.targets[0].id, arr, widths, rank, self._ctr)
             self._ctr += 1
             return stmts
-        if not self.lower_symbolic_constant or widths_all_literal(widths):
+        lower = self.lower_constant or (self.lower_symbolic_constant and not widths_all_literal(widths))
+        if not lower:
             return node
         self.changed = True
         fill = kw.get("constant_values", ast.Constant(value=0))

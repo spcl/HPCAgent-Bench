@@ -24,6 +24,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.constants import (
     fold_finfo_eps,
     fold_kernel_defaults,
     has_defaulted_parameters,
+    specialize_helpers_by_literal,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.counting import (
     HISTOGRAM_HOIST,
@@ -99,7 +100,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.numba import (
     SliceObjectInline,
     unit_axis_seeds,
 )
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.pad import PadInline
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.pad import PadInline, once_bound_tuples
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import (
     agreed_param_ranks,
     expr_rank,
@@ -204,6 +205,8 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
     kernel = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == kir.kernel_name), None)
     if backend in DEFAULT_FOLDING_BACKENDS and kernel is not None and has_defaulted_parameters(kernel):
         changed = fold_kernel_defaults(kernel, kir.input_args)
+    if backend == "numba":
+        changed = specialize_helpers_by_literal(tree, kir.kernel_name) or changed
     all_funcs = [n for n in walk_nodes(tree) if isinstance(n, ast.FunctionDef)]
     if backend == "numba":
         changed = fold_constant_helper_arguments(tree, kir.kernel_name) or changed
@@ -282,7 +285,12 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             ValueHoist(LINALG_HOIST, tables),
             # dace lowers batched and reshape-wrapped matmul and einsum itself, to library nodes.
             *([] if backend == "dace" else [ReshapeMatmulInline(ranks, widths), BatchedMatmulToLoop(ranks, widths)]),
-            PadInline(ranks, lower_symbolic_constant=backend == "dace"),
+            PadInline(
+                ranks,
+                lower_symbolic_constant=backend == "dace",
+                lower_constant=backend == "numba",
+                tuples=once_bound_tuples(fn) if backend == "numba" and isinstance(fn, ast.FunctionDef) else None,
+            ),
             *([ValueHoist(TENSORDOT_HOIST, tables)] if backend == "numba" else []),
             *([] if backend == "dace" else [ValueHoist(EINSUM_HOIST, tables)]),
             *([] if backend in NATIVE_FFT_BACKENDS else [FftInline(ranks, kir_array_dtypes)]),

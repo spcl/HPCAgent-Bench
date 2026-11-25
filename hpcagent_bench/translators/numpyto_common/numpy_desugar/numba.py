@@ -800,6 +800,30 @@ class OuterBroadcastPeel(RankedRewritePass):
         return [*binds, *peeled]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Peel an outer-product broadcast assignment, its inline ``np.arange`` views bound to temps first (cp2k's
+        ``row_cols == np.arange(n)[:, None]``): a peel indexes a name, never a computed base."""
+        binds: list[ast.stmt] = []
+        if len(node.targets) == 1:
+            for sub in walk_nodes(node.value):
+                if not (isinstance(sub, ast.Subscript) and numpy_call_attr(sub.value) == "arange"):
+                    continue
+                temp = f"__ob{self._ctr}_r{len(binds)}"
+                self.ranks[temp] = 1
+                binds.append(ast.copy_location(ast.Assign(targets=[store_(temp)], value=sub.value), node))
+                sub.value = name_(temp)
+        if not binds:
+            return self.peel_assign(node)
+        self._ctr += 1
+        self.changed = True
+        for b in binds:
+            ast.fix_missing_locations(b)
+        peeled = self.peel_assign(node)
+        if isinstance(peeled, list):
+            return [*binds, *peeled]
+        assert isinstance(peeled, ast.stmt)
+        return [*binds, peeled]
+
+    def peel_assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         """Peel an outer-product broadcast assignment into a loop over its outermost axis."""
         if len(node.targets) != 1:
             return node
@@ -1304,6 +1328,25 @@ class NdimFold(ast.NodeTransformer):
 CUMULATIVE_OPS = {"cumsum": "+", "cumprod": "*"}
 
 
+#: ``np.<ufunc>.accumulate`` -> the step combining the running slice ``{0}`` with the next input slice ``{1}``.
+ACCUMULATE_STEPS = {
+    "add": "{0} + {1}",
+    "multiply": "{0} * {1}",
+    "maximum": "np.maximum({0}, {1})",
+    "minimum": "np.minimum({0}, {1})",
+}
+
+
+def accumulated_ufunc(node: ast.expr) -> str | None:
+    """``maximum`` for ``np.maximum.accumulate(...)``, likewise for every ufunc in :data:`ACCUMULATE_STEPS`."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "accumulate"):
+        return None
+    owner = node.func.value
+    if isinstance(owner, ast.Attribute) and is_numpy_module(owner.value) and owner.attr in ACCUMULATE_STEPS:
+        return owner.attr
+    return None
+
+
 def hoist_cumulative_axis(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """``np.cumsum(x, axis=k)`` / ``np.cumprod``, ``k`` a constant -> a temp filled one slice of axis ``k`` at a time
     (numba only: its cumprod takes no ``axis``, and its cumsum scans serially).
@@ -1313,31 +1356,39 @@ def hoist_cumulative_axis(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     ``uint64``). A negative ``k`` indexes from the back (``x[..., i, :]``), so no rank is read and a helper called at
     several (mamba2's ``_segsum``) is right at each; it runs before :class:`NormalizeNegativeAxis` pins the axis."""
     op = numpy_call_attr(node)
-    if op not in CUMULATIVE_OPS or not isinstance(node, ast.Call) or not 1 <= len(node.args) <= 2:
+    ufunc = accumulated_ufunc(node)
+    if (op not in CUMULATIVE_OPS and ufunc is None) or not isinstance(node, ast.Call) or not 1 <= len(node.args) <= 2:
         return None
-    if [kw.arg for kw in node.keywords] != (["axis"] if len(node.args) == 1 else []):
+    # ``ufunc.accumulate`` scans axis 0 by default; ``np.cumsum`` without an axis scans the flattened array.
+    default_axis = ufunc is not None and not node.keywords and len(node.args) == 1
+    if [kw.arg for kw in node.keywords] != (["axis"] if len(node.args) == 1 else []) and not default_axis:
         return None  # no axis, or dtype= / out=
-    k = const_int(node.keywords[0].value if node.keywords else node.args[1])
+    axis = node.keywords[0].value if node.keywords else (node.args[1] if len(node.args) > 1 else ast.Constant(0))
+    k = const_int(axis)
     if k is None:
         return None
     t = f"__cs{hoist.ctr}"
     hoist.ctr += 1
-    x, i, sym = f"{t}_x", f"{t}_i", CUMULATIVE_OPS[op]
+    x, i = f"{t}_x", f"{t}_i"
+    step = ACCUMULATE_STEPS[ufunc] if ufunc is not None else "{0} " + CUMULATIVE_OPS[str(op)] + " {1}"
+    # maximum / minimum keep the input dtype; a sum or product widens as numba's cumsum does.
+    dtype = f"{x}.dtype" if ufunc in ("maximum", "minimum") else f"np.cumsum(np.zeros(1, {x}.dtype)).dtype"
 
     def at(e: str) -> str:
         return f"{':, ' * k}{e}" if k >= 0 else f"..., {e}{', :' * (-k - 1)}"
 
+    previous, current = f"{t}[{at(f'{i} - 1')}]", f"{x}[{at(i)}]"
     hoist.queue(
         [
             f"{x} = {ast.unparse(node.args[0])}",
-            f"{t} = np.empty({x}.shape, np.cumsum(np.zeros(1, {x}.dtype)).dtype)",
+            f"{t} = np.empty({x}.shape, {dtype})",
             f"if {x}.shape[{k}] > 0:",
             f"    {t}[{at('0')}] = {x}[{at('0')}]",
             f"    for {i} in range(1, {x}.shape[{k}]):",
-            f"        {t}[{at(i)}] = {t}[{at(f'{i} - 1')}] {sym} {x}[{at(i)}]",
+            f"        {t}[{at(i)}] = {step.format(previous, current)}",
         ]
     )
     return name_(t)
 
 
-CUMULATIVE_AXIS_HOIST = HoistForm(frozenset(CUMULATIVE_OPS), (), hoist_cumulative_axis)
+CUMULATIVE_AXIS_HOIST = HoistForm(frozenset({*CUMULATIVE_OPS, "accumulate"}), (), hoist_cumulative_axis)

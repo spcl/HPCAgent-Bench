@@ -525,20 +525,21 @@ def call_unpack_bindings(tree: ast.AST) -> list[tuple[str, str]]:
     return out
 
 
-def tuple_return_ranks(fn: ast.FunctionDef, ranks: dict[str, int]) -> list[int] | None:
-    """Per element, the rank of the tuple every ``return`` of ``fn`` spells out with one length; None otherwise."""
+def tuple_return_ranks(fn: ast.FunctionDef, ranks: dict[str, int]) -> list[int | None] | None:
+    """Per element, the rank of the tuple every ``return`` of ``fn`` spells out with one length, None for an element
+    of unknown rank; None when the returns are no such tuples."""
     values = [n.value for n in walk_nodes(fn) if isinstance(n, ast.Return) and n.value is not None]
     if not values or not all(isinstance(v, ast.Tuple) for v in values):
         return None
     lengths = {len(v.elts) for v in values if isinstance(v, ast.Tuple)}
     if len(lengths) != 1:
         return None
-    out: list[int] = []
+    # Rank 0 is no evidence: the table gives it to names built from unranked ones (``8.0 * (fj * cj)``).
+    out: list[int | None] = []
     for i in range(lengths.pop()):
         found = {expr_rank(v.elts[i], ranks) for v in values if isinstance(v, ast.Tuple)}
-        if len(found) != 1 or (rank := found.pop()) is None:
-            return None
-        out.append(rank)
+        rank = found.pop() if len(found) == 1 else None
+        out.append(rank if rank is not None and rank >= 1 else None)
     return out
 
 
@@ -898,7 +899,7 @@ def infer_param_ranks(
             ranks = rank_table(fn, base, call_returns=ret_rank)
             elements = tuple_return_ranks(fn, ranks) if tuples else None
             for i, element in enumerate(elements or []):
-                if ret_rank.get(element_key(fn.name, i)) != element:
+                if element is not None and ret_rank.get(element_key(fn.name, i)) != element:
                     ret_rank[element_key(fn.name, i)] = element
                     changed = True
             rr = None if elements is not None else return_rank(fn, ranks, seed_ranks=base)
@@ -937,7 +938,7 @@ def helper_return_ranks(
             table = rank_table(fn, seed, call_returns=returns)
             elements = tuple_return_ranks(fn, table)
             if elements is not None:
-                returns.update({element_key(fn.name, i): r for i, r in enumerate(elements)})
+                returns.update({element_key(fn.name, i): r for i, r in enumerate(elements) if r is not None})
                 continue
             rank = return_rank(fn, table, seed_ranks=seed)
             if rank is not None:
