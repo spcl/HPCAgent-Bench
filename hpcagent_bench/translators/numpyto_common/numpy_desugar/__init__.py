@@ -56,6 +56,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.guards import (
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistTables, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.indexing import (
     FANCY_GATHER_HOIST,
+    FANCY_GATHER_HOIST_NAMED,
     DecomposeRollSlice,
     FancySliceStoreToLoop,
     IxWriteToLoop,
@@ -96,6 +97,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.numba import (
     ReshapeFortranOrderInline,
     RollInline,
     SliceObjectInline,
+    unit_axis_seeds,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.pad import PadInline
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import (
@@ -224,7 +226,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
     # Exact dtypes (not just kind) for passes that need a width, e.g. FftInline's complex64/128 cast.
     # Read through ``vars()``: rank-only callers pass KIR arrays without a dtype attribute.
     kir_array_dtypes: dict[str, str] = {a.name: a.dtype for a in kir.arrays}
-    param_ranks = infer_param_ranks(all_funcs, kir.kernel_name, kir_seed)
+    param_ranks = infer_param_ranks(all_funcs, kir.kernel_name, kir_seed, tuples=backend == "numba")
     param_kinds = infer_param_kinds(all_funcs, kir.kernel_name, kir_dtype_seed) if backend == "numba" else {}
     return_ranks = (
         helper_return_ranks(all_funcs, param_ranks, kir.kernel_name, kir_seed) if backend == "numba" else None
@@ -235,6 +237,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
         else {}
     )
     eigh_aliases = eigh_alias_names(tree)
+    units = unit_axis_seeds(all_funcs, kir.kernel_name, kir.arrays) if backend == "numba" else {}
     scopes: list[ast.FunctionDef | ast.Module] = [*all_funcs] or [tree]
     for fn in scopes:
         fn_name = fn.name if isinstance(fn, ast.FunctionDef) else None
@@ -284,7 +287,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             *([] if backend == "dace" else [ValueHoist(EINSUM_HOIST, tables)]),
             *([] if backend in NATIVE_FFT_BACKENDS else [FftInline(ranks, kir_array_dtypes)]),
             MgridInline(),
-            ValueHoist(FANCY_GATHER_HOIST, tables),
+            ValueHoist(FANCY_GATHER_HOIST_NAMED if backend == "numba" else FANCY_GATHER_HOIST, tables),
             ValueHoist(DACE_REDUCE_AXIS_HOIST if backend == "dace" else REDUCE_AXIS_HOIST, tables),
             # Directly after it: takes only the keepdims reductions the loop lowering declined (unknown rank).
             KeepdimsToNewaxis(),
@@ -316,7 +319,9 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
                     RollInline(ranks),
                     NumbaCallFixups(ranks),
                     BroadcastAugAssignSpellOut(ranks),
-                    OuterBroadcastPeel(ranks, fn if isinstance(fn, ast.FunctionDef) else None),
+                    OuterBroadcastPeel(
+                        ranks, fn if isinstance(fn, ast.FunctionDef) else None, dtypes, units.get(fn_name or "")
+                    ),
                 ]
                 if backend == "numba"
                 else []
@@ -337,6 +342,8 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
                     continue
                 new_body.extend(res if isinstance(res, list) else [res])
             fn.body = new_body
+            if isinstance(p, ValueHoist):
+                p.forget_flow()
         changed = changed or any(p.changed for p in passes)
     if not changed:
         return source

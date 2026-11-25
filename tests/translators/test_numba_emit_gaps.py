@@ -145,10 +145,10 @@ def test_a_leading_unit_axis_absorbed_by_the_whole_expression_matches_numpy_on_n
     assert numba(src, {"d": d, "w": w}, {"out": (4, 3), "out2": (4, 3)}, {"G": 4, "K": 3}, shapes) == "ok"
 
 
-def test_a_named_unit_axis_never_decides_a_peel() -> None:
+def test_a_named_unit_axis_peels_to_scalar_rows() -> None:
     """Inside a prange numba computes ``g[i] * x[i]`` of shapes (1,) and (n,) WRONG, silently, where the whole-array
-    form asserts. A once-bound name's unit axis may drop a leading axis, but it never decides a peel that would leave
-    such a row: ``g = w[:, None] * 2.0; out[:] = g * x`` stays one statement and fails loudly if at all."""
+    form asserts. A peel a once-bound name's unit axis decides never stops at such a row: ``g = w[:, None] * 2.0;
+    out[:] = g * x`` loops both axes and reads ``g`` at column 0."""
     import ast
 
     from hpcagent_bench.translators.numpyto_common.numpy_desugar.numba import OuterBroadcastPeel
@@ -157,4 +157,140 @@ def test_a_named_unit_axis_never_decides_a_peel() -> None:
     assert isinstance(fn, ast.FunctionDef)
     sut = OuterBroadcastPeel({"w": 1, "x": 2, "out": 2, "g": 2}, fn)
     kept = [sut.visit(stmt) for stmt in fn.body]
-    assert [ast.unparse(k) for k in kept] == ["g = w[:, None] * 2.0", "out[:] = g * x"]
+    assert ast.unparse(kept[0]) == "g = w[:, None] * 2.0"
+    assert isinstance(kept[1], list)
+    loop = kept[1][-1]
+    assert isinstance(loop, ast.For) and isinstance(loop.body[0], ast.For)
+    assert ast.unparse(loop.body[0].body[0]) == "out[__ob0_i, __ob0_i1] = g[__ob0_i, 0] * x[__ob0_i, __ob0_i1]"
+
+
+def test_a_comparison_against_a_fancy_row_column_matches_numpy_on_numba() -> None:
+    """xsbench's ``valid = j_range[None, :] < num_nucs[mat][:, None]``: numba asserted ``Sizes of j_range, ... do not
+    match`` on the outer comparison, and the peel declined the fancy-indexed column."""
+    src = (
+        "import numpy as np\n"
+        "def f(n, m, out):\n"
+        " j = np.arange(5)\n"
+        " out[:] = np.where(j[None, :] < n[m][:, None], 1.0, 0.0)\n"
+    )
+    n = np.array([1, 4, 2, 5], dtype=np.int64)
+    m = np.array([3, 0, 2, 1, 1, 0], dtype=np.int64)
+    shapes = {"n": "(A,)", "m": "(B,)", "out": "(B, 5)"}
+    dtypes = {"n": "int64", "m": "int64", "out": "float64"}
+    assert numba(src, {"n": n, "m": m}, {"out": (6, 5)}, {"A": 4, "B": 6}, shapes, dtypes) == "ok"
+
+
+def test_a_difference_against_a_gather_by_a_neighbor_table_matches_numpy_on_numba() -> None:
+    """examinimd's ``d = x[:n_owned, None, :] - x[j]`` with ``j`` an (n, K) neighbor table: numba asserted ``Sizes of
+    ... do not match`` on the 3-D broadcast, and the peel had no axes for the integer index array."""
+    src = "import numpy as np\ndef f(x, j, out):\n d = x[:3, None, :] - x[j]\n out[:] = d * d\n"
+    x = np.linspace(-1.0, 1.0, 15).reshape(5, 3)
+    j = np.array([[1, 2], [0, 4], [3, 3]], dtype=np.int64)
+    shapes = {"x": "(N, D)", "j": "(M, K)", "out": "(M, K, D)"}
+    dtypes = {"x": "float64", "j": "int64", "out": "float64"}
+    assert numba(src, {"x": x, "j": j}, {"out": (3, 2, 3)}, {"N": 5, "D": 3, "M": 3, "K": 2}, shapes, dtypes) == "ok"
+
+
+def test_a_tensordot_chain_rebinding_one_name_matches_numpy_on_numba() -> None:
+    """cp2k_grid_integrate's ``t = np.tensordot(g, a, ...); t = np.tensordot(t, b, ...)``: each binding has another
+    rank, so the rank table dropped ``t`` and the second ``np.tensordot`` stayed, which numba does not have."""
+    src = (
+        "import numpy as np\n"
+        "def f(g, a, b, out):\n"
+        " t = np.tensordot(g, a, axes=([1], [0]))\n"
+        " t = np.tensordot(t, b, axes=([0], [1]))\n"
+        " out[:] = t\n"
+    )
+    g = np.linspace(-1.0, 1.0, 6).reshape(2, 3)
+    a = np.linspace(0.5, 2.0, 12).reshape(3, 4)
+    b = np.linspace(1.0, -1.0, 20).reshape(5, 2, 2)
+    shapes = {"g": "(P, Q)", "a": "(Q, R)", "b": "(S, P, T)", "out": "(R, S, T)"}
+    syms = {"P": 2, "Q": 3, "R": 4, "S": 5, "T": 2}
+    assert numba(src, {"g": g, "a": a, "b": b}, {"out": (4, 5, 2)}, syms, shapes) == "ok"
+
+
+def test_a_where_over_an_open_arange_mesh_matches_numpy_on_numba() -> None:
+    """cp2k_grid_integrate's ``zi = np.arange(n)[:, None, None]; ...; np.where((zi <= si) & ..., c, 0.0)``: the
+    operands pair unit axes with sized ones at one rank, which numba rejects, and which no single-axis peel removes
+    (numba computes such rows wrong inside a prange), so every axis is looped."""
+    src = (
+        "import numpy as np\n"
+        "def f(c, out):\n"
+        " zi = np.arange(3)[:, None, None]\n"
+        " yi = np.arange(3)[None, :, None]\n"
+        " xi = np.arange(3)[None, None, :]\n"
+        " si = np.arange(3)[:, None, None, None]\n"
+        " out[:] = np.where((zi <= si) & (yi + xi <= 2 - si), c, 0.0)\n"
+    )
+    c = np.linspace(1.0, 2.0, 27).reshape(3, 3, 3)
+    shapes = {"c": "(N, N, N)", "out": "(N, N, N, N)"}
+    assert numba(src, {"c": c}, {"out": (3, 3, 3, 3)}, {"N": 3}, shapes) == "ok"
+
+
+def test_a_gather_through_an_open_mesh_matches_numpy_on_numba() -> None:
+    """cp2k_grid_integrate's ``grid[gz[:, None, None], gy[None, :, None], gx[None, None, :]]``: the gather loop took
+    its shape from ``x0 * 0 + x1 * 0 + x2 * 0``, whose same-rank unit broadcast numba asserts on."""
+    src = (
+        "import numpy as np\n"
+        "def f(grid, gz, gy, gx, out):\n"
+        " out[:] = grid[gz[:, None, None], gy[None, :, None], gx[None, None, :]] * 2.0\n"
+    )
+    grid = np.linspace(0.0, 1.0, 60).reshape(3, 4, 5)
+    gz = np.array([2, 0], dtype=np.int64)
+    gy = np.array([1, 3, 0], dtype=np.int64)
+    gx = np.array([4, 0, 2, 1], dtype=np.int64)
+    shapes = {"grid": "(A, B, C)", "gz": "(I,)", "gy": "(J,)", "gx": "(K,)", "out": "(I, J, K)"}
+    dtypes = {"grid": "float64", "gz": "int64", "gy": "int64", "gx": "int64", "out": "float64"}
+    syms = {"A": 3, "B": 4, "C": 5, "I": 2, "J": 3, "K": 4}
+    ins = {"grid": grid, "gz": gz, "gy": gy, "gx": gx}
+    assert numba(src, ins, {"out": (2, 3, 4)}, syms, shapes, dtypes) == "ok"
+
+
+def test_a_declared_unit_column_times_a_matrix_matches_numpy_on_numba() -> None:
+    """nbody's ``mass * vel`` with ``mass`` declared ``(N, 1)``: numba asserted ``Sizes of mass, vel do not match``,
+    and the peel could not see the unit axis, which only the manifest declares."""
+    src = "import numpy as np\ndef f(m, v, out):\n out[:] = (m * v).sum(axis=0)\n"
+    m = np.linspace(1.0, 2.0, 4).reshape(4, 1)
+    v = np.linspace(-1.0, 1.0, 12).reshape(4, 3)
+    shapes = {"m": "(N, 1)", "v": "(N, 3)", "out": "(3,)"}
+    assert numba(src, {"m": m, "v": v}, {"out": (3,)}, {"N": 4}, shapes) == "ok"
+
+
+def test_a_column_minus_its_transpose_matches_numpy_on_numba() -> None:
+    """nbody's ``x = pos[:, 0:1]; dx = x.T - x``: numba asserted on the same-rank outer difference, and the peel had
+    no extents for ``.T``."""
+    src = "import numpy as np\ndef f(p, out):\n x = p[:, 0:1]\n out[:] = x.T - x\n"
+    p = np.linspace(-1.0, 2.0, 12).reshape(4, 3)
+    shapes = {"p": "(N, 3)", "out": "(N, N)"}
+    assert numba(src, {"p": p}, {"out": (4, 4)}, {"N": 4}, shapes) == "ok"
+
+
+def test_a_helper_reducing_a_unit_column_broadcast_matches_numpy_on_numba() -> None:
+    """nbody's helper ``0.5 * np.sum(mass * (vel * vel))``, called with the ``(N, 1)`` kernel array: the helper's
+    parameter had no unit axis, and a reduction's argument was never peeled."""
+    src = "import numpy as np\ndef h(v, m):\n return 0.5 * np.sum(m * (v * v))\ndef f(m, v, out):\n out[0] = h(v, m)\n"
+    m = np.linspace(1.0, 2.0, 4).reshape(4, 1)
+    v = np.linspace(-1.0, 1.0, 12).reshape(4, 3)
+    shapes = {"m": "(N, 1)", "v": "(N, 3)", "out": "(1,)"}
+    assert numba(src, {"m": m, "v": v}, {"out": (1,)}, {"N": 4}, shapes) == "ok"
+
+
+def test_a_helper_tuple_element_keeps_its_rank_on_numba() -> None:
+    """nbody's ``dx, dist2 = pairwise(pos)`` passed on to ``np.triu(-(m * m.T) * dist2, 1)``: an unpacked tuple
+    element had no rank, so ``dist2`` read as a scalar inside the loop the outer product became."""
+    src = (
+        "import numpy as np\n"
+        "def pairwise(p):\n"
+        " x = p[:, 0:1]\n"
+        " d = x.T - x\n"
+        " return d, d * d\n"
+        "def energy(d2, m):\n"
+        " return np.sum(np.triu(-(m * m.T) * d2, 1))\n"
+        "def f(m, p, out):\n"
+        " d, d2 = pairwise(p)\n"
+        " out[0] = energy(d2, m)\n"
+    )
+    m = np.linspace(1.0, 2.0, 4).reshape(4, 1)
+    p = np.linspace(-1.0, 2.0, 12).reshape(4, 3)
+    shapes = {"m": "(N, 1)", "p": "(N, 3)", "out": "(1,)"}
+    assert numba(src, {"m": m, "p": p}, {"out": (1,)}, {"N": 4}, shapes) == "ok"

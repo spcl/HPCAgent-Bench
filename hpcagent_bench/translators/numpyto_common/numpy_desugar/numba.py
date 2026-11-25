@@ -17,10 +17,12 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     walk_nodes,
 )
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     RankedRewritePass,
     RewritePass,
     name_store_counts,
+    reachable_functions,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import BINDING_EXPRESSIONS, HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
@@ -48,12 +50,15 @@ __all__ = [
     "scalar_index",
     "slice_extent_token",
     "token_reads",
+    "unit_axis_seeds",
     "without_leading_newaxis",
 ]
 
 
 #: Extent token for an axis pinned to one element (a newaxis or a 1-long slice).
 ONE = "1"
+#: The name :meth:`OuterBroadcastPeel.binding_extents` reads an ``np.arange`` base through; never emitted.
+ARANGE_STAND_IN = "arange0"
 
 #: Two-operand numpy ufuncs that broadcast like an arithmetic operator.
 BINARY_UFUNCS = frozenset(
@@ -150,6 +155,76 @@ def astype_receiver(expr: ast.expr) -> ast.expr | None:
     return None
 
 
+def is_matrix_transpose(expr: ast.expr, ranks: dict[str, int]) -> bool:
+    """``x.T`` of a rank-2 name ``x``."""
+    return (
+        isinstance(expr, ast.Attribute)
+        and expr.attr == "T"
+        and isinstance(expr.value, ast.Name)
+        and ranks.get(expr.value.id) == 2
+    )
+
+
+def unit_extents(name: str, unit: Sequence[bool]) -> list[str]:
+    """The extent tokens of ``name`` with a size-1 axis wherever ``unit`` says."""
+    return [ONE if one else f"{name}.shape[{k}]" for k, one in enumerate(unit)]
+
+
+def unit_axis_seeds(
+    funcs: list[ast.FunctionDef], kernel_name: str, arrays: Sequence[ArrayDesc]
+) -> dict[str, dict[str, list[str]]]:
+    """Per function, the extents of its never-rebound parameters that have a size-1 axis: the kernel's from the
+    manifest (nbody's ``mass`` of shape ``(N, 1)``), a helper's when every call site the kernel reaches passes it a
+    parameter with the same size-1 axes. :class:`OuterBroadcastPeel` starts from them."""
+    by_name = {fn.name: fn for fn in funcs}
+    reachable = reachable_functions(funcs, kernel_name)
+    counts = {fn.name: name_store_counts(fn) for fn in funcs}
+    calls = [
+        (fn.name, node)
+        for fn in funcs
+        if fn.name in reachable
+        for node in walk_nodes(fn)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in by_name
+    ]
+    called = {
+        id(node.func) for fn in funcs for node in walk_nodes(fn) if isinstance(node, ast.Call)
+    }  # unreachable callers included: their calls are calls, not escapes
+    escaped = {
+        n.id
+        for fn in funcs
+        for n in walk_nodes(fn)
+        if isinstance(n, ast.Name) and n.id in by_name and id(n) not in called
+    }
+    kernel = {
+        a.name: unit_extents(a.name, [str(d) == ONE for d in a.shape])
+        for a in arrays
+        if ONE in [str(d) for d in a.shape] and counts.get(kernel_name, {}).get(a.name) == 1
+    }
+    seeds: dict[str, dict[str, list[str]]] = {name: {} for name in by_name} | {kernel_name: kernel}
+    for unused in range(len(funcs)):
+        observed: dict[tuple[str, str], set[tuple[bool, ...] | None]] = {}
+        for caller, call in calls:
+            assert isinstance(call.func, ast.Name)
+            readable = not call.keywords and not any(isinstance(a, ast.Starred) for a in call.args)
+            for i, param in enumerate(by_name[call.func.id].args.args):
+                arg = call.args[i] if readable and i < len(call.args) else None
+                known = seeds[caller].get(arg.id) if isinstance(arg, ast.Name) else None
+                observed.setdefault((call.func.id, param.arg), set()).add(
+                    None if known is None else tuple(t == ONE for t in known)
+                )
+        agreed: dict[str, dict[str, list[str]]] = {name: {} for name in by_name} | {kernel_name: kernel}
+        for (callee, pname), patterns in observed.items():
+            unit = next(iter(patterns))
+            if callee == kernel_name or callee in escaped or len(patterns) != 1 or unit is None:
+                continue
+            if counts[callee].get(pname) == 1:
+                agreed[callee][pname] = unit_extents(pname, unit)
+        if agreed == seeds:
+            break
+        seeds = agreed
+    return seeds
+
+
 class OuterBroadcastPeel(RankedRewritePass):
     """Peel an OUTER-PRODUCT broadcast's outermost axis into an explicit loop (numba only).
 
@@ -163,17 +238,26 @@ class OuterBroadcastPeel(RankedRewritePass):
     Extents are ``<name>.shape[k]`` tokens from the rank table, since manifest shape symbols are
     not bound in the kernel. An operand whose axes cannot be placed declines the whole statement."""
 
-    __slots__ = ("known", "once")
+    __slots__ = ("dtypes", "known", "once")
 
-    def __init__(self, ranks: dict[str, int], fn: ast.FunctionDef | None = None) -> None:
+    def __init__(
+        self,
+        ranks: dict[str, int],
+        fn: ast.FunctionDef | None = None,
+        dtypes: dict[str, str] | None = None,
+        units: dict[str, list[str]] | None = None,
+    ) -> None:
         super().__init__(ranks)
+        #: Kinds of the scope's names: an integer index array places its own axes (:meth:`axes_`).
+        self.dtypes = dtypes or {}
         #: Names bound exactly once in the scope, whose extents one binding settles.
         self.once = (
             frozenset(name for name, count in name_store_counts(fn).items() if count == 1) if fn else frozenset()
         )
-        #: Extents of a once-bound name whose value has a literal unit axis (raman's ``g = w * w[None, :]``); read
-        #: only by :meth:`without_leading_unit`, never by a peel decision.
-        self.known: dict[str, list[str]] = {}
+        #: Extents of a once-bound name whose value has a literal unit axis (raman's ``g = w * w[None, :]``). A peel
+        #: they decide is kept only if its row is free of same-rank unit broadcasts (:meth:`unit_row_hazard`).
+        #: Parameters start from :func:`unit_axis_seeds`.
+        self.known: dict[str, list[str]] = dict(units or {})
 
     def operands_(self, node: ast.AST) -> list[ast.expr] | None:
         """The operands an elementwise node broadcasts together, or None when it is not one."""
@@ -215,8 +299,8 @@ class OuterBroadcastPeel(RankedRewritePass):
         if isinstance(expr, ast.Constant):
             return [] if isinstance(expr.value, (bool, int, float, complex)) else None
         if isinstance(expr, ast.Name):
-            # :attr:`known` stays out of here on purpose: a peel decided on a name's unit axis can leave a row
-            # ``x[i] * y[i]`` of shapes (1,) and (n,), which numba computes WRONG inside a prange, silently.
+            if expr.id in self.known:
+                return list(self.known[expr.id])
             return [f"{expr.id}.shape[{k}]" for k in range(self.ranks.get(expr.id, 0))]
         if isinstance(expr, ast.UnaryOp):
             return self.extents_(expr.operand)
@@ -228,6 +312,10 @@ class OuterBroadcastPeel(RankedRewritePass):
             return None if axes is None else [axis[2] for axis in axes]
         if numpy_call_attr(expr) == "arange":
             return [f"({ast.unparse(expr)}).shape[0]"]  # always 1-D, so it only ever broadcasts
+        if is_matrix_transpose(expr, self.ranks):
+            assert isinstance(expr, ast.Attribute)
+            inner = self.extents_(expr.value)
+            return None if inner is None else inner[::-1]
         receiver = astype_receiver(expr)
         if receiver is not None:
             return self.extents_(receiver)
@@ -243,6 +331,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         entries = list(sub.slice.elts) if isinstance(sub.slice, ast.Tuple) else [sub.slice]
         axes: list[tuple[int | None, str, str]] = []
         bi = 0
+        fancy = False
         for i, e in enumerate(entries):
             if is_newaxis(e):
                 axes.append((i, "new", ONE))
@@ -258,12 +347,54 @@ class OuterBroadcastPeel(RankedRewritePass):
                 bi += 1
             elif scalar_index(e, self.ranks):
                 bi += 1
+            elif self.index_array(e) and not fancy:
+                # One integer index array keeps its axes where it stands (cp2k's ``b_blocks[b_pos]``).
+                assert isinstance(e, ast.Name)
+                axes.extend((i, "fancy", f"{e.id}.shape[{k}]") for k in range(self.ranks[e.id]))
+                fancy = True
+                bi += 1
             else:
                 return None
         if bi > len(base):
             return None
         axes.extend((None, "tail", base[k]) for k in range(bi, len(base)))
         return axes
+
+    def binding_extents(self, value: ast.expr) -> list[str] | None:
+        """:meth:`extents_` of a binding's value, which may also be a view of ``np.arange`` (cp2k_grid_integrate's
+        ``zi = np.arange(nlp)[:, None, None]``): a peel never indexes that computed base, but its extents are known."""
+        if not (isinstance(value, ast.Subscript) and numpy_call_attr(value.value) == "arange"):
+            return self.extents_(value)
+        base = self.extents_(value.value)
+        if base is None:
+            return None
+        self.known[ARANGE_STAND_IN] = base
+        extents = self.extents_(ast.Subscript(value=name_(ARANGE_STAND_IN), slice=value.slice, ctx=ast.Load()))
+        del self.known[ARANGE_STAND_IN]
+        return None if extents is None or any(ARANGE_STAND_IN in t for t in extents) else extents
+
+    def index_array(self, e: ast.expr) -> bool:
+        """An index array of known rank that is no mask: the kind table calls it ``int`` or cannot tell (cp2k's
+        ``b_pos = b_base[:, None] + np.arange(fanout)[None, :]``); a comparison it binds reads ``bool``."""
+        return (
+            isinstance(e, ast.Name)
+            and (self.ranks.get(e.id) or 0) >= 1
+            and self.dtypes.get(e.id) not in ("bool", "float", "complex")
+        )
+
+    def unit_row_hazard(self, row: ast.expr) -> bool:
+        """True when an elementwise node of ``row`` pairs two operands of one rank, one with a unit axis the other
+        sizes: numba computes that row WRONG inside a prange, silently (it asserts only on whole arrays)."""
+        for node in walk_nodes(row):
+            ops = self.operands_(node)
+            if ops is None:
+                continue
+            shaped = [e for e in (self.extents_(o) for o in ops) if e is not None]
+            for a in shaped:
+                for b in shaped:
+                    if len(a) == len(b) and any(x == ONE and y != ONE for x, y in zip(a, b, strict=True)):
+                        return True
+        return False
 
     def outer_product(self, value: ast.expr, rank: int) -> bool:
         """True when some elementwise node of this rank has a shape numba's analysis asserts on and
@@ -305,9 +436,20 @@ class OuterBroadcastPeel(RankedRewritePass):
             peeled = [p for p in candidates if p is not None]
             return None if len(peeled) != len(candidates) else self.rebuild(expr, peeled)
         if isinstance(expr, ast.Name):
-            return ast.Subscript(value=expr, slice=expr_of(idx), ctx=ast.Load())
+            # A unit axis broadcasts along the peeled one: every row reads its element 0.
+            at = "0" if ext[0] == ONE else idx
+            return ast.Subscript(value=expr, slice=expr_of(at), ctx=ast.Load())
         if isinstance(expr, ast.Subscript):
             return self.peel_subscript(expr, idx)
+        if is_matrix_transpose(expr, self.ranks):
+            # Row ``idx`` of ``x.T`` is column ``idx`` of ``x`` (nbody's ``x.T - x``).
+            assert isinstance(expr, ast.Attribute)
+            column = ast.Subscript(
+                value=expr.value,
+                slice=ast.Tuple(elts=[ast.Slice(), expr_of("0" if ext[0] == ONE else idx)], ctx=ast.Load()),
+                ctx=ast.Load(),
+            )
+            return column
         receiver = astype_receiver(expr)
         if receiver is not None and isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute):
             inner = self.peel(receiver, idx, rank)
@@ -344,7 +486,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         return {([ONE] * (rank - len(e)) + e)[0] for e in leaves if len(e) <= rank} - {ONE}
 
     def peel_rows(
-        self, value: ast.expr, ivar: str, rank: int
+        self, value: ast.expr, ivar: str, rank: int, full: bool = False
     ) -> tuple[list[str], ast.expr, ast.expr, list[list[str]]] | None:
         """``(loop variables, row, probe, checks)`` peeling one axis per loop until the row is no outer product
         (warpx_field_gather's ``sx[i] * sy[:, None] * sz`` still is), or None to decline. ``probe`` is the row
@@ -352,19 +494,26 @@ class OuterBroadcastPeel(RankedRewritePass):
 
         An inner axis two operands size (force_lj's ``fpair[i, :, None] * dpos[i]``) is peeled only when its
         tokens read no loop variable, and ``checks`` lists them, axis 0 included: the caller raises unless they
-        agree, so a size-1 axis numpy would broadcast is an error, never a wrong answer (:meth:`axis_tokens`)."""
+        agree, so a size-1 axis numpy would broadcast is an error, never a wrong answer (:meth:`axis_tokens`).
+
+        ``full`` peels every axis down to a scalar row, for a value whose rows would still broadcast a size-1 axis
+        against a sized one of the same rank (:meth:`unit_row_hazard`)."""
         row = self.peel(copy.deepcopy(value), ivar, rank)
         probe = self.peel(copy.deepcopy(value), "0", rank)
         if row is None or probe is None:
             return None
         ivars = [ivar]
         checks: list[list[str]] = []
-        while (depth := rank - len(ivars)) >= 2:
+        while (depth := rank - len(ivars)) >= (1 if full else 2):
             ext = self.extents_(row)
-            if ext is None or len(ext) != depth or ext[0] == ONE or not self.outer_product(row, depth):
+            if ext is None or len(ext) != depth:
+                break
+            if not full and (ext[0] == ONE or not self.outer_product(row, depth)):
                 break
             tokens = self.axis_tokens(row, depth)
-            if not tokens or (len(tokens) > 1 and any(token_reads(t, ivars) for t in tokens)):
+            if tokens is None or (not full and not tokens):
+                break
+            if len(tokens) > 1 and any(token_reads(t, ivars) for t in tokens):
                 break
             inner = f"{ivar}{len(ivars)}"
             next_row = self.peel(copy.deepcopy(row), inner, depth)
@@ -399,11 +548,17 @@ class OuterBroadcastPeel(RankedRewritePass):
         entries = list(sub.slice.elts) if isinstance(sub.slice, ast.Tuple) else [sub.slice]
         pos, kind, ext0 = axes[0]
         if pos is None:
-            if ext0 == ONE:
-                return None
-            entries = [*entries, expr_of(idx)]  # axis 0 is an unindexed trailing base axis
+            # Axis 0 is an unindexed trailing base axis; a size-1 one broadcasts, so every row reads its element 0.
+            entries = [*entries, expr_of("0" if ext0 == ONE else idx)]
         elif kind == "new":
             entries = entries[:pos] + entries[pos + 1 :]
+        elif kind == "fancy":
+            fancy = entries[pos]
+            entries = [
+                *entries[:pos],
+                ast.Subscript(value=fancy, slice=expr_of(idx), ctx=ast.Load()),
+                *entries[pos + 1 :],
+            ]
         else:
             e = entries[pos]
             if not isinstance(e, ast.Slice):
@@ -576,6 +731,37 @@ class OuterBroadcastPeel(RankedRewritePass):
         ast.fix_missing_locations(view)
         return [*peeled, view]
 
+    def hoist_call_operands(self, node: ast.Assign) -> list[ast.stmt] | None:
+        """``ke = 0.5 * np.sum(mass * (vel * vel))`` -> ``t = mass * (vel * vel)`` peeled, then ``ke = 0.5 *
+        np.sum(t)``: an argument of a call that is no elementwise op is never a peeled statement's value, and numba
+        asserts on its same-rank size-1 broadcast (nbody's ``mass`` of shape ``(N, 1)``). None when no such argument
+        peels."""
+        value = copy.deepcopy(node.value)
+        out: list[ast.stmt] = []
+        for call in walk_nodes(value):
+            if not isinstance(call, ast.Call) or self.operands_(call) is not None:
+                continue
+            for i, arg in enumerate(call.args):
+                if self.operands_(arg) is None or not self.unit_row_hazard(arg):
+                    continue
+                ext = self.extents_(arg)
+                if ext is None:
+                    continue
+                temp = f"__ob{self._ctr}_a"
+                self.ranks[temp] = len(ext)
+                bind = ast.copy_location(ast.Assign(targets=[store_(temp)], value=arg), node)
+                peeled = self.visit_Assign(bind)
+                if not isinstance(peeled, list):
+                    del self.ranks[temp]
+                    continue
+                call.args[i] = name_(temp)
+                out.extend(peeled)
+        if not out:
+            return None
+        rest = ast.copy_location(ast.Assign(targets=node.targets, value=value), node)
+        ast.fix_missing_locations(rest)
+        return [*out, rest]
+
     def hoist_matmul_operands(self, node: ast.Assign) -> list[ast.stmt] | None:
         """``c = (a @ b) / n[:, None]`` -> ``t = a @ b`` then ``c = t / n[:, None]`` peeled: a product has no
         extents this pass can place, a bound temp of known rank has. None when no product operand of the
@@ -619,7 +805,7 @@ class OuterBroadcastPeel(RankedRewritePass):
             return node
         target = node.targets[0]
         if isinstance(target, ast.Name) and target.id in self.once:
-            extents = self.extents_(node.value)
+            extents = self.binding_extents(node.value)
             if extents is not None and ONE in extents:
                 self.known[target.id] = extents
         self.expand_ellipses(node.value)
@@ -627,6 +813,8 @@ class OuterBroadcastPeel(RankedRewritePass):
         hoisted = self.hoist_view_base(node)
         if hoisted is not None:
             return hoisted
+        if (called := self.hoist_call_operands(node)) is not None:
+            return called
         if self.extents_(node.value) is None:
             lifted = self.hoist_matmul_operands(node)
             if lifted is not None:
@@ -644,6 +832,12 @@ class OuterBroadcastPeel(RankedRewritePass):
             return node
         temp, ivar = f"__ob{self._ctr}", f"__ob{self._ctr}_i"
         peeled = self.peel_rows(node.value, ivar, rank)
+        full = peeled is not None and self.unit_row_hazard(peeled[1])
+        if full:
+            # Rows would still pair a size-1 axis with a sized one: loop every axis, down to scalars.
+            peeled = self.peel_rows(node.value, ivar, rank, full=True)
+            if peeled is not None and len(peeled[0]) != rank:
+                peeled = None
         if peeled is None:
             return node
         ivars, row, probe, checks = peeled
@@ -661,7 +855,8 @@ class OuterBroadcastPeel(RankedRewritePass):
             # A bare Name is a binding, so allocate it. The probe row carries the promoted dtype
             # (``X + Y[:, None] * 1j`` is complex though neither operand is); only its dtype is read.
             out.append(ast.Assign(targets=[store_(temp)], value=probe))
-            out.append(ast.parse(f"{dest} = np.empty(({shape},), {temp}.dtype)").body[0])
+            dtype = f"np.asarray({temp}).dtype" if full else f"{temp}.dtype"  # a scalar probe has no dtype
+            out.append(ast.parse(f"{dest} = np.empty(({shape},), {dtype})").body[0])
         elif not direct and isinstance(target, ast.Subscript):
             # The store casts into the target's dtype, so the temp takes it.
             out.append(ast.parse(f"{dest} = np.empty(({shape},), ({ast.unparse(target.value)}).dtype)").body[0])

@@ -135,7 +135,7 @@ class ValueHoist:
     the statements computing each temp in front of it. Walks statements only and rewrites just the values holding the
     form's cue. ``ctr`` carries across statements so every temp name is fresh."""
 
-    __slots__ = ("changed", "ctr", "form", "live", "pre", "tables")
+    __slots__ = ("changed", "ctr", "flow", "form", "live", "pre", "tables")
 
     def __init__(self, form: HoistForm, tables: HoistTables) -> None:
         self.form = form
@@ -144,10 +144,20 @@ class ValueHoist:
         self.ctr = 0
         self.pre: list[ast.stmt] = []
         self.changed = False
+        #: Names the rank table drops for binding several ranks, ranked at the statement that last bound them to a
+        #: temp (cp2k_grid_integrate's ``contracted = np.tensordot(contracted, ...)`` chain). :meth:`forget_flow`
+        #: drops them once the scope is done, so no later pass reads one rank for every binding.
+        self.flow: OrderedSet[str] = OrderedSet()
 
     def visit(self, node: ast.stmt) -> list[ast.stmt]:
         """Hoist the form out of one statement."""
         return self.block([node]) if self.live else [node]
+
+    def forget_flow(self) -> None:
+        """Drop the ranks :meth:`rank_rebinding` gave, after the last statement of the scope."""
+        for name in self.flow:
+            self.tables.ranks.pop(name, None)
+        self.flow = OrderedSet()
 
     def queue(self, lines: list[str]) -> None:
         """Queue source lines computing a temp, spliced in front of the current statement."""
@@ -184,8 +194,24 @@ class ValueHoist:
         if value is None or not has_cue(value, self.form):
             return [stmt]
         stmt.value = FormRewriter(self).rewrite(value)
+        self.rank_rebinding(stmt)
         if not self.pre:
             return [stmt]
         self.changed = True
         hoisted, self.pre = self.pre, []
         return [*hoisted, stmt]
+
+    def rank_rebinding(self, stmt: ast.stmt) -> None:
+        """Rank a name the table leaves unranked by the temp it is bound to here, for the statements after it."""
+        if not (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(target := stmt.targets[0], ast.Name)
+            and isinstance(stmt.value, ast.Name)
+            and stmt.value.id in self.tables.ranks
+        ):
+            return
+        if target.id in self.tables.ranks and target.id not in self.flow:
+            return
+        self.tables.ranks[target.id] = self.tables.ranks[stmt.value.id]
+        self.flow.add(target.id)

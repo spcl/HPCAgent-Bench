@@ -501,6 +501,47 @@ def tensordot_contracted(value: ast.Call) -> int | None:
     return None
 
 
+def element_key(helper: str, position: int) -> str:
+    """The ``call_returns`` key of element ``position`` of the tuple ``helper`` returns."""
+    return f"{helper}[{position}]"
+
+
+def call_unpack_bindings(tree: ast.AST) -> list[tuple[str, str]]:
+    """``(name, element key)`` of every ``a, b = helper(...)`` under ``tree`` (nbody's ``dx, dy, dz, dist2 =
+    pairwise_sep(pos)``), keyed as :func:`helper_return_ranks` records a helper's tuple elements."""
+    out: list[tuple[str, str]] = []
+    for node in walk_nodes(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Tuple)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+        ):
+            continue
+        for i, elt in enumerate(node.targets[0].elts):
+            if isinstance(elt, ast.Name):
+                out.append((elt.id, element_key(node.value.func.id, i)))
+    return out
+
+
+def tuple_return_ranks(fn: ast.FunctionDef, ranks: dict[str, int]) -> list[int] | None:
+    """Per element, the rank of the tuple every ``return`` of ``fn`` spells out with one length; None otherwise."""
+    values = [n.value for n in walk_nodes(fn) if isinstance(n, ast.Return) and n.value is not None]
+    if not values or not all(isinstance(v, ast.Tuple) for v in values):
+        return None
+    lengths = {len(v.elts) for v in values if isinstance(v, ast.Tuple)}
+    if len(lengths) != 1:
+        return None
+    out: list[int] = []
+    for i in range(lengths.pop()):
+        found = {expr_rank(v.elts[i], ranks) for v in values if isinstance(v, ast.Tuple)}
+        if len(found) != 1 or (rank := found.pop()) is None:
+            return None
+        out.append(rank)
+    return out
+
+
 def call_return_rank(value: ast.expr, call_returns: dict[str, int]) -> int | None:
     """Rank of ``helper(...)`` for a local function with a known return rank, which ``expr_rank`` cannot see."""
     if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
@@ -614,6 +655,7 @@ def rank_table(tree: ast.AST, seed: dict[str, int], call_returns: dict[str, int]
     ranks = dict(seed)
     # The tree does not change while the table converges: index its bindings once, not every round.
     bindings, first_values = name_binding_index(tree)
+    unpacked = call_unpack_bindings(tree) if call_returns else []
     for unused in range(FIXPOINT_ROUNDS):
         changed = False
         active_tuple_lengths = tuple_lengths(bindings, first_values, ranks, seed)
@@ -621,6 +663,11 @@ def rank_table(tree: ast.AST, seed: dict[str, int], call_returns: dict[str, int]
             r = expr_rank(value, ranks)
             if r is None and call_returns is not None:
                 r = call_return_rank(value, call_returns)
+            if r is not None and ranks.get(name) != r:
+                ranks[name] = r
+                changed = True
+        for name, key in unpacked:
+            r = call_returns.get(key) if call_returns else None
             if r is not None and ranks.get(name) != r:
                 ranks[name] = r
                 changed = True
@@ -829,13 +876,15 @@ def return_rank(fn: ast.FunctionDef, ranks: dict[str, int], seed_ranks: dict[str
 
 
 def infer_param_ranks(
-    funcs: list[ast.FunctionDef], kernel_name: str, kir_seed: dict[str, int]
+    funcs: list[ast.FunctionDef], kernel_name: str, kir_seed: dict[str, int], tuples: bool = False
 ) -> dict[str, dict[str, int]]:
     """Per-function ``{param: ndim}`` seeds, iterated to a fixpoint so helper-to-helper calls resolve.
 
     The kernel's params come from ``kir_seed``; a helper's from its positional call sites and the body
     lower bounds of :func:`param_body_rank_evidence`, merged by MAX: a smaller conflicting value only
-    comes from a flow-insensitive mix-up (a reshaped local passed on), never from the param's real rank."""
+    comes from a flow-insensitive mix-up (a reshaped local passed on), never from the param's real rank.
+
+    ``tuples`` (numba) also ranks the names a helper's returned tuple unpacks into (:func:`call_unpack_bindings`)."""
     by_name = {fn.name: fn for fn in funcs}
     params = {fn.name: [a.arg for a in fn.args.args] for fn in funcs}
     seeds: dict[str, dict[str, int]] = {fn.name: dict(param_body_rank_evidence(fn)) for fn in funcs}
@@ -847,7 +896,12 @@ def infer_param_ranks(
             if fn.name == kernel_name:
                 base.update(kir_seed)
             ranks = rank_table(fn, base, call_returns=ret_rank)
-            rr = return_rank(fn, ranks, seed_ranks=base)
+            elements = tuple_return_ranks(fn, ranks) if tuples else None
+            for i, element in enumerate(elements or []):
+                if ret_rank.get(element_key(fn.name, i)) != element:
+                    ret_rank[element_key(fn.name, i)] = element
+                    changed = True
+            rr = None if elements is not None else return_rank(fn, ranks, seed_ranks=base)
             if rr is not None and ret_rank.get(fn.name) != rr:
                 ret_rank[fn.name] = rr
                 changed = True
@@ -880,7 +934,12 @@ def helper_return_ranks(
             seed = dict(param_ranks.get(fn.name, {}))
             if fn.name == kernel_name:
                 seed.update(kernel_seed)
-            rank = return_rank(fn, rank_table(fn, seed, call_returns=returns), seed_ranks=seed)
+            table = rank_table(fn, seed, call_returns=returns)
+            elements = tuple_return_ranks(fn, table)
+            if elements is not None:
+                returns.update({element_key(fn.name, i): r for i, r in enumerate(elements)})
+                continue
+            rank = return_rank(fn, table, seed_ranks=seed)
             if rank is not None:
                 returns[fn.name] = rank
     return returns
