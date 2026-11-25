@@ -7,19 +7,19 @@
 
 """CLOUDSC as one routine: the whole ECMWF cloud microphysics of ``CLOUDSC``, driven over NPROMA blocks.
 
-``CLOUDSCOUTER`` calls ``CLOUDSC`` once per block of ``klon`` columns, ``nblocks`` times. A call runs, in
+``CLOUDSCOUTER`` calls ``CLOUDSC`` once per block of ``KLON`` columns, ``nblocks`` times. A call runs, in
 order: the negative-condensate tidy, the saturation fields of every level, then the level loop from
 ``NCLDTOP`` down -- supersaturation, convective detrainment and subsidence, erosion, the dT-forcing
 condensation and evaporation, ice deposition, sedimentation and precipitation cover, snow and warm-rain
 autoconversion, riming, melting, freezing, rain and snow evaporation, the cloud-cover update, the sink
 limiter with its per-column species ordering, and the 5x5 implicit LU solve -- and last the flux
-diagnostics. Blocks share nothing, so the port runs all blocks of one level as one ``(nblocks, klon)``
+diagnostics. Blocks share nothing, so the port runs all blocks of one level as one ``(nblocks, KLON)``
 plane; the level loop and the flux recurrence are the only sequential parts. A branch of the source is a
 ``np.where``, and the operand of a division or a fractional power a branch guards is itself guarded, so no
 column computes a 0/0 or a NaN it will not use.
 
-Layout: Fortran ``PT(KLON, KLEV, NBLOCKS)`` is the C-contiguous ``pt[nblocks, klev, klon]`` (same memory)
-and ``PCLV(KLON, KLEV, NCLV, NBLOCKS)`` is ``pclv[nblocks, nclv, klev, klon]``. Species and levels are
+Layout: Fortran ``PT(KLON, KLEV, NBLOCKS)`` is the C-contiguous ``pt[nblocks, klev, KLON]`` (same memory)
+and ``PCLV(KLON, KLEV, NCLV, NBLOCKS)`` is ``pclv[nblocks, nclv, klev, KLON]``. Species and levels are
 0-based: ``QL, QI, QR, QS, QV = 0..4`` and level 0 is the model top.
 
 The configuration is the one dace-fortran's CloudSC test runs the source under: the constants below,
@@ -41,6 +41,8 @@ QR = 2
 QS = 3
 QV = 4
 NCLV = 5
+#: Columns of one NPROMA block (``KLON``): a compile-time constant, so a column loop has a literal extent.
+KLON = 64
 #: First level of the microphysics loop (1-based, as ``YRECLDP%NCLDTOP``).
 NCLDTOP = 15
 
@@ -221,7 +223,6 @@ def cloudsc_monolith(
     pextra,
     ptsphy,
     klev,
-    klon,
     nblocks,
 ):
     dtype = pt.dtype
@@ -261,11 +262,11 @@ def cloudsc_monolith(
     tendency_loc_cld[:, 0 : NCLV - 1, :, :] = 0.0
     pextra[:, :, :] = 0.0
 
-    ztp1 = np.empty((nblocks, klev, klon), dtype=dtype)
-    za = np.empty((nblocks, klev, klon), dtype=dtype)
-    zaorig = np.empty((nblocks, klev, klon), dtype=dtype)
-    zqx = np.empty((nblocks, NCLV, klev, klon), dtype=dtype)
-    zqx0 = np.empty((nblocks, NCLV, klev, klon), dtype=dtype)
+    ztp1 = np.empty((nblocks, klev, KLON), dtype=dtype)
+    za = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zaorig = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zqx = np.empty((nblocks, NCLV, klev, KLON), dtype=dtype)
+    zqx0 = np.empty((nblocks, NCLV, klev, KLON), dtype=dtype)
     ztp1[:, :, :] = pt + ptsphy * tendency_tmp_t
     zqx[:, QV, :, :] = pq + ptsphy * tendency_tmp_q
     zqx0[:, QV, :, :] = pq + ptsphy * tendency_tmp_q
@@ -274,11 +275,11 @@ def cloudsc_monolith(
     zqx[:, 0 : NCLV - 1, :, :] = pclv[:, 0 : NCLV - 1, :, :] + ptsphy * tendency_tmp_cld[:, 0 : NCLV - 1, :, :]
     zqx0[:, 0 : NCLV - 1, :, :] = pclv[:, 0 : NCLV - 1, :, :] + ptsphy * tendency_tmp_cld[:, 0 : NCLV - 1, :, :]
 
-    zpfplsx = np.zeros((nblocks, NCLV, klev + 1, klon), dtype=dtype)
-    zqxn2d = np.zeros((nblocks, NCLV, klev, klon), dtype=dtype)
-    zlneg = np.zeros((nblocks, NCLV, klev, klon), dtype=dtype)
+    zpfplsx = np.zeros((nblocks, NCLV, klev + 1, KLON), dtype=dtype)
+    zqxn2d = np.zeros((nblocks, NCLV, klev, KLON), dtype=dtype)
+    zlneg = np.zeros((nblocks, NCLV, klev, KLON), dtype=dtype)
     prainfrac_toprfz[:, :] = 0.0
-    llrainliq = np.ones((nblocks, klon), dtype=np.int32)
+    llrainliq = np.ones((nblocks, KLON), dtype=np.int32)
 
     # Too little cloud water or cover: liquid and ice evaporate into vapour.
     tidy = (zqx[:, QL, :, :] + zqx[:, QI, :, :] < RLMIN) | (za < RAMIN)
@@ -310,13 +311,13 @@ def cloudsc_monolith(
         zqx[:, jm, :, :] = np.where(small, 0.0, zqx[:, jm, :, :])
 
     # Saturation over the mixed phase, ice and liquid.
-    zfoealfa = np.empty((nblocks, klev, klon), dtype=dtype)
-    zfoeewmt = np.empty((nblocks, klev, klon), dtype=dtype)
-    zqsmix = np.empty((nblocks, klev, klon), dtype=dtype)
-    zfoeew = np.empty((nblocks, klev, klon), dtype=dtype)
-    zqsice = np.empty((nblocks, klev, klon), dtype=dtype)
-    zfoeeliqt = np.empty((nblocks, klev, klon), dtype=dtype)
-    zqsliq = np.empty((nblocks, klev, klon), dtype=dtype)
+    zfoealfa = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zfoeewmt = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zqsmix = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zfoeew = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zqsice = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zfoeeliqt = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zqsliq = np.empty((nblocks, klev, KLON), dtype=dtype)
     zfoealfa[:, :, :] = foealfa(ztp1)
     zfoeewmt[:, :, :] = np.minimum(foeewm(ztp1) / pap, 0.5)
     zqsmix[:, :, :] = zfoeewmt / (1.0 - RETV * zfoeewmt)
@@ -328,43 +329,43 @@ def cloudsc_monolith(
     zqsliq[:, :, :] = zfoeeliqt / (1.0 - RETV * zfoeeliqt)
 
     za[:, :, :] = np.maximum(0.0, np.minimum(1.0, za))
-    zli = np.empty((nblocks, klev, klon), dtype=dtype)
-    zliqfrac = np.empty((nblocks, klev, klon), dtype=dtype)
-    zicefrac = np.empty((nblocks, klev, klon), dtype=dtype)
+    zli = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zliqfrac = np.empty((nblocks, klev, KLON), dtype=dtype)
+    zicefrac = np.empty((nblocks, klev, KLON), dtype=dtype)
     zli[:, :, :] = zqx[:, QL, :, :] + zqx[:, QI, :, :]
     cloudy = zli > RLMIN
     zliqfrac[:, :, :] = np.where(cloudy, zqx[:, QL, :, :] / np.where(cloudy, zli, 1.0), 0.0)
     zicefrac[:, :, :] = np.where(cloudy, 1.0 - zliqfrac, 0.0)
 
     # Per-column state carried from level to level.
-    zanewm1 = np.zeros((nblocks, klon), dtype=dtype)
-    zcovpclr = np.zeros((nblocks, klon), dtype=dtype)
-    zcovpmax = np.zeros((nblocks, klon), dtype=dtype)
-    zcovptot = np.zeros((nblocks, klon), dtype=dtype)
-    zcldtopdist = np.zeros((nblocks, klon), dtype=dtype)
-    zqxnm1 = np.zeros((nblocks, NCLV, klon), dtype=dtype)
+    zanewm1 = np.zeros((nblocks, KLON), dtype=dtype)
+    zcovpclr = np.zeros((nblocks, KLON), dtype=dtype)
+    zcovpmax = np.zeros((nblocks, KLON), dtype=dtype)
+    zcovptot = np.zeros((nblocks, KLON), dtype=dtype)
+    zcldtopdist = np.zeros((nblocks, KLON), dtype=dtype)
+    zqxnm1 = np.zeros((nblocks, NCLV, KLON), dtype=dtype)
     # Per-level work planes.
-    zqxfg = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    zsolqa = np.empty((nblocks, NCLV, NCLV, klon), dtype=dtype)
-    zsolqb = np.empty((nblocks, NCLV, NCLV, klon), dtype=dtype)
-    zqlhs = np.empty((nblocks, NCLV, NCLV, klon), dtype=dtype)
-    zfallsrce = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    zfallsink = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    zconvsrce = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    zconvsink = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    zpsupsatsrce = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    zlcust = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    zratio = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    zsinksum = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    zqxn = np.empty((nblocks, NCLV, klon), dtype=dtype)
-    iorder = np.empty((nblocks, NCLV, klon), dtype=np.int32)
-    llindex1 = np.empty((nblocks, NCLV, klon), dtype=np.int32)
-    llindex3 = np.empty((nblocks, NCLV, NCLV, klon), dtype=np.int32)
-    zsolab = np.empty((nblocks, klon), dtype=dtype)
-    zsolac = np.empty((nblocks, klon), dtype=dtype)
-    zqpretot = np.empty((nblocks, klon), dtype=dtype)
-    zlfinalsum = np.empty((nblocks, klon), dtype=dtype)
-    zmin = np.empty((nblocks, klon), dtype=dtype)
+    zqxfg = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    zsolqa = np.empty((nblocks, NCLV, NCLV, KLON), dtype=dtype)
+    zsolqb = np.empty((nblocks, NCLV, NCLV, KLON), dtype=dtype)
+    zqlhs = np.empty((nblocks, NCLV, NCLV, KLON), dtype=dtype)
+    zfallsrce = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    zfallsink = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    zconvsrce = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    zconvsink = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    zpsupsatsrce = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    zlcust = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    zratio = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    zsinksum = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    zqxn = np.empty((nblocks, NCLV, KLON), dtype=dtype)
+    iorder = np.empty((nblocks, NCLV, KLON), dtype=np.int32)
+    llindex1 = np.empty((nblocks, NCLV, KLON), dtype=np.int32)
+    llindex3 = np.empty((nblocks, NCLV, NCLV, KLON), dtype=np.int32)
+    zsolab = np.empty((nblocks, KLON), dtype=dtype)
+    zsolac = np.empty((nblocks, KLON), dtype=dtype)
+    zqpretot = np.empty((nblocks, KLON), dtype=dtype)
+    zlfinalsum = np.empty((nblocks, KLON), dtype=dtype)
+    zmin = np.empty((nblocks, KLON), dtype=dtype)
 
     for jk in range(NCLDTOP - 1, klev):
         zqxfg[:, :, :] = zqx[:, :, jk, :]
@@ -498,7 +499,7 @@ def cloudsc_monolith(
         # Saturation change under the vertical motion and the radiative heating of the step.
         zdtdp = zrdcp * t / pap[:, jk, :]
         zdpmxdt = zdp * zqtmst
-        zmfdn = np.zeros((nblocks, klon), dtype=dtype)
+        zmfdn = np.zeros((nblocks, KLON), dtype=dtype)
         if jk < klev - 1:
             zmfdn[:, :] = pmfu[:, jk + 1, :] + pmfd[:, jk + 1, :]
         zwtot = pvervel[:, jk, :] + 0.5 * RG * (pmfu[:, jk, :] + pmfd[:, jk, :] + zmfdn)
@@ -832,7 +833,7 @@ def cloudsc_monolith(
                 else:
                     zqlhs[:, jn, jm, :] = -zsolqb[:, jn, jm, :]
         for jm in range(NCLV):
-            zexplicit = np.zeros((nblocks, klon), dtype=dtype)
+            zexplicit = np.zeros((nblocks, KLON), dtype=dtype)
             for jn in range(NCLV):
                 zexplicit = zexplicit + zsolqa[:, jm, jn, :]
             zqxn[:, jm, :] = zqx[:, jm, jk, :] + zexplicit
