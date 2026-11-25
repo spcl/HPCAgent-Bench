@@ -133,6 +133,7 @@ def sandbox_build(
         as_exe: bool,
         devices: bool = False,
         agent_root: pathlib.Path | None = None,
+        audit: bool = True,
     ) -> sandbox.BuildResult:
         spawned.append(cmds)
         return sandbox.BuildResult(True, artifact, "")
