@@ -224,14 +224,46 @@ def canon_kernel_row(
         unattempted_kernels(canon_frame, column, kernels, baseline, baseline_fallback) if mark_pending else frozenset()
     )
     ratios, delivered = canon.tag_speedups(times, baseline, column, [k for k in kernels if k not in pending])
+    replicates = canon_replicates(
+        canon_frame, times, (*references, baseline_fallback), baseline, column, [k for k in ratios if delivered[k]]
+    )
+    ratios_low: dict[str, float] = {}
+    ratios_high: dict[str, float] = {}
+    for kernel, drawn in replicates.items():
+        interval = summary.rep_interval(ratios[kernel], np.asarray(drawn))
+        ratios_low[kernel], ratios_high[kernel] = interval.low, interval.high
     nan = math.nan
     numerator_ms = {k: base.get(k, nan) for k in ratios}
     denominator_ms = {k: cur.get(k, nan) for k in ratios}
     notes = [note for note in (pending_note(pending), fallback_note(substituted, baseline_fallback)) if note != "none"]
     return Row(
         column, canon_label(column), ratios, numerator_ms, denominator_ms, "; ".join(notes) or "none",
-        palette.framework_color(column), palette.framework_marker(column), delivered=delivered, pending=pending,
+        palette.framework_color(column), palette.framework_marker(column), ratios_low, ratios_high,
+        delivered=delivered, pending=pending, replicates=replicates,
     )  # fmt: skip
+
+
+def canon_replicates(
+    canon_frame: pd.DataFrame,
+    times: Mapping[str, Mapping[str, float]],
+    references: Sequence[str],
+    baseline: str,
+    column: str,
+    kernels: Sequence[str],
+) -> dict[str, tuple[float, ...]]:
+    """Each kernel's timed-run bootstrap replicates of its canon speedup (:func:`summary.rep_replicates`, one input),
+    where both sides kept their runs. The baseline's runs are those of the reference column that timed it: the one
+    whose median is the baseline's time for that kernel."""
+    reps = canon.read_reps(canon_frame)
+    out: dict[str, tuple[float, ...]] = {}
+    for kernel in kernels:
+        base_ms = times[baseline][kernel]
+        timed_by = [c for c in (baseline, *references) if c and times.get(c, {}).get(kernel) == base_ms]
+        base = next((reps[c][kernel] for c in timed_by if kernel in reps.get(c, {})), ())
+        own = reps.get(column, {}).get(kernel, ())
+        if base and own:
+            out[kernel] = tuple(summary.rep_replicates([(own, base)]).tolist())
+    return out
 
 
 def require_one_sweep(canon_frame: pd.DataFrame, columns: Collection[str], kernels: Sequence[str]) -> None:

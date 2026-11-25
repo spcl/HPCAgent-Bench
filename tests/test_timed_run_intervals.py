@@ -92,3 +92,23 @@ def test_the_figures_geomean_whisker_widens_with_kept_runs() -> None:
     point, low, high = per_kernel.summary_geomean(cells)
     assert point == pytest.approx(2.0)
     assert low < point < high
+
+
+def test_a_compiler_row_draws_its_kernels_timed_run_interval() -> None:
+    """A compiler (canon) row had no per-kernel interval: the canon table kept only the median. With its runs kept
+    (``canon.reps_ms``, schema 38) the row bootstraps one per kernel, and a kernel without runs draws none."""
+    noisy = [100.0, 104.0, 96.0, 101.0, 99.0]
+    frame = pd.DataFrame(
+        [
+            {"run": "r", "column": "numba", "kernel": "k1", "median_ms": 200.0, "validated": 1,
+             "reps_ms": json.dumps([2 * ms for ms in noisy])},
+            {"run": "r", "column": "dace_cpu", "kernel": "k1", "median_ms": 100.0, "validated": 1,
+             "reps_ms": json.dumps(noisy)},
+            {"run": "r", "column": "numba", "kernel": "k2", "median_ms": 200.0, "validated": 1, "reps_ms": ""},
+            {"run": "r", "column": "dace_cpu", "kernel": "k2", "median_ms": 100.0, "validated": 1, "reps_ms": ""},
+        ]
+    )  # fmt: skip
+    row = kernel_speedups.canon_kernel_row(frame, "dace_cpu", ["k1", "k2"], baseline="numba")
+    assert row.ratios["k1"] == pytest.approx(2.0)
+    assert row.ratios_low["k1"] < 2.0 < row.ratios_high["k1"]
+    assert "k2" not in row.ratios_low

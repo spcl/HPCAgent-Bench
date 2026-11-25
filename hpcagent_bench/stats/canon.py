@@ -26,6 +26,7 @@ __all__ = [
     "build_times",
     "format_build_times",
     "phase_label",
+    "read_reps",
     "read_status",
     "read_times",
     "tag_speedups",
@@ -52,6 +53,20 @@ def read_times(frame: "pd.DataFrame") -> dict[str, dict[str, float]]:
         ms = float(cell)
         if ms > 0:
             out[str(column)][str(kernel)] = ms
+    return out
+
+
+def read_reps(frame: "pd.DataFrame") -> dict[str, dict[str, tuple[float, ...]]]:
+    """``column -> {kernel: timed runs in ms}`` for the validated rows that kept their runs (schema 38)."""
+    import json
+
+    out: dict[str, dict[str, tuple[float, ...]]] = collections.defaultdict(dict)
+    if "reps_ms" not in frame.columns:
+        return out
+    columns = (series_of(frame, name) for name in ("validated", "reps_ms", "column", "kernel"))
+    for validated, cell, column, kernel in zip(*columns, strict=False):
+        if validated == 1 and isinstance(cell, str) and cell:
+            out[str(column)][str(kernel)] = tuple(json.loads(cell))
     return out
 
 
