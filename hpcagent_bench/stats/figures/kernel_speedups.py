@@ -624,7 +624,7 @@ def kernel_figure(
 
 def token_summary_table(rows: Sequence[Row]) -> pd.DataFrame:
     """Each token-spending row's GEOMEAN spend over its served kernels with a task total, with the figure's 95%
-    interval (blank under ``summary.MIN_PAIRS_FOR_INTERVAL`` kernels; all-blank fails Rule 5). Non-spending rows are
+    interval (blank under ``summary.MIN_INTERVAL_SAMPLES`` kernels; all-blank fails Rule 5). Non-spending rows are
     ABSENT."""
     records: list[dict[str, object]] = []
     for row in rows:

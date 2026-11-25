@@ -285,7 +285,7 @@ def kernel_medians(cells: Sequence[KernelCell]) -> np.ndarray:
 
 def summary_geomean(cells: Sequence[KernelCell]) -> tuple[float, float, float]:
     """``(geomean, low, high)`` over the plotted kernels' own medians, with its 95% bootstrap interval, withheld below
-    :data:`~hpcagent_bench.stats.summary.MIN_PAIRS_FOR_INTERVAL` kernels: nested over the kernels and their timed
+    :data:`~hpcagent_bench.stats.summary.MIN_INTERVAL_SAMPLES` kernels: nested over the kernels and their timed
     runs when any kernel kept its runs (:func:`~hpcagent_bench.stats.summary.nested_geomean_interval`), else BCa over
     the kernels (:func:`~hpcagent_bench.stats.summary.geomean_interval`)."""
     summarized = [cell for cell in cells if cell.delivered and not cell.flagged and math.isfinite(cell.median())]
@@ -492,6 +492,10 @@ def draw_ci(
         point, low, high = cell_point(cell, log2_space)
         if math.isfinite(low) and math.isfinite(high) and low < high:
             ax.vlines(x, low, high, color=one.color, linewidth=type_.line_width, alpha=0.6, zorder=INTERVAL_Z)
+        elif cell.n > 1:
+            # Too few episodes for an interval (summary.MIN_INTERVAL_SAMPLES): each one is drawn instead.
+            for value, dx in zip(cell.episodes, dodge_offsets(cell.n, RUN_SPREAD * BOX_WIDTH), strict=True):
+                plotstyle.point_mark(ax, x + dx, value, one.color, "o", True, size=RUN_MARK_PT**2)
         plotstyle.point_mark(ax, x, point, one.color, one.marker, one.filled, size=size)
 
 

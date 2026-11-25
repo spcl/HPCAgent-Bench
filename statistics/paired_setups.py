@@ -531,7 +531,7 @@ def cost_leg(left: str, right: str, tokens: dict[tuple[str, str], float], exclud
 def tested_p(change: significance.Result) -> float:
     """The leg's p, or NaN when no test was performed (``degenerate`` or ``underpowered``), so such legs do not
     enter the correction's ``m``."""
-    if change.n < summary.MIN_PAIRS_FOR_INTERVAL:
+    if change.n < summary.MIN_INTERVAL_SAMPLES:
         return math.nan
     return change.pvalue
 

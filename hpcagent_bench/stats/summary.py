@@ -22,7 +22,6 @@ __all__ = [
     "MAD_TO_SIGMA",
     "MEANAD_TO_SIGMA",
     "MIN_INTERVAL_SAMPLES",
-    "MIN_PAIRS_FOR_INTERVAL",
     "SIGN_FLIP_DRAWS",
     "SIGN_FLIP_EXACT_MAX_N",
     "FloatArray",
@@ -77,8 +76,11 @@ MEANAD_TO_SIGMA: float = 1.253314
 #: "very bad" (OS-hiccup) samples, not ordinary run-to-run jitter.
 DEFAULT_MAD_Z: float = 5.0
 
-#: Fewest samples a percentile bootstrap of a MEDIAN can say anything about.
-MIN_INTERVAL_SAMPLES: int = 5
+#: Fewest values any interval here is drawn from; below it an interval is withheld (NaN ends, ``"underpowered"``).
+#: Six is the first n where a 95% interval can hold: a two-sided sign-flip test's smallest attainable p at n = 5 is
+#: 0.0625, the order-statistic median interval covers 93.75% at n = 5, and a bootstrap of three values has ten
+#: distinct resamples.
+MIN_INTERVAL_SAMPLES: int = 6
 
 #: Bootstrap median-CI defaults, exposed so callers and docs can report them.
 DEFAULT_CONFIDENCE: float = 0.95
@@ -153,11 +155,6 @@ def default_alpha() -> float:
     return config.current().statistics.alpha
 
 
-#: Below this a two-sided sign-flip test cannot reach alpha = 0.05 whatever the data says
-#: (its smallest attainable p at n = 5 is 0.0625), so an interval would be decoration.
-MIN_PAIRS_FOR_INTERVAL: int = 6
-
-
 @dataclass(frozen=True, slots=True)
 class Interval:
     """A confidence interval and WHAT IT IS FOR (``statistic``), so a table never confuses two."""
@@ -185,12 +182,14 @@ def bootstrap_ci(
     seed: int = 0,
 ) -> Interval:
     """Non-parametric bootstrap interval for ``statistic`` (a numpy reduction taking ``axis``) of ``samples`` as
-    given; a BCa failure falls back to percentile and SAYS SO in ``method``. Fewer than 3 samples or no spread is a
-    degenerate interval."""
+    given; a BCa failure falls back to percentile and SAYS SO in ``method``. Withheld (NaN ends, ``"underpowered"``)
+    below :data:`MIN_INTERVAL_SAMPLES` samples; no spread is the point alone."""
     x: FloatArray = np.asarray(samples, dtype=np.float64)
     n = int(x.size)
     point = float(statistic(x)) if n else math.nan
-    if n < 3 or float(np.ptp(x)) == 0.0:
+    if n < MIN_INTERVAL_SAMPLES:
+        return Interval(name, point, math.nan, math.nan, confidence, "underpowered", n)
+    if float(np.ptp(x)) == 0.0:
         return Interval(name, point, point, point, confidence, f"bootstrap-{method}", n)
     from scipy.stats import bootstrap  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
@@ -222,12 +221,15 @@ def mean_ratio_ci(
     seed: int = 0,
 ) -> Interval:
     """``mean(numerator) / mean(denominator)`` over paired samples with its paired BCa bootstrap interval (a cost
-    change, SC15); percentile fallback named in ``method``; fewer than 3 pairs or no spread is the point alone."""
+    change, SC15); percentile fallback named in ``method``; withheld below :data:`MIN_INTERVAL_SAMPLES` pairs, and
+    no spread is the point alone."""
     top: FloatArray = np.asarray(numerator, dtype=np.float64)
     bottom: FloatArray = np.asarray(denominator, dtype=np.float64)
     n = int(top.size)
     point = float(np.mean(top) / np.mean(bottom)) if n else math.nan
-    if n < 3 or (float(np.ptp(top)) == 0.0 and float(np.ptp(bottom)) == 0.0):
+    if n < MIN_INTERVAL_SAMPLES:
+        return Interval("mean ratio", point, math.nan, math.nan, confidence, "underpowered", n)
+    if float(np.ptp(top)) == 0.0 and float(np.ptp(bottom)) == 0.0:
         return Interval("mean ratio", point, point, point, confidence, "bootstrap-degenerate", n)
     from scipy.stats import bootstrap  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
@@ -296,7 +298,7 @@ def geomean(values: Samples, unusable: Unusable = Unusable.RAISE) -> float:
 
 def geomean_ci(values: Samples, confidence: float | None = None) -> Interval:
     """Geometric mean and its BCa bootstrap interval, resampled in LOG space (ends asymmetric about the point);
-    fewer than 3 values or no spread is the point alone."""
+    withheld below :data:`MIN_INTERVAL_SAMPLES` values, and no spread is the point alone."""
     confidence = 1.0 - default_alpha() if confidence is None else confidence
     x: FloatArray = np.asarray(values, dtype=np.float64)
     point = geomean(x)
@@ -307,12 +309,12 @@ def geomean_ci(values: Samples, confidence: float | None = None) -> Interval:
 def geomean_interval(values: Samples, confidence: float | None = None) -> Interval:
     """The geometric mean and the interval every figure and table draws for it: :func:`geomean_ci`'s
     bootstrap interval, withheld (NaN ends, ``method`` ``"underpowered"``) below
-    :data:`MIN_PAIRS_FOR_INTERVAL` values. An empty set is all NaN."""
+    :data:`MIN_INTERVAL_SAMPLES` values. An empty set is all NaN."""
     confidence = 1.0 - default_alpha() if confidence is None else confidence
     x: FloatArray = np.asarray(values, dtype=np.float64)
     if x.size == 0:
         return Interval("geomean", math.nan, math.nan, math.nan, confidence, "underpowered", 0)
-    if x.size < MIN_PAIRS_FOR_INTERVAL:
+    if x.size < MIN_INTERVAL_SAMPLES:
         return Interval("geomean", geomean(x), math.nan, math.nan, confidence, "underpowered", int(x.size))
     return geomean_ci(x, confidence=confidence)
 
@@ -362,10 +364,10 @@ def nested_geomean_interval(
     """The geomean of the kernels' ``points`` with a two-level percentile bootstrap: each draw resamples the kernels
     with replacement, then takes one timed-run replicate of each drawn kernel's S_i (its point where ``replicates``
     holds none), so the interval carries both the kernel sample and the run-to-run noise. Withheld below
-    :data:`MIN_PAIRS_FOR_INTERVAL` kernels, as :func:`geomean_interval` is."""
+    :data:`MIN_INTERVAL_SAMPLES` kernels, as :func:`geomean_interval` is."""
     confidence = 1.0 - default_alpha() if confidence is None else confidence
     x: FloatArray = np.asarray(points, dtype=np.float64)
-    if x.size < MIN_PAIRS_FOR_INTERVAL:
+    if x.size < MIN_INTERVAL_SAMPLES:
         return geomean_interval(x, confidence)
     draws = REP_RESAMPLES
     table = np.empty((x.size, draws), dtype=np.float64)
@@ -381,20 +383,20 @@ def nested_geomean_interval(
 
 
 def mean_ci(values: Samples, confidence: float | None = None) -> Interval:
-    """Arithmetic mean and its BCa bootstrap interval (a COST summary, SC15 Rule 3); fewer than 3 values or no spread
+    """Arithmetic mean and its BCa bootstrap interval (a COST summary, SC15 Rule 3); withheld below :data:`MIN_INTERVAL_SAMPLES` values, and no spread
     is the point alone."""
     confidence = 1.0 - default_alpha() if confidence is None else confidence
     return bootstrap_ci(np.asarray(values, dtype=np.float64), np.mean, name="mean", confidence=confidence)
 
 
 def mean_interval(values: Samples, confidence: float | None = None) -> Interval:
-    """:func:`mean_ci`, withheld below :data:`MIN_PAIRS_FOR_INTERVAL` values exactly as
+    """:func:`mean_ci`, withheld below :data:`MIN_INTERVAL_SAMPLES` values exactly as
     :func:`geomean_interval` is. An empty set is all NaN."""
     confidence = 1.0 - default_alpha() if confidence is None else confidence
     x: FloatArray = np.asarray(values, dtype=np.float64)
     if x.size == 0:
         return Interval("mean", math.nan, math.nan, math.nan, confidence, "underpowered", 0)
-    if x.size < MIN_PAIRS_FOR_INTERVAL:
+    if x.size < MIN_INTERVAL_SAMPLES:
         return Interval("mean", float(np.mean(x)), math.nan, math.nan, confidence, "underpowered", int(x.size))
     return mean_ci(x, confidence=confidence)
 

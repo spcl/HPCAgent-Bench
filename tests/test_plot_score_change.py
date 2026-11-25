@@ -35,7 +35,7 @@ REPO = paths.ROOT
 MODELS: tuple[str, ...] = ("qwen38", "oss120b", "kimi27sglang")
 LANGUAGES: tuple[str, ...] = ("c", "fortran")
 
-#: Kernels per (model, language) cell. Above ``summary.MIN_PAIRS_FOR_INTERVAL``, so every cell in
+#: Kernels per (model, language) cell. Above ``summary.MIN_INTERVAL_SAMPLES``, so every cell in
 #: the fixture is a test that actually ran and the family is the full twelve.
 KERNELS: int = 8
 
@@ -1391,7 +1391,7 @@ def few_kernel_setup(x: float, kernels: int) -> efficacy_figures.SetupPoint:
 def test_a_mark_from_fewer_than_six_kernels_draws_no_interval_and_does_not_stretch_the_axis() -> None:
     """Qwen's GPU OpenMP control solved three kernels, its interval ran 0.19x to
     302x and was the only one in the figure cut at both ends; below six kernels (the paper's rule,
-    summary.MIN_PAIRS_FOR_INTERVAL) the mark stands alone."""
+    summary.MIN_INTERVAL_SAMPLES) the mark stands alone."""
     lines = {}
     limits = {}
     for kernels in (5, 6):

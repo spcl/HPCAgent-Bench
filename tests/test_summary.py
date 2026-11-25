@@ -65,17 +65,19 @@ def test_usable_ratios_drops_and_warns() -> None:
     assert kept.tolist() == [2.0, 8.0]
 
 
-def test_single_point_interval_collapses() -> None:
-    """n=1 has no spread to estimate, so the interval is the point -- and must not raise."""
-    interval = summary.geomean_ci([5.0])
-    assert interval.point == pytest.approx(5.0)
-    assert interval.low == pytest.approx(5.0)
-    assert interval.high == pytest.approx(5.0)
-    assert interval.n == 1
+@pytest.mark.parametrize("n", [1, 3, 5])
+def test_an_interval_is_withheld_below_six_values(n: int) -> None:
+    """Below six values no interval can hold 95% (three values have ten distinct bootstrap resamples): the point
+    stays, the ends are NaN, and it must not raise."""
+    interval = summary.geomean_ci([2.0, 4.0, 8.0, 1.0, 16.0][:n])
+    assert (interval.n, interval.method) == (n, "underpowered")
+    assert math.isfinite(interval.point)
+    assert math.isnan(interval.low)
+    assert math.isnan(interval.high)
 
 
 def test_geomean_interval_brackets_the_centre() -> None:
-    interval = summary.geomean_ci([2.0, 4.0, 8.0])
+    interval = summary.geomean_ci([2.0, 4.0, 8.0, 2.0, 4.0, 8.0])
     assert interval.point == pytest.approx(4.0)
     assert interval.low < interval.point < interval.high
 
@@ -83,7 +85,7 @@ def test_geomean_interval_brackets_the_centre() -> None:
 def test_the_geomean_interval_is_the_bootstrap_of_the_mean_log_mapped_back() -> None:
     """The interval is resampled in LOG space and its ends exponentiated: the bootstrap interval of the mean
     log, never a +/- half-width on the ratio axis (exp is not linear)."""
-    values = [1.5, 3.0, 0.25, 8.0]
+    values = [1.5, 3.0, 0.25, 8.0, 2.0, 0.5]
     interval = summary.geomean_ci(values)
     logs = summary.bootstrap_ci(np.log(values), np.mean)
     assert (math.log(interval.low), math.log(interval.high)) == pytest.approx((logs.low, logs.high))
@@ -129,7 +131,7 @@ def test_a_cost_has_an_arithmetic_mean_with_its_own_interval() -> None:
 
 
 def test_the_interval_names_what_it_is_for() -> None:
-    assert summary.geomean_ci([2.0, 4.0]).label() == "95% bootstrap-BCa CI for geomean"
+    assert summary.geomean_ci([2.0, 4.0, 8.0, 2.0, 4.0, 8.0]).label() == "95% bootstrap-BCa CI for geomean"
 
 
 def test_paired_change_says_underpowered_instead_of_drawing_an_interval() -> None:
@@ -168,7 +170,7 @@ def test_paired_geomean_keeps_the_kernels_that_did_not_change() -> None:
 
 
 def test_paired_geomean_withholds_interval_and_p_below_the_floor() -> None:
-    change = sign_flip([0.1] * (summary.MIN_PAIRS_FOR_INTERVAL - 2) + [0.3])
+    change = sign_flip([0.1] * (summary.MIN_INTERVAL_SAMPLES - 2) + [0.3])
     assert change.method == "underpowered"
     assert math.isnan(change.low)
     assert math.isnan(change.pvalue)

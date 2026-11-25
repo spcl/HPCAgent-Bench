@@ -1025,7 +1025,7 @@ def kernel_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)) -> "pd
 
 def kernel_medians(frame: "pd.DataFrame") -> dict[str, float | str] | None:
     """One slice's point over its KERNELS: geomean speedup and geomean token spend, each with its 95% interval
-    (withheld below ``summary.MIN_PAIRS_FOR_INTERVAL``), and the two median times (SC15 Rule 4); ``None`` without an
+    (withheld below ``summary.MIN_INTERVAL_SAMPLES``), and the two median times (SC15 Rule 4); ``None`` without an
     answer or spend. Beside the spend: what infrastructure lost over the slice's run slots (:data:`VOID_COLUMN`)
     and its share of everything spent (:data:`VOID_SHARE_COLUMN`)."""
     answers = kernel_answers(frame)

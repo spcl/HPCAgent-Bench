@@ -398,7 +398,7 @@ def test_a_pair_reports_what_the_intersection_dropped(paired_setups: ModuleType,
 
 
 def test_a_leg_below_the_interval_floor_reports_underpowered(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Under ``MIN_PAIRS_FOR_INTERVAL`` no interval and no p can be had, and the verdict says so
+    """Under ``MIN_INTERVAL_SAMPLES`` no interval and no p can be had, and the verdict says so
     rather than reading a bootstrap flag that is a coin toss at n = 2. The cost leg here is
     degenerate as well -- both setups spent the same on every kernel -- which is equally not a test."""
     rows: list[dict[str, object]] = []
@@ -414,7 +414,7 @@ def test_a_leg_below_the_interval_floor_reports_underpowered(paired_setups: Modu
         [("a", "b")], table, paired_setups.tokens_by_setup_kernel(obs), list(KERNELS), "f"
     )
 
-    assert len(KERNELS[:3]) < summary.MIN_PAIRS_FOR_INTERVAL
+    assert len(KERNELS[:3]) < summary.MIN_INTERVAL_SAMPLES
     for row in reported:
         assert row["verdict"] == "underpowered"
         assert math.isnan(float(row["ci_low"]))

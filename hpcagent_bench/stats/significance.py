@@ -553,10 +553,10 @@ def detectable(
     ``statistics.detectable_power``), from the noncentral t distribution. The t test stands in for the
     configured permutation test (same asymptotic power); the spread is the observed one, so this describes the
     design that was run and is not a post-hoc power of the observed effect. NaN where no test is performed
-    (fewer than :data:`~hpcagent_bench.stats.summary.MIN_PAIRS_FOR_INTERVAL` pairs, or no spread)."""
+    (fewer than :data:`~hpcagent_bench.stats.summary.MIN_INTERVAL_SAMPLES` pairs, or no spread)."""
     import numpy as np  # heavy dependency deferred: see the module docstring
 
-    from hpcagent_bench.stats.summary import MIN_PAIRS_FOR_INTERVAL
+    from hpcagent_bench.stats.summary import MIN_INTERVAL_SAMPLES
 
     wanted = config.current().statistics.detectable_power if power is None else power
     alpha = level(alpha)
@@ -565,7 +565,7 @@ def detectable(
     x = np.asarray(log_ratios, dtype=np.float64)
     x = x[np.isfinite(x)]
     n = int(x.size)
-    if n < MIN_PAIRS_FOR_INTERVAL or float(np.ptp(x)) == 0.0:
+    if n < MIN_INTERVAL_SAMPLES or float(np.ptp(x)) == 0.0:
         return math.nan
     stats = scipy_stats()
     from scipy import optimize  # pyright: ignore[reportMissingTypeStubs]
@@ -656,12 +656,12 @@ def floor(x: "FloatArray", estimate: float) -> Result | None:
     spread ``degenerate``, both with the estimate and no interval or p; ``None`` when the test may run."""
     import numpy as np  # heavy dependency deferred: see the module docstring
 
-    from hpcagent_bench.stats.summary import MIN_PAIRS_FOR_INTERVAL
+    from hpcagent_bench.stats.summary import MIN_INTERVAL_SAMPLES
 
     n = int(x.size)
     if n == 0:
         return Result(math.nan, math.nan, math.nan, math.nan, math.nan, 0, "degenerate")
-    if n < MIN_PAIRS_FOR_INTERVAL:
+    if n < MIN_INTERVAL_SAMPLES:
         return Result(estimate, math.nan, math.nan, math.nan, math.nan, n, "underpowered")
     if float(np.ptp(x)) == 0.0:
         return Result(estimate, math.nan, math.nan, math.nan, math.nan, n, "degenerate")

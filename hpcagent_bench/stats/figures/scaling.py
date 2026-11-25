@@ -923,7 +923,7 @@ def summary_mark(
 ) -> None:
     """One setup's geomean eta at X ``index`` with its 95% interval, and its kernel count below it."""
     setup, model, _, interval, n_kernels = row
-    # below summary.MIN_PAIRS_FOR_INTERVAL kernels the interval is withheld: a bare point
+    # below summary.MIN_INTERVAL_SAMPLES kernels the interval is withheld: a bare point
     low, high = drawn_ends(interval)
     ax.errorbar(
         index,

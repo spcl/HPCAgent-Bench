@@ -15,7 +15,7 @@ A figure that breaks one of these is wrong.
 3. **Statistics per Hoefler and Belli**, paired per kernel: a speedup is the geomean of per-kernel ratios with a
    95% BCa bootstrap interval (`summary.geomean_ci`); a token cost is an arithmetic mean, a cost change a ratio of
    means with a paired bootstrap interval (`summary.mean_ratio_ci`). Intervals need 6 kernels
-   (`summary.MIN_PAIRS_FOR_INTERVAL`). No trend lines; the table carries raw milliseconds and tokens; speedup and
+   (`summary.MIN_INTERVAL_SAMPLES`). No trend lines; the table carries raw milliseconds and tokens; speedup and
    tokens never share an axis.
 4. **Colour = model, shape = treatment**, by name, never by list position:
    - color is the LLM (`palette.model_color`); several marks of one model wear its shades

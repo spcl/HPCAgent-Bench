@@ -28,7 +28,7 @@ def test_the_mode_argument_keeps_its_spellings() -> None:
 def test_a_cost_change_is_a_ratio_of_arithmetic_means() -> None:
     """SC15: costs summarize with the arithmetic mean, so a cost change is mean(treated) / mean(control), not
     the mean of the per-kernel ratios (which here would be (0.5 + 2.0) / 2 = 1.25)."""
-    interval = summary.mean_ratio_ci([50.0, 400.0, 150.0], [100.0, 200.0, 300.0])
+    interval = summary.mean_ratio_ci([50.0, 400.0, 150.0] * 2, [100.0, 200.0, 300.0] * 2)
     assert interval.point == pytest.approx(600.0 / 600.0)
     assert interval.low <= interval.point <= interval.high
 
