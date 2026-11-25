@@ -361,14 +361,16 @@ def test_the_tokens_table_is_the_token_slots_geomean(
         assert got.gm_tokens == pytest.approx(summary.geomean(list(row.tokens.values())))
 
 
-def test_a_tokens_table_too_thin_for_any_interval_fails_rule_5(
+def test_a_tokens_table_too_thin_for_any_interval_withholds_every_interval(
     llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
 ) -> None:
-    """Three kernels support no median interval, and a table whose every row is a bare point is
-    exactly what Rule 5 refuses -- a thin tag is named, never drawn as if it were precise."""
+    """Three kernels are under ``summary.MIN_INTERVAL_SAMPLES``: every row's interval is withheld (blank, its
+    kernels drawn as dots) and its n says why, so Rule 5 accepts the table rather than a fabricated interval."""
     rows = kernel_rows(llr40_canon, llr40_observations, TAG40)
-    with pytest.raises(rules.RuleViolation, match="Rule 5"):
-        kernel_speedups.token_summary_table(rows)
+    table = kernel_speedups.token_summary_table(rows)
+    assert not table.empty
+    assert (table["n"] < summary.MIN_INTERVAL_SAMPLES).all()
+    assert table["gm_tokens_low"].isna().all() and table["gm_tokens_high"].isna().all()
 
 
 def test_the_summary_table_leaves_out_a_compilers_placeholders(llr40_canon: pd.DataFrame) -> None:
