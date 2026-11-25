@@ -12,5 +12,5 @@ folder = "plugin/nestforge"
 
 [plugins.alloy]
 package = "dace-alloy"
-version = "0.1.1"
+version = "0.1.2"
 folder = "alloy/hb_plugin"
