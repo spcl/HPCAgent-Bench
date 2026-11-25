@@ -47,7 +47,7 @@ def slot_acquirer(pool: service.SlotPool) -> Callable[[int], DeviceSlot]:
 
 
 def test_a_plugin_routes_terminal_work_queues_as_a_submission() -> None:
-    """A plugin's route is exploration, unless it serves a /submit: NestForge builds what it submits on its own route."""
+    """A plugin's route is exploration, unless it serves a /submit: tactics builds what it submits on its own route."""
     asked: list[int] = []
 
     class Pool:
@@ -59,7 +59,7 @@ def test_a_plugin_routes_terminal_work_queues_as_a_submission() -> None:
             pass
 
     handler = service.JudgeHandler.__new__(service.JudgeHandler)
-    handler.device_pool, handler.route, handler.gone = Pool(), "nestforge", threading.Event()
+    handler.device_pool, handler.route, handler.gone = Pool(), "tactics", threading.Event()
     for terminal in (False, True):
         with handler.device_slot(terminal):
             pass

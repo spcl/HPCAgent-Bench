@@ -4,13 +4,13 @@
 # `python helpers/scripts/user_plugins.py bump` moves each to its distribution's newest PyPI release.
 # A plugin with no PyPI release yet is pinned to a commit of its repository until its first release.
 
-[plugins.nestforge]
+[plugins.tactics]
 package = "tactics"
-repository = "https://github.com/spcl/NestForge.git"
-commit = "51f721b853842861a5ee6ea76f88182d3d9084d2"
-folder = "plugin/nestforge"
+repository = "https://github.com/spcl/tactics.git"
+commit = "914d74a690647baa7780da529bbadccdd7624236"
+folder = "plugin/tactics"
 
 [plugins.alloy]
 package = "dace-alloy"
-version = "0.1.2"
+version = "0.1.4"
 folder = "alloy/hb_plugin"

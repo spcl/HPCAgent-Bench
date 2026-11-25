@@ -52,7 +52,7 @@ python -m hpcagent_bench.prompt_build --packet hello --show
 Name the packet in an experiment with `PACKETS=hello`. Everything below is optional. `plugins check` is the one
 command to run before a first job: startup does not resolve these names, so a typo otherwise surfaces when an agent
 starts. A plugin whose routes or optimizers import its own package needs `python -m hpcagent_bench.plugins install`
-first. `plugins/autokernel` is the small example; NestForge, pinned in `.github/user-plugins.toml`, is the large one.
+first. `plugins/autokernel` is the small example; tactics, pinned in `.github/user-plugins.toml`, is the large one.
 
 ## Layout
 
@@ -216,7 +216,7 @@ image carries no `hpcagent_bench` and no plugin dependencies, so an agent-side t
 
 ### Replacing `submit`, `score` or `profile`
 
-A plugin whose agent writes no code (NestForge: the program is what the moves made of it) replaces the core tools
+A plugin whose agent writes no code (tactics: the program is what the moves made of it) replaces the core tools
 that take code, for the packets that list the tool's name under `tools`:
 
 ```toml

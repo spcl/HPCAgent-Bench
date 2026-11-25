@@ -167,7 +167,7 @@ def test_a_plugin_found_again_keeps_its_packets_and_a_changed_one_is_refused(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The judge registers its plugins when its service module imports; a caller that clears register_once to read
-    another plugin list finds the same plugins again (NestForge's test fixture, with an editable bench's shipped
+    another plugin list finds the same plugins again (tactics' test fixture, with an editable bench's shipped
     plugins), which once raised "already registered". Only a different definition under a taken key is a clash."""
     folder = write_plugin(tmp_path, "aaa")
     kind = Kind[PacketDef]("packets")

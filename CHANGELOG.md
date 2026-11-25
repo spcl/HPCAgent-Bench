@@ -66,6 +66,19 @@
 - The agent images' launch gate stubs `agent/README.md` beside the agent package: `hpcagent-agent` names it as its
   readme, and the editable build of the gate's venv failed without it (judge-agent-cuda, Daint 5455921).
 
+### User plugins
+
+- NestForge is now tactics (PyPI and import name `tactics`, repository spcl/tactics), pinned at its 0.1.1 release
+  candidate 914d74a until its PyPI release. The plugin is `plugin/tactics`, its packets, route and environment keys
+  are `tactics`, `/tactics/<tool>` and `TACTICS_*`, its record file is `tactics.json`, and its reference flavor is
+  `dace_{cpu,gpu}_canon_tactics_reference`. The study's experiment and tag are `tactics` and `tactics12`. Results
+  stored under the old names keep them.
+- dace-alloy 0.1.4.
+
+### Dependencies
+
+- dace-extended 1.0.2 (`>=1.0.2`).
+
 ### Skills
 
 - The `cpf-src` pages describe the form header as dace-extended 1.0.1 renders it: the reason table, the summary

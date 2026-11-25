@@ -228,7 +228,7 @@ def context_view(context: str) -> pathlib.Path | None:
 def spawn_needed(context: str) -> bool:
     """Whether a child of ``context`` needs a fresh interpreter: the loader fixed the parent's runtime
     at exec, so a parent in the default context forks only default children, and a parent a plugin's
-    context started (a NestForge tuner, on libomp) forks none: a libgomp reference would join its libomp."""
+    context started (a tactics tuner, on libomp) forks none: a libgomp reference would join its libomp."""
     contexts = {context or DEFAULT_CONTEXT, os.environ.get(CONTEXT_ENV) or DEFAULT_CONTEXT}
     return contexts != {DEFAULT_CONTEXT} and context_dir(context) is not None
 

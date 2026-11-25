@@ -208,7 +208,7 @@ def test_the_default_context_is_the_parents_own_and_never_needs_a_fresh_interpre
 
 
 def test_a_parent_in_a_plugins_context_forks_no_child(root: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A NestForge tuner runs on libomp; the gnu C reference it asks for must not fork into that process."""
+    """A tactics tuner runs on libomp; the gnu C reference it asks for must not fork into that process."""
     (root / "gnu" / "lib").mkdir(parents=True)
     monkeypatch.setenv(omp_context.CONTEXT_ENV, "llvm")
     assert omp_context.spawn_needed("gnu")
