@@ -43,7 +43,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.eigh import (
     EighLoopRewriter,
     eigh_stmts,
 )
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.einsum import EINSUM_HOIST
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.einsum import EINSUM_HOIST, TENSORDOT_HOIST
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.fft import NATIVE_FFT_BACKENDS, FftInline
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.guards import (
     BoolOpIfToChain,
@@ -272,7 +272,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             *([ValueHoist(CUMULATIVE_AXIS_HOIST, tables)] if backend == "numba" else []),
             NormalizeNegativeAxis(ranks),
             IxWriteToLoop(ranks, dtypes, fn),
-            FancySliceStoreToLoop(ranks, dtypes),
+            FancySliceStoreToLoop(ranks, dtypes, broadcast=backend == "numba"),
             # numba keeps the Jacobi loops: its own np.linalg.eigh returns the operand's precision while numba's
             # scalar arithmetic widens float32 to float64, so a float32 run mixes the two at the next ``@`` (1.1).
             EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes, keep_library=backend == "dace"),
@@ -280,6 +280,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             # dace lowers batched and reshape-wrapped matmul and einsum itself, to library nodes.
             *([] if backend == "dace" else [ReshapeMatmulInline(ranks, widths), BatchedMatmulToLoop(ranks, widths)]),
             PadInline(ranks, lower_symbolic_constant=backend == "dace"),
+            *([ValueHoist(TENSORDOT_HOIST, tables)] if backend == "numba" else []),
             *([] if backend == "dace" else [ValueHoist(EINSUM_HOIST, tables)]),
             *([] if backend in NATIVE_FFT_BACKENDS else [FftInline(ranks, kir_array_dtypes)]),
             MgridInline(),
@@ -315,7 +316,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
                     RollInline(ranks),
                     NumbaCallFixups(ranks),
                     BroadcastAugAssignSpellOut(ranks),
-                    OuterBroadcastPeel(ranks),
+                    OuterBroadcastPeel(ranks, fn if isinstance(fn, ast.FunctionDef) else None),
                 ]
                 if backend == "numba"
                 else []

@@ -366,11 +366,14 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
     axis before it.
     """
 
-    __slots__ = ("_ctr", "changed", "dtypes", "ranks")
+    __slots__ = ("_ctr", "broadcast", "changed", "dtypes", "ranks")
 
-    def __init__(self, ranks: dict[str, int], dtypes: dict[str, str]) -> None:
+    def __init__(self, ranks: dict[str, int], dtypes: dict[str, str], broadcast: bool = False) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
+        #: numba only: loop over ``len(idx)`` and read the value as numpy broadcasts it (:meth:`value_at`). numba
+        #: neither types a list's ``.shape`` nor bounds-checks; DaCe mis-lowers the guarded read (lulesh).
+        self.broadcast = broadcast
         self.changed = False
         self._ctr = 0
 
@@ -410,11 +413,17 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         lines = [
             f"{p}_v = {ast.unparse(value)}",
             # ``len``: the index may be a list (lulesh's ``corners = [n0, n1, n2, n3]``), which has no ``.shape``.
-            f"for {it} in range(len({idx_name})):",
-            f"    {target.value.id}[{', '.join(new_lead)}] {op} {self.value_at(p, value, target, lead, k, it)}",
+            f"for {it} in range(len({idx_name})):" if self.broadcast else f"for {it} in range({idx_name}.shape[0]):",
+            f"    {target.value.id}[{', '.join(new_lead)}] {op} {self.read_at(p, value, target, lead, k, it)}",
         ]
         self.changed = True
         return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
+
+    def read_at(self, p: str, value: ast.expr, target: ast.Subscript, lead: Sequence[ast.expr], k: int, it: str) -> str:
+        """The value stored at iteration ``it``: :meth:`value_at` on numba, else read at the carrier's position."""
+        if self.broadcast:
+            return self.value_at(p, value, target, lead, k, it)
+        return f"{p}_v[{', '.join([':'] * k + [it])}]"
 
     def value_at(
         self, p: str, value: ast.expr, target: ast.Subscript, lead: Sequence[ast.expr], k: int, it: str

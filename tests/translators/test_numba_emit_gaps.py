@@ -93,3 +93,53 @@ def test_a_fancy_store_through_a_list_broadcasts_a_unit_column_on_numba() -> Non
     src = "import numpy as np\ndef f(a, out):\n corners = [0, 2, 3]\n out[:, :] = 0.0\n out[:, corners] += a[:, None]\n"
     a = np.arange(1.0, 5.0)
     assert numba(src, {"a": a}, {"out": (4, 5)}, {"N": 4, "M": 5}, {"a": "(N,)", "out": "(N, M)"}) == "ok"
+
+
+def test_an_enumerate_start_keyword_matches_numpy_on_numba() -> None:
+    """laplacian_stencil_3d's ``for m, w in enumerate(_CW, start=1)``: numba's enumerate takes ``start`` only by
+    position and failed a bare ``assert not kws``."""
+    src = (
+        "import numpy as np\n"
+        "def f(x, out):\n"
+        " out[:] = 0.0\n"
+        " for m, w in enumerate((0.5, 0.25), start=1):\n"
+        "  out[m:] += w * x[: x.shape[0] - m]\n"
+    )
+    x = np.linspace(1.0, 2.0, 6)
+    assert numba(src, {"x": x}, {"out": (6,)}, {"N": 6}, {"x": "(N,)", "out": "(N,)"}) == "ok"
+
+
+def test_a_tensordot_along_each_axis_and_a_returned_unit_axis_broadcast_match_numpy_on_numba() -> None:
+    """chebyshev_filter_subspace's Laplacian: ``np.tensordot(lap, x, axes=([1], [k]))`` per axis (numba has no
+    tensordot), then ``return ... + v[..., None] * x``, a size-1 broadcast numba's parfor pass refuses ("Sizes of
+    ... do not match") unless peeled, and the peel took neither a ``return`` nor an ellipsis."""
+    src = (
+        "import numpy as np\n"
+        "def apply(lap, x, v):\n"
+        " t0 = np.tensordot(lap, x, axes=([1], [0]))\n"
+        " t1 = np.moveaxis(np.tensordot(lap, x, axes=([1], [1])), 0, 1)\n"
+        " return t0 + t1 + v[..., None] * x\n"
+        "def f(lap, x, v, out):\n"
+        " out[:] = apply(lap, x, v)\n"
+    )
+    lap = np.array([[2.0, -1.0, 0.0], [-1.0, 2.0, -1.0], [0.0, -1.0, 2.0]])
+    x = np.arange(18, dtype=np.float64).reshape(3, 3, 2)
+    v = np.linspace(0.5, 1.5, 9).reshape(3, 3)
+    shapes = {"lap": "(N, N)", "x": "(N, N, K)", "v": "(N, N)", "out": "(N, N, K)"}
+    assert numba(src, {"lap": lap, "x": x, "v": v}, {"out": (3, 3, 2)}, {"N": 3, "K": 2}, shapes) == "ok"
+
+
+def test_a_leading_unit_axis_absorbed_by_the_whole_expression_matches_numpy_on_numba() -> None:
+    """raman_fitting: ``d * d + w * w[None, :]`` keeps rank 2 though ``w * w`` is 1-D, and ``g = w * w[None, :]``
+    then ``d * d + g`` broadcasts a named (1, K) value; numba's parfor pass sizes (1, K) and (G, K) as equal."""
+    src = (
+        "import numpy as np\n"
+        "def f(d, w, out, out2):\n"
+        " out[:] = d * d + w * w[None, :]\n"
+        " g = w * w[None, :]\n"
+        " out2[:] = d * d + g\n"
+    )
+    d = np.linspace(-1.0, 1.0, 12).reshape(4, 3)
+    w = np.array([0.5, 1.0, 1.5])
+    shapes = {"d": "(G, K)", "w": "(K,)", "out": "(G, K)", "out2": "(G, K)"}
+    assert numba(src, {"d": d, "w": w}, {"out": (4, 3), "out2": (4, 3)}, {"G": 4, "K": 3}, shapes) == "ok"

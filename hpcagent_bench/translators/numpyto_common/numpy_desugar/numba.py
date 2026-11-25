@@ -25,7 +25,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import BINDING_EXPRESSIONS, HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
-from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice, is_newaxis
+from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_full_slice, is_newaxis
 
 __all__ = [
     "ARITHMETIC_NODES",
@@ -163,7 +163,16 @@ class OuterBroadcastPeel(RankedRewritePass):
     Extents are ``<name>.shape[k]`` tokens from the rank table, since manifest shape symbols are
     not bound in the kernel. An operand whose axes cannot be placed declines the whole statement."""
 
-    __slots__ = ()
+    __slots__ = ("known", "once")
+
+    def __init__(self, ranks: dict[str, int], fn: ast.FunctionDef | None = None) -> None:
+        super().__init__(ranks)
+        #: Names bound exactly once in the scope, whose extents one binding settles.
+        self.once = (
+            frozenset(name for name, count in name_store_counts(fn).items() if count == 1) if fn else frozenset()
+        )
+        #: Extents of a once-bound name whose value has a literal unit axis (raman's ``g = w * w[None, :]``).
+        self.known: dict[str, list[str]] = {}
 
     def operands_(self, node: ast.AST) -> list[ast.expr] | None:
         """The operands an elementwise node broadcasts together, or None when it is not one."""
@@ -205,6 +214,8 @@ class OuterBroadcastPeel(RankedRewritePass):
         if isinstance(expr, ast.Constant):
             return [] if isinstance(expr.value, (bool, int, float, complex)) else None
         if isinstance(expr, ast.Name):
+            if expr.id in self.known:
+                return list(self.known[expr.id])
             return [f"{expr.id}.shape[{k}]" for k in range(self.ranks.get(expr.id, 0))]
         if isinstance(expr, ast.UnaryOp):
             return self.extents_(expr.operand)
@@ -438,33 +449,92 @@ class OuterBroadcastPeel(RankedRewritePass):
             return None
         return target.value.id if self.ranks.get(target.value.id) == rank else None
 
+    def visit_Return(self, node: ast.Return) -> ast.AST | list[ast.stmt]:
+        """``return <outer-product broadcast>`` -> the peeled loop into a temp, then ``return`` it
+        (chebyshev_filter_subspace's ``return ... + vloc[..., None] * x``); left as is when nothing peels."""
+        if node.value is None:
+            return node
+        temp = f"__ob{self._ctr}_r"
+        rank = expr_rank(node.value, self.ranks)
+        if rank is None:
+            return node
+        self.ranks[temp] = rank
+        bind = ast.copy_location(ast.Assign(targets=[store_(temp)], value=copy.deepcopy(node.value)), node)
+        peeled = self.visit_Assign(bind)
+        if not isinstance(peeled, list):
+            del self.ranks[temp]
+            return node
+        returned = ast.copy_location(ast.Return(value=name_(temp)), node)
+        return [*peeled, ast.fix_missing_locations(returned)]
+
+    def expand_ellipses(self, value: ast.expr) -> None:
+        """Spell a lone ``...`` over a name of known rank as full slices, so :meth:`axes_` can place each axis
+        (chebyshev_filter_subspace's ``vloc[..., None] * x``)."""
+        for node in walk_nodes(value):
+            if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)):
+                continue
+            rank = self.ranks.get(node.value.id)
+            entries = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+            dots = [i for i, e in enumerate(entries) if is_ellipsis(e)]
+            if rank is None or len(dots) != 1:
+                continue
+            spans = rank - sum(1 for e in entries if not is_newaxis(e) and not is_ellipsis(e))
+            if spans < 0:
+                continue
+            at = dots[0]
+            full = [ast.Slice() for unused in range(spans)]
+            node.slice = ast.Tuple(elts=[*entries[:at], *full, *entries[at + 1 :]], ctx=ast.Load())
+            self.changed = True
+
     def drop_newaxes(self, value: ast.expr) -> None:
         """Drop every leading newaxis the enclosing broadcast makes redundant.
 
-        numba's analysis equates a (1, n) operand with an (m, n) one instead of broadcasting it;
-        ``x[None, :]`` -> ``x`` is exact only while the node's rank does not change."""
-        for node in walk_nodes(value):
+        numba's analysis equates a (1, n) operand with an (m, n) one instead of broadcasting it. Broadcasting is
+        right-aligned, so ``x[None, :]`` -> ``x`` is exact while the rank of the whole elementwise expression around
+        it does not change: raman_fitting's ``delta * delta + w * w[None, :]`` keeps rank 2 though ``w * w`` is 1-D.
+        A reduction or other call bounds the expression, since its own result may depend on the operand's rank."""
+        child_ids = {id(o) for node in walk_nodes(value) for o in (self.operands_(node) or [])}
+        roots = [node for node in walk_nodes(value) if self.operands_(node) is not None and id(node) not in child_ids]
+        for root in roots:
+            rank = expr_rank(root, self.ranks)
+            if rank is None:
+                continue
+            for node in self.elementwise_nodes(root):
+                ops = self.operands_(node)
+                assert ops is not None
+                for i, operand in enumerate(ops):
+                    bare = without_leading_newaxis(operand) or self.without_leading_unit(operand)
+                    if bare is None and isinstance(operand, ast.UnaryOp):
+                        # ``-ew[lo:hi][None, :]``: a sign around the newaxis broadcasts the same way.
+                        inner = without_leading_newaxis(operand.operand)
+                        bare = None if inner is None else ast.UnaryOp(op=operand.op, operand=inner)
+                    if bare is None:
+                        continue
+                    self.replace(node, i, bare)
+                    if expr_rank(root, self.ranks) != rank:
+                        self.replace(node, i, operand)
+                        continue
+                    ops[i] = bare
+                    self.changed = True
+
+    def without_leading_unit(self, operand: ast.expr) -> ast.expr | None:
+        """``name[0]`` for a name :attr:`known` to lead with a unit axis, else None."""
+        if not (isinstance(operand, ast.Name) and self.known.get(operand.id, [""])[0] == ONE):
+            return None
+        return ast.Subscript(value=name_(operand.id), slice=ast.Constant(value=0), ctx=ast.Load())
+
+    def elementwise_nodes(self, root: ast.AST) -> list[ast.AST]:
+        """``root`` and every elementwise node reached from it through elementwise operands (a sign included)."""
+        found: list[ast.AST] = []
+        pending = [root]
+        while pending:
+            node = pending.pop()
             ops = self.operands_(node)
             if ops is None:
                 continue
-            rank = expr_rank(node, self.ranks)
-            if rank is None:
-                continue
-            for i, operand in enumerate(ops):
-                bare = without_leading_newaxis(operand)
-                if bare is None and isinstance(operand, ast.UnaryOp):
-                    # ``-ew[lo:hi][None, :]``: a sign around the newaxis broadcasts the same way.
-                    inner = without_leading_newaxis(operand.operand)
-                    bare = None if inner is None else ast.UnaryOp(op=operand.op, operand=inner)
-                if bare is None:
-                    continue
-                trial = list(ops)
-                trial[i] = bare
-                if expr_rank(self.rebuild(node, trial), self.ranks) != rank:
-                    continue
-                ops[i] = bare
-                self.replace(node, i, bare)
-                self.changed = True
+            found.append(node)
+            pending.extend(o.operand if isinstance(o, ast.UnaryOp) else o for o in ops)
+        return found
 
     def replace(self, node: ast.AST, i: int, operand: ast.expr) -> None:
         """Replace operand ``i`` of ``node`` in place."""
@@ -546,6 +616,12 @@ class OuterBroadcastPeel(RankedRewritePass):
         """Peel an outer-product broadcast assignment into a loop over its outermost axis."""
         if len(node.targets) != 1:
             return node
+        target = node.targets[0]
+        if isinstance(target, ast.Name) and target.id in self.once:
+            extents = self.extents_(node.value)
+            if extents is not None and ONE in extents:
+                self.known[target.id] = extents
+        self.expand_ellipses(node.value)
         self.drop_newaxes(node.value)
         hoisted = self.hoist_view_base(node)
         if hoisted is not None:
@@ -851,13 +927,24 @@ class NumbaCallFixups(RankedRewritePass):
     """numpy calls numba does not type, spelled in ones it does (numba only).
 
     ``np.array(<array>)`` -> ``np.copy(<array>)``: numba's ``np.array`` takes a sequence, not an array (vadv's
-    ``np.array(dcol[:, :, K - 1])``)."""
+    ``np.array(dcol[:, :, K - 1])``). ``enumerate(x, start=k)`` -> ``enumerate(x, k)``: numba's ``enumerate`` takes
+    ``start`` positionally only and fails a bare ``assert not kws`` (laplacian_stencil_3d, chebyshev_filter_subspace)."""
 
     __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
-        """Respell an ``np.array`` copy of an array."""
+        """Respell an ``np.array`` copy of an array, or an ``enumerate`` start keyword."""
         self.generic_visit(node)
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "enumerate"
+            and len(node.args) == 1
+            and [k.arg for k in node.keywords] == ["start"]
+        ):
+            self.changed = True
+            return ast.copy_location(
+                ast.Call(func=node.func, args=[node.args[0], node.keywords[0].value], keywords=[]), node
+            )
         if (
             numpy_call_attr(node) == "array"
             and len(node.args) == 1
