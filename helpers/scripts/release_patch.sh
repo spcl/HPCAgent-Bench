@@ -116,6 +116,12 @@ for file in "${VERSIONED[@]}"; do
     sed -i "0,/^version = \"${old}\"$/s//version = \"${new}\"/" "${file}"
     grep -q "^version = \"${new}\"$" "${file}" || die "could not set version ${new} in ${file}"
 done
+# The packages released together pin each other exactly: an install never pairs two releases.
+for pin in "pyproject.toml hpcagent-agent" "adapters/hpcagent_bench/pyproject.toml hpcagent-bench"; do
+    read -r file package <<<"${pin}"
+    sed -i "s/\"${package}==${old}\"/\"${package}==${new}\"/" "${file}"
+    grep -q "\"${package}==${new}\"" "${file}" || die "could not pin ${package}==${new} in ${file}"
+done
 uv lock -q
 # The Harbor adapter's committed metadata carries the version (tests/test_harbor_adapter_registry.py).
 uv run -q python -m hpcagent_bench.export.harbor metadata > adapters/hpcagent_bench/adapter_metadata.json

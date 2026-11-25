@@ -40,7 +40,7 @@ classifiers = [
 # because it is the default LLR/SciComp baseline.
 # DaCe extended (dace-extended, import dace) and relayout (dace-relayout) come from PyPI, the same releases pip
 # installs; helpers/scripts/pins.sh --bump raises their lower bounds. hpcagent-agent is the agent-side runtime
-# (agent/), a workspace member.
+# (agent/), a workspace member released with this package: pinned to exactly this version (release_patch.sh moves it).
 dependencies = [
     # numpy 2: the references are graded under its NEP 50 scalar promotion; 2.3.2 is the first
     # release with Python 3.14 wheels.
@@ -61,7 +61,7 @@ dependencies = [
     "dace-extended>=1.0.1",
     # The request schema (requests: startup + operations) and its lowering: relayout, published as dace-relayout.
     "dace-relayout>=0.1.2",
-    "hpcagent-agent",
+    "hpcagent-agent==1.0.1",
     # The grading stack, judge, HF export and agent clients every framework set shares.
     "pygount",
     "jsonschema",
