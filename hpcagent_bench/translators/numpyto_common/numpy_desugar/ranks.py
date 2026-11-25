@@ -222,7 +222,8 @@ def name_index_rank(base: int, index: ast.Name, ranks: dict[str, int]) -> int | 
 
     A Name of unknown or zero rank is a scalar (a loop iterator) and drops one axis. An array index may be
     a gather (adds ``rank - 1`` axes) or a boolean mask (removes them); the two readings agree only for a
-    rank-1 index, so any higher rank is unknown rather than guessed.
+    rank-1 index. An index of more axes than ``a`` is no mask (numpy raises), so it gathers (cfd's ``density[neigh]``,
+    a 2-D table into a 1-D array); any other rank is unknown rather than guessed.
     """
     idx_rank = ranks.get(index.id)
     if idx_rank is None or idx_rank < 1:
@@ -651,9 +652,16 @@ def shape_table(tree: ast.AST, seed: dict[str, tuple[str, ...]]) -> dict[str, tu
     return table
 
 
-def rank_table(tree: ast.AST, seed: dict[str, int], call_returns: dict[str, int] | None = None) -> dict[str, int]:
+def rank_table(
+    tree: ast.AST,
+    seed: dict[str, int],
+    call_returns: dict[str, int] | None = None,
+    index_arrays: frozenset[str] = frozenset(),
+) -> dict[str, int]:
     """Propagate ndim across straight-line assignments to a fixpoint. ``call_returns`` (``{helper:
-    return_ndim}``) gives a local bound to a helper call that helper's return rank."""
+    return_ndim}``) gives a local bound to a helper call that helper's return rank. ``index_arrays`` names integer
+    arrays, so ``x[idx]`` gathers (cfd's ``momentum[neigh]``) where :func:`name_index_rank` cannot tell it from a
+    mask."""
     global active_tuple_lengths
     ranks = dict(seed)
     # The tree does not change while the table converges: index its bindings once, not every round.
@@ -664,6 +672,8 @@ def rank_table(tree: ast.AST, seed: dict[str, int], call_returns: dict[str, int]
         active_tuple_lengths = tuple_lengths(bindings, first_values, ranks, seed)
         for name, value in bindings:
             r = expr_rank(value, ranks)
+            if r is None and index_arrays:
+                r = gather_rank(value, ranks, index_arrays)
             if r is None and call_returns is not None:
                 r = call_return_rank(value, call_returns)
             if r is not None and ranks.get(name) != r:
@@ -680,6 +690,20 @@ def rank_table(tree: ast.AST, seed: dict[str, int], call_returns: dict[str, int]
     drop_rank_conflicts(tree, ranks, seed)
     active_tuple_lengths = None
     return ranks
+
+
+def gather_rank(value: ast.expr, ranks: dict[str, int], index_arrays: frozenset[str]) -> int | None:
+    """Rank of ``x[idx]`` for an integer index array ``idx``: ``x``'s rank less one, plus ``idx``'s."""
+    if not (
+        isinstance(value, ast.Subscript)
+        and isinstance(value.slice, ast.Name)
+        and value.slice.id in index_arrays
+        and (base := expr_rank(value.value, ranks)) is not None
+        and (idx := ranks.get(value.slice.id)) is not None
+        and base >= 1
+    ):
+        return None
+    return base - 1 + idx
 
 
 def drop_rank_conflicts(tree: ast.AST, ranks: dict[str, int], seed: dict[str, int]) -> None:

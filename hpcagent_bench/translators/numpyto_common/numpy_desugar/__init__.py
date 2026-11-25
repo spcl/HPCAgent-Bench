@@ -25,6 +25,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.constants import (
     fold_kernel_defaults,
     has_defaulted_parameters,
     specialize_helpers_by_literal,
+    specialize_helpers_by_unit_axes,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.counting import (
     HISTOGRAM_HOIST,
@@ -207,8 +208,11 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
     kernel = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == kir.kernel_name), None)
     if backend in DEFAULT_FOLDING_BACKENDS and kernel is not None and has_defaulted_parameters(kernel):
         changed = fold_kernel_defaults(kernel, kir.input_args)
+    families: dict[str, str] = {}
     if backend == "numba":
         changed = specialize_helpers_by_literal(tree, kir.kernel_name) or changed
+        families = specialize_helpers_by_unit_axes(tree, kir.kernel_name)
+        changed = bool(families) or changed
     all_funcs = [n for n in walk_nodes(tree) if isinstance(n, ast.FunctionDef)]
     if backend == "numba":
         changed = fold_constant_helper_arguments(tree, kir.kernel_name) or changed
@@ -236,6 +240,16 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
     # Read through ``vars()``: rank-only callers pass KIR arrays without a dtype attribute.
     kir_array_dtypes: dict[str, str] = {a.name: a.dtype for a in kir.arrays}
     param_ranks = infer_param_ranks(all_funcs, kir.kernel_name, kir_seed, tuples=backend == "numba")
+    # Clones of one helper share parameter ranks, merged by MAX as their single original's call sites were: a
+    # clone called only with a gather (cfd's ``momentum[neigh]``) has no rank evidence of its own.
+    for family in set(families.values()):
+        members = [name for name, origin in families.items() if origin == family]
+        merged: dict[str, int] = {}
+        for name in members:
+            for param, rank in param_ranks.get(name, {}).items():
+                merged[param] = max(rank, merged.get(param, rank))
+        for name in members:
+            param_ranks[name] = merged | {p: max(r, merged.get(p, r)) for p, r in param_ranks.get(name, {}).items()}
     param_kinds = infer_param_kinds(all_funcs, kir.kernel_name, kir_dtype_seed) if backend == "numba" else {}
     return_ranks = (
         helper_return_ranks(all_funcs, param_ranks, kir.kernel_name, kir_seed) if backend == "numba" else None
@@ -246,7 +260,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
         else {}
     )
     eigh_aliases = eigh_alias_names(tree)
-    units = unit_axis_seeds(all_funcs, kir.kernel_name, kir.arrays) if backend == "numba" else {}
+    units = unit_axis_seeds(all_funcs, kir.kernel_name, kir.arrays, param_ranks) if backend == "numba" else {}
     scopes: list[ast.FunctionDef | ast.Module] = [*all_funcs] or [tree]
     for fn in scopes:
         fn_name = fn.name if isinstance(fn, ast.FunctionDef) else None
@@ -258,7 +272,10 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             fold = NdimFold(fn, agreed_ranks.get(fn.name, {}))
             fold.visit(fn)
             changed = changed or fold.changed
-        ranks = rank_table(fn, seed, call_returns=return_ranks)
+        index_arrays = frozenset(
+            a.name for a in kir.arrays if is_kernel and backend == "numba" and kir_dtype_seed.get(a.name) == "int"
+        )
+        ranks = rank_table(fn, seed, call_returns=return_ranks, index_arrays=index_arrays)
         dtypes = dtype_table_(fn, kir_dtype_seed if is_kernel else {})
         noncontig = noncontig_names(fn)
         masked_gathers = masked_reduce_map(fn, ranks, dtypes)

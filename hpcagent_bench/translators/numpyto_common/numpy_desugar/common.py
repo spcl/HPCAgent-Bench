@@ -5,6 +5,7 @@ from typing import Protocol
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
+from hpcagent_bench.translators.numpyto_common.subscripts import is_newaxis
 
 __all__ = [
     "AUG_OP_SRC",
@@ -21,6 +22,7 @@ __all__ = [
     "eigh_call_kind",
     "is_eigh_assign_target",
     "name_store_counts",
+    "newaxis_view_units",
     "reachable_functions",
     "replace_call_with_name",
     "tuple_len",
@@ -214,3 +216,33 @@ def reachable_functions(funcs: list[ast.FunctionDef], entry: str) -> set[str]:
         seen.add(name)
         stack.extend(n.id for n in walk_nodes(by_name[name]) if isinstance(n, ast.Name) and n.id in by_name)
     return seen
+
+
+def newaxis_view_units(fn: ast.FunctionDef, name: str) -> tuple[bool, ...] | None:
+    """Where ``name``'s size-1 axes sit when ``fn`` binds it exactly once to a view of a name by full slices and at
+    least one newaxis (cfd's ``momentum_i = momentum[:, np.newaxis, :]`` gives ``(False, True, False)``); None for
+    any other binding. A full slice keeps an axis whose size this cannot see, so it reads as sized."""
+    if name_store_counts(fn).get(name) != 1:
+        return None
+    for node in walk_nodes(fn):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == name
+        ):
+            continue
+        value = node.value
+        if not (isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name)):
+            return None
+        entries = value.slice.elts if isinstance(value.slice, ast.Tuple) else [value.slice]
+        units: list[bool] = []
+        for e in entries:
+            if is_newaxis(e):
+                units.append(True)
+            elif isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None:
+                units.append(False)
+            else:
+                return None
+        return tuple(units) if any(units) else None
+    return None

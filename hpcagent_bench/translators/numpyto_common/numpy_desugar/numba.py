@@ -22,6 +22,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     RankedRewritePass,
     RewritePass,
     name_store_counts,
+    newaxis_view_units,
     reachable_functions,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import BINDING_EXPRESSIONS, HoistForm, ValueHoist
@@ -173,11 +174,16 @@ def unit_extents(name: str, unit: Sequence[bool]) -> list[str]:
 
 
 def unit_axis_seeds(
-    funcs: list[ast.FunctionDef], kernel_name: str, arrays: Sequence[ArrayDesc]
+    funcs: list[ast.FunctionDef],
+    kernel_name: str,
+    arrays: Sequence[ArrayDesc],
+    param_ranks: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, dict[str, list[str]]]:
     """Per function, the extents of its never-rebound parameters that have a size-1 axis: the kernel's from the
     manifest (nbody's ``mass`` of shape ``(N, 1)``), a helper's when every call site the kernel reaches passes it a
-    parameter with the same size-1 axes. :class:`OuterBroadcastPeel` starts from them."""
+    parameter, or a newaxis view (cfd's ``momentum[:, np.newaxis, :]``, :func:`newaxis_view_units`), with the same
+    size-1 axes and as many axes as ``param_ranks`` gives the helper's parameter. :class:`OuterBroadcastPeel` starts
+    from them."""
     by_name = {fn.name: fn for fn in funcs}
     reachable = reachable_functions(funcs, kernel_name)
     counts = {fn.name: name_store_counts(fn) for fn in funcs}
@@ -211,9 +217,13 @@ def unit_axis_seeds(
             for i, param in enumerate(by_name[call.func.id].args.args):
                 arg = call.args[i] if readable and i < len(call.args) else None
                 known = seeds[caller].get(arg.id) if isinstance(arg, ast.Name) else None
-                observed.setdefault((call.func.id, param.arg), set()).add(
-                    None if known is None else tuple(t == ONE for t in known)
-                )
+                unit = None if known is None else tuple(t == ONE for t in known)
+                if unit is None and isinstance(arg, ast.Name):
+                    unit = newaxis_view_units(by_name[caller], arg.id)
+                rank = (param_ranks or {}).get(call.func.id, {}).get(param.arg)
+                if unit is not None and known is None and len(unit) != rank:
+                    unit = None  # a view's trailing axes the subscript leaves implicit
+                observed.setdefault((call.func.id, param.arg), set()).add(unit)
         agreed: dict[str, dict[str, list[str]]] = {name: {} for name in by_name} | {kernel_name: kernel}
         for (callee, pname), patterns in observed.items():
             unit = next(iter(patterns))
@@ -240,7 +250,7 @@ class OuterBroadcastPeel(RankedRewritePass):
     Extents are ``<name>.shape[k]`` tokens from the rank table, since manifest shape symbols are
     not bound in the kernel. An operand whose axes cannot be placed declines the whole statement."""
 
-    __slots__ = ("dtypes", "known", "once")
+    __slots__ = ("dtypes", "fn", "known", "once", "scanned", "values")
 
     def __init__(
         self,
@@ -252,14 +262,32 @@ class OuterBroadcastPeel(RankedRewritePass):
         super().__init__(ranks)
         #: Kinds of the scope's names: an integer index array places its own axes (:meth:`axes_`).
         self.dtypes = dtypes or {}
-        #: Names bound exactly once in the scope, whose extents one binding settles.
-        self.once = (
-            frozenset(name for name, count in name_store_counts(fn).items() if count == 1) if fn else frozenset()
-        )
+        #: Names bound exactly once in the scope, whose extents one binding settles. Read off the body the first
+        #: statement sees (:meth:`scan`), so temps earlier passes hoist count (cfd's reduction ``__rdo0``).
+        self.fn = fn
+        self.once: frozenset[str] = frozenset()
+        self.scanned = False
         #: Extents of a once-bound name whose value has a literal unit axis (raman's ``g = w * w[None, :]``). A peel
         #: they decide is kept only if its row is free of same-rank unit broadcasts (:meth:`unit_row_hazard`).
         #: Parameters start from :func:`unit_axis_seeds`.
         self.known: dict[str, list[str]] = dict(units or {})
+        #: The value of each once-bound name, for the shape tokens :meth:`shape_token` follows.
+        self.values: dict[str, ast.expr] = {}
+
+    def scan(self) -> None:
+        """Fill :attr:`once` and :attr:`values` from the scope as every earlier pass left it."""
+        self.scanned = True
+        if self.fn is None:
+            return
+        self.once = frozenset(name for name, count in name_store_counts(self.fn).items() if count == 1)
+        self.values = {
+            node.targets[0].id: node.value
+            for node in walk_nodes(self.fn)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in self.once
+        }
 
     def operands_(self, node: ast.AST) -> list[ast.expr] | None:
         """The operands an elementwise node broadcasts together, or None when it is not one."""
@@ -362,9 +390,36 @@ class OuterBroadcastPeel(RankedRewritePass):
         axes.extend((None, "tail", base[k]) for k in range(bi, len(base)))
         return axes
 
+    def shape_token(self, e: ast.expr) -> str:
+        """The extent token of a shape entry, ``1`` where it reads a known unit axis: ``y.shape[k]`` of a name in
+        :attr:`known`, or a once-bound name holding one (the reduction hoist's ``d1 = src.shape[1]``)."""
+        seen = 0
+        while isinstance(e, ast.Name) and e.id in self.values and seen < 8:
+            e, seen = self.values[e.id], seen + 1
+        if (
+            isinstance(e, ast.Subscript)
+            and isinstance(e.value, ast.Attribute)
+            and e.value.attr == "shape"
+            and isinstance(e.value.value, ast.Name)
+            and e.value.value.id in self.known
+            and (k := const_int(e.slice)) is not None
+            and 0 <= k < len(self.known[e.value.value.id])
+            and self.known[e.value.value.id][k] == ONE
+        ):
+            return ONE
+        return ast.unparse(e)
+
     def binding_extents(self, value: ast.expr) -> list[str] | None:
         """:meth:`extents_` of a binding's value, which may also be a view of ``np.arange`` (cp2k_grid_integrate's
         ``zi = np.arange(nlp)[:, None, None]``): a peel never indexes that computed base, but its extents are known."""
+        if (
+            numpy_call_attr(value) in ("empty", "zeros")
+            and isinstance(value, ast.Call)
+            and value.args
+            and isinstance(shape := value.args[0], ast.Tuple)
+        ):
+            # cfd's reduction temp ``np.empty((d0, d1), ...)`` of a (N, 1, 3) source keeps the unit axis.
+            return [self.shape_token(e) for e in shape.elts]
         if not (isinstance(value, ast.Subscript) and numpy_call_attr(value.value) == "arange"):
             return self.extents_(value)
         base = self.extents_(value.value)
@@ -609,21 +664,32 @@ class OuterBroadcastPeel(RankedRewritePass):
 
     def visit_Return(self, node: ast.Return) -> ast.AST | list[ast.stmt]:
         """``return <outer-product broadcast>`` -> the peeled loop into a temp, then ``return`` it
-        (chebyshev_filter_subspace's ``return ... + vloc[..., None] * x``); left as is when nothing peels."""
+        (chebyshev_filter_subspace's ``return ... + vloc[..., None] * x``), each element of a returned tuple on its
+        own (cfd's flux ``return mn / d, mn[..., None] * m + ...``); left as is when nothing peels."""
         if node.value is None:
             return node
-        temp = f"__ob{self._ctr}_r"
-        rank = expr_rank(node.value, self.ranks)
-        if rank is None:
+        elements = node.value.elts if isinstance(node.value, ast.Tuple) else [node.value]
+        out: list[ast.stmt] = []
+        kept: list[ast.expr] = []
+        for element in elements:
+            temp = f"__ob{self._ctr}_r"
+            rank = expr_rank(element, self.ranks)
+            peeled: ast.AST | list[ast.stmt] = element
+            if rank is not None:
+                self.ranks[temp] = rank
+                bind = ast.copy_location(ast.Assign(targets=[store_(temp)], value=copy.deepcopy(element)), node)
+                peeled = self.visit_Assign(bind)
+            if isinstance(peeled, list):
+                out.extend(peeled)
+                kept.append(name_(temp))
+            else:
+                self.ranks.pop(temp, None)
+                kept.append(element)
+        if not out:
             return node
-        self.ranks[temp] = rank
-        bind = ast.copy_location(ast.Assign(targets=[store_(temp)], value=copy.deepcopy(node.value)), node)
-        peeled = self.visit_Assign(bind)
-        if not isinstance(peeled, list):
-            del self.ranks[temp]
-            return node
-        returned = ast.copy_location(ast.Return(value=name_(temp)), node)
-        return [*peeled, ast.fix_missing_locations(returned)]
+        value = ast.Tuple(elts=kept, ctx=ast.Load()) if isinstance(node.value, ast.Tuple) else kept[0]
+        returned = ast.copy_location(ast.Return(value=value), node)
+        return [*out, ast.fix_missing_locations(returned)]
 
     def expand_ellipses(self, value: ast.expr) -> None:
         """Spell a lone ``...`` over a name of known rank as full slices, so :meth:`axes_` can place each axis
@@ -830,6 +896,8 @@ class OuterBroadcastPeel(RankedRewritePass):
         if len(node.targets) != 1:
             return node
         target = node.targets[0]
+        if not self.scanned:
+            self.scan()
         if isinstance(target, ast.Name) and target.id in self.once:
             extents = self.binding_extents(node.value)
             if extents is not None and ONE in extents:

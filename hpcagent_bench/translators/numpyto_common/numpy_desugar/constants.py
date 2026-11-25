@@ -10,7 +10,7 @@ from typing import Any
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, const_int, literal_loads, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import name_store_counts
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import name_store_counts, newaxis_view_units
 
 __all__ = [
     "BINARY_OPS",
@@ -663,3 +663,37 @@ def specialize_helpers_by_literal(tree: ast.Module, kernel_name: str) -> bool:
             call.func = ast.Name(id=clones[key], ctx=ast.Load())
         changed = True
     return changed
+
+
+def specialize_helpers_by_unit_axes(tree: ast.Module, kernel_name: str) -> dict[str, str]:
+    """Clone a helper per pattern of size-1 axes its call sites pass (numba only): cfd's ``physical_flux`` takes
+    ``momentum[:, np.newaxis, :]`` at one site and a ``(N, 4, 3)`` gather at the other, so no one seed fits its
+    ``momentum * normal``. Each clone has call sites that agree, which :func:`unit_axis_seeds` then reads. Only
+    positional calls of a helper no value or nested scope reaches. Returns ``{clone: helper}``."""
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    helpers = {name: fn for name, fn in funcs.items() if name != kernel_name}
+    sites, escaped = helper_call_sites(tree, helpers)
+    owner = {id(c): fn for fn in funcs.values() for c in walk_nodes(fn) if isinstance(c, ast.Call)}
+    families: dict[str, str] = {}
+    for name, fn in helpers.items():
+        calls = [c for c in sites.get(name, []) if id(c) in owner]
+        if len(calls) < 2 or name in escaped or not substitutable_helper(fn, calls):
+            continue
+        keys = [
+            tuple(newaxis_view_units(owner[id(c)], a.id) if isinstance(a, ast.Name) else None for a in c.args)
+            for c in calls
+        ]
+        if len(set(keys)) < 2 or all(all(u is None for u in key) for key in keys):
+            continue
+        clones: dict[tuple[tuple[bool, ...] | None, ...], str] = {}
+        at = tree.body.index(fn)
+        for call, key in zip(calls, keys, strict=True):
+            if key not in clones:
+                clone = copy.deepcopy(fn)
+                clone.name = f"{name}_u{len(clones)}"
+                clones[key] = clone.name
+                families[clone.name] = name
+                at += 1
+                tree.body.insert(at, clone)
+            call.func = ast.Name(id=clones[key], ctx=ast.Load())
+    return families
