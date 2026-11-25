@@ -38,8 +38,8 @@ To develop against a dace checkout of your own, change the `dace` line of `[tool
 the pin). That is a local edit: do not commit it or the `uv.lock` it rewrites (`git checkout pyproject.toml uv.lock`
 restores both). After changing a dependency, run `uv lock` and commit `uv.lock` with it; `helpers/scripts/pins.sh --bump` raises the `dace-extended` and `dace-relayout` lower bounds to their newest
 PyPI releases and relocks them (pip and uv install the same releases), and moves the user plugins to their newest
-releases. Every package releases from its own repository. A patch release of the bench (hpcagent-bench and
-hpcagent-agent, vX.Y.Z to vX.Y.(Z+1)) is `helpers/scripts/release.sh` on a clean main with green CI: it dates the
+releases. Every package releases from its own repository. A patch release of this repository's two packages
+(the bench and its agent package, vX.Y.Z to vX.Y.(Z+1)) is `helpers/scripts/release.sh` on a clean main with green CI: it dates the
 `## X.Y.(Z+1) (unreleased)` CHANGELOG section, builds and smoke-tests both packages, uploads them with `TWINE_USER`
 and `TWINE_TOKEN`, and only then pushes the tag and creates the GitHub release (`--dry-run` keeps nothing).
 
