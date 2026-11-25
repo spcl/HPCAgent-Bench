@@ -68,6 +68,8 @@ PARSE_WORKERS = 2
 #: sound under the split because it is per-kernel in both directions -- a shard's regressions and
 #: its ``fixed`` set are read off the kernels that shard parsed.
 PARSE_SHARD = os.environ.get("HPCAGENT_BENCH_DACE_PARSE_SHARD", "").strip()
+#: ``"1"`` on a push or pull request (the workflow's top-level env): parse the coverage set only (:func:`frontend_keys`).
+PER_PUSH_SLICE = os.environ.get("HPCAGENT_BENCH_E2E_SUBSET", "").strip() == "1"
 
 #: How many kernels EMIT at once. The emit is a pure-Python AST walk with no shared state -- each
 #: kernel reads and writes only its own directory -- so nothing races and no verdict moves.
@@ -256,6 +258,18 @@ def stop_measuring_coverage() -> None:
         active.stop()
 
 
+def frontend_keys(keys: Iterable[str], numeric: frozenset[str], per_push: bool) -> list[str]:
+    """The registry keys this sweep parses: every kernel the numeric gate does not run, and per push only those in the
+    measured coverage set (:func:`tests.translators.bench_yaml.coverage_set`), the slice the e2e and numeric sweeps
+    take. The rest drive translation the coverage set already exercises; a dispatched run parses them all, and only it
+    can see a :data:`REFUSED` entry that started parsing."""
+    from tests.translators.bench_yaml import coverage_set
+
+    covered = coverage_set()
+    stems = ((key, key.rsplit("/", 1)[-1]) for key in keys)
+    return [key for key, stem in stems if stem not in numeric and (not per_push or stem in covered)]
+
+
 def generated_programs() -> list[pathlib.Path]:
     """Every kernel's canonical DaCe program the numeric gate does not run, GENERATING any that a fresh checkout lacks.
 
@@ -283,8 +297,7 @@ def generated_programs() -> list[pathlib.Path]:
     # Deferred: tests.test_dace_numeric_agreement imports this module.
     from tests.test_dace_numeric_agreement import numeric_kernels
 
-    numeric = frozenset(numeric_kernels())
-    keys = [key for key in sorted(KERNELS) if key.rsplit("/", 1)[-1] not in numeric]
+    keys = frontend_keys(sorted(KERNELS), frozenset(numeric_kernels()), per_push=PER_PUSH_SLICE)
     # forkserver: a child forked from a multithreaded xdist worker can segfault importing dace (758901).
     context = multiprocessing.get_context("forkserver")
     with ProcessPoolExecutor(max_workers=EMIT_WORKERS, mp_context=context, initializer=stop_measuring_coverage) as pool:
@@ -727,3 +740,15 @@ def test_a_kept_helper_declares_the_extent_its_body_writes(key: str) -> None:
     finally:
         server.close()
     assert answer["verdict"] == "ok", f"{key}: {answer}"
+
+
+def test_a_push_parses_the_coverage_set_and_a_dispatched_run_parses_every_kernel() -> None:
+    """The frontend sweep parsed all 289 non-numeric kernels on every push (17 min a shard); per push it now parses
+    the coverage set the other sweeps use, and a dispatched run still parses the whole corpus."""
+    from tests.translators.bench_yaml import coverage_set
+
+    covered = sorted(coverage_set())
+    keys = [f"track/{stem}/{stem}" for stem in [*covered[:2], "not_in_the_coverage_set"]]
+    numeric = frozenset({covered[1]})
+    assert frontend_keys(keys, numeric, per_push=True) == [keys[0]]
+    assert frontend_keys(keys, numeric, per_push=False) == [keys[0], keys[2]]
