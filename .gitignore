@@ -224,3 +224,4 @@ experiments/mwd-final-*/
 # The static site (web/): npm install and vite build output.
 web/node_modules/
 web/dist/
+tests/data/*.db.lock
