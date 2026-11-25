@@ -33,8 +33,10 @@ __all__ = [
     "ARITHMETIC_NODES",
     "BINARY_UFUNCS",
     "CUMULATIVE_AXIS_HOIST",
+    "OFFSET_DIAG_HOIST",
     "ONE",
     "BroadcastAugAssignSpellOut",
+    "IxUnpack",
     "NdimFold",
     "NonePlaceholderDrop",
     "NumbaCallFixups",
@@ -1148,7 +1150,10 @@ class NumbaCallFixups(RankedRewritePass):
 
     ``np.array(<array>)`` -> ``np.copy(<array>)``: numba's ``np.array`` takes a sequence, not an array (vadv's
     ``np.array(dcol[:, :, K - 1])``). ``enumerate(x, start=k)`` -> ``enumerate(x, k)``: numba's ``enumerate`` takes
-    ``start`` positionally only and fails a bare ``assert not kws`` (laplacian_stencil_3d, chebyshev_filter_subspace)."""
+    ``start`` positionally only and fails a bare ``assert not kws`` (laplacian_stencil_3d, chebyshev_filter_subspace).
+    ``np.fft.fftfreq(n, d)`` -> numpy's own two ``np.arange`` halves times ``1.0 / (n * d)``: numba has no ``np.fft``
+    (ls3df_scf's ``2.0 * np.pi * np.fft.fftfreq(n, d=h)``). ``np.linalg.norm(x)`` of a rank-3+ ``x`` ->
+    ``np.linalg.norm(x.ravel())``, which numpy computes for it and numba accepts (ls3df_scf's Lanczos start)."""
 
     __slots__ = ()
 
@@ -1166,6 +1171,46 @@ class NumbaCallFixups(RankedRewritePass):
                 ast.Call(func=node.func, args=[node.args[0], node.keywords[0].value], keywords=[]), node
             )
         if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "fftfreq"
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "fft"
+            and is_numpy_module(node.func.value.value)
+            and 1 <= len(node.args) <= 2
+            and {k.arg for k in node.keywords} <= {"d"}
+            and len(node.args) + len(node.keywords) <= 2
+            and all(
+                isinstance(n, ARITHMETIC_NODES)
+                for a in [*node.args, *(k.value for k in node.keywords)]
+                for n in walk_nodes(a)
+            )
+        ):
+            # numpy's own steps: the non-negative then the negative frequencies, times ``1.0 / (n * d)``.
+            spacing = [*node.args[1:], *(k.value for k in node.keywords)] or [ast.Constant(1.0)]
+            n, d = ast.unparse(node.args[0]), ast.unparse(spacing[0])
+            self.changed = True
+            return ast.copy_location(
+                expr_of(
+                    f"np.concatenate((np.arange(0, ({n} - 1) // 2 + 1), np.arange(-({n} // 2), 0)))"
+                    f" * (1.0 / ({n} * {d}))"
+                ),
+                node,
+            )
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "norm"
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "linalg"
+            and is_numpy_module(node.func.value.value)
+            and len(node.args) == 1
+            and not node.keywords
+            and (expr_rank(node.args[0], self.ranks) or 0) >= 3
+        ):
+            # numpy's default norm of any rank is the 2-norm of the flattened array; numba's takes 1-D and 2-D.
+            self.changed = True
+            ravel = ast.Call(func=ast.Attribute(value=node.args[0], attr="ravel", ctx=ast.Load()), args=[], keywords=[])
+            return ast.copy_location(ast.Call(func=node.func, args=[ravel], keywords=[]), node)
+        if (
             numpy_call_attr(node) == "array"
             and len(node.args) == 1
             and not node.keywords
@@ -1175,6 +1220,43 @@ class NumbaCallFixups(RankedRewritePass):
             self.changed = True
             return ast.copy_location(expr_of(f"np.copy({ast.unparse(node.args[0])})"), node)
         return node
+
+
+class IxUnpack(RankedRewritePass):
+    """``a, b, c = np.ix_(x, y, z)`` -> ``a = x[:, None, None]``, ``b = y[None, :, None]``, ``c = z[None, None, :]``
+    (numba only: numba has no ``np.ix_``; ls3df_scf's fragment gather ``V_tot[gx, gy, gz]``). ``np.ix_`` takes 1-D
+    sequences alone, so each view is exact for an integer one; a boolean one (which ``np.ix_`` turns into its nonzero
+    indices) declines the statement."""
+
+    __slots__ = ("dtypes",)
+
+    def __init__(self, ranks: dict[str, int], dtypes: dict[str, str]) -> None:
+        super().__init__(ranks)
+        self.dtypes = dtypes
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        """Unpack an ``np.ix_`` open mesh into one newaxis view per argument."""
+        value = node.value
+        if not (
+            len(node.targets) == 1
+            and isinstance(target := node.targets[0], ast.Tuple)
+            and all(isinstance(e, ast.Name) for e in target.elts)
+            and isinstance(value, ast.Call)
+            and numpy_call_attr(value) == "ix_"
+            and not value.keywords
+            and len(value.args) == len(target.elts)
+            and all(isinstance(a, ast.Name) and self.dtypes.get(a.id) != "bool" for a in value.args)
+        ):
+            return node
+        count = len(value.args)
+        out: list[ast.stmt] = []
+        for k, (name, arg) in enumerate(zip(target.elts, value.args, strict=True)):
+            assert isinstance(name, ast.Name) and isinstance(arg, ast.Name)
+            entries = ", ".join(":" if j == k else "None" for j in range(count))
+            out.append(ast.copy_location(ast.parse(f"{name.id} = {arg.id}[{entries}]").body[0], node))
+            self.ranks[name.id] = count
+        self.changed = True
+        return out
 
 
 class RollInline(RankedRewritePass):
@@ -1322,6 +1404,36 @@ class NdimFold(ast.NodeTransformer):
             self.changed = True
             return node.body if node.test.value else node.orelse
         return node
+
+
+def hoist_offset_diag(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
+    """``np.diag(v, k)`` of a 1-D ``v`` and a literal ``k != 0`` -> a zero square of side ``len(v) + |k|`` filled along
+    diagonal ``k`` (numba only: its parfor analysis takes the result for ``v``'s shape and asserts on
+    ls3df_scf's ``T + np.diag(off, 1)``)."""
+    if not (
+        isinstance(node, ast.Call) and numpy_call_attr(node) == "diag" and len(node.args) == 2 and not node.keywords
+    ):
+        return None
+    k = const_int(node.args[1])
+    if not k or expr_rank(node.args[0], hoist.tables.ranks) != 1:
+        return None
+    t = f"__dg{hoist.ctr}"
+    hoist.ctr += 1
+    v, i = f"{t}_v", f"{t}_i"
+    row, col = (i, f"{i} + {k}") if k > 0 else (f"{i} + {-k}", i)
+    hoist.queue(
+        [
+            f"{v} = {ast.unparse(node.args[0])}",
+            f"{t} = np.zeros(({v}.shape[0] + {abs(k)}, {v}.shape[0] + {abs(k)}), {v}.dtype)",
+            f"for {i} in range({v}.shape[0]):",
+            f"    {t}[{row}, {col}] = {v}[{i}]",
+        ]
+    )
+    hoist.tables.ranks[t] = 2
+    return name_(t)
+
+
+OFFSET_DIAG_HOIST = HoistForm(frozenset({"diag"}), (), hoist_offset_diag)
 
 
 #: numpy scan -> the operator one step of it applies.

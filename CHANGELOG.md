@@ -49,7 +49,7 @@
   the submit precedence, repo-PR and tuner end-to-end tests drop runs the unit tests already pin.
 - The from-source OpenBLAS cache now saves: its path named `openblas-openmp/` while the test installs under
   `openblas-openmp-<toolchain id>/`, so every integration run rebuilt OpenBLAS (about 600 s).
-- The per-push numba e2e leg leaves out the 5 kernels whose generated numba numba 0.68 rejects
+- The per-push numba e2e leg leaves out the 4 kernels whose generated numba numba 0.68 rejects
   (`NUMBA_EMIT_GAPS`; each ships a hand-written numba reference). A dispatched run holds each to its recorded
   status, so a fixed one fails until its entry goes.
 - CI fetches the tree-sitter grammars of the comment sanitizer once per job, with retries, and caches them per
@@ -107,6 +107,12 @@
   on it folds (max_filter's `running_max(..., axis=0)` and `axis=1`). It lowers a constant-mode `np.pad`, which
   numba lacks, reads a `pad_width` bound to a tuple by name, and lowers `np.maximum/minimum/add/multiply.accumulate`
   along a literal axis. max_filter now matches numpy on numba.
+- The numba emit lowers `np.fft.fftfreq` with numpy's own steps (the rank table had given it `n`'s rank, 0),
+  `gx, gy, gz = np.ix_(xs, ys, zs)` to newaxis views before any rank table, `np.linalg.norm` of a 3-D or larger
+  array to the norm of its ravel, and `np.diag(v, k)` with `k != 0` to a filled square (numba's parfor analysis
+  took it for `v`'s shape). A point-wise gather sizes each axis by every entry spanning it and reads a size-1
+  axis at 0: through names it read past `gy = ys[None, :, None]`'s unit axis. ls3df_scf now matches numpy on
+  numba.
 These fixes follow the fuzzed baseline sweep of the CPF paper (jobs 760899 and 760901, rerun in 761626).
 
 - The C and C++ references call LAPACKE: `?gesv` for `np.linalg.solve` and `?syevd`/`?heevd` for the eigensolver

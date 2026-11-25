@@ -94,13 +94,16 @@ def fancy_gather_lines(
 ) -> list[str]:
     """Source lines gathering ``arr[elts]`` point-wise into ``<p>_o``, one loop per driver axis.
 
-    ``named`` (numba) sizes each axis by the entries that span it: numba asserts on the broadcast sum
-    ``x0 * 0 + x1 * 0`` of same-rank entries with unit axes (cp2k_grid_integrate's open mesh)."""
+    ``named`` (numba) sizes each axis by the entries that span it, the largest when several do, and reads an entry
+    whose axis is 1 at run time at 0 there: numba asserts on the broadcast sum ``x0 * 0 + x1 * 0`` of same-rank
+    entries with unit axes (cp2k_grid_integrate's open mesh), and a name hides its unit axes (ls3df_scf's
+    ``gx = xs[:, None, None]``), which the loops would otherwise read past."""
     iters = [f"{p}_i{k}" for k in range(driver_rank)]
     it = ", ".join(iters)
     # An axis an entry pins to extent 1 is read at 0 in that entry, not at the iterator.
     idx_j = [j for j, r in enumerate(elt_ranks) if (r or 0) >= 1]
     singles = {j: newaxis_singletons(elts[j], driver_rank) for j in idx_j}
+    spans = [[j for j in idx_j if k not in singles[j]] for k in range(driver_rank)]
     pre: list[str] = []
     idx_exprs: list[str] = []
     for j, e in enumerate(elts):
@@ -109,13 +112,22 @@ def fancy_gather_lines(
             continue
         t = f"{p}_x{j}"
         pre.append(f"{t} = {ast.unparse(e)}")
-        idx_exprs.append(f"{t}[{', '.join('0' if k in singles[j] else iters[k] for k in range(driver_rank))}]")
+        at = [
+            "0"
+            if k in singles[j]
+            # Branchless: numba unifies a prange index (uint64) and a literal 0 to float64.
+            else f"{iters[k]} * ({t}.shape[{k}] != 1)"
+            if named and len(spans[k]) > 1
+            else iters[k]
+            for k in range(driver_rank)
+        ]
+        idx_exprs.append(f"{t}[{', '.join(at)}]")
     # Shape by broadcasting the entries, not by naming extents: a symbolic-shape backend
     # cannot prove a re-spelled extent equal to the one the statement already carries.
     driver = f"{p}_x{idx_j[0]}"
-    if any(singles.values()) and named:
-        spans = [[f"{p}_x{j}.shape[{k}]" for j in idx_j if k not in singles[j]] for k in range(driver_rank)]
-        extents = [("max(" + ", ".join(s) + ")" if len(s) > 1 else s[0]) if s else "1" for s in spans]
+    if named:
+        named_spans = [[f"{p}_x{j}.shape[{k}]" for j in span] for k, span in enumerate(spans)]
+        extents = [("max(" + ", ".join(s) + ")" if len(s) > 1 else s[0]) if s else "1" for s in named_spans]
         shape = f"({', '.join(extents)},)"
     else:
         if any(singles.values()):

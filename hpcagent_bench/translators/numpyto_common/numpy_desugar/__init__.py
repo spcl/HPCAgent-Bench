@@ -89,7 +89,9 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.matmul import (
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.numba import (
     CUMULATIVE_AXIS_HOIST,
+    OFFSET_DIAG_HOIST,
     BroadcastAugAssignSpellOut,
+    IxUnpack,
     NdimFold,
     NonePlaceholderDrop,
     NumbaCallFixups,
@@ -214,6 +216,10 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             inline = SliceObjectInline(func)
             inline.visit(func)
             changed = changed or inline.changed
+            # Before every rank table: the names an ``np.ix_`` unpacks into, and all their uses, take ranks.
+            unpack = IxUnpack({}, dtype_table_(func, {}))
+            unpack.visit(func)
+            changed = changed or unpack.changed
             placeholders = NonePlaceholderDrop(func)
             placeholders.visit(func)
             changed = changed or placeholders.changed
@@ -276,6 +282,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             BoolOpIfToChain(),
             # Before NormalizeNegativeAxis, which pins a negative scan axis to one rank of a helper.
             *([ValueHoist(CUMULATIVE_AXIS_HOIST, tables)] if backend == "numba" else []),
+            *([ValueHoist(OFFSET_DIAG_HOIST, tables)] if backend == "numba" else []),
             NormalizeNegativeAxis(ranks),
             IxWriteToLoop(ranks, dtypes, fn),
             FancySliceStoreToLoop(ranks, dtypes, broadcast=backend == "numba"),

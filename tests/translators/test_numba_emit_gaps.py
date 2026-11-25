@@ -25,6 +25,33 @@ def numba(
     return run_op(src, "f", ins, outs, syms, shapes=shapes, backends=("numba",), dtypes=dtypes)["numba"]
 
 
+def numba_as_written(
+    tmp_path: pathlib.Path,
+    src: str,
+    ins: dict[str, np.ndarray],
+    outs: dict[str, tuple[int, ...]],
+    syms: dict[str, int],
+    shapes: dict[str, str],
+    dtypes: dict[str, str] | None = None,
+) -> tuple[str, dict[str, np.ndarray]]:
+    """``(emitted source, outputs)`` of ``src``'s ``f`` emitted the way ``write_numba`` does (the parsed, unlowered
+    IR) and run: the op-oracle's lowering rejects some calls (``ufunc.accumulate``, ``np.ix_``) before any desugar."""
+    from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
+    from tests.translators.op_oracle import parse_source
+
+    kir = parse_source(src, "f", list(ins), list(outs), shapes, syms, dtypes)
+    emitted = emit_numba(src, kir=kir)
+    module = tmp_path / "f_numba.py"
+    module.write_text(emitted)
+    spec = importlib.util.spec_from_file_location("f_numba", module)
+    assert spec is not None and spec.loader is not None
+    sut = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sut)
+    got = {name: np.zeros(shape) for name, shape in outs.items()}
+    sut.f(*[v.copy() for v in ins.values()], *got.values())
+    return emitted, got
+
+
 def test_an_in_place_update_by_an_axis_reduction_matches_numpy_on_numba() -> None:
     """nbody's ``vel -= (mass * vel).sum(axis=0) / N``: the hoisted reduction temp had no rank, so the in-place
     broadcast stayed an ``-=`` numba's parfor lowering rejects (``cannot index array(float64, 1d) with 2 indices``)."""
@@ -388,22 +415,102 @@ def test_a_helper_called_with_two_axis_literals_matches_numpy_on_numba() -> None
 
 
 def test_a_running_maximum_along_an_axis_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
-    """max_filter's ``np.maximum.accumulate(blocks, axis=-1)``: numba has no ``ufunc.accumulate``. Emitted the way
-    ``write_numba`` does (the parsed, unlowered IR): the op-oracle's lowering rejects the call before any desugar."""
-    from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
-    from tests.translators.op_oracle import parse_source
-
+    """max_filter's ``np.maximum.accumulate(blocks, axis=-1)``: numba has no ``ufunc.accumulate``."""
     src = "import numpy as np\ndef f(x, out):\n out[:] = np.maximum.accumulate(x, axis=-1) - np.add.accumulate(x)\n"
-    kir = parse_source(src, "f", ["x"], ["out"], {"x": "(A, B)", "out": "(A, B)"}, {"A": 2, "B": 3})
-    emitted = emit_numba(src, kir=kir)
-    assert "accumulate" not in emitted
-    module = tmp_path / "scan_numba.py"
-    module.write_text(emitted)
-    spec = importlib.util.spec_from_file_location("scan_numba", module)
-    assert spec is not None and spec.loader is not None
-    sut = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(sut)
     x = np.array([[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]])
-    out = np.zeros((2, 3))
-    sut.f(x, out)
-    np.testing.assert_array_equal(out, np.maximum.accumulate(x, axis=-1) - np.add.accumulate(x))
+    emitted, got = numba_as_written(
+        tmp_path, src, {"x": x}, {"out": (2, 3)}, {"A": 2, "B": 3}, {"x": "(A, B)", "out": "(A, B)"}
+    )
+    assert "accumulate" not in emitted
+    np.testing.assert_array_equal(got["out"], np.maximum.accumulate(x, axis=-1) - np.add.accumulate(x))
+
+
+def test_sample_frequencies_feed_an_open_mesh_on_numba(tmp_path: pathlib.Path) -> None:
+    """ls3df_scf's ``kx = 2.0 * np.pi * np.fft.fftfreq(n, d=h)`` then ``kx[:, None] * kx[:, None] + kx * kx``:
+    numba has no ``np.fft.fftfreq``, and the rank table gave it ``n``'s rank, 0, so the mesh was never peeled."""
+    src = (
+        "import numpy as np\n"
+        "def mesh(n, h):\n"
+        " kx = 2.0 * np.pi * np.fft.fftfreq(n, d=h)\n"
+        " return kx[:, None] * kx[:, None] + kx * kx\n"
+        "def f(x, out):\n"
+        " out[:] = x * mesh(5, 0.5)\n"
+    )
+    x = np.linspace(1.0, 2.0, 25).reshape(5, 5)
+    emitted, got = numba_as_written(
+        tmp_path, src, {"x": x}, {"out": (5, 5)}, {"N": 5}, {"x": "(N, N)", "out": "(N, N)"}
+    )
+    assert "fftfreq" not in emitted
+    kx = 2.0 * np.pi * np.fft.fftfreq(5, d=0.5)
+    np.testing.assert_array_equal(got["out"], x * (kx[:, None] * kx[:, None] + kx * kx))
+
+
+def test_a_gather_through_an_unpacked_ix_mesh_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """ls3df_scf's ``gx, gy, gz = np.ix_(xs, ys, zs); vloc = V_tot[gx, gy, gz]``: numba has no ``np.ix_``, and the
+    gather loops then sized by ``gx``'s shape ``(2, 1, 1)`` read ``gy`` past its size-1 axis."""
+    src = (
+        "import numpy as np\n"
+        "def gather(v, xs, ys, zs):\n"
+        " gx, gy, gz = np.ix_(xs, ys, zs)\n"
+        " return v[gx, gy, gz]\n"
+        "def f(v, xs, ys, zs, out):\n"
+        " out[:] = gather(v, xs, ys, zs) * 2.0\n"
+    )
+    v = np.linspace(0.0, 1.0, 64).reshape(4, 4, 4)
+    xs = np.array([3, 0], dtype=np.int64)
+    ys = np.array([1, 2, 0], dtype=np.int64)
+    zs = np.array([0, 3], dtype=np.int64)
+    shapes = {"v": "(N, N, N)", "xs": "(2,)", "ys": "(3,)", "zs": "(2,)", "out": "(2, 3, 2)"}
+    dtypes = {"v": "float64", "xs": "int64", "ys": "int64", "zs": "int64", "out": "float64"}
+    ins = {"v": v, "xs": xs, "ys": ys, "zs": zs}
+    emitted, got = numba_as_written(tmp_path, src, ins, {"out": (2, 3, 2)}, {"N": 4}, shapes, dtypes)
+    assert "ix_" not in emitted
+    np.testing.assert_array_equal(got["out"], v[np.ix_(xs, ys, zs)] * 2.0)
+
+
+def test_the_norm_of_a_volume_matches_numpy_on_numba() -> None:
+    """ls3df_scf's ``v / (np.linalg.norm(v) + 1e-30)`` with ``v`` 3-D: numba's ``norm`` takes 1-D and 2-D only."""
+    src = (
+        "import numpy as np\ndef unit(v):\n return v / (np.linalg.norm(v) + 1e-30)\ndef f(v, out):\n out[:] = unit(v)\n"
+    )
+    v = np.linspace(-1.0, 1.0, 24).reshape(2, 3, 4)
+    assert numba(src, {"v": v}, {"out": (2, 3, 4)}, {"A": 2}, {"v": "(2, 3, 4)", "out": "(2, 3, 4)"}) == "ok"
+
+
+def test_an_offset_diagonal_added_to_a_square_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """ls3df_scf's tridiagonal ``T = np.diag(a); T = T + np.diag(off, 1) + np.diag(off, -1)``: numba's parfor analysis
+    takes ``np.diag(off, 1)`` for ``off``'s shape and asserts ``Sizes of T, ... do not match``."""
+    src = (
+        "import numpy as np\n"
+        "def f(a, out):\n"
+        " off = a[:3]\n"
+        " t = np.diag(a)\n"
+        " out[:] = t + np.diag(off, 1) + np.diag(off, -1)\n"
+    )
+    a = np.arange(1.0, 5.0)
+    emitted, got = numba_as_written(tmp_path, src, {"a": a}, {"out": (4, 4)}, {"N": 4}, {"a": "(N,)", "out": "(N, N)"})
+    assert "np.diag(off, 1)" not in emitted
+    np.testing.assert_array_equal(got["out"], np.diag(a) + np.diag(a[:3], 1) + np.diag(a[:3], -1))
+
+
+def test_an_ix_gather_keeps_its_rank_into_a_helper_on_numba(tmp_path: pathlib.Path) -> None:
+    """ls3df_scf's ``vloc = V_tot[gx, gy, gz]`` passed to a helper reading ``vloc[..., None] * X``: the unpack ran after
+    the rank tables, so ``vloc`` had no rank and the ellipsis was spelled out for the wrong one (``vloc[:, None]``)."""
+    src = (
+        "import numpy as np\n"
+        "def apply(v, x):\n"
+        " return v[..., None] * x\n"
+        "def f(a, xs, ys, x, out):\n"
+        " gx, gy = np.ix_(xs, ys)\n"
+        " v = a[gx, gy]\n"
+        " out[:] = apply(v, x)\n"
+    )
+    a = np.linspace(0.0, 1.0, 16).reshape(4, 4)
+    xs = np.array([3, 0], dtype=np.int64)
+    ys = np.array([1, 2, 0], dtype=np.int64)
+    x = np.linspace(1.0, 2.0, 12).reshape(2, 3, 2)
+    shapes = {"a": "(N, N)", "xs": "(2,)", "ys": "(3,)", "x": "(2, 3, 2)", "out": "(2, 3, 2)"}
+    dtypes = {"a": "float64", "xs": "int64", "ys": "int64", "x": "float64", "out": "float64"}
+    ins = {"a": a, "xs": xs, "ys": ys, "x": x}
+    unused, got = numba_as_written(tmp_path, src, ins, {"out": (2, 3, 2)}, {"N": 4}, shapes, dtypes)
+    np.testing.assert_array_equal(got["out"], a[np.ix_(xs, ys)][..., None] * x)

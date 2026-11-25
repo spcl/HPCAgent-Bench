@@ -255,6 +255,8 @@ def call_rank(value: ast.Call, ranks: dict[str, int]) -> int | None:
     """The rank of a call."""
     func = value.func
     is_abs = isinstance(func, ast.Name) and func.id == "abs"
+    if numpy_submodule_attr(value, "fft") in ("fftfreq", "rfftfreq"):
+        return 1  # the sample frequencies of a length: 1-D whatever ``n`` is
     if value.args and (is_abs or numpy_submodule_attr(value, "fft")):
         return expr_rank(value.args[0], ranks)  # builtin abs is elementwise; fft/ifft/fftn... preserve rank
     attr = numpy_call_attr(value)
