@@ -69,7 +69,7 @@
 ### User plugins
 
 - NestForge is now tactics (PyPI and import name `tactics`, repository spcl/tactics), pinned at its 0.1.1 release
-  candidate 914d74a until its PyPI release. The plugin is `plugin/tactics`, its packets, route and environment keys
+  candidate 1664b68 until its PyPI release. The plugin is `plugin/tactics`, its packets, route and environment keys
   are `tactics`, `/tactics/<tool>` and `TACTICS_*`, its record file is `tactics.json`, and its reference flavor is
   `dace_{cpu,gpu}_canon_tactics_reference`. The study's experiment and tag are `tactics` and `tactics12`. Results
   stored under the old names keep them.
