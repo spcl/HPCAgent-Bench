@@ -409,11 +409,31 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         new_lead = [ast.unparse(e) if j != k else ast.unparse(at_iter) for j, e in enumerate(lead)]
         lines = [
             f"{p}_v = {ast.unparse(value)}",
-            f"for {it} in range({idx_name}.shape[0]):",
-            f"    {target.value.id}[{', '.join(new_lead)}] {op} {p}_v[{', '.join([':'] * k + [it])}]",
+            # ``len``: the index may be a list (lulesh's ``corners = [n0, n1, n2, n3]``), which has no ``.shape``.
+            f"for {it} in range(len({idx_name})):",
+            f"    {target.value.id}[{', '.join(new_lead)}] {op} {self.value_at(p, value, target, lead, k, it)}",
         ]
         self.changed = True
         return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
+
+    def value_at(
+        self, p: str, value: ast.expr, target: ast.Subscript, lead: Sequence[ast.expr], k: int, it: str
+    ) -> str:
+        """The value stored at iteration ``it``, broadcast as numpy does: the value's axis aligned with the index
+        (the selection's axes right-aligned to the value's) read at ``it``, or at 0 where it has size 1
+        (lulesh's ``areaX[:, None]``); unindexed when the value does not reach that axis."""
+        # Scalars before the carrier drop out of the selection; slices and the carrier each keep an axis.
+        carrier_axis = sum(1 for e in lead[:k] if isinstance(e, ast.Slice))
+        target_rank = self.ranks.get(target.value.id) if isinstance(target.value, ast.Name) else None
+        value_rank = expr_rank(value, self.ranks)
+        offset = 0
+        if target_rank is not None and value_rank is not None:
+            kept = sum(1 for j, e in enumerate(lead) if j == k or isinstance(e, ast.Slice))
+            offset = kept + target_rank - len(lead) - value_rank
+        axis = carrier_axis - offset
+        if axis < 0:
+            return f"{p}_v"
+        return f"{p}_v[{', '.join([':'] * axis + [f'{it} if {p}_v.shape[{axis}] != 1 else 0'])}]"
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         """Lower a fancy slice assignment into a loop."""

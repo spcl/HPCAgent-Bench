@@ -178,6 +178,15 @@ class IssubdtypeFold(ast.NodeTransformer):
         return ast.copy_location(ast.Constant(value=(kind in kinds)), node)
 
 
+#: The literals ``is`` compares by identity: one object each.
+SINGLETONS = (None, True, False)
+
+
+def is_singleton(node: ast.expr) -> bool:
+    """A ``None`` / ``True`` / ``False`` literal, by identity: ``0`` and ``1`` compare equal to the booleans."""
+    return isinstance(node, ast.Constant) and any(node.value is literal for literal in SINGLETONS)
+
+
 class DeadBranchElim(RewritePass):
     """Drop the unreachable branch of ``if <const bool>:``, folding ``not`` / ``and`` / ``or`` of constants.
 
@@ -197,6 +206,17 @@ class DeadBranchElim(RewritePass):
             if isinstance(node.op, ast.And):
                 return False if any(v is False for v in vals) else (True if all(v is True for v in vals) else None)
             return True if any(v is True for v in vals) else (False if all(v is False for v in vals) else None)
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], (ast.Is, ast.IsNot)):
+            # ``None is not None`` once a defaulted argument folds (qe_vexx_k's ``coulomb_fac_q``).
+            left, right = node.left, node.comparators[0]
+            if (
+                isinstance(left, ast.Constant)
+                and isinstance(right, ast.Constant)
+                and is_singleton(left)
+                and is_singleton(right)
+            ):
+                same = left.value is right.value
+                return same if isinstance(node.ops[0], ast.Is) else not same
         return None
 
     def visit_If(self, node: ast.If) -> ast.stmt | list[ast.stmt]:

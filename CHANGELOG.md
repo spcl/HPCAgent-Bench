@@ -75,6 +75,11 @@
   (`out[:h, :h], out[h:2 * h, :h] = ...`). dwt2d_daubechies' level loop, where each level rewrites the corner the
   next one reads, became `nb.prange` once the numba emit compiled. The numba emit also lowers `np.roll` along a
   runtime axis, and a conditional binding (`a if c else b`) takes its branches' rank.
+- A store through a fancy index and slices (`out[:, idx] += v`) loops over `len(idx)`, so a list index works, and
+  reads the value along numpy's broadcast: a size-1 axis at 0. It read the size-1 column at every index, past its
+  end, which numba does not bounds-check (lulesh's `normal[:, corners, 0] += areaX[:, None]`). A folded `None`
+  default drops its dead branch (`if None is not None:`), which left `None[...]` SyntaxWarnings in qe_vexx_k's
+  numba emit.
 These fixes follow the fuzzed baseline sweep of the CPF paper (jobs 760899 and 760901, rerun in 761626).
 
 - The C and C++ references call LAPACKE: `?gesv` for `np.linalg.solve` and `?syevd`/`?heevd` for the eigensolver
