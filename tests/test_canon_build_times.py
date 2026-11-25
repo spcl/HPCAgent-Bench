@@ -49,4 +49,3 @@ def test_the_table_names_every_summarized_row() -> None:
     text = canon.format_build_times(canon.build_times([row("gemm", 1.0, 0.5, 2.0, tune=3.0)]))
     assert text.count("dace_cpu_canon") == 4
     assert [line.split()[1] for line in text.splitlines()[1:]] == ["optimize", "tune", "compile", "total"]
-
