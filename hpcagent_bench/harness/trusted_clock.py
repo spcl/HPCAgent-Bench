@@ -518,9 +518,8 @@ class ClockServer:
         if len(self.null_ns) < CALIBRATION_CALLS:
             raise ClockError(f"{len(self.null_ns)} of {CALIBRATION_CALLS} calibration calls reached the parent")
         handshake, spread = handshake_cost(self.null_ns)
-        findings = list(self.findings)
         samples = tuple(self.events) if self.plan.device else host_samples(self.brackets, handshake, spread)
-        return ClockSummary(samples, tuple(self.brackets), handshake, spread, "; ".join(dict.fromkeys(findings)))
+        return ClockSummary(samples, tuple(self.brackets), handshake, spread, "; ".join(dict.fromkeys(self.findings)))
 
     def release(self) -> None:
         """Disarm, and resume a child the kernel stopped as its end closed (a hang-up raises ``SIGIO`` too)."""
