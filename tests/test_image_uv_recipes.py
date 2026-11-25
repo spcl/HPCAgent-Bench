@@ -29,7 +29,7 @@ PIP_INTERFACE: re.Pattern[str] = re.compile(
 INSTALLERS: tuple[pathlib.Path, ...] = (
     *IMAGES.glob("*/Dockerfile"),
     *LIB.glob("*.sh"),
-    ROOT / "helpers" / "scripts" / "do_release.sh",
+    ROOT / "helpers" / "scripts" / "release.sh",
     ROOT / ".github" / "actions" / "setup" / "action.yml",
     ROOT / "tests" / "test_container_launch.py",
     ROOT / "tests" / "test_packaging.py",

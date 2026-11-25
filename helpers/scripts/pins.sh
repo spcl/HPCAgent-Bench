@@ -6,20 +6,11 @@
 #   pins.sh [dace|relayout]  print the version uv.lock holds (dace: dace-extended, the default)
 #   pins.sh --bump           raise both lower bounds to the newest PyPI versions and relock them, and move the user
 #                            plugins to their newest PyPI releases (user_plugins.py bump)
-#   pins.sh --release        first patch-release DaCe extended (dace_extended_release.sh) and the library below (its
-#                            helpers/release_patch.sh, run in a fresh clone of main: tag, PyPI upload, GitHub release;
-#                            both need TWINE_USER and TWINE_TOKEN), then --bump. A failed release does not stop the
-#                            others. --release --github-only passes --github-only to each release.
 set -euo pipefail
 ulimit -c 0
 root="$(dirname -- "${BASH_SOURCE[0]}")/../.."
 declare -A distribution=([dace]="dace-extended" [relayout]="dace-relayout")
-# Only what the bench imports: dace-relayout, released after DaCe extended. The user plugins (dace-alloy, tactics)
-# import hpcagent-bench, not the reverse: they release from their own helpers/release_patch.sh, and --bump moves the
-# user-plugins CI job's pins to their newest PyPI releases.
-LIBRARIES=(
-    "https://github.com/ThrudPrimrose/dace-relayout.git"
-)
+# Every package releases from its own repository; --bump only moves this checkout's pins to what PyPI has.
 
 locked() {
     python3 - "${root}/uv.lock" "$1" <<'EOF'
@@ -32,25 +23,6 @@ if len(versions) != 1:
     sys.exit(f"uv.lock: expected one {sys.argv[2]}, found {len(versions)}")
 print(versions[0])
 EOF
-}
-
-release() {
-    local failed=() url work
-    "${root}/helpers/scripts/dace_extended_release.sh" "$@" || failed+=("DaCe extended")
-    for url in "${LIBRARIES[@]}"; do
-        echo "=== ${url} ==="
-        work="$(mktemp -d "${TMPDIR:-/tmp}/pins-release.XXXXXX")"
-        if ! git clone -q --branch main "${url}" "${work}/repo"; then
-            failed+=("${url} (clone)")
-        elif [[ ! -x "${work}/repo/helpers/release_patch.sh" ]]; then
-            failed+=("${url} (no helpers/release_patch.sh)")
-        else
-            "${work}/repo/helpers/release_patch.sh" "$@" || failed+=("${url}")
-        fi
-        rm -rf "${work}"
-    done
-    ((${#failed[@]} == 0)) || printf 'pins.sh: not released: %s\n' "${failed[@]}" >&2
-    return "${#failed[@]}"
 }
 
 bump() {
@@ -78,20 +50,10 @@ bump() {
     (cd "${root}" && uv lock -q) || restore
 }
 
-released=0
-case "${1:-}" in
-    --release)
-        shift
-        [[ "${1:-}" == "" || "${1:-}" == --github-only ]] || { echo "pins.sh: --release takes only --github-only" >&2; exit 2; }
-        release "$@" || released=$?
-        bump
-        exit "${released}"
-        ;;
-    --bump)
-        bump
-        exit 0
-        ;;
-esac
+if [[ "${1:-}" == --bump ]]; then
+    bump
+    exit 0
+fi
 package="${1:-dace}"
 [[ -n "${distribution[${package}]:-}" ]] || { echo "pins.sh: unknown package '${package}' (dace or relayout)" >&2; exit 2; }
 locked "${distribution[${package}]}"

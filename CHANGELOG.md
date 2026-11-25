@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.3 (unreleased)
+
+### Releases
+
+- One release script, `helpers/scripts/release.sh`, for this repository's two packages: it builds, smoke-tests and
+  uploads before it pushes the tag, so a failed build leaves nothing pushed. The bench no longer releases DaCe
+  extended, dace-relayout or the user plugins (`release_patch.sh`, `do_release.sh`, `release_all.py`,
+  `dace_extended_release.sh` and `pins.sh --release` are gone): each releases from its own repository, and
+  `pins.sh --bump` moves the bench's pins.
+
 ## 1.0.2 (2026-11-26)
 
 ### Grading and anti-cheat

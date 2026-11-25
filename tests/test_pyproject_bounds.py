@@ -83,7 +83,7 @@ def test_every_upper_bound_or_pin_says_why(entry: Entry) -> None:
     assert commented(entry.text, source()), f"{entry.where}: {entry.text} caps a version without a comment"
 
 
-#: The packages released together pin each other exactly (release_patch.sh moves the pins).
+#: The packages released together pin each other exactly (helpers/scripts/release.sh moves the pins).
 RELEASED_TOGETHER = frozenset({"hpcagent-agent", "hpcagent-bench"})
 
 

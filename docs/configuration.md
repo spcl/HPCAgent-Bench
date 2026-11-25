@@ -201,8 +201,7 @@ Defaults are in `containers/images/images.env` and `build_common.sh`; `IMAGE_REQ
 ### dace
 
 DaCe comes from the spcl/dace `extended` branch, released on PyPI as `dace-extended` (import `dace`; tags
-`extended-vX.Y.Z` on github.com/ThrudPrimrose/dace, cut by `helpers/scripts/dace_extended_release.sh` once every
-spcl/dace workflow passed). `pyproject.toml` holds the lower bound and `uv.lock` the exact release, so pip and `uv sync`
+`extended-vX.Y.Z` on github.com/ThrudPrimrose/dace, released from that repository). `pyproject.toml` holds the lower bound and `uv.lock` the exact release, so pip and `uv sync`
 install the same code; `helpers/scripts/pins.sh --bump` moves both. For development, install a DaCe checkout of your own
 in place of dace-extended. No image carries DaCe: every job installs its checkout's lock at start
 (`containers/images/lib/launch_venv.sh`), so a new release needs no rebuild. A release records the spcl/dace commit it
