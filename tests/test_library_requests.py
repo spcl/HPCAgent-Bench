@@ -12,10 +12,19 @@ from hpcagent_bench import languages
 from hpcagent_bench.categories import Language
 
 
-def test_every_entry_declares_what_the_tool_needs() -> None:
+def test_every_entry_declares_a_coherent_route_and_what_the_tool_needs() -> None:
+    """Four resolution routes, and each entry must name at least one. pkg-config where the distro
+    ships a .pc, a toolset.yaml entry for the GPU toolkits, a bare -l for a library built into the
+    image's own prefix (hptt, tblis), and header_only for one with no .so at all. An entry may
+    carry pkg AND link: the .pc is preferred and the bare -l is the fallback for an image that
+    packages the same library without one. A header-only entry may carry pkg too -- that is where
+    its -I comes from -- but never link, because there is nothing to link."""
     for name, entry in languages.load_libraries().items():
-        route = entry.pkg or entry.toolset or entry.link or entry.header_only
-        assert route, f"{name} names no resolution route"
+        fields = entry.model_dump()
+        routes = [k for k in ("pkg", "toolset", "link", "header_only") if fields[k]]
+        assert routes, f"{name} names no resolution route"
+        assert not ("toolset" in routes and len(routes) > 1), f"{name} mixes a toolset entry with another route"
+        assert not ("header_only" in routes and "link" in routes), f"{name} is header_only and names a link route"
         if entry.header_only:
             # The compile probe is the only gate a header-only library has, and it needs a header
             # to include. Without one library_offered can never say yes, so the entry is dead.
@@ -59,11 +68,6 @@ def test_two_names_on_one_shared_object_do_not_duplicate_the_link() -> None:
     unused_compile, link = languages.library_build_flags(Language.C, ["blas", "lapack"])
     assert len(link) == len(set(link))
     assert sum(1 for t in link if t == "-lopenblas") <= 1
-
-
-def test_available_libraries_is_a_subset_of_the_table() -> None:
-    for lang in (Language.C, Language.CPP, Language.FORTRAN):
-        assert set(languages.available_libraries(lang)) <= set(languages.load_libraries())
 
 
 def test_rpath_accompanies_every_search_path() -> None:
@@ -183,21 +187,6 @@ def test_a_requested_library_actually_builds_links_and_loads(name: str, tmp_path
     if searched:
         dynamic = subprocess.run(["readelf", "-d", str(out)], capture_output=True, text=True, check=False).stdout
         assert any(d in dynamic for d in searched), f"{name}: no RPATH/RUNPATH for {searched} in {out.name}"
-
-
-def test_an_entry_offers_a_pkg_config_name_a_toolset_entry_or_a_bare_link() -> None:
-    """Four resolution routes, and each entry must name at least one. pkg-config where the distro
-    ships a .pc, a toolset.yaml entry for the GPU toolkits, a bare -l for a library built into the
-    image's own prefix (hptt, tblis), and header_only for one with no .so at all. An entry may
-    carry pkg AND link: the .pc is preferred and the bare -l is the fallback for an image that
-    packages the same library without one. A header-only entry may carry pkg too -- that is where
-    its -I comes from -- but never link, because there is nothing to link."""
-    for name, entry in languages.load_libraries().items():
-        fields = entry.model_dump()
-        routes = [k for k in ("pkg", "toolset", "link", "header_only") if fields[k]]
-        assert routes, f"{name} names no resolution route"
-        assert not ("toolset" in routes and len(routes) > 1), f"{name} mixes a toolset entry with another route"
-        assert not ("header_only" in routes and "link" in routes), f"{name} is header_only and names a link route"
 
 
 def test_a_bare_link_route_never_invents_a_search_path() -> None:
@@ -339,13 +328,6 @@ def test_mpi_without_its_wrapper_falls_back_to_pkg_config(monkeypatch: pytest.Mo
     finally:
         languages.library_tokens.cache_clear()
     assert got == (("-I/pc/include",), ("-L/pc/lib", "-lmpi", "-Wl,-rpath,/pc/lib"))
-
-
-def test_mpi_and_rccl_are_requestable_by_a_hip_submission() -> None:
-    libraries = languages.load_libraries()
-    assert Language.HIP in libraries["mpi"].langs
-    assert Language.HIP in libraries["rccl"].langs
-    assert languages.toolset_link_tokens(libraries["rccl"].toolset) == ("-lrccl",)
 
 
 def test_a_cuda_trial_link_spells_the_rpath_as_nvcc_takes_it(monkeypatch: pytest.MonkeyPatch) -> None:

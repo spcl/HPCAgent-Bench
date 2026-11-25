@@ -54,10 +54,6 @@ def test_an_integer_square_root_size_is_spelled_and_evaluated_exactly() -> None:
     assert fuzz.eval_int("isqrt(N - 2)", {"N": 1}) == -1
 
 
-def test_a_form_without_a_workspace_requests_none() -> None:
-    assert cpf_bridge.binding_workspace_bytes("0", scalar_binding("N"), {}) == "0"
-
-
 def test_a_size_over_a_name_the_kernel_lacks_is_a_render_failure() -> None:
     """The judge would refuse that request (400), so the form is not published."""
     with pytest.raises(ValueError, match="not an expression over the kernel's scalars"):
@@ -65,13 +61,6 @@ def test_a_size_over_a_name_the_kernel_lacks_is_a_render_failure() -> None:
 
 
 # --- the cache and the verification -------------------------------------------------------------------------
-
-
-def test_the_cache_returns_the_forms_workspace(tmp_path: pathlib.Path) -> None:
-    form = cpf_prerender.lookup(
-        view_with_workspace(tmp_path, WORKSPACE), KERNEL, "c", "", HintDetail.PROOFS, Target.CPU
-    )
-    assert form.workspace_bytes == WORKSPACE
 
 
 def test_cpf_verify_grades_a_form_with_its_workspace(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

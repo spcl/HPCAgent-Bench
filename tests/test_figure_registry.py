@@ -5,6 +5,7 @@ the drawing-side sibling of ``tests/test_display_names.py``."""
 
 import logging
 import pathlib
+from collections.abc import Callable
 
 import matplotlib as mpl
 
@@ -23,26 +24,24 @@ def test_every_framework_the_palette_hues_is_named() -> None:
     assert set(palette.hue_order("frameworks")) <= named
 
 
-def test_colouring_an_unregistered_packet_is_never_silent(caplog: pytest.LogCaptureFixture) -> None:
-    """The fallback keeps the plot drawing. The warning is what stops it reaching a paper unseen."""
+@pytest.mark.parametrize(
+    ("draw", "tag"),
+    [
+        pytest.param(palette.color, "a-packet-nobody-registered", id="packet-colour"),
+        pytest.param(palette.framework_color, "a-framework-nobody-registered", id="framework-colour"),
+        pytest.param(palette.marker, "a-model-nobody-registered", id="model-shape"),
+    ],
+)
+def test_drawing_an_unregistered_entity_is_never_silent(
+    caplog: pytest.LogCaptureFixture, draw: Callable[[str], object], tag: str
+) -> None:
+    """The fallback keeps the plot drawing. The warning is what stops it reaching a paper unseen. Shape is the
+    model in every figure, so an unregistered model loses its identity twice."""
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        colour = palette.color("a-packet-nobody-registered")
-    assert colour
+        drawn = draw(tag)
+    assert drawn
     assert "is not registered" in caplog.text
-    assert "a-packet-nobody-registered" in caplog.text
-
-
-def test_colouring_an_unregistered_framework_is_never_silent(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        palette.framework_color("a-framework-nobody-registered")
-    assert "is not registered" in caplog.text
-
-
-def test_shaping_an_unregistered_model_is_never_silent(caplog: pytest.LogCaptureFixture) -> None:
-    """Shape is the model in every figure, so an unregistered model loses its identity twice."""
-    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        palette.marker("a-model-nobody-registered")
-    assert "is not registered" in caplog.text
+    assert tag in caplog.text
 
 
 def test_a_figure_that_colours_a_whole_unregistered_set_warns_once_per_entity(

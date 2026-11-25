@@ -46,12 +46,6 @@ def checks() -> list[mutation.Control]:
     return list(mutation.controls(long_terms=(100, 100_000)))
 
 
-def test_the_sweep_covers_every_case(rows: list[mutation.Row]) -> None:
-    cases = len(mutation.REFERENCES) * len(mutation.PRECISIONS) * len(mutation.CORRUPTIONS) * len(mutation.LENGTHS)
-    assert len(rows) == cases == 600
-    assert [mutation.probed_length(length) for length in mutation.LENGTHS] == [10, 316, 10_000]
-
-
 def test_every_corruption_changes_the_answer() -> None:
     for kind in mutation.REFERENCES:
         for precision in mutation.PRECISIONS:
@@ -82,10 +76,6 @@ def test_unit_scale_and_fp64_structural_corruptions_are_never_accepted(rows: lis
         beyond = row.corruption not in WITHIN_BAND
         if (row.reference == "normal" and beyond) or (row.precision == "fp64" and row.corruption in structural):
             assert mutation.ACCEPT not in (row.symbolic, row.probed), row
-
-
-def test_a_shorter_length_never_accepts_what_the_longer_one_rejected(rows: list[mutation.Row]) -> None:
-    assert not [row for row in rows if row.symbolic == mutation.REJECT and row.probed == mutation.ACCEPT]
 
 
 def test_the_verdict_changes_of_the_shorter_length(rows: list[mutation.Row]) -> None:

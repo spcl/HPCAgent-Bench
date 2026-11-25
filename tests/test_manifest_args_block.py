@@ -100,10 +100,3 @@ def test_the_argument_lists_args_derives_cannot_be_spelled() -> None:
         edit(raw)
         with pytest.raises(ValueError, match=key):
             BenchSpec.from_yaml(raw, source=str(path))
-
-
-if __name__ == "__main__":
-    test_a_declarative_init_with_a_scalar_returns_every_entry_in_args_order()
-    test_a_fallback_initializer_returns_the_values_it_builds_and_the_partitioned_arrays_carry_their_axes()
-    test_a_fuzzed_distributed_kernel_seeds_the_scalars_its_initializer_does_not_return()
-    test_the_argument_lists_args_derives_cannot_be_spelled()

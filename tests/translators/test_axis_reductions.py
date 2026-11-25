@@ -51,39 +51,24 @@ def count_for_loops(stmts: list[ast.stmt]) -> int:
 # A. ``read_axis_keepdims`` parsing                                          #
 
 
-def test_read_axis_none_no_keepdims() -> None:
-    args, kws = call_args("np.sum(arr)")
-    assert read_axis_keepdims(args, kws) == (None, False)
-
-
-def test_read_axis_int_positive() -> None:
-    args, kws = call_args("np.sum(arr, axis=2)")
-    assert read_axis_keepdims(args, kws) == ([2], False)
-
-
-def test_read_axis_int_negative_unary() -> None:
-    args, kws = call_args("np.sum(arr, axis=-1)")
-    assert read_axis_keepdims(args, kws) == ([-1], False)
-
-
-def test_read_axis_tuple_form() -> None:
-    args, kws = call_args("np.sum(arr, axis=(1, 2, 3))")
-    assert read_axis_keepdims(args, kws) == ([1, 2, 3], False)
-
-
-def test_read_axis_list_form_with_keepdims() -> None:
-    args, kws = call_args("np.sum(arr, axis=[0, 1], keepdims=True)")
-    assert read_axis_keepdims(args, kws) == ([0, 1], True)
-
-
-def test_read_axis_positional_int() -> None:
-    args, kws = call_args("np.sum(arr, 1)")
-    assert read_axis_keepdims(args, kws) == ([1], False)
-
-
-def test_read_axis_positional_tuple() -> None:
-    args, kws = call_args("np.sum(arr, (0, 2))")
-    assert read_axis_keepdims(args, kws) == ([0, 2], False)
+@pytest.mark.parametrize(
+    ("src", "want"),
+    [
+        ("np.sum(arr)", (None, False)),
+        ("np.sum(arr, axis=2)", ([2], False)),
+        ("np.sum(arr, axis=-1)", ([-1], False)),
+        ("np.sum(arr, axis=(1, 2, 3))", ([1, 2, 3], False)),
+        ("np.sum(arr, axis=[0, 1], keepdims=True)", ([0, 1], True)),
+        ("np.sum(arr, 1)", ([1], False)),
+        ("np.sum(arr, (0, 2))", ([0, 2], False)),
+    ],
+    ids=["none", "int", "negative_int", "tuple", "list_with_keepdims", "positional_int", "positional_tuple"],
+)
+def test_the_axis_and_keepdims_of_a_reduction_call_are_read_in_every_spelling(
+    src: str, want: tuple[list[int] | None, bool]
+) -> None:
+    args, kws = call_args(src)
+    assert read_axis_keepdims(args, kws) == want
 
 
 # B. Loop structure for axis=int                                              #
@@ -115,23 +100,6 @@ def test_sum_axis_tuple_2_of_4_emits_correct_loop_count() -> None:
     assert count_for_loops(stmts) == 4
 
 
-def test_sum_axis_tuple_3_of_4_collapses_to_one_kept_axis() -> None:
-    """conv2d-style: ``np.sum(arr, axis=(1, 2, 3))`` on a 4-D array
-    keeps only axis 0 -> 1 outer loop + 3 inner reduction loops."""
-    args, kws = call_args("np.sum(arr, axis=(1, 2, 3))")
-    stmts = expand_sum(target("out"), args, {"arr": ("N", "H", "W", "C")}, kws)
-    assert count_for_loops(stmts) == 4
-
-
-def test_sum_axis_tuple_all_axes_reduces_to_scalar() -> None:
-    """``np.sum(arr, axis=(0, 1))`` on a 2-D array reduces every axis
-    and emits the same code as ``axis=None`` (just two for-loops, no
-    Subscripts on the target since out is scalar)."""
-    args, kws = call_args("np.sum(arr, axis=(0, 1))")
-    stmts = expand_sum(target("out"), args, {"arr": ("N", "M")}, kws)
-    assert count_for_loops(stmts) == 2
-
-
 def test_sum_axis_tuple_with_keepdims_writes_to_const_zero() -> None:
     """With keepdims=True the target subscript fills the reduced
     axes with constant 0. Structural check: a Subscript whose slice
@@ -148,21 +116,6 @@ def test_sum_axis_tuple_with_keepdims_writes_to_const_zero() -> None:
                     if isinstance(elt, ast.Constant) and elt.value == 0:
                         has_const_zero = True
     assert has_const_zero
-
-
-def test_sum_axis_list_equivalent_to_tuple() -> None:
-    """``axis=[1, 2]`` parses the same as ``axis=(1, 2)``."""
-    args, kws = call_args("np.sum(arr, axis=[1, 2])")
-    stmts = expand_sum(target("out"), args, {"arr": ("N", "H", "W", "C")}, kws)
-    assert count_for_loops(stmts) == 4
-
-
-def test_sum_axis_tuple_with_negative_axis() -> None:
-    """``axis=(-1,)`` resolves against the operand rank."""
-    args, kws = call_args("np.sum(arr, axis=(-1,))")
-    stmts = expand_sum(target("out"), args, {"arr": ("N", "M")}, kws)
-    # 2-D - 1 reduction axis = 1 outer + 1 inner = 2 loops.
-    assert count_for_loops(stmts) == 2
 
 
 def test_sum_axis_tuple_rejects_duplicates() -> None:
@@ -185,30 +138,6 @@ def reshape_to_index(src: str, ranks: dict[str, int]) -> str:
 def test_expand_dims_of_a_partial_slice_is_left_chained() -> None:
     """A partial slice keeps an offset an outer index would drop, so it is NOT merged."""
     assert reshape_to_index("np.expand_dims(a[1:3], axis=0)", {"a": 1}) == "a[1:3][None, :]"
-
-
-def test_mean_over_nested_expand_dims() -> None:
-    """``np.mean(np.expand_dims(np.expand_dims(z, 1), 1), axis=(2, 3), keepdims=True)`` --
-    the instance-norm operand shape, reduced over a tuple axis."""
-    z = np.linspace(-3.0, 5.0, 12).reshape(3, 4)
-    src = (
-        "import numpy as np\n"
-        "def f(z, out):\n"
-        "    t = np.expand_dims(np.expand_dims(z, axis=1), axis=1)\n"
-        "    m = np.mean(t, axis=(2, 3), keepdims=True)\n"
-        "    out[:] = np.squeeze(np.squeeze(m, axis=1), axis=1)\n"
-    )
-    res = run_op(
-        src,
-        "f",
-        {"z": z},
-        {"out": (3, 1)},
-        {"NB": 3, "NC": 4},
-        shapes={"z": "(NB, NC)", "out": "(NB, 1)"},
-        backends=ALL,
-    )
-    assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
-    assert any(v == "ok" for v in res.values()), res
 
 
 def test_instance_norm_over_expanded_operand() -> None:

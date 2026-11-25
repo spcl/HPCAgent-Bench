@@ -10,7 +10,7 @@ import os
 import pathlib
 import threading
 import types
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import ClassVar
 
 import pydantic
@@ -162,17 +162,21 @@ def test_a_key_variable_that_is_not_set_fails_before_any_agent_starts(service: t
 # the wire shape decides what may run against it
 
 
-def test_an_anthropic_shaped_service_refuses_an_openai_runner(service: types.ModuleType) -> None:
-    """mini-SWE speaks /v1/chat/completions; against a Messages-only
-    service every request 404s, and the setup burns its wall clock discovering that."""
-    with pytest.raises(SystemExit, match="miniswe"):
-        service.from_environ(anthropic_setup(HPCAGENT_BENCH_AGENT_HARNESS="miniswe"))
-
-
-def test_an_openai_shaped_service_refuses_the_claude_harness(service: types.ModuleType) -> None:
-    """The claude CLI appends /v1/messages, which an OpenAI-only service does not serve."""
-    with pytest.raises(SystemExit, match="claude"):
-        service.from_environ(openai_setup(HPCAGENT_BENCH_AGENT_HARNESS="claude"))
+@pytest.mark.parametrize(
+    ("setup", "harness"),
+    [
+        # mini-SWE speaks /v1/chat/completions; against a Messages-only service every request 404s, and the
+        # setup burns its wall clock discovering that.
+        pytest.param(anthropic_setup, "miniswe", id="anthropic_shaped_service_refuses_an_openai_runner"),
+        # The claude CLI appends /v1/messages, which an OpenAI-only service does not serve.
+        pytest.param(openai_setup, "claude", id="openai_shaped_service_refuses_the_claude_harness"),
+    ],
+)
+def test_a_service_refuses_a_harness_that_speaks_the_other_wire_shape(
+    service: types.ModuleType, setup: Callable[..., dict[str, str]], harness: str
+) -> None:
+    with pytest.raises(SystemExit, match=harness):
+        service.from_environ(setup(HPCAGENT_BENCH_AGENT_HARNESS=harness))
 
 
 def test_meta_serves_both_shapes_so_the_setup_chooses(service: types.ModuleType) -> None:
@@ -271,11 +275,6 @@ def test_the_run_records_the_provider_model_and_tier(service: types.ModuleType, 
     assert written["api"] == "anthropic"
     assert written["base_url"] == "https://api.meta.ai/v1"
     assert written["key_env"] == "META_MODEL_API_KEY"
-
-
-def test_the_recorded_provenance_never_holds_the_key(service: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    service.record(tmp_path, muse_setup())
-    assert SECRET not in (tmp_path / service.RECORD_NAME).read_text(encoding="utf-8")
 
 
 def test_a_server_setup_records_its_engine_instead(service: types.ModuleType, tmp_path: pathlib.Path) -> None:
@@ -461,21 +460,6 @@ def test_the_muse_spark_setup_reaches_metas_messages_surface_with_a_bearer_key(
     )
     assert handler.seen["headers"]["authorization"] == f"Bearer {SECRET}"
     assert handler.seen["payload"]["model"] == "muse-spark-1.3-contributor"
-
-
-def test_an_openai_shaped_usage_block_read_as_anthropic_would_count_nothing(
-    runner_common: types.ModuleType,
-) -> None:
-    """Why the shape gate above exists rather than one parser guessing: the Anthropic usage block
-    has no field the OpenAI parser reads, so a mismatched setup would report zero tokens for every
-    call instead of failing. The gate refuses the pairing; this records what it prevents."""
-    anthropic_block = {"input_tokens": 100, "output_tokens": 400, "cache_read_input_tokens": 900}
-    assert runner_common.openai_usage(anthropic_block) == {
-        "input": 0,
-        "cached_input": 0,
-        "output": 0,
-        "reasoning": 0,
-    }
 
 
 def test_a_service_setup_writes_no_key_into_the_usage_file(

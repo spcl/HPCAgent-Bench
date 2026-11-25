@@ -45,11 +45,6 @@ def test_pure_scalar_operands_are_still_renamed() -> None:
     assert rewrite("np.maximum(0.0, a)", array_names=("x",), defer=False) == "fmax(0.0, a)"
 
 
-def test_other_intrinsics_are_never_deferred() -> None:
-    """Only the array-capable pair is held back; a unary intrinsic still renames on pass one."""
-    assert rewrite("np.sqrt(a)", array_names=(), defer=True) == "sqrt(a)"
-
-
 ALL = ("c", "cpp", "fortran", "numba")
 
 

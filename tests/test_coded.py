@@ -70,11 +70,3 @@ def test_a_boundary_model_reads_and_writes_the_spelling() -> None:
     assert Wire.model_json_schema()["properties"]["mode"]["enum"] == ["py-binding", "source"]
     with pytest.raises(pydantic.ValidationError, match="not a Mode"):
         Wire.model_validate({"mode": "nope"})
-
-
-if __name__ == "__main__":
-    test_a_member_is_spelled_by_its_name_separator_and_overrides()
-    test_parse_inverts_text_and_names_the_choices()
-    test_a_member_is_not_its_spelling()
-    test_two_members_spelled_alike_are_refused()
-    test_a_boundary_model_reads_and_writes_the_spelling()

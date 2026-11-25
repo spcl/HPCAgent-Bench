@@ -4,9 +4,7 @@
 one is refused where it is read (one test per format without its own module)."""
 
 import json
-import os
 import pathlib
-import tempfile
 
 import numpy as np
 import pydantic
@@ -279,24 +277,3 @@ def test_the_formats_read_but_not_owned_ignore_what_they_do_not_use_and_need_wha
     empty = agent.ChatCompletion.model_validate_json('{"choices": [{"message": null}], "usage": null}')
     assert empty.text() == ""
     assert agent.openai_usage(empty).input_tokens == 0
-
-
-if __name__ == "__main__":
-    test_an_entry_of_another_layout_or_with_an_unknown_field_is_refused()
-    test_an_ok_form_entry_without_its_source_and_binding_is_refused()
-    test_a_published_manifest_is_written_key_sorted_with_only_the_fields_set(pathlib.Path(tempfile.mkdtemp()))
-    test_a_cost_card_refuses_a_flag_a_negative_or_an_unknown_weight()
-    test_the_shipped_registry_and_studies_parse_and_an_experiment_takes_its_key_for_what_it_leaves_out()
-    test_a_yaml_tag_read_as_a_flag_or_a_number_is_text_and_an_unknown_block_is_refused()
-    test_the_grading_tables_parse_and_refuse_a_malformed_entry()
-    test_a_systems_file_with_an_unknown_field_or_a_list_value_is_refused(pathlib.Path(tempfile.mkdtemp()))
-    test_a_library_entry_without_languages_or_with_an_unknown_route_is_refused()
-    test_a_skill_frontmatter_with_a_singular_applies_key_or_an_empty_list_is_refused()
-    test_the_binding_document_round_trips_and_writes_shape_for_pointers_only()
-    test_a_render_childs_lines_are_its_plan_and_its_verdict_and_a_foreign_line_is_skipped()
-    test_an_opt_report_manifest_and_a_pr_status_dump_their_fields()
-    test_the_agent_folder_log_names_the_latest_folder_and_skips_a_malformed_line(pathlib.Path(tempfile.mkdtemp()))
-    test_a_json_column_reads_back_what_it_wrote_and_refuses_another_shape()
-    test_a_profiled_childs_result_line_needs_its_time_and_its_reps()
-    test_the_formats_read_but_not_owned_ignore_what_they_do_not_use_and_need_what_they_do()
-    print("ok", os.path.basename(__file__))

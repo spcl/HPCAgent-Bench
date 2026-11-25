@@ -83,12 +83,17 @@ def test_every_upper_bound_or_pin_says_why(entry: Entry) -> None:
     assert commented(entry.text, source()), f"{entry.where}: {entry.text} caps a version without a comment"
 
 
+#: The packages released together pin each other exactly (release_patch.sh moves the pins).
+RELEASED_TOGETHER = frozenset({"hpcagent-agent", "hpcagent-bench"})
+
+
 def test_exact_pins_live_only_in_the_dependency_groups() -> None:
     pinned = [
         f"{entry.where}: {entry.text}"
         for entry in entries()
         if any(spec.operator in ("==", "===") for spec in entry.req.specifier)
         and not entry.where.startswith("dependency-groups.")
+        and entry.req.name not in RELEASED_TOGETHER
     ]
     assert pinned == [], pinned
 

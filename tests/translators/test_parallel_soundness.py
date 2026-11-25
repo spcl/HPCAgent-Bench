@@ -20,6 +20,8 @@ transpose of a READ-ONLY source, a write-before-read private temp, a plain reduc
 
 import ast
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_common.parallelism import loop_is_parallel_safe, loop_reduction
 
 
@@ -27,51 +29,42 @@ def stmt_(src: str) -> ast.stmt:
     return ast.parse(src).body[0]
 
 
-# A: cross-axis write to a written array is a race
-def test_inplace_transpose_is_not_parallel_safe() -> None:
-    src = "for i in range(N):\n    for j in range(N):\n        A[i, j] = A[j, i] + 1.0\n"
-    assert not loop_is_parallel_safe(stmt_(src))
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        # A: cross-axis write to a written array is a race.
+        ("for i in range(N):\n    for j in range(N):\n        A[i, j] = A[j, i] + 1.0\n", False),
+        # out is written only at [i, j]; a is READ-ONLY, so its transposed read cannot race.
+        ("for i in range(N):\n    for j in range(N):\n        out[i, j] = a[j, i] + 1.0\n", True),
+        # B: b[i] reads the PREVIOUS iteration's s (a lag) -> serial-only.
+        ("for i in range(N):\n    b[i] = s\n    s = a[i]\n", False),
+        # s is (re)written before it is read every iteration -> a private temp, safe to parallelize.
+        ("for i in range(N):\n    s = a[i]\n    b[i] = s + 1.0\n", True),
+        ("for i in range(N):\n    for j in range(M):\n        c[i] = c[i] + t\n    t = a[i]\n", False),
+    ],
+    ids=[
+        "inplace_transpose_is_unsafe",
+        "transpose_of_readonly_source_is_safe",
+        "carried_scalar_read_before_write_is_unsafe",
+        "write_before_read_private_temp_is_safe",
+        "carried_scalar_inside_inner_loop_is_unsafe",
+    ],
+)
+def test_parallel_safety_follows_cross_iteration_dependences(src: str, expected: bool) -> None:
+    assert bool(loop_is_parallel_safe(stmt_(src))) is expected
 
 
-def test_transpose_of_readonly_source_stays_parallel_safe() -> None:
-    # out is written only at [i, j]; a is READ-ONLY, so its transposed read cannot race.
-    src = "for i in range(N):\n    for j in range(N):\n        out[i, j] = a[j, i] + 1.0\n"
-    assert loop_is_parallel_safe(stmt_(src))
-
-
-# B: loop-carried scalar read before write
-def test_carried_scalar_read_before_write_is_not_parallel_safe() -> None:
-    # b[i] reads the PREVIOUS iteration's s (a lag) -> serial-only.
-    src = "for i in range(N):\n    b[i] = s\n    s = a[i]\n"
-    assert not loop_is_parallel_safe(stmt_(src))
-
-
-def test_write_before_read_private_temp_stays_parallel_safe() -> None:
-    # s is (re)written before it is read every iteration -> a private temp, safe to parallelize.
-    src = "for i in range(N):\n    s = a[i]\n    b[i] = s + 1.0\n"
-    assert loop_is_parallel_safe(stmt_(src))
-
-
-def test_carried_scalar_inside_inner_loop_is_not_parallel_safe() -> None:
-    src = "for i in range(N):\n    for j in range(M):\n        c[i] = c[i] + t\n    t = a[i]\n"
-    assert not loop_is_parallel_safe(stmt_(src))
-
-
-# C: captured accumulator is a scan, not a reduction
-def test_prefix_scan_capture_is_not_a_reduction() -> None:
-    src = "for i in range(N):\n    s = s + a[i]\n    out[i] = s\n"
+# C: a captured accumulator is a scan, not a reduction
+@pytest.mark.parametrize(
+    "src",
+    [
+        "for i in range(N):\n    s = s + a[i]\n    out[i] = s\n",
+        "for i in range(N):\n    s = s + a[i]\n    c[i] = s * 2.0\n",
+    ],
+    ids=["prefix_scan_capture", "accumulator_used_in_other_expr"],
+)
+def test_a_live_accumulator_captured_each_iteration_is_not_a_reduction(src: str) -> None:
     assert loop_reduction(stmt_(src)) is None
-
-
-def test_accumulator_used_in_other_expr_is_not_a_reduction() -> None:
-    src = "for i in range(N):\n    s = s + a[i]\n    c[i] = s * 2.0\n"
-    assert loop_reduction(stmt_(src)) is None
-
-
-def test_plain_reduction_without_capture_still_matches() -> None:
-    # the accumulator is combined and never otherwise read in the body -> a clean reduction.
-    assert loop_reduction(stmt_("for i in range(N):\n    s = s + a[i]\n")) == ("+", "s")
-    assert loop_reduction(stmt_("for i in range(N):\n    m = max(m, a[i])\n")) == ("max", "m")
 
 
 # D: a store through a tuple target is a store

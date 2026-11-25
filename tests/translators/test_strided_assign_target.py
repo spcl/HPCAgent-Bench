@@ -36,16 +36,24 @@ def fuse(src: str, shapes: dict) -> str:
 # structural: the emitted store carries the stride
 
 
-def test_strided_target_writes_every_kth_element() -> None:
-    assert fuse("out[0::2] = a[:]", {"out": ["12"], "a": ["6"]}) == (
-        "for si0 in range(0, 6):\n    out[si0 * 2] = a[si0]"
-    )
-
-
-def test_stride_applies_per_axis_only_where_written() -> None:
-    assert fuse("out[0::2, :] = c[:, :]", {"out": ["4", "3"], "c": ["2", "3"]}) == (
-        "for si0 in range(0, 2):\n    for si1 in range(0, 3):\n        out[si0 * 2, si1] = c[si0, si1]"
-    )
+@pytest.mark.parametrize(
+    ("src", "shapes", "expected"),
+    [
+        (
+            "out[0::2] = a[:]",
+            {"out": ["12"], "a": ["6"]},
+            "for si0 in range(0, 6):\n    out[si0 * 2] = a[si0]",
+        ),
+        (
+            "out[0::2, :] = c[:, :]",
+            {"out": ["4", "3"], "c": ["2", "3"]},
+            "for si0 in range(0, 2):\n    for si1 in range(0, 3):\n        out[si0 * 2, si1] = c[si0, si1]",
+        ),
+    ],
+    ids=["every_kth_element", "stride_per_axis_only_where_written"],
+)
+def test_strided_target_carries_the_stride_in_the_emitted_store(src: str, shapes: dict, expected: str) -> None:
+    assert fuse(src, shapes) == expected
 
 
 def test_negative_step_target_is_refused_not_miscompiled() -> None:
@@ -56,63 +64,28 @@ def test_negative_step_target_is_refused_not_miscompiled() -> None:
 # numerical: every native backend matches numpy
 
 
-def test_interleave_matches_numpy() -> None:
-    # The inverse of dwt2d's Haar deinterleave, written as a strided slice assignment
-    # rather than an index loop.
-    src = "import numpy as np\ndef f(lo, hi, out):\n    out[0::2] = lo\n    out[1::2] = hi\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+@pytest.mark.parametrize(
+    ("src", "inputs", "shapes"),
+    [
+        # The inverse of dwt2d's Haar deinterleave, written as a strided slice assignment
+        # rather than an index loop.
+        (
+            "import numpy as np\ndef f(lo, hi, out):\n    out[0::2] = lo\n    out[1::2] = hi\n",
             {"lo": np.arange(1.0, 7.0), "hi": np.arange(101.0, 107.0)},
-            {"out": (12,)},
-            {"N": 12},
-            shapes={"lo": "(6,)", "hi": "(6,)", "out": "(12,)"},
-            backends=NATIVE,
-        )
-    )
-
-
-def test_strided_target_with_offset_start_matches_numpy() -> None:
-    src = "import numpy as np\ndef f(a, out):\n    out[1:10:3] = a\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+            {"lo": "(6,)", "hi": "(6,)", "out": "(12,)"},
+        ),
+        (
+            "import numpy as np\ndef f(a, out):\n    out[1:10:3] = a\n",
             {"a": np.arange(1.0, 4.0)},
-            {"out": (12,)},
-            {"N": 12},
-            shapes={"a": "(3,)", "out": "(12,)"},
-            backends=NATIVE,
-        )
-    )
-
-
-def test_strided_target_of_a_strided_read_matches_numpy() -> None:
-    src = "import numpy as np\ndef f(a, out):\n    out[0::2] = a[1::2]\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+            {"a": "(3,)", "out": "(12,)"},
+        ),
+        (
+            "import numpy as np\ndef f(a, out):\n    out[0::2] = a[1::2]\n",
             {"a": np.arange(1.0, 13.0)},
-            {"out": (12,)},
-            {"N": 12},
-            shapes={"a": "(12,)", "out": "(12,)"},
-            backends=NATIVE,
-        )
-    )
-
-
-def test_strided_row_target_of_a_2d_array_matches_numpy() -> None:
-    src = "import numpy as np\ndef f(a, out):\n    out[0::2, :] = a\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
-            {"a": np.arange(1.0, 7.0).reshape(2, 3)},
-            {"out": (4, 3)},
-            {"N": 4},
-            shapes={"a": "(2,3)", "out": "(4,3)"},
-            backends=NATIVE,
-        )
-    )
+            {"a": "(12,)", "out": "(12,)"},
+        ),
+    ],
+    ids=["interleave", "offset_start", "strided_read"],
+)
+def test_strided_target_matches_numpy(src: str, inputs: dict[str, np.ndarray], shapes: dict[str, str]) -> None:
+    assert_all_ok(run_op(src, "f", inputs, {"out": (12,)}, {"N": 12}, shapes=shapes, backends=NATIVE))

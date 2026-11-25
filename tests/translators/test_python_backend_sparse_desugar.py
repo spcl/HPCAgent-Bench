@@ -14,6 +14,8 @@ these pin the rewrites, which a callback warning several frames deep does not na
 
 import ast
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     BincountInline,
     DiffToSliceDifference,
@@ -37,12 +39,6 @@ def test_diff_becomes_the_slice_difference() -> None:
     assert apply(DiffToSliceDifference(), "d = np.diff(p)") == "d = p[1:] - p[:-1]"
 
 
-def test_bincount_without_minlength_is_left_standing() -> None:
-    """The result length would be ``idx.max() + 1`` -- data, not a shape we may invent."""
-    src = "h = np.bincount(idx)"
-    assert apply(BincountInline({"idx": 1}), src) == src
-
-
 def test_per_element_repeat_walks_a_running_offset() -> None:
     """The destination offset is the prefix sum of the counts, never ``i * K``."""
     out = apply(RepeatCountsInline({"p": 1}), "r = np.repeat(np.arange(M), np.diff(p))")
@@ -53,10 +49,18 @@ def test_per_element_repeat_walks_a_running_offset() -> None:
     assert "np.zeros(p[-1] - p[0]" in out, out
 
 
-def test_a_per_element_count_that_is_not_a_difference_is_left_standing() -> None:
-    """Only a first difference telescopes; any other count needs a sum we cannot derive here."""
-    src = "r = np.repeat(v, counts)"
-    assert apply(RepeatCountsInline({"v": 1, "counts": 1}), src) == src
+@pytest.mark.parametrize(
+    ("pass_obj", "src"),
+    [
+        # The result length would be ``idx.max() + 1`` -- data, not a shape we may invent.
+        (BincountInline({"idx": 1}), "h = np.bincount(idx)"),
+        # Only a first difference telescopes; any other count needs a sum we cannot derive here.
+        (RepeatCountsInline({"v": 1, "counts": 1}), "r = np.repeat(v, counts)"),
+    ],
+    ids=["bincount_without_minlength", "per_element_count_that_is_not_a_difference"],
+)
+def test_a_form_whose_extent_is_data_is_left_standing(pass_obj: ast.NodeTransformer, src: str) -> None:
+    assert apply(pass_obj, src) == src
 
 
 def test_astype_copy_kwarg_is_dropped() -> None:

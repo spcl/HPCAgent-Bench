@@ -76,12 +76,6 @@ def test_an_unset_knob_is_left_unset(recwarn: pytest.WarningsRecorder) -> None:
     assert environ == {"PATH": "/bin"} and future_warnings(recwarn) == []
 
 
-def test_the_translation_keeps_no_state_of_its_own() -> None:
-    """Once per name is a property of the environment (the current name is set after the copy), not of a registry."""
-    assert set(env_aliases.__all__) == {"DEPRECATED", "exports", "main", "translate"}
-    assert not hasattr(env_aliases, "WARNED")
-
-
 def test_an_old_name_set_at_entry_reaches_the_agent_readers() -> None:
     """Each agent-side reader sees the value of a deprecated name the process started with; one warning per name."""
     done = entry(

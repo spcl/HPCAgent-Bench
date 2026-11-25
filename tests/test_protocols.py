@@ -102,13 +102,3 @@ def test_the_final_settings_carry_the_protocols_own_shape() -> None:
         "0.1",
     )
     assert env[grade_under.TIMING_BACKEND_ENV] == "mannwhitney_delta"
-
-
-if __name__ == "__main__":
-    test_the_registered_stamps_are_the_pinned_ones()
-    test_a_grade_protocol_is_one_line_and_its_stamp_says_what_it_times()
-    test_exactly_one_protocol_is_credited_and_the_config_names_it()
-    test_the_config_may_credit_any_grade_protocol_and_nothing_else()
-    test_every_stamp_a_reduction_writes_is_registered()
-    test_a_protocol_needs_a_shape_its_role_allows_and_a_unique_stamp()
-    test_the_final_settings_carry_the_protocols_own_shape()

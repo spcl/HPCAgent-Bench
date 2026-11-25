@@ -16,14 +16,19 @@ NAMES = ("a", "b", "c", "alpha")
 SCALARS = {"alpha": 1.0}
 
 
-def test_every_returned_name_binds_in_order() -> None:
-    assert returned_names("k", NAMES, SCALARS, 4) == ["a", "b", "c", "alpha"]
-
-
-def test_the_value_scalars_may_be_left_to_the_manifest() -> None:
-    """``value:`` scalars are bound from the manifest; an initializer need not return them."""
-    assert returned_names("k", NAMES, SCALARS, 3) == ["a", "b", "c"]
-    assert returned_names("k", ("a", "alpha", "b"), SCALARS, 2) == ["a", "b"]
+@pytest.mark.parametrize(
+    ("names", "count", "bound"),
+    [
+        pytest.param(NAMES, 4, ["a", "b", "c", "alpha"], id="every_returned_name_binds_in_order"),
+        # ``value:`` scalars are bound from the manifest; an initializer need not return them.
+        pytest.param(NAMES, 3, ["a", "b", "c"], id="trailing_value_scalar_left_to_the_manifest"),
+        pytest.param(("a", "alpha", "b"), 2, ["a", "b"], id="inner_value_scalar_left_to_the_manifest"),
+    ],
+)
+def test_the_returned_values_bind_to_the_names_in_order_skipping_manifest_scalars(
+    names: tuple[str, ...], count: int, bound: list[str]
+) -> None:
+    assert returned_names("k", names, SCALARS, count) == bound
 
 
 @pytest.mark.parametrize("count", [2, 5, 50])

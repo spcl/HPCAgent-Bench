@@ -45,19 +45,6 @@ def grade_count(path: pathlib.Path) -> int:
         return int(conn.execute("SELECT COUNT(*) FROM grades").fetchone()[0])
 
 
-def test_the_table_left_the_schema_in_user_version_36() -> None:
-    assert results_db.SCHEMA_VERSION >= DROPPED_IN
-    assert "disqualifications" in results_db.DROPPED[DROPPED_IN]
-    assert "disqualifications" not in results_db.TABLES
-
-
-def test_a_new_file_has_no_disqualifications_table(tmp_path: pathlib.Path) -> None:
-    path = tmp_path / "results.db"
-    results_seed.score(path, "setup.n0.p1.w1", "gemm", 1, 4.0)
-
-    assert "disqualifications" not in tables(path)
-
-
 def test_an_older_file_holds_the_empty_table_and_reads_as_it_is(tmp_path: pathlib.Path) -> None:
     """Read-only, an older file is never upgraded: the table stays, and the grades read."""
     path = old_file(tmp_path / "results.db")

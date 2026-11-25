@@ -370,22 +370,3 @@ def test_hold_truncates_an_episode_past_the_global_limit_where_that_limit_would_
         "tsvc_2_s235": ("pending", ""),
         "gemm": ("pending", ""),
     }
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    test_every_slot_is_classified_from_the_regrade_and_its_own_limits(pathlib.Path(tempfile.mkdtemp()))
-    test_a_final_grade_before_the_regrade_decides_nothing(pathlib.Path(tempfile.mkdtemp()))
-    test_the_owed_list_holds_only_owed_slots_under_the_setups_own_limits(pathlib.Path(tempfile.mkdtemp()))
-    test_a_reused_studys_owed_and_missing_cells_rerun_under_its_experiment(pathlib.Path(tempfile.mkdtemp()))
-    test_a_reused_november_setup_is_held_to_the_global_limit_not_its_recorded_one(pathlib.Path(tempfile.mkdtemp()))
-    test_the_limit_that_ended_an_episode_is_compared_as_a_limit_not_on_usage(pathlib.Path(tempfile.mkdtemp()))
-    test_hold_writes_an_analysis_copy_whose_episodes_within_the_global_limit_carry_it(pathlib.Path(tempfile.mkdtemp()))
-    test_hold_truncates_an_episode_past_the_global_limit_where_that_limit_would_have_ended_it(
-        pathlib.Path(tempfile.mkdtemp())
-    )
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_slot_whose_kernel_sizes_moved_since_its_episode_ran_is_owed_whatever_its_regrade(
-            pathlib.Path(tempfile.mkdtemp()), patch
-        )

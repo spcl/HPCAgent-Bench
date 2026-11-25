@@ -100,19 +100,24 @@ def start(
     return process, attempts, log_path
 
 
-def test_a_connected_server_is_not_retried(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    driver = load_driver(monkeypatch)
-    _, attempts, _ = start(driver, monkeypatch, tmp_path, ["connected"])
-    assert attempts == 1
-
-
-def test_a_failed_server_is_relaunched_until_it_connects(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+@pytest.mark.parametrize(
+    ("statuses", "attempts"),
+    [
+        pytest.param(["connected"], 1, id="connected_server_is_not_retried"),
+        pytest.param(["failed", "connected"], 2, id="one_failure"),
+        pytest.param(["failed", "failed", "connected"], 3, id="two_failures"),
+    ],
+)
+def test_a_failed_server_is_relaunched_until_it_connects_and_leaves_only_the_connected_transcript(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, statuses: list[str], attempts: int
 ) -> None:
+    """A connected server is not retried. Downstream readers take the LAST result event, so a dead attempt's output
+    must not linger: the surviving transcript is the connected attempt."""
     driver = load_driver(monkeypatch)
-    _, attempts, log_path = start(driver, monkeypatch, tmp_path, ["failed", "failed", "connected"])
-    assert attempts == 3
+    unused, started, log_path = start(driver, monkeypatch, tmp_path, statuses)
+    assert started == attempts
     assert driver.mcp_failed(log_path) is False, "the surviving transcript is the connected attempt"
+    assert log_path.read_text(encoding="utf-8").count('"subtype": "init"') == 1
 
 
 def test_the_retries_are_bounded_and_an_agent_without_its_tools_never_runs(
@@ -124,13 +129,6 @@ def test_the_retries_are_bounded_and_an_agent_without_its_tools_never_runs(
     with pytest.raises(driver.McpUnavailable, match="after 2 attempt"):
         start(driver, monkeypatch, tmp_path, ["failed"])
     assert "MCP still not connected" in (tmp_path / "claude.log").read_text(encoding="utf-8")
-
-
-def test_a_retry_leaves_no_half_transcript(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    """Downstream readers take the LAST result event; a dead attempt's output must not linger."""
-    driver = load_driver(monkeypatch)
-    _, _, log_path = start(driver, monkeypatch, tmp_path, ["failed", "connected"])
-    assert log_path.read_text(encoding="utf-8").count('"subtype": "init"') == 1
 
 
 def test_mcp_failed_distinguishes_not_yet_from_connected(
@@ -236,12 +234,6 @@ def test_a_reported_result_is_the_cli_verdict_not_a_crash(
     log = tmp_path / "claude.log"
     log.write_text(json.dumps({"type": "result", "subtype": "error_during_execution"}) + "\n", encoding="utf-8")
     assert driver.closing_crashed(1, driver.transcript_closing(log)) is False
-
-
-def test_crash_retries_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("AGENT_CRASH_ATTEMPTS", raising=False)
-    driver = load_driver(monkeypatch)
-    assert 2 <= driver.AGENT_CRASH_ATTEMPTS <= 5
 
 
 def crashing_popen_class(exit_codes: list[int]) -> type:

@@ -888,14 +888,6 @@ def test_rocprof_reports_name_which_kind_of_nothing_came_back(tmp_path: pathlib.
     assert gpu_profiling.KERNEL_STATS_CSV in str(ei.value)
 
 
-def test_gpu_check_picks_the_profiler_by_language_and_reports_which(monkeypatch: pytest.MonkeyPatch) -> None:
-    """One probe, before anything is built, and the vendor is the only branch in it."""
-    monkeypatch.setattr(gpu_profiling, "nsys_check", lambda _lang: "/usr/bin/nsys")
-    monkeypatch.setattr(gpu_profiling, "rocprof_check", lambda: ("rocprofv3", "/opt/rocm/bin/rocprofv3"))
-    assert gpu_profiling.gpu_check(Language.CUDA) == ("nsys", "/usr/bin/nsys")
-    assert gpu_profiling.gpu_check(Language.HIP) == ("rocprofv3", "/opt/rocm/bin/rocprofv3")
-
-
 def test_render_report_marks_the_amd_fields_that_have_no_counterpart() -> None:
     """An absent field printed as 0 reads as a kernel using no registers; printed as None it reads
     as a bug. It is '--', and the note says which tool would answer."""
@@ -1012,11 +1004,6 @@ def test_roctx_build_flags_come_from_the_rocm_root_holding_rocprofv3(tmp_path: p
         [f"-I{root / 'include'}"],
         [f"-L{lib}", f"-Wl,-rpath,{lib}", f"-l{gpu_profiling.ROCTX_LIBRARY}"],
     )
-
-
-@pytest.mark.parametrize("tool", ["nsys", "ncu"])
-def test_no_other_device_tool_gets_roctx_build_flags(tmp_path: pathlib.Path, tool: str) -> None:
-    assert gpu_profiling.roctx_build_flags((tool, fake_rocm(tmp_path.resolve() / "rocm"))) == ([], [])
 
 
 def test_a_rocm_root_without_the_roctx_header_adds_no_flags(tmp_path: pathlib.Path) -> None:

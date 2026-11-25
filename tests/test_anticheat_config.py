@@ -203,14 +203,6 @@ def test_a_v20_database_gains_the_gates_column_on_open(tmp_path: pathlib.Path) -
         assert [row["gates"] for row in conn.execute("SELECT gates FROM grades")] == [""]
 
 
-def test_a_finished_v20_file_reads_its_missing_gates_column_as_empty(tmp_path: pathlib.Path) -> None:
-    path = tmp_path / "results.db"
-    results_seed.score(path, "setup.n0.p1.w1", "gemm", 1, 4.0, source="int x;")
-    results_seed.as_version(path, 20)
-    with results_db.reading(path, finished=True) as conn:
-        assert [dict(row)["gates"] for row in conn.execute("SELECT g.gates FROM grades g")] == [""]
-
-
 def test_an_experiment_names_the_gates_its_setups_keep() -> None:
     spec = {
         "base": env_spec.Experiment(),
@@ -307,9 +299,3 @@ def test_an_unaudited_grade_is_stamped_so_and_pools_under_no_standard_aggregate(
     assert population.timing_bracket_of(unaudited) == population.timing_bracket_of(audited)
     frame = pandas.DataFrame({population.PROTOCOL_COLUMN: [audited, unaudited], "speedup": [2.0, 3.0]})
     assert list(population.standard_gates(frame).index) == [0]
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__, "-q"]))

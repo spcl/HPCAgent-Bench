@@ -23,6 +23,8 @@ against the pass rather than through the full emit pipeline.
 
 import ast
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import promote_free_names_to_params
 
@@ -42,41 +44,27 @@ def test_listcomp_target_not_promoted_to_param() -> None:
     assert [s.name for s in kir.symbols] == []
 
 
-def test_setcomp_and_dictcomp_targets_not_promoted() -> None:
-    kir = kir_(
-        "def k(xs, out):\n    d = {v: v * 2 for v in xs}\n    s = {w for w in xs}\n    out[0] = len(d) + len(s)\n",
-        ["xs", "out"],
-    )
+@pytest.mark.parametrize(
+    ("body", "bound_names"),
+    [
+        (
+            "def k(xs, out):\n    d = {v: v * 2 for v in xs}\n    s = {w for w in xs}\n    out[0] = len(d) + len(s)\n",
+            ("v", "w"),
+        ),
+        ("def k(xs, out):\n    f = lambda z: z + 1\n    out[0] = f(xs[0])\n", ("z",)),
+        ("def k(xs, out):\n    if (n := len(xs)) > 0:\n        out[0] = n\n", ("n",)),
+        (
+            "def k(xs, out):\n    try:\n        out[0] = xs[0]\n    except IndexError as err:\n        out[0] = 0\n",
+            ("err",),
+        ),
+    ],
+    ids=["set_and_dict_comprehension_targets", "lambda_args", "walrus_target", "except_handler_name"],
+)
+def test_locally_bound_names_are_not_promoted_to_params(body: str, bound_names: tuple[str, ...]) -> None:
+    kir = kir_(body, ["xs", "out"])
     promote_free_names_to_params(kir)
-    assert "v" not in kir.input_args
-    assert "w" not in kir.input_args
-
-
-def test_lambda_args_not_promoted() -> None:
-    kir = kir_(
-        "def k(xs, out):\n    f = lambda z: z + 1\n    out[0] = f(xs[0])\n",
-        ["xs", "out"],
-    )
-    promote_free_names_to_params(kir)
-    assert "z" not in kir.input_args
-
-
-def test_walrus_target_not_promoted() -> None:
-    kir = kir_(
-        "def k(xs, out):\n    if (n := len(xs)) > 0:\n        out[0] = n\n",
-        ["xs", "out"],
-    )
-    promote_free_names_to_params(kir)
-    assert "n" not in kir.input_args
-
-
-def test_except_handler_name_not_promoted() -> None:
-    kir = kir_(
-        "def k(xs, out):\n    try:\n        out[0] = xs[0]\n    except IndexError as err:\n        out[0] = 0\n",
-        ["xs", "out"],
-    )
-    promote_free_names_to_params(kir)
-    assert "err" not in kir.input_args
+    for name in bound_names:
+        assert name not in kir.input_args
 
 
 # end-to-end pin: the real kernel this was found on

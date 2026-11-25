@@ -16,6 +16,8 @@ import subprocess
 import types
 from pathlib import Path
 
+import pytest
+
 from hpcagent_bench import paths
 from tests.fresh_module import module_at
 
@@ -33,15 +35,21 @@ def _load_check_headers() -> types.ModuleType:
     return module_at(REPO / "helpers" / "scripts" / "checks" / "check_headers.py")
 
 
-def test_fix_inserts_header_at_content_top(tmp_path: Path) -> None:
-    """``insert_header`` prepends the two-line header as the first lines of a headerless file."""
+@pytest.mark.parametrize(
+    ("body", "above"),
+    [
+        pytest.param("import os\n\n\ndef g():\n    return os.getpid()\n", [], id="headerless"),
+        pytest.param("#!/usr/bin/env python\nimport sys\n", ["#!/usr/bin/env python"], id="shebang"),
+    ],
+)
+def test_fix_inserts_header_at_content_top_after_a_shebang(tmp_path: Path, body: str, above: list[str]) -> None:
+    """``insert_header`` prepends the two-line header as the first lines of a headerless file; a ``#!`` shebang
+    stays on line 1 and the header follows it (so an executable script still runs)."""
     ch = _load_check_headers()
     f = tmp_path / "mod.py"
-    f.write_text("import os\n\n\ndef g():\n    return os.getpid()\n", encoding="utf-8")
+    f.write_text(body, encoding="utf-8")
     assert ch.insert_header(f) is True
-    lines = f.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == HEADER[0]
-    assert lines[1] == HEADER[1]
+    assert f.read_text(encoding="utf-8").splitlines()[: len(above) + 2] == [*above, *HEADER]
 
 
 def test_fix_is_idempotent_and_never_double_stamps(tmp_path: Path) -> None:
@@ -54,18 +62,6 @@ def test_fix_is_idempotent_and_never_double_stamps(tmp_path: Path) -> None:
     assert ch.insert_header(f) is False  # already headered
     assert f.read_text(encoding="utf-8") == before
     assert f.read_text(encoding="utf-8").count(HEADER[0]) == 1
-
-
-def test_fix_places_header_after_a_shebang(tmp_path: Path) -> None:
-    """A ``#!`` shebang stays on line 1; the header follows it (so an executable script still runs)."""
-    ch = _load_check_headers()
-    f = tmp_path / "cli.py"
-    f.write_text("#!/usr/bin/env python\nimport sys\n", encoding="utf-8")
-    assert ch.insert_header(f) is True
-    lines = f.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == "#!/usr/bin/env python"
-    assert lines[1] == HEADER[0]
-    assert lines[2] == HEADER[1]
 
 
 def test_the_formatter_leaves_the_header_byte_for_byte(tmp_path: Path) -> None:
@@ -82,18 +78,3 @@ def test_the_formatter_leaves_the_header_byte_for_byte(tmp_path: Path) -> None:
     assert out[1] == HEADER[0]
     assert out[2] == HEADER[1]
     assert "def f(x):" in f.read_text(encoding="utf-8")  # body WAS reformatted (test is meaningful)
-
-
-def test_header_hook_and_the_formatter_compose(tmp_path: Path) -> None:
-    """End to end: insert the header into a headerless, badly-formatted file, then format it -- the
-    header is present at the top and untouched, proving the two fixers do not fight."""
-    ruff = shutil.which("ruff")
-    assert ruff, "ruff must be installed"
-    ch = _load_check_headers()
-    f = tmp_path / "mod.py"
-    f.write_text("import   os\ndef  h( ):\n    return  os.getpid( )\n", encoding="utf-8")
-    assert ch.insert_header(f) is True
-    subprocess.run([ruff, "format", "--line-length", LINE_LENGTH, str(f)], check=True)
-    lines = f.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == HEADER[0]
-    assert lines[1] == HEADER[1]

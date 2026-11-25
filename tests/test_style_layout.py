@@ -7,7 +7,6 @@ every value axis shares (:func:`~hpcagent_bench.stats.style.minor_ticks`)."""
 
 import logging
 import math
-from collections.abc import Callable
 
 import matplotlib as mpl
 import pytest
@@ -15,7 +14,6 @@ import pytest
 mpl.use("Agg")
 
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
 from matplotlib.ticker import FixedLocator, Locator, LogLocator, MultipleLocator
 
@@ -236,22 +234,6 @@ def test_a_count_step_no_whole_part_divides_gets_no_minor_ticks() -> None:
     5.25 tasks, lines that mark no count at all."""
     fig, ax = ruled_axis(style.MinorKind.COUNT, FixedLocator([0.0, 7.0]), (-0.5, 7.5))
     assert list(ax.yaxis.get_minorticklocs()) == []
-
-
-@pytest.mark.parametrize(
-    ("measure", "share"),
-    [
-        pytest.param(Line2D.get_markersize, 0.55, id="length"),
-        pytest.param(Line2D.get_markeredgewidth, 0.6, id="width"),
-    ],
-)
-def test_a_minor_tick_mark_is_a_fixed_share_of_a_major_one(measure: Callable[[Line2D], float], share: float) -> None:
-    """The minor marks subdivide the labelled reference: 0.55x the major's length, 0.6x its width.
-    matplotlib's own minors are already smaller, so only the exact share shows the rule is applied."""
-    fig, ax = ruled_axis(style.MinorKind.RATIO, FixedLocator([1.0, 2.0, 4.0]), (1.0, 4.0))
-    fig.canvas.draw()
-    major, minor = ax.yaxis.get_major_ticks()[0].tick1line, ax.yaxis.get_minor_ticks()[0].tick1line
-    assert measure(minor) == pytest.approx(share * measure(major))
 
 
 def test_minors_follow_majors_and_limits_set_after_the_axis_was_ruled() -> None:

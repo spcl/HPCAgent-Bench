@@ -22,6 +22,8 @@ after the loop the name holds one or the other and nothing here knows which.
 import ast
 import dataclasses
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import rank_table
 from hpcagent_bench.translators.numpyto_common.tuple_desugar import Env, TupleDesugar, desugar_tuples
 
@@ -57,17 +59,35 @@ def test_an_allocation_sized_by_a_scalar_expression_is_one_dimensional() -> None
     assert (ranks.get("d"), ranks.get("e")) == (1, 1), ranks
 
 
-def test_a_slice_of_the_shape_tuple_is_still_compile_time() -> None:
-    """``x.shape[2:]`` -- the "trailing axes" idiom. The elements stay symbolic; only the LENGTH
-    has to be compile-time, which is what the concat and the following ``ndim`` need."""
-    interp = fold(
-        "def f(x, g):\n    n, c = x.shape[0], x.shape[1]\n    y = x.reshape((n, g, c // g) + x.shape[2:])\n",
-        ranks={"x": 4},
-        int_scalars=frozenset({"g", "n", "c"}),
-        arrays=frozenset({"x"}),
-    )
-    assert "x.reshape((n, g, c // g, x.shape[2], x.shape[3]))" in source_of(interp)
-    assert interp.ranks["y"] == 5
+@pytest.mark.parametrize(
+    ("src", "ranks", "int_scalars", "want", "rank_of_y"),
+    [
+        # ``x.shape[2:]`` -- the "trailing axes" idiom. The elements stay symbolic; only the LENGTH
+        # has to be compile-time, which is what the concat and the following ``ndim`` need.
+        (
+            "def f(x, g):\n    n, c = x.shape[0], x.shape[1]\n    y = x.reshape((n, g, c // g) + x.shape[2:])\n",
+            {"x": 4},
+            frozenset({"g", "n", "c"}),
+            "x.reshape((n, g, c // g, x.shape[2], x.shape[3]))",
+            5,
+        ),
+        # ``x.shape[:-1]`` is the same idiom from the other end; the bound must fold, not the extents.
+        (
+            "def f(x):\n    y = x.reshape(x.shape[:-1] + (1,))\n",
+            {"x": 3},
+            frozenset(),
+            "x.reshape((x.shape[0], x.shape[1], 1))",
+            3,
+        ),
+    ],
+    ids=["trailing_axes", "negative_bound"],
+)
+def test_a_slice_of_the_shape_tuple_is_still_compile_time(
+    src: str, ranks: dict[str, int], int_scalars: frozenset[str], want: str, rank_of_y: int
+) -> None:
+    interp = fold(src, ranks=ranks, int_scalars=int_scalars, arrays=frozenset({"x"}))
+    assert want in source_of(interp)
+    assert interp.ranks["y"] == rank_of_y
 
 
 def test_the_group_norm_axis_folds_once_the_reshape_collapses() -> None:
@@ -81,13 +101,6 @@ def test_the_group_norm_axis_folds_once_the_reshape_collapses() -> None:
         arrays=frozenset({"x"}),
     )
     assert "axis=(2, 3, 4)" in source_of(interp)
-
-
-def test_a_negative_shape_slice_folds_too() -> None:
-    """``x.shape[:-1]`` is the same idiom from the other end; the bound must fold, not the extents."""
-    interp = fold("def f(x):\n    y = x.reshape(x.shape[:-1] + (1,))\n", ranks={"x": 3}, arrays=frozenset({"x"}))
-    assert "x.reshape((x.shape[0], x.shape[1], 1))" in source_of(interp)
-    assert interp.ranks["y"] == 3
 
 
 def test_a_symbolic_slice_bound_declines() -> None:

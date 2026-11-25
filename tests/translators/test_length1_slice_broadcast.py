@@ -15,6 +15,7 @@ numpy is the oracle here rather than the emitted text, because the text was plau
 """
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import run_op
 
@@ -40,28 +41,29 @@ def check(body: str, out_shape: tuple, shapes: dict) -> None:
     assert not bad, bad
 
 
-def test_a_length_1_slice_broadcasts_instead_of_advancing() -> None:
-    """``a[:, 0:1]`` is column 0 read for EVERY output column -- the case that was miscompiled."""
-    check("    out[:, :] = a[:, 0:1] + b[:, :]\n", (M, N), SHAPES_2D)
-
-
-def test_a_length_1_slice_broadcasts_under_multiplication_too() -> None:
-    """Not addition-specific: the defect is in the index mapping, so every operator inherits it."""
-    check("    out[:, :] = a[:, 0:1] * b[:, :]\n", (M, N), SHAPES_2D)
-
-
-def test_an_integer_index_drops_the_axis() -> None:
-    """The other rule, and the reason the first cannot simply be 'squeeze size-1 dims': ``a[i, 0]``
-    is a scalar spread along the row, which is a DIFFERENT computation from ``a[:, 0:1]``."""
-    check("    for i in range(a.shape[0]):\n        out[i, :] = a[i, 0] + b[i, :]\n", (M, N), SHAPES_2D)
-
-
-def test_a_length_1_slice_as_the_assignment_TARGET_keeps_its_axis() -> None:
-    check("    out[:, 0:1] = a[:, 0:1]\n", (M, N), SHAPES_2D)
-
-
-def test_a_length_1_row_slice_keeps_the_leading_axis() -> None:
-    check("    out[0:1, :] = a[0:1, :] + b[0:1, :]\n", (M, N), SHAPES_2D)
+@pytest.mark.parametrize(
+    "body",
+    [
+        # ``a[:, 0:1]`` is column 0 read for EVERY output column -- the case that was miscompiled.
+        "    out[:, :] = a[:, 0:1] + b[:, :]\n",
+        # Not addition-specific: the defect is in the index mapping, so every operator inherits it.
+        "    out[:, :] = a[:, 0:1] * b[:, :]\n",
+        # The other rule, and the reason the first cannot simply be 'squeeze size-1 dims': ``a[i, 0]``
+        # is a scalar spread along the row, which is a DIFFERENT computation from ``a[:, 0:1]``.
+        "    for i in range(a.shape[0]):\n        out[i, :] = a[i, 0] + b[i, :]\n",
+        "    out[:, 0:1] = a[:, 0:1]\n",
+        "    out[0:1, :] = a[0:1, :] + b[0:1, :]\n",
+    ],
+    ids=[
+        "length_1_slice_broadcasts_instead_of_advancing",
+        "length_1_slice_broadcasts_under_multiplication",
+        "integer_index_drops_the_axis",
+        "length_1_slice_as_the_assignment_target_keeps_its_axis",
+        "length_1_row_slice_keeps_the_leading_axis",
+    ],
+)
+def test_a_length_1_slice_keeps_its_axis_and_an_integer_index_drops_it(body: str) -> None:
+    check(body, (M, N), SHAPES_2D)
 
 
 def test_reducing_over_a_length_1_axis_yields_the_lower_rank() -> None:
@@ -92,20 +94,21 @@ def check_broadcast(body: str) -> None:
     assert not bad, bad
 
 
-def test_a_declared_size_1_axis_broadcasts_under_a_newaxis() -> None:
+@pytest.mark.parametrize(
+    "body",
+    ["    out[:] = p[..., np.newaxis] * n\n", "    out[:] = p[:, :, None] * n\n"],
+    ids=["ellipsis_spelling", "explicit_slices_spelling"],
+)
+def test_a_declared_size_1_axis_broadcasts_under_a_newaxis(body: str) -> None:
     """cfd's ``pressure[..., np.newaxis] * normal``.
 
     ``...`` expands to full slices, so the operand reaches the scalarizer as ``p[:, :, None]`` --
     a SLICE over an axis the array declares as 1, which the length-1-slice rule above never sees.
     The slice consumed the result's extent-``K`` iter, so ``p[i, k]`` read along a single column:
     the next row's element for every cell but the last, and past the allocation for that one.
+    Both spellings must agree.
     """
-    check_broadcast("    out[:] = p[..., np.newaxis] * n\n")
-
-
-def test_the_same_operand_spelled_without_the_ellipsis() -> None:
-    """``p[:, :, None]`` is what the ellipsis expands to; both spellings must agree."""
-    check_broadcast("    out[:] = p[:, :, None] * n\n")
+    check_broadcast(body)
 
 
 def test_a_size_1_axis_still_broadcasts_when_it_is_the_leading_one() -> None:

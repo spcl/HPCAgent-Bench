@@ -71,17 +71,21 @@ def build_two_setup_job(job_dir: pathlib.Path, benchmarks_root: pathlib.Path) ->
     write_manifest(benchmarks_root, KERNEL_B)
 
 
-def test_a_multi_setup_job_files_a_workers_last_saved_source_under_its_own_setup(tmp_path: pathlib.Path) -> None:
-    """The regression: worker 17's last-saved file must land under SETUP_B, never under SETUP_A
-    just because SETUP_A's row was the job's first."""
+def extract_two_setup_job(tmp_path: pathlib.Path) -> pathlib.Path:
+    """The two-setup job run through ``extract_llr40.main``; the output directory."""
     job_dir = tmp_path / "644349"
     benchmarks_root = tmp_path / "benchmarks"
     build_two_setup_job(job_dir, benchmarks_root)
     out = tmp_path / "out"
+    assert extract_llr40.main(["--runs", str(job_dir), "--benchmarks", str(benchmarks_root), "--out", str(out)]) == 0
+    return out
 
-    rc = extract_llr40.main(["--runs", str(job_dir), "--benchmarks", str(benchmarks_root), "--out", str(out)])
 
-    assert rc == 0
+def test_a_multi_setup_job_files_a_workers_last_saved_source_under_its_own_setup(tmp_path: pathlib.Path) -> None:
+    """The regression: worker 17's last-saved file must land under SETUP_B, never under SETUP_A
+    just because SETUP_A's row was the job's first."""
+    out = extract_two_setup_job(tmp_path)
+
     wrong_dir = out / "sources" / SETUP_A / KERNEL_B
     right_dir = out / "sources" / SETUP_B / KERNEL_B
     assert not wrong_dir.exists(), f"w17's HIP file was filed under the wrong setup: {sorted(wrong_dir.rglob('*'))}"
@@ -94,14 +98,8 @@ def test_a_multi_setup_job_files_a_workers_last_saved_source_under_its_own_setup
 def test_the_sources_index_row_carries_the_workers_own_setup_and_episode_id(tmp_path: pathlib.Path) -> None:
     """``llr40_sources_index.csv``'s row for the last-saved file must carry SETUP_B and w17's real
     episode id, not the job's other setup and a blank episode id."""
-    job_dir = tmp_path / "644349"
-    benchmarks_root = tmp_path / "benchmarks"
-    build_two_setup_job(job_dir, benchmarks_root)
-    out = tmp_path / "out"
+    out = extract_two_setup_job(tmp_path)
 
-    rc = extract_llr40.main(["--runs", str(job_dir), "--benchmarks", str(benchmarks_root), "--out", str(out)])
-
-    assert rc == 0
     with (out / "llr40_sources_index.csv").open(newline="", encoding="utf-8") as handle:
         rows = [row for row in csv.DictReader(handle) if row["worker_index"] == "17" and row["kind"] == "candidate"]
     assert len(rows) == 1

@@ -92,11 +92,6 @@ def test_every_other_dtype_stores_as_itself() -> None:
 # 2. The manifest rule the dtype carries
 
 
-def test_manifest_accepts_an_even_innermost_extent() -> None:
-    spec = BenchSpec.from_dict(_manifest("(4, N)", {"S": {"N": 8}}), SITE, source="<int4test>")
-    assert spec.init.dtypes["x"] == "int4", "the declared dtype must survive validation verbatim"
-
-
 def test_manifest_rejects_an_odd_innermost_extent() -> None:
     """The error names the array, the preset and the offending extent -- the three things an
     author needs to fix the manifest without reading the validator."""

@@ -42,9 +42,3 @@ def test_the_table_names_every_summarized_row() -> None:
     text = canon.format_build_times(canon.build_times([row("gemm", 1.0, 0.5, 2.0)]))
     assert text.count("dace_cpu_canon") == 4
     assert [line.split()[1] for line in text.splitlines()[1:]] == ["transform", "codegen", "compile", "total"]
-
-
-if __name__ == "__main__":
-    test_each_phase_and_the_total_are_summarized_with_the_slowest_kernel()
-    test_an_unmeasured_or_failed_row_counts_in_no_distribution()
-    test_the_table_names_every_summarized_row()

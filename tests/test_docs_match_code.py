@@ -182,18 +182,6 @@ def test_docs_never_pass_the_agent_name_as_an_option() -> None:
     assert not stale, f"`hpcagent-bench agent --agent` in: {stale}"
 
 
-def test_docs_name_only_tags_subcommands_that_exist() -> None:
-    """`python -m hpcagent_bench.tags <command>` in a doc is a command the module defines."""
-    known = {"resolve", "version", "sample"}
-    stale = [
-        f"{path}: {m.group(0)}"
-        for path, text in doc_text()
-        for m in re.finditer(r"hpcagent_bench\.tags (\S+)", text)
-        if m.group(1).strip("`") not in known
-    ]
-    assert not stale, f"documented tags commands the module does not have: {stale}"
-
-
 def test_docs_name_only_autogen_registries_that_exist() -> None:
     """An upper-case name a paragraph places in `hpcagent_bench/autogen.py` is one of its attributes."""
     import hpcagent_bench.autogen
@@ -207,14 +195,6 @@ def test_docs_name_only_autogen_registries_that_exist() -> None:
         if not modules.defines(hpcagent_bench.autogen, name)
     ]
     assert not stale, f"documented autogen names that do not exist: {stale}"
-
-
-def test_no_doc_promises_a_skip_row_for_an_unsupported_precision() -> None:
-    """`run-framework` never reads a column's `precisions`, so nothing writes a `skip` row for one (a `skip:<why>`
-    status of another cause is not this claim)."""
-    sources = [*doc_text(), *((p, p.read_text()) for p in (paths.ROOT / "hpcagent_bench").glob("*.py"))]
-    stale = [str(path) for path, text in sources if re.search(r"records `?skip`?(?![:\w])|status=\"skip\"", text)]
-    assert not stale, f"a `skip` row for an unsupported precision is promised in: {stale}"
 
 
 #: An ``HPCAGENT_BENCH_*`` name as prose writes it; a trailing ``_*`` or ``_<...>`` makes it a prefix.

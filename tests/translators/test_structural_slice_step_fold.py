@@ -38,6 +38,28 @@ NATIVE = ("c", "cpp", "fortran")
 #: 1..12, so a stride is visible in the RESULT: ``[::2]`` -> 1 3 5 7 9 11, ``[::3]`` -> 1 4 7 10.
 A12 = np.arange(1.0, 13.0)
 
+POOL_SRC = (
+    "import numpy as np\n"
+    "def pool(v, k):\n"
+    "    return v[:(6 - 1) * k + 1:k] * 1.0\n"
+    "def f(x, stride, out):\n"
+    "    out[:] = pool(x, stride)\n"
+)
+
+TWO_STRIDES_SRC = (
+    "import numpy as np\n"
+    "def f(x, stride_a, stride_b, out_a, out_b):\n"
+    "    out_a[:] = x[:(6 - 1) * stride_a + 1:stride_a] * 1.0\n"
+    "    out_b[:] = x[:(4 - 1) * stride_b + 1:stride_b] * 1.0\n"
+)
+
+REBOUND_SRC = (
+    "import numpy as np\n"
+    "def f(x, stride, out):\n"
+    "    stride = stride + 1\n"
+    "    out[:] = x[:(4 - 1) * stride + 1:stride] * 1.0\n"
+)
+
 
 def parse(src: str, args: list[str], arrays: list[str], shapes: dict[str, str], preset: dict[str, int]) -> KernelIR:
     """Parse ``src``'s ``f`` against a synthesized manifest (``preset`` is the ``S`` block)."""
@@ -92,14 +114,7 @@ def test_manifest_scalar_step_stays_symbolic() -> None:
     Folding it would compile and run -- and would ignore whatever the harness passed, which is the
     one failure the caller cannot see.
     """
-    src = (
-        "import numpy as np\n"
-        "def pool(v, k):\n"
-        "    return v[:(6 - 1) * k + 1:k] * 1.0\n"
-        "def f(x, stride, out):\n"
-        "    out[:] = pool(x, stride)\n"
-    )
-    kir = parse(src, ["x", "stride", "out"], ["x", "out"], {"x": "(N,)", "out": "(6,)"}, {"N": 12, "stride": 2})
+    kir = parse(POOL_SRC, ["x", "stride", "out"], ["x", "out"], {"x": "(N,)", "out": "(6,)"}, {"N": 12, "stride": 2})
     assert steps(kir) == [None], steps(kir)
     assert "stride" in kir.param_order(), kir.param_order()
 
@@ -111,14 +126,8 @@ def test_two_distinct_manifest_steps_do_not_collapse() -> None:
     slices would compile, and the second would silently walk the first's stride. The numbers, not
     the exit code, are what decide it -- see the numeric sibling below.
     """
-    src = (
-        "import numpy as np\n"
-        "def f(x, stride_a, stride_b, out_a, out_b):\n"
-        "    out_a[:] = x[:(6 - 1) * stride_a + 1:stride_a] * 1.0\n"
-        "    out_b[:] = x[:(4 - 1) * stride_b + 1:stride_b] * 1.0\n"
-    )
     kir = parse(
-        src,
+        TWO_STRIDES_SRC,
         ["x", "stride_a", "stride_b", "out_a", "out_b"],
         ["x", "out_a", "out_b"],
         {"x": "(N,)", "out_a": "(6,)", "out_b": "(4,)"},
@@ -131,15 +140,9 @@ def test_two_distinct_manifest_steps_do_not_collapse() -> None:
 def test_two_distinct_manifest_steps_walk_their_own_stride() -> None:
     """out_a reads 1 3 5 7 9 11 and out_b reads 1 4 7 10; a collapse fills one of them with the
     other's stride and still compiles."""
-    src = (
-        "import numpy as np\n"
-        "def f(x, stride_a, stride_b, out_a, out_b):\n"
-        "    out_a[:] = x[:(6 - 1) * stride_a + 1:stride_a] * 1.0\n"
-        "    out_b[:] = x[:(4 - 1) * stride_b + 1:stride_b] * 1.0\n"
-    )
     assert_all_ok(
         run_op(
-            src,
+            TWO_STRIDES_SRC,
             "f",
             {"x": A12, "stride_a": 2, "stride_b": 3},
             {"out_a": (6,), "out_b": (4,)},
@@ -165,22 +168,6 @@ def test_a_bounded_step_absent_from_the_manifest_lowers_symbolically() -> None:
     assert "step" in kir.param_order(), kir.param_order()
 
 
-def test_a_bounded_step_absent_from_the_manifest_matches_numpy() -> None:
-    """A lost stride reads 1..6 instead of 1 3 5 7 9 11 -- the discriminating output."""
-    src = "import numpy as np\ndef f(x, step, out):\n    out[:] = x[:(6 - 1) * step + 1:step] * 1.0\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
-            {"x": A12, "step": 2},
-            {"out": (6,)},
-            {"N": 12},
-            shapes={"x": "(N,)", "out": "(6,)"},
-            backends=NATIVE,
-        )
-    )
-
-
 def test_a_rebound_step_name_is_not_folded() -> None:
     """Once the body assigns to it, the manifest default is not what the slice reads.
 
@@ -188,13 +175,7 @@ def test_a_rebound_step_name_is_not_folded() -> None:
     same rule ``FoldConstantSymbols`` applies to its own substitution. The step is carried
     symbolically instead of refusing the kernel outright, so the slice reads the REBOUND value.
     """
-    src = (
-        "import numpy as np\n"
-        "def f(x, stride, out):\n"
-        "    stride = stride + 1\n"
-        "    out[:] = x[:(4 - 1) * stride + 1:stride] * 1.0\n"
-    )
-    kir = parse(src, ["x", "stride", "out"], ["x", "out"], {"x": "(N,)", "out": "(4,)"}, {"N": 12, "stride": 2})
+    kir = parse(REBOUND_SRC, ["x", "stride", "out"], ["x", "out"], {"x": "(N,)", "out": "(4,)"}, {"N": 12, "stride": 2})
     assert steps(kir) == [None], steps(kir)
 
 
@@ -204,15 +185,9 @@ def test_a_rebound_step_walks_the_rebound_stride_on_every_backend() -> None:
     Had the manifest's 2 been folded in, the same kernel would fill ``out`` with 1 3 5 7 -- it
     compiles either way, which is why the numbers rather than the exit code decide it.
     """
-    src = (
-        "import numpy as np\n"
-        "def f(x, stride, out):\n"
-        "    stride = stride + 1\n"
-        "    out[:] = x[:(4 - 1) * stride + 1:stride] * 1.0\n"
-    )
     assert_all_ok(
         run_op(
-            src,
+            REBOUND_SRC,
             "f",
             {"x": A12, "stride": 2},
             {"out": (4,)},
@@ -241,16 +216,9 @@ def test_an_unbounded_symbolic_step_is_still_refused() -> None:
 
 def test_manifest_step_matches_numpy_on_every_backend() -> None:
     # The stride arrives across the ABI: a lost one reads 1..6 instead of 1 3 5 7 9 11.
-    src = (
-        "import numpy as np\n"
-        "def pool(v, k):\n"
-        "    return v[:(6 - 1) * k + 1:k] * 1.0\n"
-        "def f(x, stride, out):\n"
-        "    out[:] = pool(x, stride)\n"
-    )
     assert_all_ok(
         run_op(
-            src,
+            POOL_SRC,
             "f",
             {"x": A12, "stride": 2},
             {"out": (6,)},

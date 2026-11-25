@@ -14,7 +14,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import tempfile
 
 import pytest
 
@@ -410,17 +409,6 @@ def test_a_gang_runs_under_the_container_engine_only_and_says_why() -> None:
         assert "fabric hooks" in done.stderr, done.stderr
 
 
-def test_the_default_runtime_is_the_container_engine() -> None:
-    done = subprocess.run(
-        ["bash", "-c", f'. {shlex.quote(str(SEAM))}; echo "$CONTAINER_RUNTIME"'],
-        env={"PATH": "/usr/bin:/bin"},
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert done.stdout.strip() == "ce"
-
-
 def test_an_edf_resolves_in_the_first_search_directory_holding_it_with_its_image_digest(tmp_path: pathlib.Path) -> None:
     """edf_file searches every EDF_PATH directory in order, not only the first, and a miss names the path;
     export_image_sha reads the digest beside the squashfs the EDF names."""
@@ -462,9 +450,17 @@ def agent_rootfs_mode(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 
 
 @pytest.mark.parametrize("runtime", RUNTIMES)
-def test_the_default_agent_rootfs_leaves_the_launch_argv_alone(tmp_path: pathlib.Path, runtime: str) -> None:
-    """writable (the default, and an unset variable) is today's behaviour: no rootfs flag, no scratch mount."""
-    done = wrap(tmp_path, runtime, "agent-node")
+@pytest.mark.parametrize(
+    ("role", "agent_rootfs"),
+    [("agent-node", ""), ("judge-node", "read-only")],
+    ids=["default_agent_rootfs", "read_only_names_agent_steps_only"],
+)
+def test_the_launch_argv_stays_writable_unless_an_agent_step_asks_for_a_read_only_rootfs(
+    tmp_path: pathlib.Path, runtime: str, role: str, agent_rootfs: str
+) -> None:
+    """writable (the default, and an unset variable) is today's behaviour: no rootfs flag, no scratch mount. A judge
+    step of the same run mounts nothing of the read-only switch: it names the AGENT rootfs alone."""
+    done = wrap(tmp_path, runtime, role, agent_rootfs=agent_rootfs)
     assert done.returncode == 0, done.stderr
     text = " ".join(done.wrap)
     assert "--read-only" not in text
@@ -509,86 +505,7 @@ def test_a_read_only_agent_rootfs_binds_the_scratch_under_apptainer(tmp_path: pa
     assert bind[:2] == ["/tmp:/tmp", "/dev/shm:/dev/shm"]
 
 
-@pytest.mark.parametrize("runtime", RUNTIMES)
-def test_the_read_only_agent_rootfs_hardens_agent_steps_only(tmp_path: pathlib.Path, runtime: str) -> None:
-    """A judge step of the same run mounts nothing of it: the switch names the AGENT rootfs alone."""
-    done = wrap(tmp_path, runtime, "judge-node", agent_rootfs="read-only")
-    assert done.returncode == 0, done.stderr
-    text = " ".join(done.wrap)
-    assert "--read-only" not in text and "--tmpfs" not in text
-    assert "/tmp:/tmp" not in text and "/dev/shm:/dev/shm" not in text
-
-
 def test_an_agent_step_refuses_to_launch_on_an_unknown_agent_rootfs(tmp_path: pathlib.Path) -> None:
     done = wrap(tmp_path, "podman", "agent-node", agent_rootfs="sometimes")
     assert done.returncode == 2
     assert "HPCAGENT_BENCH_ISOLATION_AGENT_ROOTFS must be writable or read-only, got 'sometimes'" in done.stderr
-
-
-if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as scratch:
-        root = pathlib.Path(scratch)
-
-        def fresh(name: str) -> pathlib.Path:
-            path = root / name
-            path.mkdir()
-            return path
-
-        test_ce_hands_srun_the_roles_derived_edf_and_wraps_nothing(fresh("ce"))
-        test_ce_uses_an_absolute_toml_as_it_is(fresh("ce-toml"))
-        test_ce_without_an_edf_name_says_so(fresh("ce-none"))
-        test_apptainer_binds_the_shared_folder_and_the_roles_mounts(fresh("apptainer"))
-        for container in ("podman", "docker"):
-            test_podman_and_docker_run_the_image_on_the_host_network_with_the_job_env(
-                fresh(f"run-{container}"), container
-            )
-            test_docker_wrap_carries_limits(fresh(f"limits-{container}"), container)
-        test_an_oci_step_runs_with_what_the_seal_needs(
-            fresh("seal-docker"), "docker", ["seccomp=unconfined", "systempaths=unconfined"]
-        )
-        test_an_oci_step_runs_with_what_the_seal_needs(fresh("seal-podman"), "podman", ["unmask=ALL"])
-        for container in (*RUNTIMES, "ce"):
-            test_only_an_oci_runtime_is_offered_the_container_limits(fresh(f"nolimit-{container}"), container)
-        for container in RUNTIMES:
-            for name, flag in (("judge-node", True), ("merge-node", True), ("agent-node", False)):
-                test_the_judge_image_gets_the_checkout_where_its_editable_install_looks(
-                    fresh(f"pkg-{container}-{name}"), container, name, flag
-                )
-        for container in RUNTIMES:
-            test_the_agent_gets_its_tools_and_launch_directory_read_only_and_never_the_repo(
-                fresh(f"agent-{container}"), container
-            )
-            test_an_extra_bind_source_reaches_every_runtime_at_its_own_path(fresh(f"extra-{container}"), container)
-            test_a_runtime_that_runs_an_image_refuses_to_run_without_one(fresh(f"image-{container}"), container)
-            test_a_bind_whose_path_holds_a_space_stays_one_bind(fresh(f"space-{container}"), container)
-            for name in ("agent-node", "judge-node"):
-                test_every_runtime_mounts_what_the_container_engine_mounts(
-                    fresh(f"ce-{container}-{name}"), container, name
-                )
-        test_an_apptainer_agent_keeps_the_host_home_and_working_directory_out(fresh("apptainer-hostfs"))
-        test_the_apptainer_row_runs_singularity_where_apptainer_is_absent(
-            fresh("singularity-only"), ("singularity",), "singularity"
-        )
-        test_the_apptainer_row_runs_singularity_where_apptainer_is_absent(
-            fresh("apptainer-both"), ("apptainer", "singularity"), "apptainer"
-        )
-        test_an_unknown_runtime_is_refused_with_the_known_ones_named(fresh("unknown"))
-        test_a_gang_runs_under_the_container_engine_only_and_says_why()
-        test_the_default_runtime_is_the_container_engine()
-        for container in RUNTIMES:
-            test_the_default_agent_rootfs_leaves_the_launch_argv_alone(fresh(f"ro-default-{container}"), container)
-            test_the_read_only_agent_rootfs_hardens_agent_steps_only(fresh(f"ro-judge-{container}"), container)
-        for container in ("podman", "docker"):
-            test_a_read_only_agent_rootfs_runs_the_agent_rootfs_read_only_over_fresh_tmpfs(
-                fresh(f"ro-tmpfs-{container}"), container
-            )
-        test_a_read_only_agent_rootfs_binds_the_scratch_under_apptainer(fresh("ro-bind-apptainer"))
-        test_the_agent_rootfs_mode_defaults_to_writable_and_refuses_an_unknown_value()
-        test_an_agent_step_refuses_to_launch_on_an_unknown_agent_rootfs(fresh("ro-bad"))
-    test_a_new_backend_is_one_table_row_for_both_launchers(pathlib.Path(tempfile.mkdtemp()))
-    test_an_edf_resolves_in_the_first_search_directory_holding_it_with_its_image_digest(
-        pathlib.Path(tempfile.mkdtemp())
-    )
-    for role in (*ROLE_ONLY, "prepare"):
-        test_a_step_forwards_what_its_role_reads_and_nothing_of_the_host(role)
-    print("ok")

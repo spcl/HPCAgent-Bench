@@ -54,14 +54,11 @@ def declaration(src: str, name: str) -> str:
     return hits[0]
 
 
-def test_the_small_local_stays_on_the_stack() -> None:
+def test_the_small_local_stays_on_the_stack_and_the_heap_local_is_freed() -> None:
     """The budget must not push every temporary to the heap -- that would cost every kernel."""
-    decl = declaration(emit_("c"), "small")
-    assert "malloc" not in decl, decl
-
-
-def test_the_heap_local_is_freed() -> None:
     src = emit_("c")
+    decl = declaration(src, "small")
+    assert "malloc" not in decl, decl
     assert "free(big)" in src, src
 
 

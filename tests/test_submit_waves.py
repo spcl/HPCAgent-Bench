@@ -82,16 +82,24 @@ def plan(tmp_path: pathlib.Path, max_nodes: str, *counts: int) -> subprocess.Com
     return run_bash(tmp_path, f'plan_waves "{max_nodes}" {words}\necho "${{WAVE_NUMBERS[*]}}"')
 
 
-def test_plan_waves_opens_a_wave_when_the_next_setup_would_pass_the_limit(tmp_path: pathlib.Path) -> None:
-    done = plan(tmp_path, "32", 12, 12, 8, 20, 4, 32)
+@pytest.mark.parametrize(
+    ("max_nodes", "counts", "waves"),
+    [
+        (
+            "32",
+            (12, 12, 8, 20, 4, 32),
+            ["1", "1", "1", "2", "2", "3"],
+        ),  # a wave opens when the next setup passes the limit
+        ("", (12, 40, 8), ["1", "1", "1"]),  # no limit is one wave
+    ],
+    ids=["opens_a_wave_past_the_limit", "no_limit_is_one_wave"],
+)
+def test_plan_waves_numbers_each_setup_by_the_limit(
+    tmp_path: pathlib.Path, max_nodes: str, counts: tuple[int, ...], waves: list[str]
+) -> None:
+    done = plan(tmp_path, max_nodes, *counts)
     assert done.returncode == 0, done.stderr
-    assert done.stdout.split() == ["1", "1", "1", "2", "2", "3"]
-
-
-def test_plan_waves_without_a_limit_is_one_wave(tmp_path: pathlib.Path) -> None:
-    done = plan(tmp_path, "", 12, 40, 8)
-    assert done.returncode == 0, done.stderr
-    assert done.stdout.split() == ["1", "1", "1"]
+    assert done.stdout.split() == waves
 
 
 def test_plan_waves_refuses_a_setup_larger_than_the_limit(tmp_path: pathlib.Path) -> None:

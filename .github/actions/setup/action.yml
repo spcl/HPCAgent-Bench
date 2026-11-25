@@ -2,7 +2,7 @@ name: "HPCAgent-Bench CI setup"
 description: >
   Python, the native toolchain (GCC 16, LLVM 22, OpenBLAS, FFTW, LAPACKE), and the project's `cpu`
   environment from uv.lock (DaCe extended as the locked dace-extended release), one `uv sync` per job.
-  Optionally a per-job ccache and the vendor compilers. Pair with ./.github/actions/finish at the end of a job.
+  Optionally a per-job ccache. Pair with ./.github/actions/finish at the end of a job.
 
 inputs:
   python-version:
@@ -19,10 +19,6 @@ inputs:
     description: >
       Cache key for a restored ccache (unique per job and matrix leg); empty disables it.
       ./.github/actions/finish saves it under the same key.
-    required: false
-    default: ""
-  vendor-compilers:
-    description: "'' (none) or 'nvhpc' (nvc, nvc++, nvfortran)."
     required: false
     default: ""
 
@@ -190,23 +186,6 @@ runs:
         clang++ -std=c++20 -fsyntax-only "${RUNNER_TEMP}/cxx-smoke.cpp" \
           || { echo "::error::clang++ cannot compile a <cstdint> TU -- its selected GCC install has no libstdc++ headers"; \
                clang++ -v -x c++ -E /dev/null 2>&1 | grep -i 'selected gcc installation' >&2; exit 1; }
-
-    - name: Vendor compilers (${{ inputs.vendor-compilers }})
-      if: ${{ inputs.vendor-compilers != '' }}
-      shell: bash
-      env:
-        INSTALL_NVHPC: ${{ inputs.vendor-compilers == 'nvhpc' && '1' || '0' }}
-      run: |
-        # test_parallelism_dispatch.py needs nvc++.
-        set -euo pipefail
-        for attempt in 1 2 3; do
-          sudo env "INSTALL_NVHPC=${INSTALL_NVHPC}" sh .github/scripts/install-extra-toolchains.sh && break
-          if [ "$attempt" = 3 ]; then
-            echo "::error::vendor compiler install failed 3 times (NVHPC apt endpoint down)"
-            exit 1
-          fi
-          sleep $((attempt * 10))
-        done
 
     - name: ccache (per-uarch key)
       if: ${{ inputs.ccache != '' }}

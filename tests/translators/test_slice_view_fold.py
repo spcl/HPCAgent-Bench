@@ -6,6 +6,7 @@
 import ast
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.categories import Preset
 from hpcagent_bench.translators.numpyto_common.lowering import fold_slice_view_aliases
@@ -23,51 +24,64 @@ def fold_(src: str, shapes: dict[str, tuple[str, ...]]) -> str:
 # structural: the composed subscript / dropped alias, asserted on exact text  #
 
 
-def test_integer_view_index_drops_the_axis() -> None:
-    # ``row = mat[i, a:b]`` -- ``i`` is an INTEGER index and drops axis 0 (numpy
-    # squeeze); axis 1 stays a real bounded slice (not trimmed to nothing, so
-    # :func:`fold_subarray_aliases` -- which bails on any surviving Slice --
-    # does not touch this). ``row[j]`` composes to ``mat[i, a + j]``: the
-    # dropped axis's original scalar index passes through unchanged, the kept
-    # axis's offset composes.
-    src = "def f(mat, i, a, b, j, out):\n    row = mat[i, a:b]\n    out[0] = row[j]\n"
-    lowered = fold_(src, {"mat": ("M", "N")})
-    assert "row" not in lowered
-    assert "out[0] = mat[i, a + j]" in lowered
-
-
-def test_implicit_trailing_dimensions_are_padded() -> None:
-    # ``arr[:, a:b]`` on a 4-D array means ``arr[:, a:b, :, :]`` -- the pass must
-    # pad the missing trailing axes itself (this AST predates any external
-    # padding pass) so a 4-index use still composes correctly.
-    src = "def f(arr, a, b, out):\n    view = arr[:, a:b]\n    out[0] = view[0, 1, 2, 3]\n"
-    lowered = fold_(src, {"arr": ("N", "C", "H", "W")})
-    assert "view" not in lowered
-    assert "out[0] = arr[0, a + 1, 2, 3]" in lowered
+@pytest.mark.parametrize(
+    ("src", "shapes", "alias", "folded"),
+    [
+        # ``row = mat[i, a:b]`` -- ``i`` is an INTEGER index and drops axis 0 (numpy
+        # squeeze); axis 1 stays a real bounded slice (not trimmed to nothing, so
+        # :func:`fold_subarray_aliases` -- which bails on any surviving Slice --
+        # does not touch this). ``row[j]`` composes to ``mat[i, a + j]``: the
+        # dropped axis's original scalar index passes through unchanged, the kept
+        # axis's offset composes.
+        (
+            "def f(mat, i, a, b, j, out):\n    row = mat[i, a:b]\n    out[0] = row[j]\n",
+            {"mat": ("M", "N")},
+            "row",
+            "out[0] = mat[i, a + j]",
+        ),
+        # ``arr[:, a:b]`` on a 4-D array means ``arr[:, a:b, :, :]`` -- the pass must
+        # pad the missing trailing axes itself (this AST predates any external
+        # padding pass) so a 4-index use still composes correctly.
+        (
+            "def f(arr, a, b, out):\n    view = arr[:, a:b]\n    out[0] = view[0, 1, 2, 3]\n",
+            {"arr": ("N", "C", "H", "W")},
+            "view",
+            "out[0] = arr[0, a + 1, 2, 3]",
+        ),
+    ],
+    ids=["integer_view_index_drops_the_axis", "implicit_trailing_dimensions_are_padded"],
+)
+def test_a_view_alias_folds_into_the_composed_subscript(src: str, shapes: dict, alias: str, folded: str) -> None:
+    lowered = fold_(src, shapes)
+    assert alias not in lowered
+    assert folded in lowered
 
 
 # negative: unsound folds must NOT fire -- a correct refusal beats a wrong one #
 
 
-def test_negative_step_view_is_not_folded() -> None:
-    # ``a[::-2]`` is a numpy REVERSE: the implicit start is the LAST element, not
-    # 0, which the ``start + step*index`` composition assumes. A literal negative
-    # step is provably wrong to compose (unlike a symbolic step, always emitted
-    # positive per this file's own convention), so it must be refused, not folded
-    # with the wrong (0-based) start.
-    src = "def f(a, out):\n    b = a[::-2]\n    out[0] = b[0]\n"
-    lowered = fold_(src, {"a": ("N",)})
-    assert lowered == ast.unparse(ast.parse(src))
-
-
-def test_base_rewritten_between_bind_and_use_is_not_folded() -> None:
-    # ``arr`` is reassigned after ``view`` captures a slice of the ORIGINAL
-    # ``arr`` -- composing ``view[0, 1]`` against the (rebound) name ``arr``
-    # would read whatever ``something_else`` returns, not the array ``view``
-    # actually sliced. Must be left alone.
-    src = "def f(arr, i, out):\n    view = arr[:, i:i + 2]\n    arr = something_else(arr)\n    out[0] = view[0, 1]\n"
-    lowered = fold_(src, {"arr": ("N", "M")})
-    assert lowered == ast.unparse(ast.parse(src))
+@pytest.mark.parametrize(
+    ("src", "shapes"),
+    [
+        # ``a[::-2]`` is a numpy REVERSE: the implicit start is the LAST element, not
+        # 0, which the ``start + step*index`` composition assumes. A literal negative
+        # step is provably wrong to compose (unlike a symbolic step, always emitted
+        # positive per this file's own convention), so it must be refused, not folded
+        # with the wrong (0-based) start.
+        ("def f(a, out):\n    b = a[::-2]\n    out[0] = b[0]\n", {"a": ("N",)}),
+        # ``arr`` is reassigned after ``view`` captures a slice of the ORIGINAL
+        # ``arr`` -- composing ``view[0, 1]`` against the (rebound) name ``arr``
+        # would read whatever ``something_else`` returns, not the array ``view``
+        # actually sliced. Must be left alone.
+        (
+            "def f(arr, i, out):\n    view = arr[:, i:i + 2]\n    arr = something_else(arr)\n    out[0] = view[0, 1]\n",
+            {"arr": ("N", "M")},
+        ),
+    ],
+    ids=["negative_step_view", "base_rewritten_between_bind_and_use"],
+)
+def test_an_unsound_view_fold_is_refused(src: str, shapes: dict) -> None:
+    assert fold_(src, shapes) == ast.unparse(ast.parse(src))
 
 
 # numeric: the composed access matches numpy, through the real C backend      #

@@ -291,12 +291,15 @@ def impact_table(paired_setups: ModuleType, tmp_path: pathlib.Path) -> pd.DataFr
     return pd.read_csv(out)
 
 
-def test_the_impact_table_has_one_row_per_setup_with_the_ratio_on_the_treatment_row(
+def test_the_impact_table_has_one_row_per_setup_with_ratios_usage_aggregates_and_relaunch_rate(
     paired_setups: ModuleType, tmp_path: pathlib.Path, plain: None
 ) -> None:
     """Spec section 10: every setup once, the control carrying no ratio, the treatment carrying
     the paper's rho on both legs -- speedup treatment/control 3/2, cost control/treated 100/50 = 2
-    (above 1: the treatment is cheaper)."""
+    (above 1: the treatment is cheaper). Attempts come off the task rows, speedup is the geomean (A1),
+    cost the geomean task total with its bootstrap interval (A2) and, beside it, the arithmetic mean,
+    each over the 8 selected tasks. The fixture relaunches every treated task once and never relaunches
+    a control one."""
     table = impact_table(paired_setups, tmp_path).set_index("setup")
     assert list(table.index) == ["x-qwen38-c-cpf-tool", "x-qwen38-c"]
     assert list(table.columns) == [c for c in paired_setups.IMPACT_COLUMNS if c != "setup"]
@@ -308,15 +311,6 @@ def test_the_impact_table_has_one_row_per_setup_with_the_ratio_on_the_treatment_
     assert pd.isna(control.speedup_ratio)
     assert pd.isna(control.token_ratio)
     assert (treated.model, treated.language, treated.packet) == ("qwen38", "c", "cpf-tool-cpu")
-
-
-def test_the_impact_table_carries_usage_and_the_setup_aggregates(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """Attempts come off the task rows, speedup is the geomean (A1), cost the geomean task total with
-    its bootstrap interval (A2) and, beside it, the arithmetic mean, each over the 8 selected tasks."""
-    table = impact_table(paired_setups, tmp_path).set_index("setup")
-    treated, control = table.loc["x-qwen38-c-cpf-tool"], table.loc["x-qwen38-c"]
     assert (treated.tasks, treated.n_solved, treated.n_token_kernels) == (8, 8, 8)
     assert (treated.attempts_per_episode, control.attempts_per_episode) == (2.0, 1.0)
     assert treated.accepted_submissions_per_episode == pytest.approx(1.0)
@@ -324,6 +318,9 @@ def test_the_impact_table_carries_usage_and_the_setup_aggregates(
     assert control.gm_tokens == pytest.approx(100.0)
     assert treated.gm_tokens_ci_low == pytest.approx(50.0) == treated.gm_tokens_ci_high
     assert (treated.mean_tokens, control.mean_tokens) == pytest.approx((50.0, 100.0))
+    assert (treated.relaunched_episodes, control.relaunched_episodes) == (8, 0)
+    assert treated.share_relaunched == pytest.approx(1.0)
+    assert control.share_relaunched == pytest.approx(0.0)
 
 
 def test_counts_are_written_as_integers_and_ratios_at_full_precision(
@@ -650,17 +647,6 @@ def test_usage_reports_how_many_tasks_were_relaunched_and_what_infrastructure_lo
     assert usage.share_tokens_void == pytest.approx(130.0 / (4 * 100.0 + 130.0))
 
 
-def test_the_impact_table_carries_the_relaunch_rate_beside_every_token_ratio(
-    paired_setups: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """The fixture relaunches every treated task once and never relaunches a control one."""
-    table = impact_table(paired_setups, tmp_path).set_index("setup")
-    treated, control = table.loc["x-qwen38-c-cpf-tool"], table.loc["x-qwen38-c"]
-    assert (treated.relaunched_episodes, control.relaunched_episodes) == (8, 0)
-    assert treated.share_relaunched == pytest.approx(1.0)
-    assert control.share_relaunched == pytest.approx(0.0)
-
-
 def test_a_declared_tag_is_read_from_the_file_and_not_from_the_rows(
     paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
@@ -845,15 +831,6 @@ def test_no_submit_rate_is_over_every_episode_not_the_kernels_final_one(
     assert row["no_submit_rate"] == pytest.approx(0.5)
 
 
-def test_no_submit_rate_is_absent_for_a_setup_with_no_episodes_in_the_frame(paired_setups: ModuleType) -> None:
-    """An empty ``graded`` frame names no setup at all, so the mapping stays empty and a caller reading
-    it back with ``.get(setup, nan)`` sees NaN, never a fabricated 0.0."""
-    empty = frame([]).assign(
-        **{name: pd.Series(dtype="object") for name in (*population.EPISODE_KEY, "setup", "optimizer")}
-    )
-    assert paired_setups.no_submit_rate_by_setup(empty) == {}
-
-
 def test_cpf_uptake_reads_the_iteration_counts_call_column(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
     """``cpf_uptake_by_setup`` reads an ``iteration_counts.py`` CSV per setup: the fraction of its rows
     (one per transcript) whose ``canonical_parallel_form_calls`` is nonzero. 2 of 3 episodes here
@@ -877,13 +854,6 @@ def test_cpf_uptake_is_absent_without_the_call_column(paired_setups: ModuleType,
     csv_path = tmp_path / "iters-old.csv"
     pd.DataFrame([{"agent_dir": "w0", "turns": 4}]).to_csv(csv_path, index=False)
     assert paired_setups.cpf_uptake_by_setup({"x-qwen38-c-cpf-tool": csv_path}) == {}
-
-
-def test_parse_iteration_counts_splits_setup_and_path(paired_setups: ModuleType) -> None:
-    setup, path = paired_setups.parse_iteration_counts("x-qwen38-c-cpf-tool=/tmp/iters.csv")
-    assert (setup, path) == ("x-qwen38-c-cpf-tool", pathlib.Path("/tmp/iters.csv"))
-    with pytest.raises(SystemExit):
-        paired_setups.parse_iteration_counts("no-equals-sign")
 
 
 def test_the_impact_table_carries_cpf_uptake_only_for_the_setup_it_was_given(

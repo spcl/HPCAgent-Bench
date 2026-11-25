@@ -68,12 +68,3 @@ def test_register_adds_the_decorated_object_unchanged() -> None:
     assert kind["double"] is double
     assert double(3) == 6
     assert kind.slot("double") == 0
-
-
-if __name__ == "__main__":
-    test_add_returns_the_entry_and_lookup_resolves_keys_and_aliases()
-    test_a_taken_key_or_alias_is_refused_and_leaves_the_registry_as_it_was()
-    test_the_slot_is_the_registration_position()
-    test_an_entry_without_a_slot_comes_first_and_takes_none()
-    test_canonical_resolves_an_alias_and_passes_an_unregistered_tag_through()
-    test_register_adds_the_decorated_object_unchanged()

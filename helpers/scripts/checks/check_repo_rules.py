@@ -522,6 +522,7 @@ FILE_ROOT_ALLOW = {
     "helpers/scripts/checks/check_no_hidden_in_image.py": "pre-commit runs it without the package installed",
     "helpers/scripts/checks/check_doc_links.py": "pre-commit runs it without the package installed",
     "tests/check_yaml_style.py": "pre-commit runs it without the package installed",
+    ".github/scripts/deal_shards.py": "CI runs it before the setup installs the package",
     "hpcagent_bench/harness/judge_web_search.py": "loaded by file path (containers/images/tools_launch_check.py)",
     "containers/images/verify_image.py": "runs inside an image, where hpcagent_bench may be absent",
     "tests/test_check_repo_rules.py": "synthetic offenders for this rule",
@@ -605,6 +606,22 @@ def hardcoded_paths(files: list[str]) -> list[str]:
     return out
 
 
+def pytest_only(files: list[str]) -> list[str]:
+    """A test module runs under pytest alone: a ``__main__`` runner repeats pytest's collection by hand and drifts
+    from it (it kept calling deleted tests)."""
+    out = []
+    for rel in files:
+        name = pathlib.PurePath(rel).name
+        if not (rel.startswith(("tests/", "agent/tests/")) and name.startswith("test_") and name.endswith(".py")):
+            continue
+        text = text_of(rel)
+        if text is not None and any(
+            isinstance(node, ast.If) and "__main__" in ast.unparse(node.test) for node in ast.parse(text).body
+        ):
+            out.append(f'{rel}: `if __name__ == "__main__"` runner in a test module (run it with pytest)')
+    return out
+
+
 RULES: dict[str, Callable[[list[str]], list[str]]] = {
     "hash-seed": hash_seed,
     "import-path": import_path,
@@ -616,6 +633,7 @@ RULES: dict[str, Callable[[list[str]], list[str]]] = {
     "opt-flags": opt_flags,
     "site-values": site_values,
     "hardcoded-paths": hardcoded_paths,
+    "pytest-only": pytest_only,
 }
 
 

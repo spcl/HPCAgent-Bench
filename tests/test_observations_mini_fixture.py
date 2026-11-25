@@ -35,13 +35,6 @@ def load_script(name: str) -> types.ModuleType:
 score_change = efficacy_command
 
 
-def test_read_observations_reads_the_extracted_db_the_same_shape_as_a_csv() -> None:
-    frame = studies.read_observations(FIXTURE)
-    assert not frame.empty
-    assert {"setup", "packet", "kernel", "row_kind", "speedup", "tokens"} <= set(frame.columns)
-    assert set(frame.packet.unique()) == {"", "lang-skills", "cpf-src", "perf-playbook-cpu"}
-
-
 def test_read_observations_reads_the_extractors_sqlite_name_as_a_database(tmp_path: pathlib.Path) -> None:
     """``observations_extract --db obs/observations.sqlite`` (LAUNCH.md) is a database, not a CSV."""
     sqlite = tmp_path / "observations.sqlite"

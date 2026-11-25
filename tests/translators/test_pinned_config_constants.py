@@ -184,15 +184,12 @@ def test_a_pinned_knob_named_like_a_libc_function_is_declared_under_a_respelled_
     assert re.search(r"\batol\b", declarations) is None, "past the headers, nothing may still spell <stdlib.h>'s atol"
 
 
-@have_gcc
 @pytest.mark.integration
-def test_a_knob_named_like_a_libc_function_computes_with_its_pinned_value_in_c() -> None:
+@pytest.mark.parametrize(
+    ("emit", "cpp"),
+    [pytest.param(emit_c, False, marks=have_gcc, id="c"), pytest.param(emit_cpp, True, marks=have_gpp, id="cpp")],
+)
+def test_a_knob_named_like_a_libc_function_computes_with_its_pinned_value(emit: Callable[..., str], cpp: bool) -> None:
     """The alias has to survive the preprocessor, not just a string match: the driver checks that
     ``atol`` in the body still means 1e-09 and not <stdlib.h>'s string conversion."""
-    assert build_run_c(emit_c(libc_name_kir(), fn_name="f"), LIBC_NAME_DRIVER).returncode == 0
-
-
-@have_gpp
-@pytest.mark.integration
-def test_a_knob_named_like_a_libc_function_computes_with_its_pinned_value_in_cpp() -> None:
-    assert build_run_c(emit_cpp(libc_name_kir(), fn_name="f"), LIBC_NAME_DRIVER, cpp=True).returncode == 0
+    assert build_run_c(emit(libc_name_kir(), fn_name="f"), LIBC_NAME_DRIVER, cpp=cpp).returncode == 0

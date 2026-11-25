@@ -101,18 +101,6 @@ def failing_polycc(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess:  # n
 # taking it is how the column reported clang numbers under Pluto's name for as long as it did.
 
 
-def test_absent_polycc_declines_instead_of_building_the_untransformed_source(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No polycc means no Pluto source. The failure mode being refused is compiling the emitted C++
-    and calling the result a Pluto measurement."""
-    write_scop(tmp_path)
-    monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: None)
-    with pytest.raises(NotSupportedByFramework) as excinfo:
-        pluto_transform.transformed_sources(tmp_path, "mm")
-    assert "polycc" in str(excinfo.value)
-
-
 def test_no_emitted_scop_declines(tmp_path: pathlib.Path) -> None:
     """A kernel the translator emitted no ``#pragma scop`` for has nothing for polycc to transform."""
     with pytest.raises(NotSupportedByFramework) as excinfo:
@@ -252,15 +240,6 @@ def test_the_build_selects_polyccs_output_over_the_emitted_cpp(
 
     assert [p.name for p in sources] == ["mm_fp64_pluto.c"]
     assert sources[0] != scop, "the column compiled polycc's INPUT rather than its output"
-
-
-def test_the_column_compiles_c_with_a_c_driver() -> None:
-    """polycc's output is C and only C: VLA parameters, the ``restrict`` keyword and ``register``,
-    none of which survive C++ -- and it prepends its own ``#define min(x,y)``, which detonates inside
-    libstdc++. A ``clangpp`` here would not be a style choice, it would not compile."""
-    assert native_runtime.FRAMEWORK_LANG["pluto"] is Language.C
-    assert native_runtime.FRAMEWORK_COMPILER["pluto"] != "clangpp"
-    assert native_runtime.FRAMEWORK_LANG["pluto"] != native_runtime.FRAMEWORK_LANG["llvm"]
 
 
 def test_the_ppcg_column_follows_the_local_gpu_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:

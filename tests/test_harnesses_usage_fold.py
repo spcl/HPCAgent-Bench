@@ -25,14 +25,6 @@ def harnesses_fixture() -> ModuleType:
 # call_tokens: one usage.jsonl line's own count
 
 
-def test_call_tokens_sums_all_four_disjoint_fields(harnesses: ModuleType) -> None:
-    """The four fields (uncached prompt, cached prompt, completion, reasoning) are declared disjoint
-    (harnesses.py's module docstring); a call that carries all four is charged their sum, not just
-    the ones a caller might expect to matter (output alone, say)."""
-    record = {"input": 1000, "cached_input": 20000, "output": 300, "reasoning": 150}
-    assert harnesses.call_tokens(record) == 1000 + 20000 + 300 + 150
-
-
 @pytest.mark.parametrize(
     ("record", "expected"),
     [
@@ -55,11 +47,26 @@ def test_call_tokens_treats_missing_and_junk_fields_as_absent_not_zero(
     assert harnesses.call_tokens(record) == expected
 
 
-def test_call_tokens_ignores_fields_outside_the_declared_four(harnesses: ModuleType) -> None:
-    """A field this contract does not name (e.g. a future ``retries`` or ``latency_ms``) must not be
-    swept into the count just because it happens to be numeric -- only CONSUMED_FIELDS are tokens."""
-    record = {"input": 100, "output": 50, "latency_ms": 900, "retries": 3}
-    assert harnesses.call_tokens(record) == 150
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        pytest.param(
+            {"input": 1000, "cached_input": 20000, "output": 300, "reasoning": 150},
+            1000 + 20000 + 300 + 150,
+            id="all-four",
+        ),
+        pytest.param({"input": 100, "output": 50, "latency_ms": 900, "retries": 3}, 150, id="extra-numeric-fields"),
+    ],
+)
+def test_call_tokens_charges_the_sum_of_the_four_declared_fields_only(
+    harnesses: ModuleType, record: dict, expected: int
+) -> None:
+    """The four fields (uncached prompt, cached prompt, completion, reasoning) are declared disjoint
+    (harnesses.py's module docstring); a call that carries all four is charged their sum, not just
+    the ones a caller might expect to matter (output alone, say). A field this contract does not name
+    (e.g. a future ``retries`` or ``latency_ms``) must not be swept into the count just because it
+    happens to be numeric -- only CONSUMED_FIELDS are tokens."""
+    assert harnesses.call_tokens(record) == expected
 
 
 # accumulate_usage_tokens: the running total over usage.jsonl lines

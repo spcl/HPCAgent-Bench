@@ -14,6 +14,8 @@ overwrite a name before the other read it, which is a wrong answer rather than a
 
 import ast
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_c.dace_emit import SplitTupleAssign
 
 
@@ -34,18 +36,21 @@ def test_a_shape_unpack_becomes_one_indexed_read_per_name() -> None:
     ]
 
 
-def test_a_rotation_through_a_shared_name_also_latches() -> None:
-    """Any read of a bound name is enough -- ``c`` is untouched but ``a`` and ``b`` still rotate."""
-    out = split("a, b, c = b, c, a").splitlines()
-    assert len(out) == 6, out
+@pytest.mark.parametrize(
+    ("source", "statements"),
+    [
+        # Any read of a bound name is enough: ``c`` is untouched but ``a`` and ``b`` still rotate.
+        ("a, b, c = b, c, a", 6),
+        # The read need not be the whole element: ``b + 1`` reads ``b``, so ``b`` must be latched
+        # before ``a`` is overwritten.
+        ("a, b = b + 1, a * 2", 4),
+    ],
+    ids=["rotation_through_a_shared_name", "expression_reading_a_bound_name"],
+)
+def test_a_tuple_assignment_reading_a_bound_name_latches_it(source: str, statements: int) -> None:
+    out = split(source).splitlines()
+    assert len(out) == statements, out
     assert all(" = " in line for line in out)
-
-
-def test_an_expression_reading_a_bound_name_latches_too() -> None:
-    """The read need not be the whole element: ``b + 1`` reads ``b``, so ``b`` must be latched
-    before ``a`` is overwritten."""
-    out = split("a, b = b + 1, a * 2").splitlines()
-    assert len(out) == 4, out
 
 
 def test_a_nested_tuple_assignment_is_split_too() -> None:

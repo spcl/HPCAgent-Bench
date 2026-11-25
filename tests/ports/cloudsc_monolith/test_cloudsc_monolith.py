@@ -150,8 +150,3 @@ def main() -> None:
             reference_run(want, *configuration)
             print(configuration, ulp_report(child.result[index], want))
     print("all cloudsc_monolith port tests passed")
-
-
-if __name__ == "__main__":
-    main()
-    test_the_ulp_distance_counts_representable_steps_across_zero()

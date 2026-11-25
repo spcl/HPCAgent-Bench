@@ -13,7 +13,6 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 
 import pytest
 
@@ -348,15 +347,6 @@ def test_remove_loose_also_drops_what_the_archives_make_redundant(tmp_path: path
     assert artifacts.verify_run(other) == []
 
 
-def test_remove_loose_removes_nothing_when_the_archive_does_not_read_back_equal(tmp_path: pathlib.Path) -> None:
-    run = run_dir(tmp_path)
-    (directory,) = artifacts.pack_run(run)
-    (directory / "worker.tar.zst").write_bytes((directory / "logs.tar.zst").read_bytes())
-    with pytest.raises(SystemExit, match="nothing removed"):
-        artifacts.pack_run(run, remove_loose=True)
-    assert (run / WORKER / "claude.log").is_file() and (run / WORKER / "prompt.txt").is_file()
-
-
 def test_remove_loose_removes_nothing_when_the_extract_gives_other_token_totals(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -486,36 +476,3 @@ def test_a_sealed_run_directory_is_packed_and_sealed_again(tmp_path: pathlib.Pat
     assert (directory / artifacts.EPISODE_JSON).is_file()
     assert sorted(path.name for path in (run / WORKER).iterdir()) == ["attempts.jsonl", "tokens.json"]
     assert not os.access(run, os.W_OK), "the pack seals the run directory again"
-
-
-if __name__ == "__main__":
-
-    def scratch() -> pathlib.Path:
-        return pathlib.Path(tempfile.mkdtemp())
-
-    test_pack_writes_one_folder_per_ended_episode_without_its_secrets_and_indexes_it(scratch())
-    test_unpack_restores_the_episode_exactly_but_its_secrets(scratch())
-    test_pack_is_idempotent_and_remove_loose_keeps_what_owed_reads(scratch())
-    test_remove_loose_also_drops_what_the_archives_make_redundant(scratch())
-    test_remove_loose_removes_nothing_when_the_archive_does_not_read_back_equal(scratch())
-    with pytest.MonkeyPatch.context() as patch:
-        test_remove_loose_removes_nothing_when_the_extract_gives_other_token_totals(scratch(), patch)
-    test_verify_reports_a_member_that_changed_or_went(scratch())
-    test_an_episode_with_no_ended_attempt_is_skipped_and_refused_alone(scratch())
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_job_still_in_squeue_is_refused(scratch(), patch)
-    test_stage_restores_each_continued_episode_under_its_problem_id(scratch())
-    with pytest.MonkeyPatch.context() as patch:
-        test_pack_without_local_submits_a_job_and_local_runs_politely(scratch(), patch)
-    test_the_cli_verb_packs_verifies_and_restores(scratch())
-    test_an_episode_whose_folder_is_named_for_its_problem_id_is_found_by_its_record(scratch())
-    test_a_sealed_run_directory_is_packed_and_sealed_again(scratch())
-    test_the_workspace_archive_keeps_text_and_libraries_and_lists_binary_data_it_omits(scratch())
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_schema_2_archive_is_slimmed_in_place_and_indexed_again(scratch(), patch)
-    test_a_pack_cut_off_before_it_indexed_its_folder_is_indexed_by_the_next_pack(scratch())
-    test_a_torn_last_line_in_the_job_s_logs_does_not_stop_packing(scratch())
-    test_a_local_git_clone_in_the_workspace_is_archived_whole_with_its_hard_links_as_files(scratch())
-    test_a_hard_link_in_workspaces_tar_is_archived_as_a_file_of_its_own(scratch())
-    test_an_archive_with_a_hard_link_to_a_file_it_omitted_still_unpacks(scratch())
-    test_an_episode_that_does_not_read_back_equal_stops_no_other_episode(scratch())

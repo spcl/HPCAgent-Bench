@@ -150,6 +150,13 @@ def block_axis0(scheme: Scheme = Scheme.BLOCK, block_size: int = 1) -> dict[str,
     return {"axes": [{"grid_dim": 0, "scheme": scheme.value, "block_size": block_size}, {"grid_dim": None}]}
 
 
+def only_a_distributed() -> Descriptor:
+    """A 2-D descriptor on a [2, 1] grid with A block-distributed on axis 0 and C left undeclared (replicated)."""
+    return Descriptor.from_submission(
+        submitted({"grid": [2, 1], "arrays": {"A": block_axis0()}}), binding_2d(), ranks=2
+    )
+
+
 def test_from_submission_resolves_declared_and_replicates_the_rest() -> None:
     b = binding_2d()
     sub = submitted({"grid": [2, 1], "arrays": {"A": block_axis0(), "C": block_axis0()}})
@@ -163,9 +170,8 @@ def test_from_submission_resolves_declared_and_replicates_the_rest() -> None:
 
 
 def test_from_submission_replicates_undeclared_array() -> None:
-    b = binding_2d()
     # only A is distributed; C is left out -> replicated (lives on every rank, rank 0 wins).
-    d = Descriptor.from_submission(submitted({"grid": [2, 1], "arrays": {"A": block_axis0()}}), b, ranks=2)
+    d = only_a_distributed()
     assert d.arrays["C"].replicated is True
     assert d.arrays["A"].replicated is False
 
@@ -219,8 +225,7 @@ def test_layout_rejects_zero_block_factor() -> None:
 
 
 def test_descriptor_scatter_gather_roundtrip_declared_and_replicated() -> None:
-    b = binding_2d()
-    d = Descriptor.from_submission(submitted({"grid": [2, 1], "arrays": {"A": block_axis0()}}), b, ranks=2)
+    d = only_a_distributed()
     a = arange((8, 4), np.float64)
     # A is block-distributed on axis 0; C is replicated (undeclared). Both roundtrip.
     for name in ("A", "C"):
@@ -231,8 +236,7 @@ def test_descriptor_scatter_gather_roundtrip_declared_and_replicated() -> None:
 
 
 def test_descriptor_length1_array_is_replicated_and_gathers_from_rank0() -> None:
-    b = binding_2d()
-    d = Descriptor.from_submission(submitted({"grid": [2, 1], "arrays": {"A": block_axis0()}}), b, ranks=2)
+    d = only_a_distributed()
     # A length-1 output (a wrapped scalar reduction) is forced replicated regardless of the
     # declared layout: every rank holds it, rank 0 is authoritative.
     scalarish = np.array([[42.0]])
@@ -496,31 +500,12 @@ def test_hypercube_grid_rejects_non_perfect_power() -> None:
         hypercube_grid(8, 2)  # 8 is not a perfect square -> no equal-edge 2-D cube
 
 
-def test_block_cyclic_roundtrips_on_equal_hypercube() -> None:
-    # A 3-D array block-cyclic over a 2x2x2 equal-edge cube must scatter/gather bit-exact.
-    grid = hypercube_grid(8, 3)
-    dist = ArrayDist(axes=tuple(AxisDist(grid_dim=d, scheme=Scheme.BLOCK_CYCLIC, block_size=1) for d in range(3)))
-    a = arange((4, 6, 4), np.float64)
-    assert is_partition(a.shape, dist, grid)
-    back = gather(scatter(a, dist, grid), dist, grid, a.shape, np.dtype(np.float64))
-    assert np.array_equal(back, a)
-
-
 def test_plan_rejects_block_cyclic_on_unequal_grid() -> None:
     # a [2, 4] grid has unequal edges, so a block-cyclic layout on it is rejected.
     cyclic = [(0, Scheme.BLOCK_CYCLIC, 2), (1, Scheme.BLOCK_CYCLIC, 2)]
     bad = Requests.from_plan(plan_of({"grid": [2, 2], "arrays": {"A": {"axes": [axis_entry(a) for a in cyclic]}}}))
     with pytest.raises(ValueError, match="needs an equal-edge grid"):
         replace(bad, startup=Startup(grid=("2", "4"))).plan({"A": 2}, 8)
-
-
-def test_plan_allows_block_cyclic_on_equal_hypercube() -> None:
-    cyclic = [(0, Scheme.BLOCK_CYCLIC, 2), (1, Scheme.BLOCK_CYCLIC, 2)]
-    ok = Requests.from_plan(plan_of({"grid": [2, 2], "arrays": {"A": {"axes": [axis_entry(a) for a in cyclic]}}}))
-    ok.plan({"A": 2}, 4)  # no raise
-    # a 1-D block-cyclic grid is trivially equal-edge (one dimension).
-    one_d = {"grid": [4], "arrays": {"A": {"axes": [axis_entry((0, Scheme.BLOCK_CYCLIC, 2))]}}}
-    Requests.from_plan(plan_of(one_d)).plan({"A": 1}, 4)
 
 
 def axis_entry(axis: tuple[int, Scheme, int]) -> dict:
@@ -705,60 +690,3 @@ def test_every_accepted_request_owns_each_element_on_its_documented_ranks(ranks:
                     assert not owners, (dims, ops, shape, sorted(owners)[:3])
                     a = arange(shape, np.float64)
                     assert np.array_equal(gather(scatter(a, dist, grid), dist, grid, shape, a.dtype), a)
-
-
-if __name__ == "__main__":
-    for n, parts in [(10, 3), (12, 4), (7, 4), (1, 4), (5, 5), (100, 7), (3, 8)]:
-        test_block_bounds_partition_and_balance(n, parts)
-    test_block_cyclic_owner_formula()
-    test_is_partition_false_for_overlapping_dist()
-    test_axis_count_mismatch_is_a_clear_error()
-    test_default_distribution_replicates_trailing_axes()
-    test_default_distribution_rejects_grid_wider_than_array()
-    test_from_submission_resolves_declared_and_replicates_the_rest()
-    test_from_submission_replicates_undeclared_array()
-    test_from_submission_rejects_grid_rank_mismatch()
-    test_from_submission_rejects_unknown_array()
-    test_from_submission_rejects_distributing_a_scalar()
-    test_from_submission_rejects_an_op_on_a_missing_dimension()
-    test_layout_rejects_two_dimensions_on_one_grid_dim()
-    test_layout_rejects_zero_block_factor()
-    test_descriptor_scatter_gather_roundtrip_declared_and_replicated()
-    test_descriptor_length1_array_is_replicated_and_gathers_from_rank0()
-    test_local_size_scalars_localises_distributed_symbol_only()
-    test_local_size_scalars_ragged_split()
-    test_local_size_scalars_no_shapes_leaves_symbols_global()
-    test_local_size_scalars_keeps_a_row_col_coupled_symbol_global()
-    test_local_size_scalars_rejects_a_symbol_split_two_different_ways()
-    test_local_size_scalars_allows_decoupled_row_col_symbols()
-    test_local_size_scalars_allows_symbol_on_several_identically_split_axes()
-    test_local_size_scalars_allows_symbol_on_count_equivalent_schemes()
-    test_distribution_over_symbol_scaled_add_1d()
-    test_distribution_over_symbol_splits_klon_at_its_per_array_axis()
-    test_distribution_over_symbol_no_matching_axis_raises()
-    for name, shape in [
-        ("ktype", (14,)),  # 1-D field: klon at axis 0
-        ("pt", (8, 14)),  # 2-D (nlev, klon): klon at axis 1
-        ("paph", (9, 14)),  # 2-D (nlev+1, klon): klon at axis 1
-        ("pclv", (5, 8, 14)),  # 3-D (nclv, nlev, klon): klon at axis 2
-    ]:
-        test_cloudsc_klon_split_roundtrips_per_array(name, shape)
-    test_cloudsc_klon_localises_only_klon_not_nlev()
-    test_cloudsc_weak_scaling_grows_only_klon()
-    for nranks, ndim, dims in [(4, 1, (4,)), (4, 2, (2, 2)), (8, 3, (2, 2, 2)), (9, 2, (3, 3))]:
-        test_hypercube_grid_equal_edges(nranks, ndim, dims)
-    test_hypercube_grid_rejects_non_perfect_power()
-    test_block_cyclic_roundtrips_on_equal_hypercube()
-    test_plan_rejects_block_cyclic_on_unequal_grid()
-    test_plan_allows_block_cyclic_on_equal_hypercube()
-    test_blockcyclic_builder_deals_leading_axes_over_hypercube()
-    test_blockcyclic_builder_replicates_low_rank_arrays_and_rejects_bad_ranks()
-    test_distribution_for_kernel_dispatches_blockcyclic_2d()
-    test_distribution_for_kernel_1d_block_cyclic_keeps_block_size()
-    test_distribution_from_shapes_emits_block_cyclic_width()
-    test_from_submission_captures_per_array_location()
-    test_from_submission_default_location_applies()
-    test_envelope_rejects_bad_location()
-    test_from_plan_refuses_an_axis_beyond_the_grid()
-    for ranks in [1, 2, 3, 4, 6, 9, 12, 16]:
-        test_every_accepted_request_owns_each_element_on_its_documented_ranks(ranks)

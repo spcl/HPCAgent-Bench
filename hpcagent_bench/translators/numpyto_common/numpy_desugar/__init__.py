@@ -200,9 +200,9 @@ def family_param_ranks(
         merged: dict[str, int] = {}
         for name in members:
             for param, rank in param_ranks.get(name, {}).items():
-                merged[param] = max(rank, merged.get(param, rank))
+                merged[param] = max(rank, merged.get(param, 0))
         for name in members:
-            param_ranks[name] = merged | {p: max(r, merged.get(p, r)) for p, r in param_ranks.get(name, {}).items()}
+            param_ranks[name] = dict(merged)
     return param_ranks
 
 
@@ -229,12 +229,13 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
     if backend in DEFAULT_FOLDING_BACKENDS and kernel is not None and has_defaulted_parameters(kernel):
         changed = fold_kernel_defaults(kernel, kir.input_args)
     families: dict[str, str] = {}
-    if backend == "numba":
+    numba = backend == "numba"
+    if numba:
         changed = specialize_helpers_by_literal(tree, kir.kernel_name) or changed
         families = specialize_helpers_by_unit_axes(tree, kir.kernel_name)
         changed = bool(families) or changed
     all_funcs = [n for n in walk_nodes(tree) if isinstance(n, ast.FunctionDef)]
-    if backend == "numba":
+    if numba:
         changed = fold_constant_helper_arguments(tree, kir.kernel_name) or changed
         for func in all_funcs:
             inline = SliceObjectInline(func)
@@ -259,7 +260,6 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
     # Exact dtypes (not just kind) for passes that need a width, e.g. FftInline's complex64/128 cast.
     # Read through ``vars()``: rank-only callers pass KIR arrays without a dtype attribute.
     kir_array_dtypes: dict[str, str] = {a.name: a.dtype for a in kir.arrays}
-    numba = backend == "numba"
     param_ranks = family_param_ranks(all_funcs, kir.kernel_name, kir_seed, families, numba)
     return_ranks = helper_return_ranks(all_funcs, param_ranks, kir.kernel_name, kir_seed) if numba else None
     if return_ranks is not None and split_helpers_by_ndim(tree, kir.kernel_name, param_ranks, kir_seed, return_ranks):
@@ -281,7 +281,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             rank = expr_rank(stmt.value, {})
             if rank is not None:
                 module_ranks[stmt.targets[0].id] = rank
-    units = unit_axis_seeds(all_funcs, kir.kernel_name, kir.arrays, param_ranks) if backend == "numba" else {}
+    units = unit_axis_seeds(all_funcs, kir.kernel_name, kir.arrays, param_ranks) if numba else {}
     scopes: list[ast.FunctionDef | ast.Module] = [*all_funcs] or [tree]
     # Each nested def's innermost enclosing def: all_funcs lists an enclosing def before what it nests.
     enclosing = {id(n): f for f in all_funcs for n in walk_nodes(f) if isinstance(n, ast.FunctionDef) and n is not f}
@@ -304,7 +304,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             fold.visit(fn)
             changed = changed or fold.changed
         index_arrays = frozenset(
-            a.name for a in kir.arrays if is_kernel and backend == "numba" and kir_dtype_seed.get(a.name) == "int"
+            a.name for a in kir.arrays if is_kernel and numba and kir_dtype_seed.get(a.name) == "int"
         )
         ranks = rank_table(fn, seed, call_returns=return_ranks, index_arrays=index_arrays)
         scope_ranks[id(fn)] = module_ranks | ranks
@@ -317,11 +317,11 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
         tables = HoistTables(ranks, dtypes, masked_gathers, lower_solve_rhs_ranks, widths)
         numba_reshape_passes: list[DesugarPass] = (
             [ReshapeFortranOrderInline(), NumbaDtypeFixups(dtype_table_(fn, param_kinds.get(fn_name or "", {})))]
-            if backend == "numba"
+            if numba
             else []
         )
         passes: list[DesugarPass] = [
-            DropGuards(keep_data=backend == "numba"),
+            DropGuards(keep_data=numba),
             # First: splices statements out of a ``with`` body; every pass below walks only top-level statements.
             SpliceErrstate(),
             ConstComprehensionFold(consts),
@@ -330,11 +330,11 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             # temp would redeclare it per branch. After the const folds, whose bound-once table clones stale.
             BoolOpIfToChain(),
             # Before NormalizeNegativeAxis, which pins a negative scan axis to one rank of a helper.
-            *([ValueHoist(CUMULATIVE_AXIS_HOIST, tables)] if backend == "numba" else []),
-            *([ValueHoist(OFFSET_DIAG_HOIST, tables)] if backend == "numba" else []),
+            *([ValueHoist(CUMULATIVE_AXIS_HOIST, tables)] if numba else []),
+            *([ValueHoist(OFFSET_DIAG_HOIST, tables)] if numba else []),
             NormalizeNegativeAxis(ranks),
             IxWriteToLoop(ranks, dtypes, fn),
-            FancySliceStoreToLoop(ranks, dtypes, broadcast=backend == "numba"),
+            FancySliceStoreToLoop(ranks, dtypes, broadcast=numba),
             # numba keeps the Jacobi loops: its own np.linalg.eigh returns the operand's precision while numba's
             # scalar arithmetic widens float32 to float64, so a float32 run mixes the two at the next ``@`` (1.1).
             EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes, keep_library=backend == "dace"),
@@ -344,10 +344,10 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             PadInline(
                 ranks,
                 lower_symbolic_constant=backend == "dace",
-                lower_constant=backend == "numba",
-                tuples=once_bound_tuples(fn) if backend == "numba" and isinstance(fn, ast.FunctionDef) else None,
+                lower_constant=numba,
+                tuples=once_bound_tuples(fn) if numba and isinstance(fn, ast.FunctionDef) else None,
             ),
-            *([ValueHoist(TENSORDOT_HOIST, tables)] if backend == "numba" else []),
+            *([ValueHoist(TENSORDOT_HOIST, tables)] if numba else []),
             *([] if backend == "dace" else [ValueHoist(EINSUM_HOIST, tables)]),
             *(
                 []
@@ -361,7 +361,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
                 ]
             ),
             MgridInline(),
-            ValueHoist(FANCY_GATHER_HOIST_NAMED if backend == "numba" else FANCY_GATHER_HOIST, tables),
+            ValueHoist(FANCY_GATHER_HOIST_NAMED if numba else FANCY_GATHER_HOIST, tables),
             ValueHoist(DACE_REDUCE_AXIS_HOIST if backend == "dace" else REDUCE_AXIS_HOIST, tables),
             # Directly after it: takes only the keepdims reductions the loop lowering declined (unknown rank).
             KeepdimsToNewaxis(),
@@ -397,7 +397,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
                         ranks, fn if isinstance(fn, ast.FunctionDef) else None, dtypes, units.get(fn_name or "")
                     ),
                 ]
-                if backend == "numba"
+                if numba
                 else []
             ),
             # Last: every pass above looks names up in tables built before the loop (ranks / dtypes /

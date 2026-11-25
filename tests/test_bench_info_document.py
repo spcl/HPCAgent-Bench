@@ -5,7 +5,6 @@ harness writes reads back to the same bytes, and a document the producer would n
 the translator reads it instead of being half-read."""
 
 import json
-import os
 
 import pydantic
 import pytest
@@ -96,13 +95,3 @@ def test_an_absent_block_is_not_written() -> None:
     """Only what the producer set is written: a dense kernel carries no sparse, rebuild or init defaults."""
     benchmark = json.loads(BenchInfoDocument.model_validate({"benchmark": MINIMAL}).text())["benchmark"]
     assert benchmark == MINIMAL
-
-
-if __name__ == "__main__":
-    test_every_kernels_bench_info_reads_back_to_the_bytes_it_was_written_as()
-    test_the_text_is_spelled_as_json_dumps_spells_the_document()
-    test_an_unknown_key_or_a_missing_required_field_is_refused()
-    test_a_bare_benchmark_block_reads_as_the_whole_document()
-    test_values_keep_the_type_the_document_spells_them_in()
-    test_an_absent_block_is_not_written()
-    print("ok", os.path.basename(__file__))

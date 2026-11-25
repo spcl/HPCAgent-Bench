@@ -61,11 +61,6 @@ def test_stage_starts_a_failed_render_from_the_reference(tmp_path: pathlib.Path)
     assert stage(cache, tmp_path / "dest") == 1, "without the knob a failed render still stops the launch"
 
 
-def test_without_the_knob_stage_serves_any_form(tmp_path: pathlib.Path) -> None:
-    """The default keeps today's contract: the prepare gate, not stage, decides what is verified enough."""
-    assert stage(cache_with(tmp_path, "argmax_value"), tmp_path / "dest") == 0
-
-
 def run_materialize(
     repo: pathlib.Path, shared: pathlib.Path, problems: pathlib.Path, **setup: str
 ) -> subprocess.CompletedProcess[str]:

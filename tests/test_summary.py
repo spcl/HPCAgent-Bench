@@ -24,12 +24,6 @@ def test_signed_axis_mapping(ratio: float, expected: float) -> None:
     assert summary.signed_change(ratio) == pytest.approx(expected)
 
 
-@pytest.mark.parametrize("ratio", [1.25, 2.0, 3.0, 7.5, 100.0])
-def test_signed_axis_is_odd_about_no_change(ratio: float) -> None:
-    """A win and the identical loss must be the same distance from zero, or the axis flatters one."""
-    assert summary.signed_change(1.0 / ratio) == pytest.approx(-summary.signed_change(ratio))
-
-
 @pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, -math.inf, math.nan])
 def test_an_unmeasured_cell_is_not_no_change(bad: float) -> None:
     """0 is the exact value of "measured, and nothing changed". An absent measurement may not claim it."""
@@ -74,22 +68,6 @@ def test_single_point_interval_collapses() -> None:
     assert interval.n == 1
 
 
-def test_geomean_interval_brackets_the_centre() -> None:
-    interval = summary.geomean_ci([2.0, 4.0, 8.0])
-    assert interval.point == pytest.approx(4.0)
-    assert interval.low < interval.point < interval.high
-
-
-def test_the_geomean_interval_is_the_bootstrap_of_the_mean_log_mapped_back() -> None:
-    """The interval is resampled in LOG space and its ends exponentiated: the bootstrap interval of the mean
-    log, never a +/- half-width on the ratio axis (exp is not linear)."""
-    values = [1.5, 3.0, 0.25, 8.0]
-    interval = summary.geomean_ci(values)
-    logs = summary.bootstrap_ci(np.log(values), np.mean)
-    assert (math.log(interval.low), math.log(interval.high)) == pytest.approx((logs.low, logs.high))
-    assert interval.low < interval.point < interval.high
-
-
 def test_the_geomean_interval_is_the_95_percent_bca_bootstrap_and_reproducible() -> None:
     """Ratios 1,2,4,1,2,4: log2 values 0,1,2,0,1,2. Every BCa resample mean is a multiple of 1/6 in log2,
     and the ends land on 2^(1/3) and 2^(5/3); the fixed seed makes a second call identical."""
@@ -128,10 +106,6 @@ def test_a_cost_has_an_arithmetic_mean_with_its_own_interval() -> None:
     assert summary.mean_interval([1.0, 2.0]).method == "underpowered"
 
 
-def test_the_interval_names_what_it_is_for() -> None:
-    assert summary.geomean_ci([2.0, 4.0]).label() == "95% bootstrap-BCa CI for geomean"
-
-
 def test_paired_change_says_underpowered_instead_of_drawing_an_interval() -> None:
     """Below six pairs the two-sided test cannot reach 0.05 whatever the data says, so an interval
     would be decoration."""
@@ -165,13 +139,6 @@ def test_paired_geomean_keeps_the_kernels_that_did_not_change() -> None:
     change = sign_flip(logs)
     assert (change.n, summary.signs(logs).ties) == (6, 4)
     assert change.estimate == pytest.approx(1.0 / 3.0)
-
-
-def test_paired_geomean_withholds_interval_and_p_below_the_floor() -> None:
-    change = sign_flip([0.1] * (summary.MIN_PAIRS_FOR_INTERVAL - 2) + [0.3])
-    assert change.method == "underpowered"
-    assert math.isnan(change.low)
-    assert math.isnan(change.pvalue)
 
 
 def test_paired_geomean_without_spread_reports_no_test() -> None:

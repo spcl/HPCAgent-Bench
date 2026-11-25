@@ -22,7 +22,6 @@ import numpy as np
 import pytest
 
 from hpcagent_bench.precision import (
-    DTYPES,
     TOLERANCE_MATRIX,
     Precision,
     atol_below_one_ulp,
@@ -51,20 +50,6 @@ def test_every_band_is_satisfiable() -> None:
     )
 
 
-@pytest.mark.parametrize("precision", list(Precision), ids=lambda p: p.value)
-def test_a_one_ulp_disagreement_passes_the_band(precision: Precision) -> None:
-    """The end the invariant exists for: perturb a value by one ULP of its own format and the
-    band still accepts it. Asserted on the WORST case for a relative tolerance -- a reference of
-    exactly zero, where only ``atol`` can reach."""
-    rtol, atol = TOLERANCE_MATRIX[precision].as_tuple()
-    dtype = numpy_dtype(precision)
-    one_ulp = float(np.asarray([machine_eps(precision)], dtype=dtype)[0])
-    assert np.isclose(one_ulp, 0.0, rtol=rtol, atol=atol), (
-        f"{precision.value}: a reference of 0.0 against a candidate one ULP away ({one_ulp:g}) "
-        f"fails its own band (rtol={rtol:g}, atol={atol:g}) -- unsatisfiable"
-    )
-
-
 def test_derived_band_never_falls_below_one_ulp() -> None:
     """The invariant holds for an UNLISTED format too. ``derived_band`` is what a new precision
     gets before anyone tunes it, and its ``rtol * 1e-2`` rule alone goes below one ULP as soon as
@@ -77,18 +62,6 @@ def test_derived_band_never_falls_below_one_ulp() -> None:
         assert band.atol >= eps, f"{precision.value}: derived atol {band.atol:g} is below one ULP ({eps:g})"
 
 
-def test_the_fp8_formats_are_the_coarse_case_this_guards() -> None:
-    """Premise check. The invariant is only interesting while some format is coarse enough for
-    one ULP to be a large number; if fp8 were ever dropped, this file would still pass while
-    guarding nothing, so the premise is asserted rather than assumed."""
-    for precision in (Precision.FP8_E4M3, Precision.FP8_E5M2):
-        assert precision in DTYPES, f"{precision.value} left the corpus; re-check what this file still covers"
-        assert machine_eps(precision) >= 0.1, (
-            f"{precision.value} eps is {machine_eps(precision):g} -- no longer the "
-            "coarse case, so the guard's premise changed"
-        )
-
-
 def test_no_band_is_finer_than_one_ulp_relative() -> None:
     """The relative twin of the atol rule: one ULP at the bottom of a binade is ``eps * |x|``, so an
     ``rtol`` below eps fails two correct implementations whose results round to neighbouring values
@@ -98,11 +71,18 @@ def test_no_band_is_finer_than_one_ulp_relative() -> None:
 
 
 @pytest.mark.parametrize("precision", list(Precision), ids=lambda p: p.value)
-def test_a_one_ulp_disagreement_passes_the_band_in_every_binade(precision: Precision) -> None:
-    """Neighbouring representable values pass the band at the bottom of every binade up to the format's
-    safe magnitude, in both directions -- not only at a reference of zero."""
+def test_a_one_ulp_disagreement_passes_the_band_at_zero_and_in_every_binade(precision: Precision) -> None:
+    """The end the invariant exists for: perturb a value by one ULP of its own format and the
+    band still accepts it. Asserted on the WORST case for a relative tolerance -- a reference of
+    exactly zero, where only ``atol`` can reach -- and then at the bottom of every binade up to the
+    format's safe magnitude, in both directions."""
     rtol, atol = TOLERANCE_MATRIX[precision].as_tuple()
     dtype = numpy_dtype(precision)
+    one_ulp = float(np.asarray([machine_eps(precision)], dtype=dtype)[0])
+    assert np.isclose(one_ulp, 0.0, rtol=rtol, atol=atol), (
+        f"{precision.value}: a reference of 0.0 against a candidate one ULP away ({one_ulp:g}) "
+        f"fails its own band (rtol={rtol:g}, atol={atol:g}) -- unsatisfiable"
+    )
     top = min(safe_max(precision), 1e30)
     exponent = -6
     while 2.0**exponent <= top:

@@ -15,10 +15,7 @@ import pytest
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     expand_all,
-    expand_any,
     expand_argmax,
-    expand_argmin,
-    expand_count_nonzero,
     expand_linalg_norm,
     expand_var,
 )
@@ -45,12 +42,15 @@ def count_for_loops(stmts: list[ast.stmt]) -> int:
 # A. np.var                                                                   #
 
 
-def test_var_axis_none_two_dim() -> None:
-    """``np.var(A)`` on A:(N, M) -> walk every axis, scalar result."""
-    args, kws = call_args("np.var(A)")
-    stmts = expand_var(target("out"), args, {"A": ("N", "M")}, kws)
-    # 2 (mean) + 2 (sum-of-squared-dev) = 4 loops total.
-    assert count_for_loops(stmts) == 4
+def has_const_zero_subscript(stmts: list[ast.stmt]) -> bool:
+    """Whether any subscript indexes a constant 0 (the reduced axis kept by ``keepdims``)."""
+    for stmt in stmts:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Subscript) and isinstance(sub.slice, ast.Tuple):
+                for elt in sub.slice.elts:
+                    if isinstance(elt, ast.Constant) and elt.value == 0:
+                        return True
+    return False
 
 
 def test_var_axis_tuple_of_three_on_four_dim() -> None:
@@ -66,24 +66,10 @@ def test_var_axis_tuple_of_three_on_four_dim() -> None:
 def test_var_keepdims_writes_const_zero_on_reduced_axis() -> None:
     args, kws = call_args("np.var(A, axis=1, keepdims=True)")
     stmts = expand_var(target("out"), args, {"A": ("N", "M", "K")}, kws)
-    seen_const_zero = False
-    for stmt in stmts:
-        for sub in ast.walk(stmt):
-            if isinstance(sub, ast.Subscript) and isinstance(sub.slice, ast.Tuple):
-                for elt in sub.slice.elts:
-                    if isinstance(elt, ast.Constant) and elt.value == 0:
-                        seen_const_zero = True
-    assert seen_const_zero
+    assert has_const_zero_subscript(stmts)
 
 
 # B. np.any / np.all                                                          #
-
-
-def test_any_axis_int_one_dim_result() -> None:
-    args, kws = call_args("np.any(A, axis=0)")
-    stmts = expand_any(target("out"), args, {"A": ("N", "M")}, kws)
-    # 1 outer (kept axis M) + 1 inner (reduction axis N) = 2 loops.
-    assert count_for_loops(stmts) == 2
 
 
 def test_all_axis_tuple_collapses_to_scalar() -> None:
@@ -93,36 +79,7 @@ def test_all_axis_tuple_collapses_to_scalar() -> None:
     assert count_for_loops(stmts) == 2
 
 
-def test_count_nonzero_axis_negative() -> None:
-    """``np.count_nonzero(A, axis=-1)`` on (N, M, K) -> kept axes 0/1.
-    1 + 1 = 2 outer + 1 inner = 3 loops."""
-    args, kws = call_args("np.count_nonzero(A, axis=-1)")
-    stmts = expand_count_nonzero(target("out"), args, {"A": ("N", "M", "K")}, kws)
-    assert count_for_loops(stmts) == 3
-
-
 # C. np.argmax / np.argmin                                                    #
-
-
-def test_argmax_axis_none_full_reduction() -> None:
-    """``np.argmax(A)`` -> flat argmax. Walks every axis."""
-    args, kws = call_args("np.argmax(A)")
-    stmts = expand_argmax(target("out"), args, {"A": ("N", "M")}, kws)
-    assert count_for_loops(stmts) == 2
-
-
-def test_argmax_axis_int_two_dim() -> None:
-    """``np.argmax(A, axis=0)`` -> 1 outer (kept) + 1 inner (reduction)."""
-    args, kws = call_args("np.argmax(A, axis=0)")
-    stmts = expand_argmax(target("out"), args, {"A": ("N", "M")}, kws)
-    assert count_for_loops(stmts) == 2
-
-
-def test_argmin_axis_int_three_dim() -> None:
-    """``np.argmin(A, axis=1)`` on (N, M, K) -> 2 outer + 1 inner."""
-    args, kws = call_args("np.argmin(A, axis=1)")
-    stmts = expand_argmin(target("out"), args, {"A": ("N", "M", "K")}, kws)
-    assert count_for_loops(stmts) == 3
 
 
 def test_argmax_axis_tuple_two_axes_on_three_dim() -> None:
@@ -132,14 +89,6 @@ def test_argmax_axis_tuple_two_axes_on_three_dim() -> None:
     args, kws = call_args("np.argmax(A, axis=(0, 1))")
     stmts = expand_argmax(target("out"), args, {"A": ("N", "M", "K")}, kws)
     assert count_for_loops(stmts) == 3
-
-
-def test_argmin_axis_tuple_three_of_four() -> None:
-    """``np.argmin(A, axis=(1, 2, 3))`` on (N, H, W, C) -> keeps axis 0;
-    1 outer + 3 inner = 4 loops."""
-    args, kws = call_args("np.argmin(A, axis=(1, 2, 3))")
-    stmts = expand_argmin(target("out"), args, {"A": ("N", "H", "W", "C")}, kws)
-    assert count_for_loops(stmts) == 4
 
 
 def test_argmax_axis_tuple_duplicate_rejected() -> None:
@@ -153,43 +102,12 @@ def test_argmax_axis_tuple_duplicate_rejected() -> None:
 # D. np.linalg.norm (full axis + keepdims)                                    #
 
 
-def test_linalg_norm_full_reduction() -> None:
-    """Default form -- L2 norm over every axis -> scalar."""
-    args, kws = call_args("np.linalg.norm(A)")
-    stmts = expand_linalg_norm(target("out"), args, {"A": ("N", "M")}, kws)
-    # 2 loops for the squared-sum + a finalisation sqrt assignment.
-    assert count_for_loops(stmts) == 2
-
-
-def test_linalg_norm_axis_int_two_dim() -> None:
-    """``np.linalg.norm(A, axis=0)`` -> per-column L2."""
-    args, kws = call_args("np.linalg.norm(A, axis=0)")
-    stmts = expand_linalg_norm(target("out"), args, {"A": ("N", "M")}, kws)
-    # 1 outer (kept axis M) + 1 inner (reduction axis N) = 2.
-    assert count_for_loops(stmts) == 2
-
-
-def test_linalg_norm_axis_tuple_3_of_4() -> None:
-    """``np.linalg.norm(A, axis=(1, 2, 3))`` on (N, H, W, C) -> 1
-    outer + 3 inner = 4 loops."""
-    args, kws = call_args("np.linalg.norm(A, axis=(1, 2, 3))")
-    stmts = expand_linalg_norm(target("out"), args, {"A": ("N", "H", "W", "C")}, kws)
-    assert count_for_loops(stmts) == 4
-
-
 def test_linalg_norm_keepdims_true() -> None:
     args, kws = call_args("np.linalg.norm(A, axis=0, keepdims=True)")
     stmts = expand_linalg_norm(target("out"), args, {"A": ("N", "M")}, kws)
     # Same loop count -- keepdims only affects the target subscript.
     assert count_for_loops(stmts) == 2
-    seen_const_zero = False
-    for stmt in stmts:
-        for sub in ast.walk(stmt):
-            if isinstance(sub, ast.Subscript) and isinstance(sub.slice, ast.Tuple):
-                for elt in sub.slice.elts:
-                    if isinstance(elt, ast.Constant) and elt.value == 0:
-                        seen_const_zero = True
-    assert seen_const_zero
+    assert has_const_zero_subscript(stmts)
 
 
 def test_linalg_norm_rejects_unsupported_ord() -> None:

@@ -186,26 +186,3 @@ def test_the_task_tool_runs_the_subagent_as_a_nested_conversation(
     assert after["messages"][-1]["content"][0]["content"] == "the summary"
     assert usage.calls == 3, "the subagent's calls are the episode's tokens too"
     assert (tmp_path / "anthropic.subagent-1-helper.jsonl").is_file()
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    test_a_subagent_file_reads_its_name_description_tools_and_prompt()
-    for spelling in (
-        "tools: bash, score",
-        "tools: [bash, score]",
-        'tools: ["bash", "score"]',
-        "tools:\n  - bash\n  - score",
-    ):
-        test_a_tools_line_reads_the_same_in_every_yaml_list_spelling(spelling)
-    test_a_subagent_file_without_a_description_is_refused()
-    test_a_subagent_gets_its_own_tools_and_never_the_task_tool()
-    with tempfile.TemporaryDirectory() as scratch:
-        test_the_driver_stages_exactly_the_subagents_the_packet_names(pathlib.Path(scratch))
-    with tempfile.TemporaryDirectory() as scratch:
-        test_a_packet_naming_a_subagent_exports_it_to_the_job(pathlib.Path(scratch))
-    from hpcagent_agent.harness import run_anthropic as anthropic_runner
-
-    with tempfile.TemporaryDirectory() as scratch:
-        test_the_task_tool_runs_the_subagent_as_a_nested_conversation(pathlib.Path(scratch), anthropic_runner)

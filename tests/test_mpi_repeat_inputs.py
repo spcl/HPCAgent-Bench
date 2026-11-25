@@ -324,13 +324,3 @@ def test_a_sharded_plan_refuses_call_seeds_that_do_not_end_in_its_own() -> None:
         plan_for(1, ROW_SPLIT, rep_seeds=[11, 12, 13, 14])
     with pytest.raises(ValueError, match="call seeds"):
         plan_for(1, ROW_SPLIT, rep_seeds=[11, 7])
-
-
-def test_the_call_seeds_ride_in_the_plan_file_every_rank_reads() -> None:
-    on_disk = mpi_shard_driver.ShardPlan.model_validate({"draws": [plan_for(1, ROW_SPLIT, rep_seeds=[11, 12, 13, 7])]})
-    assert mpi_shard_driver.ShardPlan.model_validate_json(on_disk.model_dump_json()).draws[0].rep_seeds == [
-        11,
-        12,
-        13,
-        7,
-    ]

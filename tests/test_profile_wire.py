@@ -342,28 +342,3 @@ def test_each_report_model_tracks_its_producer_field_for_field(model: type[pydan
 
 def test_the_call_graph_row_tracks_the_producer_s_config_row() -> None:
     assert list(ConfigReport.__annotations__) == list(profiling.ConfigRow.__annotations__)
-
-
-if __name__ == "__main__":
-    test_a_linuxperf_report_is_sent_as_built()
-    test_a_papi_report_is_sent_as_built()
-    for refused in (False, True):
-        test_a_per_thread_papi_report_is_sent_as_built(refused)
-    test_an_instrument_report_is_sent_as_built()
-    test_a_device_trace_report_is_sent_as_built()
-    for name in ("rocprof-compute", "ncu"):
-        test_a_device_count_report_is_sent_as_built(name)
-    test_a_build_failure_is_sent_as_built()
-    test_an_opt_report_reads_back_as_its_model()
-    test_a_report_with_an_unknown_row_field_is_refused()
-    for model_type, payload_type in (
-        (LinuxperfReport, profiling.ProfilePayload),
-        (CountReport, profiling.CountPayload),
-        (ThreadCountReport, profiling.ThreadPayload),
-        (InstrumentReport, profiling.InstrumentPayload),
-        (DeviceTraceReport, gpu_profiling.GpuPayload),
-        (DeviceCountReport, compute_profiling.ComputePayload),
-        (BuildFailureReport, profiling.BuildFailure),
-    ):
-        test_each_report_model_tracks_its_producer_field_for_field(model_type, payload_type)
-    test_the_call_graph_row_tracks_the_producer_s_config_row()

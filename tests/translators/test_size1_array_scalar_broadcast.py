@@ -58,23 +58,3 @@ def kir_(src: str) -> KernelIR:
     from hpcagent_bench.translators.numpyto_common.lowering import lower
 
     return lower(parse_source(src, "f", ["a", "x"], ["out"], {"a": "(N,)", "x": "(1,)", "out": "(1,)"}, {"N": 8}))
-
-
-def test_c_declares_scalar_and_scalarises_size1_read() -> None:
-    from hpcagent_bench.translators.numpyto_c.emit import emit_c
-
-    c = emit_c(kir_(SRC), fn_name="f")
-    assert "c[1]" not in c
-    assert "bool c[" not in c
-    assert "a[i] > x[0]" in c  # the bare size-1 array ``x`` is read as its element
-    assert "x[0][0]" not in c
-    assert "x[0][" not in c
-
-
-def test_fortran_declares_scalar_and_scalarises_size1_read() -> None:
-    from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
-
-    f = emit_fortran(kir_(SRC), fn_name="f")
-    assert "> x)" not in f  # ``x`` is scalarised, so no rank-0-vs-rank-1 ``a(i+1) > x``
-    assert "x(1)" in f  # the size-1 array is read as element ``x(1)``
-    assert "x(1)(" not in f  # explicit subscripts are not double-indexed

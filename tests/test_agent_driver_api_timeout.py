@@ -38,18 +38,23 @@ def test_a_timed_out_request_is_not_a_success(driver: ModuleType, tmp_path: path
     assert driver.final_result(log) == ("success", 52)
 
 
-@pytest.mark.parametrize("returncode", [0, 1])
-def test_it_counts_as_a_crash_so_the_agent_is_relaunched(
-    driver: ModuleType, tmp_path: pathlib.Path, returncode: int
+@pytest.mark.parametrize(
+    ("returncode", "crashed"),
+    [
+        pytest.param(0, True, id="rc_0"),
+        pytest.param(1, True, id="rc_1"),
+        pytest.param(124, False, id="timeout"),
+        pytest.param(125, False, id="token_budget"),
+        pytest.param(126, False, id="context"),
+    ],
+)
+def test_a_timed_out_request_is_relaunched_as_a_crash_unless_the_driver_killed_it(
+    driver: ModuleType, tmp_path: pathlib.Path, returncode: int, crashed: bool
 ) -> None:
-    """Both exits, because the CLI's is not dependable: the sibling context death ships rc=0."""
-    assert driver.closing_crashed(returncode, driver.transcript_closing(transcript(tmp_path, TIMED_OUT))) is True
-
-
-@pytest.mark.parametrize("returncode", [124, 125, 126])  # RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT
-def test_the_drivers_own_kills_stay_budgets(driver: ModuleType, tmp_path: pathlib.Path, returncode: int) -> None:
-    """A wall-clock or token kill is an allowance the agent SPENT; relaunching would grant a second."""
-    assert driver.closing_crashed(returncode, driver.transcript_closing(transcript(tmp_path, TIMED_OUT))) is False
+    """Both CLI exits 0 and 1 count as a crash, because the CLI's is not dependable: the sibling context death ships
+    rc=0. The driver's own kills (RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT) stay budgets: a wall-clock or token kill is
+    an allowance the agent SPENT; relaunching would grant a second."""
+    assert driver.closing_crashed(returncode, driver.transcript_closing(transcript(tmp_path, TIMED_OUT))) is crashed
 
 
 @pytest.mark.parametrize(

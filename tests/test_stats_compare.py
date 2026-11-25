@@ -5,7 +5,6 @@ paired geomean and its interval, regret and hit rate against a best-of set, and 
 
 import math
 import pathlib
-import tempfile
 
 import numpy as np
 import pandas as pd
@@ -192,21 +191,3 @@ def test_the_text_table_has_one_line_per_pair_with_its_counts() -> None:
     assert len(lines) == 2
     assert lines[1].split()[:4] == ["a", "b", "1", "1/0/0"]
     assert lines[1].endswith("0 | 1")
-
-
-if __name__ == "__main__":
-    test_wins_ties_and_losses_count_against_a_given_band()
-    test_without_a_band_the_cells_run_to_run_range_decides_the_tie()
-    test_a_single_run_falls_back_to_the_noise_floor()
-    test_regret_and_hit_rate_are_against_the_per_kernel_best_of_a_set()
-    test_best_is_a_series_a_pair_may_name()
-    test_each_sides_failures_are_reported_apart_and_left_out_of_the_pairing()
-    test_a_tag_kernel_neither_side_attempted_is_a_failure_of_both()
-    test_the_geomean_interval_contains_the_constructed_ratio()
-    test_an_unknown_series_is_refused()
-    test_canon_runs_of_a_column_are_one_cells_runs_and_an_unvalidated_row_is_a_failure()
-    test_a_canon_cell_over_two_presets_is_refused()
-    test_a_setups_answered_slots_are_its_runs_and_a_kernel_it_only_ran_is_a_failure()
-    with tempfile.TemporaryDirectory() as scratch:
-        test_the_command_writes_both_tables(pathlib.Path(scratch))
-    test_the_text_table_has_one_line_per_pair_with_its_counts()

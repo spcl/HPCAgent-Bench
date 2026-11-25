@@ -80,15 +80,16 @@ def reaches(key: str, targets: tuple[str, ...]) -> bool:
 
 
 @pytest.mark.parametrize("key", REGISTERED_KEYS)
-def test_the_cpf_src_dropin_switch_is_set_only_by_a_spec_that_reaches_cpf_src(key: str) -> None:
+@pytest.mark.parametrize(
+    ("switch", "reaching"),
+    [("CPF_DROPIN_DIR", CPF_SRC_KEYS), (CPF_TOOL_SWITCH, CPF_TOOL_KEYS)],
+    ids=["cpf_src_dropin", "cpf_tool"],
+)
+def test_a_cpf_switch_is_set_only_by_a_spec_that_reaches_its_setups(
+    key: str, switch: str, reaching: tuple[str, ...]
+) -> None:
     env = dict(resolved(key).env)
-    assert ("CPF_DROPIN_DIR" in env) == reaches(key, CPF_SRC_KEYS), (key, env)
-
-
-@pytest.mark.parametrize("key", REGISTERED_KEYS)
-def test_the_cpf_tool_switch_is_set_only_by_a_spec_that_reaches_cpf(key: str) -> None:
-    env = dict(resolved(key).env)
-    assert (CPF_TOOL_SWITCH in env) == reaches(key, CPF_TOOL_KEYS), (key, env)
+    assert (switch in env) == reaches(key, reaching), (key, env)
 
 
 @pytest.mark.parametrize("key", REGISTERED_KEYS)

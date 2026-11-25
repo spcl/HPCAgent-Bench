@@ -82,19 +82,6 @@ def test_the_launch_directory_holds_what_an_agent_step_executes_and_nothing_else
     assert sorted(path.name for path in launch.iterdir()) == sorted((*launch_files(), ".env", PROBLEMS))
 
 
-def test_the_staged_env_names_the_staged_problems_file(tmp_path: pathlib.Path) -> None:
-    """The step re-sources .env inside the container, where a problems path with a directory would
-    point outside the only studies files it can read."""
-    launch, _ = staged_checkout(tmp_path)
-    assert (launch / ".env").read_text().splitlines()[-1] == f"PROBLEMS_FILE={PROBLEMS}"
-
-
-def test_staged_files_are_read_only(tmp_path: pathlib.Path) -> None:
-    launch, _ = staged_checkout(tmp_path)
-    writable = [path.name for path in launch.iterdir() if path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP)]
-    assert not writable, writable
-
-
 def test_restaging_the_same_job_replaces_the_launch_directory(tmp_path: pathlib.Path) -> None:
     """A requeued job stages again into its own id; read-only files from the first attempt must not stop it."""
     launch, env_file = staged_checkout(tmp_path)

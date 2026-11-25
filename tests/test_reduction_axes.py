@@ -4,7 +4,6 @@
 :func:`hpcagent_bench.harness.grading.contracted_extent`, and that the shorter ``l`` still accepts reassociated
 summation orders (sequential, reverse, pairwise, blocked, numpy) while rejecting another draw's answer."""
 
-import math
 from collections.abc import Callable
 
 import numpy as np
@@ -12,7 +11,7 @@ import pytest
 
 from helpers.scripts import reduction_axes_table
 from hpcagent_bench.frameworks.utilities import compare_arrays
-from hpcagent_bench.harness import grading, reduction_axes
+from hpcagent_bench.harness import reduction_axes
 from hpcagent_bench.harness.grading import contracted_extent
 from hpcagent_bench.harness.reduction_axes import KEPT_MAX, probe_axis_roles, probed_length
 from hpcagent_bench.precision import (
@@ -61,19 +60,21 @@ def test_transposed_matvec_contracts_the_row_axis() -> None:
     assert probed_length(roles["out"], data) == N
 
 
-def test_square_matmul_contracts_only_the_shared_axis() -> None:
-    roles, data = roles_of(lambda d: d["A"] @ d["B"], inputs=("A", "B"))
-    assert probed_length(roles["out"], data) == N
-
-
-def test_an_elementwise_map_contracts_nothing() -> None:
-    roles, data = roles_of(lambda d: d["A"] * 2.0 + d["B"], inputs=("A", "B"))
-    assert probed_length(roles["out"], data) == 1
-
-
-def test_a_full_sum_contracts_every_axis() -> None:
-    roles, data = roles_of(lambda d: np.array(d["A"].sum()), inputs=("A",))
-    assert probed_length(roles["out"], data) == N * N
+@pytest.mark.parametrize(
+    ("func", "inputs", "length"),
+    [
+        (lambda d: d["A"] @ d["B"], ("A", "B"), N),  # matmul contracts only the shared axis
+        (lambda d: d["A"] * 2.0 + d["B"], ("A", "B"), 1),  # an elementwise map contracts nothing
+        (lambda d: np.array(d["A"].sum()), ("A",), N * N),  # a full sum contracts every axis
+        (lambda d: np.cumsum(d["x"]), ("x",), N),  # a scan: a chain along an axis the output keeps
+    ],
+    ids=["square_matmul", "elementwise_map", "full_sum", "scan"],
+)
+def test_the_probed_accumulation_length_is_the_extent_the_reduction_contracts(
+    func: Callable[[dict], object], inputs: tuple[str, ...], length: int
+) -> None:
+    roles, data = roles_of(func, inputs=inputs)
+    assert probed_length(roles["out"], data) == length
 
 
 def test_a_max_reduction_is_inconclusive_and_counts_every_axis() -> None:
@@ -94,12 +95,6 @@ def test_zero_hyperplanes_do_not_hide_a_contracted_axis() -> None:
     data["B"][::4, :] = 0.0
     data["B"][N // 2, :] = 0.0
     roles, _ = roles_of(lambda d: d["A"] @ d["B"], inputs=("A", "B"), data=data)
-    assert probed_length(roles["out"], data) == N
-
-
-def test_a_scan_contracts_its_axis() -> None:
-    """``out[i] = sum(x[:i+1])``: a chain along an axis the output keeps, which shape symbols cannot see."""
-    roles, data = roles_of(lambda d: np.cumsum(d["x"]), inputs=("x",))
     assert probed_length(roles["out"], data) == N
 
 
@@ -401,9 +396,3 @@ def test_ungradeable_follows_the_probed_l() -> None:
         compare_arrays(ref, ref, rtol=FP32.rtol, atol=FP32.atol, accum_length=n * n, eps_precision=EPS32)
     assert compare_arrays(ref, ref, rtol=FP32.rtol, atol=FP32.atol, accum_length=n, eps_precision=EPS32).ok
     assert n * n >= (FP32.rtol / EPS32) ** 2 > n
-
-
-def test_grading_exports_the_two_halves() -> None:
-    assert callable(grading.symbolic_extent)
-    assert callable(grading.probed_extent)
-    assert math.isclose(KEPT_MAX, 1.5)

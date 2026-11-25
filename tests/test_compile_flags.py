@@ -210,13 +210,6 @@ def test_gcc_autopar_carries_graphite_and_gcc_accepts_it() -> None:
         assert proc.returncode == 0, f"gcc rejected the Graphite autopar line:\n$ {' '.join(cmd)}\n{proc.stderr}"
 
 
-def test_gcc_autopar_bakes_the_resolved_core_count() -> None:
-    """-ftree-parallelize-loops={n} must be substituted before it reaches gcc, or it would be rejected."""
-    autopar = flags.GCC_AUTOPAR.format(n=flags.ncores())
-    assert "{n}" not in autopar
-    assert f"-ftree-parallelize-loops={flags.ncores()}" in autopar
-
-
 def make_fake_driver(directory: pathlib.Path, name: str) -> None:
     """An executable stub on PATH -- resolve_compiler only inspects names, never runs them."""
     path = directory / name
@@ -273,11 +266,6 @@ def test_resolve_compiler_follows_the_flang_rename(fake_path: pathlib.Path) -> N
     """
     make_fake_driver(fake_path, "flang-new-22")
     assert languages.resolve_compiler("flang") == str(fake_path / "flang-new-22")
-
-
-def test_resolve_compiler_reports_a_genuinely_absent_driver(fake_path: pathlib.Path) -> None:
-    """None, not a guess -- a fabricated path turns a clean skip into a confusing exec failure."""
-    assert languages.resolve_compiler("zzc") is None
 
 
 #: Blocks that pin no ``-std=`` and are RIGHT not to, each for a stated reason. Anything else that

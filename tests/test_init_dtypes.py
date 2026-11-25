@@ -33,8 +33,3 @@ def test_scalar_types_come_from_their_literal_unless_declared() -> None:
     assert (scalars["k"], scalars["m"]) == ("int64", "float64")
     declared = BenchSpec.from_dict(_raw({"dtype": "int64"}), SITE, source="<t>")
     assert {a.name: a.dtype for a in binding_from_spec(declared).scalars}["m"] == "int64"
-
-
-if __name__ == "__main__":
-    test_init_carries_no_dtypes_block()
-    test_scalar_types_come_from_their_literal_unless_declared()

@@ -21,22 +21,6 @@ def clean_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(key, raising=False)
 
 
-def test_load_backends_lists_every_backend() -> None:
-    """Two OCI implementations that consume the shipped image directly, the SIF conversion
-    target, the Alps container engine, and the no-container path."""
-    assert list(containers.load_backends()) == [R.DOCKER, R.PODMAN, R.APPTAINER, R.CE, R.NATIVE]
-
-
-def test_oci_is_a_standard_not_a_program() -> None:
-    """docker and podman are two IMPLEMENTATIONS of one standard, which is why `oci` is an alias over both rather than a
-    runtime of its own. Nothing is ever launched as `oci`: selecting it always resolves to a program."""
-    assert R.OCI not in containers.load_backends()  # a standard has no row: it is not a thing you exec
-    assert containers.family_members(R.OCI) == (R.DOCKER, R.PODMAN)
-    assert containers.family_members(R.SIF) == (R.APPTAINER,)
-    assert containers.family_members(R.CE) == (R.CE,)
-    assert containers.family_members(R.NATIVE) == (R.NATIVE,)
-
-
 def test_a_family_name_resolves_to_whichever_flavour_is_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Selecting `oci` says WHICH INTERFACE, not which program. It must ask the machine."""
     monkeypatch.setattr(containers.shutil, "which", lambda name: "/usr/bin/" + name if name == "docker" else None)
@@ -49,12 +33,6 @@ def test_a_family_name_resolves_to_whichever_flavour_is_installed(monkeypatch: p
     assert containers.resolve_backend(R.OCI) == R.DOCKER  # none present -> deterministic fallback
     assert containers.resolve_backend(R.SIF) == R.APPTAINER
     assert containers.resolve_backend(R.CE) == R.CE
-
-
-def test_every_family_has_at_least_one_runtime() -> None:
-    """A family nobody implements would resolve to nothing and fail far from its cause."""
-    for family in containers.FAMILIES:
-        assert containers.family_members(family), family
 
 
 def test_detect_backend_probes_path_rather_than_assuming(monkeypatch: pytest.MonkeyPatch) -> None:

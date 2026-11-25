@@ -18,6 +18,8 @@ confined to ``tmp_path``.
 
 import pathlib
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_common.emit_io import AUTO_MARKER, is_generated, is_override, write_generated
 
 
@@ -45,11 +47,19 @@ def test_regenerate_refreshes_a_generated_file(tmp_path: pathlib.Path) -> None:
     assert "print(1)" not in body
 
 
-def test_hand_override_is_never_clobbered(tmp_path: pathlib.Path) -> None:
-    """The clobber guard: a file present with an ordinary (non-marker) first line is a
-    hand override -- ``write_generated`` refuses it and leaves the bytes untouched."""
+@pytest.mark.parametrize(
+    "original",
+    [
+        pytest.param("# my own file\nprint('mine')\n", id="ordinary-first-line"),
+        pytest.param('"""uses the ' + AUTO_MARKER + ' token"""\ncode = 1\n', id="marker-mentioned-in-docstring"),
+    ],
+)
+def test_hand_override_is_never_clobbered(tmp_path: pathlib.Path, original: str) -> None:
+    """The clobber guard: a file present with an ordinary (non-marker) first line is a hand override --
+    ``write_generated`` refuses it and leaves the bytes untouched. A hand file whose line-1 docstring merely NAMES
+    the marker is no generated file either (the marker must follow a comment lead): the misclassification the
+    guard is written to avoid."""
     out = tmp_path / "gemm_numba.py"
-    original = "# my own file\nprint('mine')\n"
     out.write_text(original)
     assert is_override(out)
     assert not is_generated(out)
@@ -57,19 +67,6 @@ def test_hand_override_is_never_clobbered(tmp_path: pathlib.Path) -> None:
     status = write_generated(out, "print('GENERATED')\n", source="gemm_numpy.py")
     assert status == "override"
     assert out.read_text() == original  # not a single byte rewritten
-
-
-def test_marker_mention_in_line1_docstring_is_not_generated(tmp_path: pathlib.Path) -> None:
-    """A hand file whose line-1 docstring merely NAMES the marker is not a generated
-    file (the marker must follow a comment lead), so it is protected as an override --
-    exactly the misclassification the guard is written to avoid."""
-    out = tmp_path / "gemm_pythran.py"
-    original = '"""uses the ' + AUTO_MARKER + ' token"""\ncode = 1\n'
-    out.write_text(original)
-    assert not is_generated(out)
-    assert is_override(out)
-    assert write_generated(out, "clobbered = 1\n") == "override"
-    assert out.read_text() == original
 
 
 def test_the_dace_marker_is_recognized_as_generated(tmp_path: pathlib.Path) -> None:

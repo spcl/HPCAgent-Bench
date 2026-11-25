@@ -40,10 +40,3 @@ def test_a_slow_call_sends_progress_until_it_answers(
     assert result.content[0].text == "score"
     assert (len(session.progress) >= 2) is beats
     assert all(token == 7 for token, _ in session.progress)
-
-
-if __name__ == "__main__":
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_slow_call_sends_progress_until_it_answers(patch, {"progress_token": 7}, True)
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_slow_call_sends_progress_until_it_answers(patch, None, False)

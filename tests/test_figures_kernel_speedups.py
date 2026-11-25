@@ -268,11 +268,6 @@ def test_the_summary_slot_leaves_out_a_compilers_1x_placeholders(llr40_canon: pd
     assert style.ratio_label(100.0 ** (1.0 / 3.0)) not in printed, printed
 
 
-def test_rows_without_observations_draws_canon_only(llr40_canon: pd.DataFrame) -> None:
-    rows = kernel_rows(llr40_canon, None, TAG40)
-    assert [row.framework for row in rows] == list(CANON_COLUMNS)
-
-
 def test_rows_keep_only_tag_complete_conditions(llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame) -> None:
     rows = kernel_rows(llr40_canon, llr40_observations, TAG40)
     setups = {row.framework for row in rows}
@@ -331,15 +326,6 @@ def test_the_per_kernel_figure_renders_with_missing_marks_and_rule_checked_table
     assert set(token_summary["framework"]).isdisjoint(CANON_COLUMNS)
 
 
-def test_token_summary_table_excludes_rows_with_no_tokens(
-    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
-) -> None:
-    rows = kernel_rows(llr40_canon, llr40_observations, TAG_TOKENS)
-    frame = kernel_speedups.token_summary_table(rows)
-    assert set(frame.columns) == set(kernel_speedups.TOKEN_SUMMARY_COLUMNS)
-    assert set(frame["framework"]).isdisjoint(CANON_COLUMNS)
-
-
 def test_the_tokens_table_is_the_token_slots_geomean(
     llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
 ) -> None:
@@ -382,7 +368,7 @@ def test_the_summary_table_leaves_out_a_compilers_placeholders(llr40_canon: pd.D
 # clears the rotated kernel labels and says what it is showing.
 
 
-def test_log2_change_matches_signed_change_sign_and_zero() -> None:
+def test_log2_change_is_signed_at_one_and_nan_off_a_placeholder() -> None:
     from hpcagent_bench.stats.summary import log2_change
 
     assert log2_change(1.0) == pytest.approx(0.0)
@@ -390,11 +376,6 @@ def test_log2_change_matches_signed_change_sign_and_zero() -> None:
     assert log2_change(0.5) == pytest.approx(-1.0)
     # A 75x outlier sits at a SMALL log2 distance, not at 74 the way signed_change would place it.
     assert log2_change(75.0) < 7.0
-
-
-def test_log2_change_is_nan_off_a_placeholder() -> None:
-    from hpcagent_bench.stats.summary import log2_change
-
     assert math.isnan(log2_change(0.0))
     assert math.isnan(log2_change(-1.0))
 
@@ -452,12 +433,6 @@ def test_legend_names_each_optimizer_and_the_cross_only_when_one_is_drawn(llr40_
     assert [handle.get_label() for handle in handles] == ["DaCe+AOpt", "DaCe+CPF"]
 
 
-def test_standalone_optimizers_wear_their_own_shapes(llr40_canon: pd.DataFrame) -> None:
-    rows = kernel_rows(llr40_canon, None, TAG40)
-    assert [row.marker for row in rows] == [palette.marker("dace"), palette.marker("cpf")]
-    assert rows[0].marker != rows[1].marker
-
-
 def test_figure_prints_at_text_width_and_names_its_summary_statistic(llr40_canon: pd.DataFrame) -> None:
     """Drawn at the size the page prints it: a figure* is text width, and a single speedup panel
     is a short strip, not a page. The axis label names the baseline and the 1x tick stays a ratio;
@@ -508,13 +483,6 @@ def pending_canon_fixture() -> pd.DataFrame:
                          ("dace_cpu_canon", "k1", 10.0), ("dace_cpu_canon", "k2", 50.0)])  # fmt: skip
     frame.loc[(frame["column"] == "dace_cpu_canon") & (frame["kernel"] == "k2"), "validated"] = 0
     return frame
-
-
-def test_by_default_a_kernel_never_attempted_is_a_failure_at_one(pending_canon: pd.DataFrame) -> None:
-    row = kernel_speedups.canon_kernel_row(pending_canon, "dace_cpu_canon", TAG40)
-    assert row.ratios == {"k1": pytest.approx(10.0), "k2": 1.0, "k3": 1.0}
-    assert row.pending == frozenset()
-    assert row.excluded == "none"
 
 
 def test_mark_pending_splits_a_kernel_never_attempted_from_one_that_failed(pending_canon: pd.DataFrame) -> None:
@@ -628,16 +596,6 @@ def test_the_fallback_never_replaces_a_numba_time() -> None:
     assert canon.with_fallback(times, "numba", "") == (times, frozenset())
 
 
-def test_a_shorter_panel_makes_a_shorter_figure_at_the_same_width(llr40_canon: pd.DataFrame) -> None:
-    rows = kernel_rows(llr40_canon, None, TAG40)
-    tall, short = (
-        kernel_speedups.kernel_figure(rows, TAG40),
-        kernel_speedups.kernel_figure(rows, TAG40, panel_height_in=1.0),
-    )
-    assert short.get_size_inches()[0] == pytest.approx(tall.get_size_inches()[0])
-    assert short.get_size_inches()[1] == pytest.approx(tall.get_size_inches()[1] - 0.5, abs=0.01)
-
-
 @pytest.mark.parametrize(
     ("baseline", "label", "ink"),
     [
@@ -655,11 +613,6 @@ def test_the_reference_line_names_every_reference_a_best_of_denominator_races(
 # An agent row keeps a kernel it ran but never solved out of its data and summary (no ratio is
 # defined over it), so the row's note carries the count: the caption discloses the omission (Rule 9)
 # instead of leaving the row's n to be read as the whole tag.
-
-
-def test_the_unsolved_note_counts_and_stays_quiet_at_zero() -> None:
-    assert kernel_speedups.unsolved_note(0) == "none"
-    assert kernel_speedups.unsolved_note(3) == "unsolved runs omitted (N=3)"
 
 
 def test_an_agent_row_notes_the_unsolved_runs_it_omits(

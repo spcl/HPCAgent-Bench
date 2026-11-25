@@ -199,17 +199,44 @@ def test_an_all_integer_display_folds_to_an_integer_array() -> None:
     assert "np.zeros(n, dtype=np.int64)" in out
 
 
-def test_a_cut_to_a_different_length_is_left_alone() -> None:
-    # Grown to ``n`` and cut to ``m`` is not this idiom: the closed form above would be the wrong
-    # length. Nothing is guessed -- the list stays and the refusal that owns it still fires.
-    out = folded_lists("""
+@pytest.mark.parametrize(
+    "source",
+    [
+        # Grown to ``n`` and cut to ``m`` is not this idiom: the closed form would be the wrong
+        # length. Nothing is guessed -- the list stays and the refusal that owns it still fires.
+        """
         def f(n, m, out):
             centre = [1.0]
             while len(centre) < n:
                 centre.append(2.0)
             centre = centre[:m]
             out[:] = centre
-        """)
+        """,
+        # A second append outside the growth loop is a mutation the closed form does not account for.
+        """
+        def f(n, out):
+            centre = [1.0]
+            while len(centre) < n:
+                centre.append(2.0)
+            centre.append(3.0)
+            out[:] = centre
+        """,
+        # The build itself is complete and cut; the append in a later branch is what the guard refuses.
+        """
+        def f(n, flag, out):
+            centre = [1.0]
+            while len(centre) < n:
+                centre.append(2.0)
+            centre = centre[:n]
+            if flag:
+                centre.append(3.0)
+            out[:] = centre
+        """,
+    ],
+    ids=["cut_to_a_different_length", "mutated_outside_the_growth_loop", "resized_after_its_cut"],
+)
+def test_a_list_the_closed_form_cannot_account_for_is_left_alone(source: str) -> None:
+    out = folded_lists(source)
     assert "centre = [1.0]" in out
     assert "while len(centre) < n:" in out
 
@@ -255,35 +282,6 @@ def test_a_growth_cut_into_a_fresh_name_folds_and_keeps_python_values(n: int) ->
     assert "append" not in folded_lists(source)
     assert got.shape == expected.shape
     assert np.array_equal(got, expected)
-
-
-def test_a_list_mutated_anywhere_else_is_left_alone() -> None:
-    # A second append outside the growth loop is a mutation the closed form does not account for.
-    out = folded_lists("""
-        def f(n, out):
-            centre = [1.0]
-            while len(centre) < n:
-                centre.append(2.0)
-            centre.append(3.0)
-            out[:] = centre
-        """)
-    assert "while len(centre) < n:" in out
-
-
-def test_a_list_resized_after_its_cut_is_left_alone() -> None:
-    # The build itself is complete and cut; the append in a later branch is what the guard refuses.
-    out = folded_lists("""
-        def f(n, flag, out):
-            centre = [1.0]
-            while len(centre) < n:
-                centre.append(2.0)
-            centre = centre[:n]
-            if flag:
-                centre.append(3.0)
-            out[:] = centre
-        """)
-    assert "centre = [1.0]" in out
-    assert "while len(centre) < n:" in out
 
 
 @pytest.mark.parametrize("n", [2, 5])

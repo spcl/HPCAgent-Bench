@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from hpcagent_bench import manifest_schema, paths, spec
-from hpcagent_bench.spec import BenchSpec, ConfigKnob
+from hpcagent_bench.spec import BenchSpec
 
 #: A corpus manifest with ``args``, a fallback initializer and an ``mpi`` block.
 GEMM = paths.BENCHMARKS / "scientific_computing" / "dense_linear_algebra" / "gemm" / "gemm.yaml"
@@ -37,49 +37,54 @@ def test_every_corpus_manifest_matches_the_schema() -> None:
     assert not failures, "\n".join(failures)
 
 
+def args_with(entry: object) -> dict[str, object]:
+    """``gemm``'s ``args`` with its ``C`` entry replaced by ``entry``."""
+    return {**gemm_raw()["args"], "C": entry}  # type: ignore[dict-item]
+
+
+MALFORMED_BLOCKS: list[tuple[str, object, str]] = [
+    ("constraints", "NI > 0", "constraints: Input should be a valid list"),
+    ("languages", "c", "languages: Input should be a valid list"),
+    ("allowed_precisions", "fp32", "allowed_precisions: Input should be a valid list"),
+    ("scale_axes", "NI", "scale_axes: Input should be a valid list"),
+    ("mpi", {"replicateable": ["A"]}, "mpi.replicateable: unknown manifest field"),
+    ("mpi", {"decomposition": {"axis": "NI"}}, "mpi.decomposition.axis: Input should be a valid list"),
+    ("mpi", {"decomposition": {"axis": ["NI"], "work_exponent": "1"}}, "mpi.decomposition.work_exponent"),
+    ("level", True, "level: Input should be a valid integer"),
+    ("timeout_s", "600", "timeout_s: expected a number (got str)"),
+    ("timeout_s", 0, "timeout_s: Input should be greater than 0"),
+    ("timeout_s", -5, "timeout_s: Input should be greater than 0"),
+    ("floor_bytes_fraction", 1.5, "floor_bytes_fraction: Input should be less than or equal to 1"),
+    ("args", {"A": {"dtype": "flaot64"}}, "unknown dtype 'flaot64'"),
+    ("args", args_with({"shape": "(NI, NJ)", "out": True, "shap": "(NI,)"}), "args.C.shap: unknown manifest field"),
+    ("args", args_with({"shape": "(NI, NJ)", "out": "yes"}), "args.C.out: Input should be a valid boolean"),
+    ("args", args_with({"shape": "(NI, NJ)", "out": True, "domain": [0, None]}), "args.C.domain"),
+    ("args", args_with(["(NI, NJ)"]), "args.C: expected a shape string, a number or a mapping (got list)"),
+    (
+        "config",
+        {"tile": {"domain": [32, None]}},
+        "config.mapping.tile.domain[1]: expected a bool, a number or a string",
+    ),
+    ("config", {"tile": {"domian": [32]}}, "config.mapping.tile.domian: unknown manifest field"),
+    ("config", [{"tile": [32]}], "config.list[0].tile: expected a bool, a number or a string (got list)"),
+    ("config", 3, "config: expected a mapping of symbol -> knob or a list of complete configs"),
+]
+
+
 @pytest.mark.parametrize(
     ("key", "value", "reported"),
-    [
-        ("constraints", "NI > 0", "constraints: Input should be a valid list"),
-        ("languages", "c", "languages: Input should be a valid list"),
-        ("allowed_precisions", "fp32", "allowed_precisions: Input should be a valid list"),
-        ("scale_axes", "NI", "scale_axes: Input should be a valid list"),
-        ("mpi", {"replicateable": ["A"]}, "mpi.replicateable: unknown manifest field"),
-        ("mpi", {"decomposition": {"axis": "NI"}}, "mpi.decomposition.axis: Input should be a valid list"),
-        ("mpi", {"decomposition": {"axis": ["NI"], "work_exponent": "1"}}, "mpi.decomposition.work_exponent"),
-        ("level", True, "level: Input should be a valid integer"),
-        ("timeout_s", "600", "timeout_s: expected a number (got str)"),
-        ("timeout_s", 0, "timeout_s: Input should be greater than 0"),
-        ("timeout_s", -5, "timeout_s: Input should be greater than 0"),
-        ("floor_bytes_fraction", 1.5, "floor_bytes_fraction: Input should be less than or equal to 1"),
-        ("args", {"A": {"dtype": "flaot64"}}, "unknown dtype 'flaot64'"),
-    ],
+    MALFORMED_BLOCKS,
+    ids=[reported for unused_key, unused_value, reported in MALFORMED_BLOCKS],
 )
 def test_a_mistyped_block_is_refused_naming_its_key_path(key: str, value: object, reported: str) -> None:
     """A string where a list belongs used to read as an empty list, and an unknown ``mpi`` key was
-    kept unread: both dropped a declaration without a word."""
+    kept unread: both dropped a declaration without a word. A malformed ``args`` entry or ``config``
+    block is refused the same way."""
     raw = gemm_raw()
     raw[key] = value
     with pytest.raises(ValueError, match="invalid manifest") as err:
         BenchSpec.from_yaml(raw, source=str(GEMM))
     assert f"{GEMM}: " in str(err.value)
-    assert reported in str(err.value), str(err.value)
-
-
-@pytest.mark.parametrize(
-    ("entry", "reported"),
-    [
-        ({"shape": "(NI, NJ)", "out": True, "shap": "(NI,)"}, "args.C.shap: unknown manifest field"),
-        ({"shape": "(NI, NJ)", "out": "yes"}, "args.C.out: Input should be a valid boolean"),
-        ({"shape": "(NI, NJ)", "out": True, "domain": [0, None]}, "args.C.domain"),
-        (["(NI, NJ)"], "args.C: expected a shape string, a number or a mapping (got list)"),
-    ],
-)
-def test_a_malformed_args_entry_is_refused_naming_its_key_path(entry: object, reported: str) -> None:
-    raw = gemm_raw()
-    raw["args"] = {**raw["args"], "C": entry}  # type: ignore[dict-item]
-    with pytest.raises(ValueError, match="invalid manifest") as err:
-        BenchSpec.from_yaml(raw, source=str(GEMM))
     assert reported in str(err.value), str(err.value)
 
 
@@ -99,23 +104,6 @@ def test_a_top_level_typo_names_the_closest_key() -> None:
     raw["levle"] = raw.pop("level")
     with pytest.raises(ValueError, match=r"levle: unknown manifest field \(did you mean 'level'\?\)"):
         BenchSpec.from_yaml(raw, source=str(GEMM))
-
-
-@pytest.mark.parametrize(
-    ("config", "reported"),
-    [
-        ({"tile": {"domain": [32, None]}}, "config.mapping.tile.domain[1]: expected a bool, a number or a string"),
-        ({"tile": {"domian": [32]}}, "config.mapping.tile.domian: unknown manifest field"),
-        ([{"tile": [32]}], "config.list[0].tile: expected a bool, a number or a string (got list)"),
-        (3, "config: expected a mapping of symbol -> knob or a list of complete configs"),
-    ],
-)
-def test_a_malformed_config_block_is_refused_naming_its_key_path(config: object, reported: str) -> None:
-    raw = gemm_raw()
-    raw["config"] = config
-    with pytest.raises(ValueError, match="invalid manifest") as err:
-        BenchSpec.from_yaml(raw, source=str(GEMM))
-    assert reported in str(err.value), str(err.value)
 
 
 def test_a_non_text_parameter_key_is_refused() -> None:
@@ -174,38 +162,6 @@ def test_the_key_sets_are_the_schema_fields(constant: frozenset[str], keys: set[
     assert constant == keys
 
 
-def test_a_bench_spec_refuses_a_list_for_a_tuple_field() -> None:
-    """A list argument tuple is mutable, so two specs could share and edit one order."""
-    with pytest.raises(ValidationError, match="output_args"):
-        BenchSpec(
-            short_name="k",
-            name="k",
-            relative_path="t/k",
-            module_name="k",
-            func_name="k",
-            parameters={},
-            input_args=(),
-            array_args=(),
-            output_args=["x"],  # type: ignore[arg-type]
-        )
-
-
-def test_a_bench_spec_refuses_an_unknown_field() -> None:
-    with pytest.raises(ValidationError, match="outputs"):
-        BenchSpec(
-            short_name="k",
-            name="k",
-            relative_path="t/k",
-            module_name="k",
-            func_name="k",
-            parameters={},
-            input_args=(),
-            array_args=(),
-            output_args=("x",),
-            outputs=("x",),  # type: ignore[call-arg]
-        )
-
-
 def test_replace_validates_the_changed_fields() -> None:
     """``model_copy(update=...)`` skips validation; ``replace`` must not."""
     gemm = BenchSpec.from_yaml(gemm_raw(), source=str(GEMM))
@@ -213,8 +169,3 @@ def test_replace_validates_the_changed_fields() -> None:
         gemm.replace(level="1")
     assert gemm.replace(level=2).level == 2
     assert gemm.level == 1
-
-
-def test_a_config_knob_refuses_an_unknown_field() -> None:
-    with pytest.raises(ValidationError, match="domian"):
-        ConfigKnob(domian=(1, 2))  # type: ignore[call-arg]

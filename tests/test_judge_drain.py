@@ -86,20 +86,3 @@ def test_a_malformed_body_is_not_drained(rank: Rank) -> None:
 def test_a_rank_that_does_not_answer_is_drained() -> None:
     """A dead rank cannot finish a grade: waiting on it would only spend the fold's reserve."""
     assert merge_results.in_flight("http://127.0.0.1:9/in-flight") == 0
-
-
-if __name__ == "__main__":
-    test_a_submit_is_counted_while_it_is_served_and_nothing_else_is()
-    test_a_rank_that_does_not_answer_is_drained()
-    for case in (
-        test_the_drain_waits_for_the_last_grade_to_finish,
-        test_a_grade_still_running_at_the_deadline_is_reported_lost,
-        test_a_router_error_is_not_drained,
-        test_a_malformed_body_is_not_drained,
-    ):
-        served = Rank()
-        try:
-            case(served)
-        finally:
-            served.server.shutdown()
-            served.server.server_close()

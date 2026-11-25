@@ -10,6 +10,8 @@ import ast
 import textwrap
 from collections.abc import Callable
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
@@ -181,20 +183,25 @@ def test_a_chained_array_is_one_name() -> None:
     assert split(body) == function_text("a = np.zeros(n)\na[0] = 1.0\nout[0] = a[0]\n")
 
 
-def test_an_alias_takes_the_buffer_where_the_shared_name_is_rebound() -> None:
-    body = "a = b = np.zeros(n)\na[0] = 1.0\na = np.ones(n)\nout[0] = b[0]\n"
-    assert split(body) == function_text("a = np.zeros(n)\na[0] = 1.0\nb = a\na = np.ones(n)\nout[0] = b[0]\n")
-
-
-def test_an_alias_rebound_inside_a_loop_takes_the_buffer_before_the_loop() -> None:
-    body = "p = v = np.zeros(n)\nfor i in range(3):\n    out[i] = v[0]\n    v = p + 1.0\n"
-    expected = "p = np.zeros(n)\nv = p\nfor i in range(3):\n    out[i] = v[0]\n    v = p + 1.0\n"
-    assert split(body) == function_text(expected)
-
-
-def test_an_alias_read_after_its_block_takes_the_buffer_at_the_end_of_the_block() -> None:
-    body = "if c:\n    a = b = np.zeros(n)\n    a[0] = 1.0\nout[0] = b[0]\n"
-    expected = "if c:\n    a = np.zeros(n)\n    a[0] = 1.0\n    b = a\nout[0] = b[0]\n"
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            "a = b = np.zeros(n)\na[0] = 1.0\na = np.ones(n)\nout[0] = b[0]\n",
+            "a = np.zeros(n)\na[0] = 1.0\nb = a\na = np.ones(n)\nout[0] = b[0]\n",
+        ),
+        (
+            "p = v = np.zeros(n)\nfor i in range(3):\n    out[i] = v[0]\n    v = p + 1.0\n",
+            "p = np.zeros(n)\nv = p\nfor i in range(3):\n    out[i] = v[0]\n    v = p + 1.0\n",
+        ),
+        (
+            "if c:\n    a = b = np.zeros(n)\n    a[0] = 1.0\nout[0] = b[0]\n",
+            "if c:\n    a = np.zeros(n)\n    a[0] = 1.0\n    b = a\nout[0] = b[0]\n",
+        ),
+    ],
+    ids=["where_the_shared_name_is_rebound", "before_the_loop_that_rebinds_it", "at_the_end_of_the_block_read_after"],
+)
+def test_an_alias_takes_the_shared_buffer_before_it_is_lost(body: str, expected: str) -> None:
     assert split(body) == function_text(expected)
 
 

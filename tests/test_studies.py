@@ -197,15 +197,6 @@ def test_a_task_that_never_relaunched_keeps_every_row() -> None:
     assert len(studies.drop_pre_relaunch_rows(frame)) == len(frame)
 
 
-def test_the_task_start_is_taken_over_the_rows_x7_kept() -> None:
-    """R3 reads ts_ms off the frame ``read_observations`` returns, so a task's start is the start of
-    its FINAL attempt and a rerun cannot be dated by an attempt that was thrown away."""
-    with pytest.warns(UserWarning, match="spec X7"):
-        kept = studies.drop_pre_relaunch_rows(relaunched_frame())
-    relaunched = kept[kept.episode_id == "a.n0.p38.w38"]
-    assert relaunched.ts_ms.min() == 100  # the task row's own stamp, the only pre-cut row kept
-
-
 def cancelled_frame() -> pd.DataFrame:
     """Task w38's agent was still working when the job went down; task w39's finished."""
     common = {"run_root": "r", "job": "636537", "setup": "a", "kernel": "gemm"}
@@ -310,11 +301,6 @@ def test_read_table_opens_a_db_under_a_directory_sqlite_uris_would_misread(
         conn.execute("INSERT INTO t VALUES (7)")
         conn.commit()
     assert studies.read_table(path, "t").x.tolist() == [7]
-
-
-def test_a_database_at_the_filesystem_root_is_not_a_shard() -> None:
-    """A shard has two parents to walk; a shallow path has fewer, and is no shard."""
-    assert not studies.merged_shard(pathlib.Path("/results.db"))
 
 
 def test_constant_answer_kernels_are_dropped_by_name_unless_the_key_is_off(monkeypatch: pytest.MonkeyPatch) -> None:

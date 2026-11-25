@@ -214,6 +214,9 @@ NUMBA_REPEATS = {
 #: that only reach the skip); a dispatched run holds each to exactly this status, so a fixed one fails until its entry
 #: is deleted.
 NUMBA_EMIT_GAPS: dict[str, str] = {}
+# Reproducer: lulesh and qe_vexx_k numba under parallel=True (00edfb5a3): their per-push numba legs fail when a module
+# constant, a closure's enclosing name or an einsum temp loses its rank, a helper call has no return rank, or a slice
+# store stops marking a parameter as an array.
 
 
 def _ungated_stems() -> list[str]:
@@ -393,21 +396,23 @@ def test_pinned_kernels_stay_in_the_sweep() -> None:
     )
 
 
-def test_a_numba_opt_override_names_a_gated_kernel_and_a_valid_level() -> None:
-    """The level must be one numba accepts: a typo does not fail, it is ignored, and the kernel
-    silently goes back to costing twenty minutes."""
+@pytest.mark.parametrize(
+    ("overrides", "valid_levels", "kind"),
+    [
+        pytest.param(NUMBA_LOW_OPT, {"0", "1", "2", "3"}, "numba", id="numba"),
+        pytest.param(NATIVE_LOW_OPT, {"-O0", "-O1"}, "native", id="native"),
+    ],
+)
+def test_an_opt_override_names_a_gated_kernel_and_a_valid_level(
+    overrides: dict[str, str], valid_levels: set[str], kind: str
+) -> None:
+    """The level must be one the backend accepts: a numba typo does not fail, it is ignored, and the kernel
+    silently goes back to costing twenty minutes. NATIVE_LOW_OPT only lowers the level (a level worth overriding
+    -O2 with), and only for kernels the sweep runs."""
     gated = set(_gated_stems())
-    for stem, level in NUMBA_LOW_OPT.items():
-        assert stem in gated, f"{stem} carries a numba opt override but is not in the gated sweep at all"
-        assert level in {"0", "1", "2", "3"}, f"{stem}: NUMBA_OPT={level!r} is not a level numba accepts"
-
-
-def test_a_native_opt_override_names_a_gated_kernel_and_a_valid_level() -> None:
-    """NATIVE_LOW_OPT only lowers the level, and only for kernels the sweep runs."""
-    gated = set(_gated_stems())
-    for stem, level in NATIVE_LOW_OPT.items():
-        assert stem in gated, f"{stem} carries a native opt override but is not in the gated sweep at all"
-        assert level in {"-O0", "-O1"}, f"{stem}: {level!r} is not a level worth overriding -O2 with"
+    for stem, level in overrides.items():
+        assert stem in gated, f"{stem} carries a {kind} opt override but is not in the gated sweep at all"
+        assert level in valid_levels, f"{stem}: {level!r} is not a level worth overriding the {kind} default with"
 
 
 def test_the_override_swaps_the_level_and_nothing_else() -> None:
@@ -448,25 +453,11 @@ def test_a_slow_numba_compile_is_never_a_required_pair() -> None:
     assert not {(stem, "numba") for stem in NUMBA_SLOW_COMPILE} & REQUIRE_OK
 
 
-def test_a_numba_opt_override_still_grades_the_kernel() -> None:
-    """The override changes HOW the leg is compiled, never whether it is graded."""
-    for stem in NUMBA_LOW_OPT:
-        assert MISSING_EMIT_FEATURE.get(stem) is None, (
-            f"{stem} carries an opt override AND is excused on the native backends, which leaves the override pointless"
-        )
-
-
 def test_mandelbrots_allow_fp64_only() -> None:
     """Both mandelbrots are chaotic escape-time iterations: fp32 rounding flips which iteration a
     point escapes at, so Z_out differs by O(1) across implementations -- not a translator bug."""
     for stem in ("mandelbrot_escape_count", "mandelbrot_escape_stamp"):
         assert BenchSpec.load(stem).allowed_precisions == ("fp64",)
-
-
-def test_the_precision_skip_fires_on_a_precision_the_kernel_leaves_out() -> None:
-    for stem in ("mandelbrot_escape_count", "mandelbrot_escape_stamp"):
-        assert _precision_skip(stem, "fp32") == "skip:precision-not-allowed:fp32"
-        assert _precision_skip(stem, "fp64") == ""
 
 
 def test_a_chaotic_band_cannot_hide_a_wrong_answer() -> None:

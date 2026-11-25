@@ -112,25 +112,17 @@ def while_kir() -> KernelIR:
     )
 
 
-def test_no_region_holds_a_construct_pet_cannot_model() -> None:
+def test_a_sized_zeros_kernel_keeps_its_allocation_outside_every_region_and_fills_with_a_loop() -> None:
+    """Splitting must not DROP the prologue -- it moves out of the regions, not out of the kernel.
+    A fill adjacent to compute is spelled as the affine nest it is, so it can stay in."""
     text = emit_pluto(sized_zeros_kir(), fn_name="sz")
     regions = regions_(text)
     assert regions, text
     for body in regions:
         for bad in UNSCOPABLE:
             assert bad not in body, f"{bad} inside a scop region:\n{body}"
-
-
-def test_the_allocation_stays_in_the_translation_unit_outside_every_region() -> None:
-    """Splitting must not DROP the prologue -- it moves out of the regions, not out of the kernel."""
-    text = emit_pluto(sized_zeros_kir(), fn_name="sz")
     assert "malloc(" in text, text
-    assert "malloc(" not in "".join(regions_(text)), text
-
-
-def test_a_body_level_zero_fill_is_a_loop_not_a_memset() -> None:
-    """The desugar: a fill adjacent to compute is spelled as the affine nest it is, so it can stay in."""
-    text = emit_pluto(sized_zeros_kir(), fn_name="sz")
+    assert "malloc(" not in "".join(regions), text
     fill = [ln for ln in text.split("\n") if "__zf" in ln]
     assert fill, text
     assert all("for (" in ln for ln in fill), fill

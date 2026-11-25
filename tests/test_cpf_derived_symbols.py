@@ -53,12 +53,3 @@ def test_a_symbol_the_abi_takes_is_left_alone() -> None:
     sdfg = sized_sdfg()
     assert bridge.bind_derived_symbols(sdfg, [("k", "N + 1")], ["x", "N", "k"]) == ()
     assert "k" in {str(symbol) for symbol in sdfg.free_symbols}
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        test_the_recipes_are_read_from_the_emitted_module(pathlib.Path(tmp))
-    test_a_derived_size_leaves_the_entry_signature()
-    test_a_symbol_the_abi_takes_is_left_alone()

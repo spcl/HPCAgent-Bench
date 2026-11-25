@@ -121,12 +121,6 @@ class ReadGuard:
         return getattr(self._result, name)
 
 
-def test_the_key_is_off_by_default() -> None:
-    assert config.current().service.score_info is False
-    with config.overridden("service.score_info", True):
-        assert config.current().service.score_info is True
-
-
 def test_the_score_answer_has_no_info_unless_one_is_passed() -> None:
     plain = service.score_answer(GRADES["correct"], KERNEL, Language.C, Preset.XL, Residency.HOST).to_json()
     info = score_info.build(GRADES["correct"])

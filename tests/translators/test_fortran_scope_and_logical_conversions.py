@@ -38,7 +38,6 @@ import tempfile
 import numpy as np
 import pytest
 
-from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.ir import apply_precision
 from hpcagent_bench.translators.numpyto_common.lowering import lower
@@ -129,7 +128,9 @@ def iter_sized_fortran() -> str:
     return fortran(ITER_SIZED, "f", ["r", "y"], ["out"], ITER_SHAPES, ITER_SYMS)
 
 
-def test_an_iterator_sized_temp_allocates_against_the_renamed_do_variable() -> None:
+def test_an_iterator_sized_temp_allocates_inside_the_loop_against_the_renamed_do_variable() -> None:
+    """The extent only EXISTS inside the loop, so a function-top ALLOCATE cannot be right even if
+    it somehow named a declared variable."""
     text = iter_sized_fortran()
     allocs = ALLOCATE.findall(text)
     assert allocs, f"the iterator-sized temp no longer allocates at all:\n{text}"
@@ -141,12 +142,6 @@ def test_an_iterator_sized_temp_allocates_against_the_renamed_do_variable() -> N
     assert not any(extent.strip() == "k" for name_, extent in allocs), (
         f"an ALLOCATE is still sized by the pre-rename ``k``, which no declaration binds:\n{text}"
     )
-
-
-def test_an_iterator_sized_temp_allocates_inside_the_loop_not_at_the_top() -> None:
-    """The extent only EXISTS inside the loop, so a function-top ALLOCATE cannot be right even if
-    it somehow named a declared variable."""
-    text = iter_sized_fortran()
     body = text.split("do k_l", 1)
     assert len(body) == 2, f"the k loop is gone from the emitted body:\n{text}"
     assert "allocate(" not in body[0], (
@@ -228,13 +223,6 @@ def test_the_helper_call_typechecks_at_both_precisions(precision: str | None) ->
     assert not diag, f"precision={precision}:\n{diag}"
 
 
-def test_the_kernel_float_precision_is_where_the_kind_comes_from() -> None:
-    """Pins the derivation rather than the literal: the dummy takes the accumulator dtype of the
-    kernel's precision, the same rule ``collect_implicit_locals`` types the caller's temp by."""
-    assert dtypes.fortran_kind(dtypes.accumulator_dtype("float32")) == "real(c_float)"
-    assert dtypes.fortran_kind(dtypes.accumulator_dtype("float64")) == "real(c_double)"
-
-
 # C. LOGICAL <-> numeric, in both directions                                   #
 
 #: ``m[i] = <int>`` stores a number into a bool; ``a[i] + m[i]`` reads a bool as a number.
@@ -256,18 +244,15 @@ def logical_fortran() -> str:
     return fortran(LOGICAL_BOTH_WAYS, "f", ["a"], ["out"], LOGICAL_SHAPES, LOGICAL_SYMS)
 
 
-def test_a_number_stored_into_a_logical_converts_by_truthiness() -> None:
+def test_a_logical_mask_converts_by_truthiness_on_store_and_promotes_to_zero_or_one_in_arithmetic() -> None:
+    """Reading a LOGICAL in arithmetic is numpy's bool -> 0/1 promotion, spelled as the MERGE Fortran
+    needs; ``a + m`` is a type error without it, so the alternative is not a wrong number but no kernel
+    at all."""
     text = logical_fortran()
     assert "logical(c_bool) :: m(" in text, f"the mask local is no longer LOGICAL:\n{text}"
     assert re.search(r"m\(\(i_l\d+\) \+ 1\) = \(x_ifexp\d+\) /= 0", text), (
         f"the integer store into the LOGICAL mask is not converted:\n{text}"
     )
-
-
-def test_a_logical_read_in_arithmetic_promotes_to_zero_or_one() -> None:
-    """numpy's bool -> 0/1 promotion, spelled as the MERGE Fortran needs; ``a + m`` is a type
-    error without it, so the alternative is not a wrong number but no kernel at all."""
-    text = logical_fortran()
     assert re.search(r"\+ merge\(1_c_int64_t, 0_c_int64_t, m\(", text), (
         f"the LOGICAL operand is not promoted inside the arithmetic:\n{text}"
     )

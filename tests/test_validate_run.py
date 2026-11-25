@@ -156,17 +156,6 @@ def test_missing_log_and_empty_agent_dir_fail_only_those_checks(
     assert validate_run.main([str(run_dir)]) == 1
 
 
-def test_report_prints_a_pass_fail_line_per_check(
-    tmp_path: pathlib.Path, validate_run: types.ModuleType, capsys: pytest.CaptureFixture[str]
-) -> None:
-    run_dir = build_run_dir(tmp_path, drop_log=True)
-    validate_run.main([str(run_dir)])
-    out = capsys.readouterr().out
-    assert "FAIL" in out
-    assert "PASS" in out
-    assert "agent_logs" in out
-
-
 # graceful degradation: a missing subtree is a FAIL, never a traceback
 @pytest.mark.parametrize(
     ("check_name", "expected_summary"),

@@ -345,36 +345,3 @@ def run_case(test: Callable[..., None], *args: object) -> None:
             test(*args, **{name: fixtures[name] for name in names[len(args) :]})
     finally:
         config.OVERRIDES.replace(snapshot)
-
-
-if __name__ == "__main__":
-    for template_path, section_key in KEY_CASES:
-        run_case(test_a_section_key_is_its_path_without_extension_and_separators, template_path, section_key)
-    for layout_task in LAYOUT_CASES:
-        run_case(test_each_section_starts_at_its_heading_after_one_blank_line, layout_task)
-    for case in (
-        test_every_section_the_top_level_templates_include_has_a_key,
-        test_a_section_an_overlay_turns_off_renders_nothing_and_leaves_no_gap,
-        test_later_overlays_win_in_both_directions,
-        test_a_section_replaced_by_a_file_renders_that_file_as_a_template,
-        test_a_replacement_reaches_every_include_of_the_section,
-        test_a_block_is_inserted_before_and_after_a_section_with_its_slots_filled,
-        test_an_inserted_text_without_a_trailing_newline_still_ends_in_one_blank_line,
-        test_inserts_beside_one_block_are_ordered_as_in_the_agent_prompt,
-        test_chained_inserts_beside_a_disabled_block_render_in_the_agent_prompts_order,
-        test_removing_an_inserted_block_keeps_the_blocks_anchored_to_it,
-        test_a_disabled_blocks_vars_do_not_reach_the_render,
-        test_an_overlay_var_named_like_a_stated_value_is_refused,
-        test_a_removed_block_is_gone_for_later_overlays,
-        test_a_section_off_by_default_renders_once_an_overlay_turns_it_on,
-        test_an_unknown_block_is_refused_and_the_known_ones_are_listed,
-        test_a_missing_included_template_is_named,
-        test_a_disabled_tool_fragment_is_dropped_without_a_gap,
-        test_one_partial_switch_removes_its_text_from_every_tool_that_includes_it,
-        test_the_debug_header_names_the_overlays,
-        test_the_cli_applies_an_overlay_and_lists_the_blocks,
-        test_the_correctness_section_states_the_strict_gate_as_configured,
-    ):
-        run_case(case)
-    run_case(test_a_section_removed_and_inserted_again_renders_once)
-    run_case(test_a_replaced_inserted_block_ends_in_a_blank_line_as_in_the_agent_prompt)

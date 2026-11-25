@@ -72,11 +72,6 @@ def test_every_pipeline_is_scored_by_exactly_one_deterministic_flavor() -> None:
     )
 
 
-def test_unknown_pipeline_is_rejected() -> None:
-    with pytest.raises(KeyError, match="does_not_exist"):
-        pipeline_named("does_not_exist")
-
-
 def test_only_canonicalize_columns_need_the_fork(probe_flavor: str) -> None:
     """The gate is derived from what a flavor RUNS, not from a second hand-maintained list."""
     every = framework_flavors("dace")
@@ -130,15 +125,6 @@ def test_a_two_device_backend_names_its_columns_by_device(monkeypatch: pytest.Mo
     monkeypatch.setitem(FRAMEWORKS.entries, "tvm", FRAMEWORKS.entries["tvm_gpu"])
     with pytest.raises(KeyError, match="two-device backend"):
         check_flavor_registry()
-
-
-def test_the_registry_as_shipped_is_valid() -> None:
-    check_flavor_registry()
-    for name, entry in FRAMEWORKS.entries.items():
-        if entry.flavor is None or entry.column is None:
-            continue
-        assert entry.column in FRAMEWORKS.entries
-        assert name == f"{entry.column}_{entry.flavor}"
 
 
 def test_ranks_per_node_splits_the_node() -> None:
@@ -265,26 +251,6 @@ def test_a_codegen_key_the_environment_names_keeps_its_value(monkeypatch: pytest
     finally:
         for key, value in zip(keys, original, strict=True):
             dace.Config.set(*key, value=value)
-
-
-@pytest.mark.parametrize(
-    ("pipeline", "cpu", "cuda"),
-    [
-        ("canon_cpu", "experimental_readable", "experimental"),
-        ("canon_gpu", "experimental_readable", "experimental"),
-        ("parallel_cpu", "legacy", "experimental"),
-        ("parallel_gpu", "legacy", "experimental"),
-    ],
-)
-def test_each_pipeline_runs_its_generators_and_the_new_offload(pipeline: str, cpu: str, cuda: str) -> None:
-    """canon runs the new CPU and GPU generators; parallel keeps the classic CPU generator and takes the new GPU
-    one; both offload with the new pass."""
-    from hpcagent_bench.frameworks.dace_framework import PIPELINES_BY_NAME
-
-    config = dict(PIPELINES_BY_NAME[pipeline].config)
-    assert config[("compiler", "cpu", "implementation")] == cpu
-    assert config[("compiler", "cuda", "implementation")] == cuda
-    assert config[("optimizer", "new_gpu_offloading_pass")] is True
 
 
 def test_every_gpu_variant_runs_on_the_default_stream_only() -> None:

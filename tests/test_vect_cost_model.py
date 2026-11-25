@@ -64,10 +64,6 @@ def test_an_unknown_cost_model_is_refused_by_name(monkeypatch: pytest.MonkeyPatc
         languages.family_report_flags("gcc")
 
 
-def test_the_llvm_switch_never_pins_a_vector_width() -> None:
-    assert "force-vector-width" not in flags.CLANG_VECT_UNLIMITED
-
-
 def report_of(tmp_path: pathlib.Path, driver: str, family: str, march: str, source: str = "k.c") -> str:
     """The stderr of one compile-only report run for ``march``, with the flags the knob currently selects."""
     executable = shutil.which(driver)

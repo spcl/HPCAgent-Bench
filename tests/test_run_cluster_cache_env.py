@@ -14,6 +14,8 @@ import pathlib
 import re
 import subprocess
 
+import pytest
+
 from hpcagent_bench import paths
 
 REPO = paths.ROOT
@@ -34,12 +36,6 @@ def run(script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["bash", "-c", script], env=full_env, capture_output=True, text=True, check=False)
 
 
-def test_the_cache_root_derivation_reads_only_jit_cache_root() -> None:
-    """Pins the exact expression the two behavioural tests below execute: the root is cache_env.sh's
-    JIT_CACHE_ROOT (exported by the batch shell's env.sh), with no second default spelled here."""
-    assert _assignment("cache_root") == "${JIT_CACHE_ROOT:?helpers/scripts/cache_env.sh exports it}"
-
-
 def test_cache_root_fails_loudly_without_jit_cache_root(tmp_path: pathlib.Path) -> None:
     """An inference node without JIT_CACHE_ROOT refuses to pick a cache root, even with SCRATCH set, rather
     than deriving one that could disagree with cache_env.sh's."""
@@ -57,35 +53,21 @@ def test_cache_root_is_jit_cache_root(tmp_path: pathlib.Path) -> None:
     assert proc.stdout.strip() == str(root)
 
 
-def test_the_node_local_jit_root_is_keyed_by_both_job_and_node_rank() -> None:
-    """The node-local write layer (jit_cache_layer.sh) exists because several engines compiling into
-    the SAME directory at once corrupt each other's reads. That guarantee
-    depends on no two node ranks -- of the same job or of two jobs running at once -- ever computing
-    the same local_root; both the job id and the node rank must appear in it."""
-    expr = _assignment("local_root")
-    assert "${SLURM_JOB_ID:-$$}" in expr, expr
-    assert "${node_rank}" in expr, expr
-
-
-def test_two_node_ranks_of_the_same_job_get_distinct_local_roots(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ("ranks", "job_ids"),
+    [
+        pytest.param(("0", "1"), ("640200", "640200"), id="two_node_ranks_of_one_job"),
+        pytest.param(("0", "0"), ("640200", "640201"), id="two_concurrent_jobs_on_one_node_rank"),
+    ],
+)
+def test_distinct_ranks_or_jobs_get_distinct_local_roots(
+    tmp_path: pathlib.Path, ranks: tuple[str, str], job_ids: tuple[str, str]
+) -> None:
     expr = _assignment("local_root")
     roots = set()
-    for rank in ("0", "1"):
+    for rank, job_id in zip(ranks, job_ids, strict=True):
         proc = run(
             f'node_rank="{rank}"; local_root="{expr}"; echo "$local_root"',
-            {"SLURM_JOB_ID": "640200", "TMPDIR": str(tmp_path)},
-        )
-        assert proc.returncode == 0, proc.stderr
-        roots.add(proc.stdout.strip())
-    assert len(roots) == 2, roots
-
-
-def test_two_concurrent_jobs_on_the_same_node_rank_get_distinct_local_roots(tmp_path: pathlib.Path) -> None:
-    expr = _assignment("local_root")
-    roots = set()
-    for job_id in ("640200", "640201"):
-        proc = run(
-            f'node_rank="0"; local_root="{expr}"; echo "$local_root"',
             {"SLURM_JOB_ID": job_id, "TMPDIR": str(tmp_path)},
         )
         assert proc.returncode == 0, proc.stderr

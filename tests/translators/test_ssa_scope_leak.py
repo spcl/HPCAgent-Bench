@@ -54,72 +54,107 @@ REBIND_IN_UNTAKEN_BRANCH = (
 )
 
 
-def test_conditional_shape_rebinding_is_refused_not_miscompiled() -> None:
-    # Whichever branch runs is a RUNTIME fact, so no static buffer choice is correct. Refusing is
-    # the only sound answer -- silently binding to either one is the bug this pins. The oracle
-    # reports an emit-time refusal as a status rather than propagating it, so assert on that.
-    for backend, status in run_(REBIND_IN_UNTAKEN_BRANCH).items():
+REBIND_AT_LOOP_TOP = (
+    "import numpy as np\n"
+    "def f(a, out):\n"
+    "    n = a.shape[0]\n"
+    "    x = np.zeros(n)\n"
+    "    for i in range(n):\n"
+    "        out[i] = x[0]\n"
+    "        x = np.zeros(2 * n)\n"
+    "        for j in range(2 * n):\n"
+    "            x[j] = a[i]\n"
+)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # Whichever branch runs is a RUNTIME fact, so no static buffer choice is correct. Refusing is
+        # the only sound answer -- silently binding to either one is the bug this pins.
+        REBIND_IN_UNTAKEN_BRANCH,
+        # The kill is what makes the loop case safe, so a body with NO kill before the read must still
+        # be refused. Here ``x`` is bound before the loop and re-bound at a second extent inside it,
+        # with the re-entry read at the top of the body reaching that second binding: which extent that
+        # read sees depends on the iteration.
+        REBIND_AT_LOOP_TOP,
+    ],
+    ids=["rebinding_in_untaken_branch", "reentry_read_before_any_rebinding"],
+)
+def test_conditional_shape_rebinding_is_refused_not_miscompiled(src: str) -> None:
+    # The oracle reports an emit-time refusal as a status rather than propagating it, so assert on that.
+    for backend, status in run_(src).items():
         assert status.startswith("FAIL:emit:NotImplementedError"), f"{backend}: {status}"
         assert "conditional control flow" in status, f"{backend}: {status}"
 
 
-def test_unconditional_rebinding_at_top_level_still_versions() -> None:
-    # The supported case: both extents are live on every path, so each gets its own buffer.
-    src = (
-        "import numpy as np\n"
-        "def f(a, out):\n"
-        "    n = a.shape[0]\n"
-        "    x = np.zeros(n)\n"
-        "    for i in range(n):\n"
-        "        x[i] = a[i]\n"
-        "    x = np.zeros(2 * n)\n"
-        "    for i in range(2 * n):\n"
-        "        x[i] = 1.0\n"
-        "    for i in range(n):\n"
-        "        out[i] = x[i] + a[i]\n"
-    )
-    assert_all_ok(run_(src))
-
-
-def test_same_shape_rebinding_reuses_one_buffer() -> None:
-    # A rebinding to the SAME extent is not a new buffer and must not be renamed at all, inside
-    # control flow or out of it.
-    src = (
-        "import numpy as np\n"
-        "def f(a, out):\n"
-        "    n = a.shape[0]\n"
-        "    x = np.zeros(n)\n"
-        "    for i in range(n):\n"
-        "        x[i] = a[i]\n"
-        "    x = np.zeros(n)\n"
-        "    for i in range(n):\n"
-        "        x[i] = a[i] * 2.0\n"
-        "    for i in range(n):\n"
-        "        out[i] = x[i]\n"
-    )
-    assert_all_ok(run_(src))
-
-
-def test_sibling_loop_nests_may_reuse_a_name_at_different_shapes() -> None:
-    # The shape ICON's velocity_tendencies actually has: two INDEPENDENT temporaries that happen to
-    # share the name `t`, each written and fully consumed inside its own nest, at different extents.
-    # Nothing reads `t` after either nest, so there is no ambiguity -- refusing this would reject a
-    # working kernel, which an earlier, liveness-blind version of the guard did.
-    src = (
-        "import numpy as np\n"
-        "def f(a, out):\n"
-        "    n = a.shape[0]\n"
-        "    for i in range(n):\n"
-        "        t = np.zeros(n)\n"
-        "        for j in range(n):\n"
-        "            t[j] = a[j] * 2.0\n"
-        "        out[i] = t[i]\n"
-        "    for i in range(n):\n"
-        "        t = np.zeros(2 * n)\n"
-        "        for j in range(2 * n):\n"
-        "            t[j] = a[i]\n"
-        "        out[i] = out[i] + t[0]\n"
-    )
+@pytest.mark.parametrize(
+    "src",
+    [
+        # The supported case: both extents are live on every path, so each gets its own buffer.
+        (
+            "import numpy as np\n"
+            "def f(a, out):\n"
+            "    n = a.shape[0]\n"
+            "    x = np.zeros(n)\n"
+            "    for i in range(n):\n"
+            "        x[i] = a[i]\n"
+            "    x = np.zeros(2 * n)\n"
+            "    for i in range(2 * n):\n"
+            "        x[i] = 1.0\n"
+            "    for i in range(n):\n"
+            "        out[i] = x[i] + a[i]\n"
+        ),
+        # A rebinding to the SAME extent is not a new buffer and must not be renamed at all, inside
+        # control flow or out of it.
+        (
+            "import numpy as np\n"
+            "def f(a, out):\n"
+            "    n = a.shape[0]\n"
+            "    x = np.zeros(n)\n"
+            "    for i in range(n):\n"
+            "        x[i] = a[i]\n"
+            "    x = np.zeros(n)\n"
+            "    for i in range(n):\n"
+            "        x[i] = a[i] * 2.0\n"
+            "    for i in range(n):\n"
+            "        out[i] = x[i]\n"
+        ),
+        # The shape ICON's velocity_tendencies actually has: two INDEPENDENT temporaries that happen to
+        # share the name `t`, each written and fully consumed inside its own nest, at different extents.
+        # Nothing reads `t` after either nest, so there is no ambiguity -- refusing this would reject a
+        # working kernel, which an earlier, liveness-blind version of the guard did.
+        (
+            "import numpy as np\n"
+            "def f(a, out):\n"
+            "    n = a.shape[0]\n"
+            "    for i in range(n):\n"
+            "        t = np.zeros(n)\n"
+            "        for j in range(n):\n"
+            "            t[j] = a[j] * 2.0\n"
+            "        out[i] = t[i]\n"
+            "    for i in range(n):\n"
+            "        t = np.zeros(2 * n)\n"
+            "        for j in range(2 * n):\n"
+            "            t[j] = a[i]\n"
+            "        out[i] = out[i] + t[0]\n"
+        ),
+        # x is re-bound and fully consumed inside the loop body; nothing after the loop reads it, so
+        # there is no ambiguity to refuse and the kernel must still translate.
+        (
+            "import numpy as np\n"
+            "def f(a, out):\n"
+            "    n = a.shape[0]\n"
+            "    for i in range(n):\n"
+            "        t = np.zeros(2 * n)\n"
+            "        for j in range(2 * n):\n"
+            "            t[j] = a[i]\n"
+            "        out[i] = t[0]\n"
+        ),
+    ],
+    ids=["unconditional_top_level", "same_shape_reuses_one_buffer", "sibling_loop_nests", "confined_to_loop_body"],
+)
+def test_a_rebinding_with_no_ambiguous_read_still_translates(src: str) -> None:
     assert_all_ok(run_(src))
 
 
@@ -152,46 +187,6 @@ def test_two_shapes_per_loop_iteration_are_not_refused() -> None:
     assert_all_ok(run_(src))
 
 
-def test_reentry_read_before_any_rebinding_is_still_refused() -> None:
-    """The kill is what makes the loop case safe, so a body with NO kill before the read must still
-    be refused -- otherwise this change would have traded a false positive for a false negative.
-
-    Here ``x`` is bound before the loop and re-bound at a second extent inside it, with the re-entry
-    read at the top of the body reaching that second binding. Which extent that read sees depends on
-    the iteration, so no static buffer choice is right.
-    """
-    src = (
-        "import numpy as np\n"
-        "def f(a, out):\n"
-        "    n = a.shape[0]\n"
-        "    x = np.zeros(n)\n"
-        "    for i in range(n):\n"
-        "        out[i] = x[0]\n"
-        "        x = np.zeros(2 * n)\n"
-        "        for j in range(2 * n):\n"
-        "            x[j] = a[i]\n"
-    )
-    for backend, status in run_(src).items():
-        assert status.startswith("FAIL:emit:NotImplementedError"), f"{backend}: {status}"
-        assert "conditional control flow" in status, f"{backend}: {status}"
-
-
-def test_rebinding_confined_to_a_loop_body_does_not_escape() -> None:
-    # x is re-bound and fully consumed inside the loop body; nothing after the loop reads it, so
-    # there is no ambiguity to refuse and the kernel must still translate.
-    src = (
-        "import numpy as np\n"
-        "def f(a, out):\n"
-        "    n = a.shape[0]\n"
-        "    for i in range(n):\n"
-        "        t = np.zeros(2 * n)\n"
-        "        for j in range(2 * n):\n"
-        "            t[j] = a[i]\n"
-        "        out[i] = t[0]\n"
-    )
-    assert_all_ok(run_(src))
-
-
 # holes found by review of the first fix; each was CONFIRMED before being closed
 # These drive the PASS directly instead of emitting and running. The property under test belongs to
 # the lowering pass, and going end-to-end is actively unsafe here: the while-loop case below is a
@@ -205,17 +200,14 @@ def lower_(body: str) -> None:
     ssa_rename_reassigned(ast.parse("import numpy as np\n" + body), dict(SHAPES))
 
 
-def assert_refused(body: str) -> None:
-    with pytest.raises(NotImplementedError, match="conditional control flow"):
-        lower_(body)
-
-
-def test_rebinding_nested_below_the_loop_body_is_refused() -> None:
-    """A guard consulting only the IMMEDIATELY enclosing block lets a rebinding one level deeper
-    escape -- the same miscompile the guard exists for, just nested. Every enclosing loop's
-    re-entry POINT is carried down and truncated per name at the mint site (the truncation
-    depends on the name, so a pre-truncated prefix cannot be passed down)."""
-    assert_refused("""
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A guard consulting only the IMMEDIATELY enclosing block lets a rebinding one level deeper
+        # escape -- the same miscompile the guard exists for, just nested. Every enclosing loop's
+        # re-entry POINT is carried down and truncated per name at the mint site (the truncation
+        # depends on the name, so a pre-truncated prefix cannot be passed down).
+        """
 def k(a, out, n, m, iters):
     e = np.zeros((n,))
     for it in range(iters):
@@ -223,13 +215,10 @@ def k(a, out, n, m, iters):
         for j in range(m):
             e = np.zeros((m,))
             e[j] = 1.0
-""")
-
-
-def test_the_killing_statement_own_rhs_read_still_counts() -> None:
-    # `X = np.zeros(n) + X[0]` kills X, but its RHS reads the previous binding FIRST. Truncating
-    # the prefix before the whole statement skipped that read.
-    assert_refused("""
+""",
+        # `X = np.zeros(n) + X[0]` kills X, but its RHS reads the previous binding FIRST. Truncating
+        # the prefix before the whole statement skipped that read.
+        """
 def k(a, out, n, m, T):
     X = np.zeros((n,))
     for t in range(T):
@@ -237,26 +226,20 @@ def k(a, out, n, m, T):
         out[t] = X[0]
         X = np.zeros((m,))
         X[0] = 1.0
-""")
-
-
-def test_augmented_assignment_counts_as_a_read() -> None:
-    # `e += 1.0` reads and writes the SAME buffer, but its bare-Name target carries ctx=Store, so
-    # it was neither a kill (correctly) nor a read (wrongly) and liveness answered "dead".
-    assert_refused("""
+""",
+        # `e += 1.0` reads and writes the SAME buffer, but its bare-Name target carries ctx=Store, so
+        # it was neither a kill (correctly) nor a read (wrongly) and liveness answered "dead".
+        """
 def k(a, out, n, m):
     e = np.zeros((n,))
     if n > 0:
         e = np.zeros((m,))
         e[0] = 2.0
     e += 1.0
-""")
-
-
-def test_a_zero_trip_for_target_is_not_a_kill() -> None:
-    """`for e in range(k)` with a runtime k == 0 never binds e, so the previous binding survives --
-    may-define, not must-define. Treating it as a kill dropped every read before it."""
-    assert_refused("""
+""",
+        # `for e in range(k)` with a runtime k == 0 never binds e, so the previous binding survives --
+        # may-define, not must-define. Treating it as a kill dropped every read before it.
+        """
 def k(a, out, n, m, iters):
     e = np.zeros((n,))
     for it in range(iters):
@@ -265,19 +248,28 @@ def k(a, out, n, m, iters):
         out[it] = e[0]
         e = np.zeros((m,))
         e[0] = 1.0
-""")
-
-
-def test_while_test_runs_after_the_body() -> None:
-    # A While re-tests its condition after the body, so the test is live-after code too.
-    assert_refused("""
+""",
+        # A While re-tests its condition after the body, so the test is live-after code too.
+        """
 def k(a, out, n, m):
     x = np.zeros((n,))
     c = 0
     while x[0] < 1.0:
         x = np.zeros((m,))
         c = c + 1
-""")
+""",
+    ],
+    ids=[
+        "rebinding_nested_below_the_loop_body",
+        "killing_statement_own_rhs_read",
+        "augmented_assignment_read",
+        "zero_trip_for_target_is_not_a_kill",
+        "while_test_runs_after_the_body",
+    ],
+)
+def test_a_rebinding_whose_read_is_ambiguous_is_refused(body: str) -> None:
+    with pytest.raises(NotImplementedError, match="conditional control flow"):
+        lower_(body)
 
 
 def test_starred_and_nested_unpacking_are_recognised_as_kills() -> None:

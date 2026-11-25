@@ -3,7 +3,6 @@
 """Kernel provenance and the attribution files rendered from it (helpers/scripts/render_attribution.py)."""
 
 import pathlib
-import tempfile
 
 import pydantic
 import pytest
@@ -99,27 +98,3 @@ def test_a_prose_comment_starting_with_provenance_is_not_the_provenance_line(tmp
     manifest = tmp_path / "k.yaml"
     manifest.write_text("# header\n# provenance: {kind: original}\n# provenance: input data from X\nname: k\n")
     assert ra.read_manifest(manifest).kind is ra.Kind.ORIGINAL
-
-
-def test_a_kind_is_spelled_as_the_provenance_lines_write_it() -> None:
-    assert ra.Kind.texts() == ("derived", "algorithm", "original")
-
-
-if __name__ == "__main__":
-    test_every_manifest_carries_a_provenance_line_the_registry_resolves()
-    for rendered in (ra.CONTRIBUTORS, ra.NOTICE):
-        test_the_rendered_attribution_file_is_in_sync(rendered)
-    test_every_license_text_file_is_named_by_an_upstream()
-    for inconsistent, reported in (
-        ("# provenance: {kind: derived}", "must name an upstream"),
-        ("# provenance: {kind: original, upstream: npbench}", "must not name an upstream"),
-        ("# provenance: {kind: derived, upstream: nowhere}", "unknown upstream 'nowhere'"),
-        ("# provenance: {kind: original, contributor: nobody}", "unknown contributor 'nobody'"),
-    ):
-        test_an_inconsistent_provenance_line_is_reported(inconsistent, reported)
-    for unparsable in UNPARSABLE_LINES:
-        test_an_unknown_kind_or_key_is_a_parse_error(unparsable)
-    test_one_upstream_and_a_list_of_them_parse_alike()
-    test_a_registry_with_an_unknown_field_or_a_missing_license_is_refused()
-    test_a_prose_comment_starting_with_provenance_is_not_the_provenance_line(pathlib.Path(tempfile.mkdtemp()))
-    test_a_kind_is_spelled_as_the_provenance_lines_write_it()

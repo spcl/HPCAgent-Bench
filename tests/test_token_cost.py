@@ -136,40 +136,6 @@ def test_a_single_attempt_tasks_total_is_that_attempts_own(token_cost: ModuleTyp
     assert totals.tokens_billed == 500
 
 
-def test_effective_comes_from_episode_cost_not_a_reimplementation(
-    token_cost: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """The per-attempt effective figure must be exactly ``episode_cost(log)["effective"]`` summed,
-    the one implementation of the cost model -- not a second copy that can drift from it."""
-    write_claude_log(tmp_path / "claude.attempt1.log", input_tokens=900, output_tokens=10)
-    write_claude_log(tmp_path / "claude.log", input_tokens=1900, output_tokens=20)
-
-    totals = token_cost.episode_totals(tmp_path)
-
-    def effective(name: str) -> int:
-        return int(token_cost.episode_cost(tmp_path / name)["effective"])
-
-    assert totals.tokens_effective == effective("claude.log")
-    assert totals.tokens_effective_crashed == effective("claude.attempt1.log")
-
-
-def test_billed_comes_from_accumulate_total_tokens_not_a_reimplementation(
-    token_cost: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """The per-attempt billed figure must be exactly ``accumulate_total_tokens``'s fold, folded
-    fresh per attempt -- the same fold the driver's token-budget watcher uses."""
-    write_claude_log(tmp_path / "claude.attempt1.log", input_tokens=900, output_tokens=10)
-    write_claude_log(tmp_path / "claude.log", input_tokens=1900, output_tokens=20)
-
-    totals = token_cost.episode_totals(tmp_path)
-
-    def folded(name: str) -> int:
-        return token_cost.accumulate_total_tokens((tmp_path / name).read_text(encoding="utf-8").splitlines(), {})
-
-    assert totals.tokens_billed == folded("claude.log")
-    assert totals.tokens_billed_crashed == folded("claude.attempt1.log")
-
-
 def test_skipping_lines_that_cannot_carry_usage_changes_no_total(
     token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:

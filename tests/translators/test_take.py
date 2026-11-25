@@ -6,7 +6,7 @@ Lowered as a lib-node expander so the fresh output local is declared like any ot
 gather target; the index-array detection is taught the ``np.take`` form so ``idx`` is
 typed int (C rejects a float subscript). Validated numerically vs numpy across the full
 backend matrix (C / C++ / Fortran + numba, skip-tolerant), for the flat and
-axis forms and an intermediate-local operand. ``test_take_negative_axis`` subsumes the
+axis forms and an intermediate-local operand. the ``negative_axis`` case subsumes the
 positive last-axis gather (``-1`` normalizes to it).
 
 Note the index-length symbol is ``NIDX`` (not ``K``): Fortran is case-insensitive, so a
@@ -15,6 +15,7 @@ unrelated to take, avoided here by naming.
 """
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import all_ok, run_op
 
@@ -67,13 +68,13 @@ def take_axis(axis: int, out_shape: tuple[int, int], out_sym: str) -> dict[str, 
     )
 
 
-def test_take_axis0_row_gather() -> None:
-    ok, res = all_ok(take_axis(0, (3, 4), "(NIDX, N)"))
-    assert ok, res
-
-
-def test_take_negative_axis() -> None:
-    ok, res = all_ok(take_axis(-1, (3, 3), "(M, NIDX)"))
+@pytest.mark.parametrize(
+    ("axis", "out_shape", "out_sym"),
+    [(0, (3, 4), "(NIDX, N)"), (-1, (3, 3), "(M, NIDX)")],
+    ids=["axis0_row_gather", "negative_axis"],
+)
+def test_take_along_an_axis_matches_numpy(axis: int, out_shape: tuple[int, int], out_sym: str) -> None:
+    ok, res = all_ok(take_axis(axis, out_shape, out_sym))
     assert ok, res
 
 

@@ -125,12 +125,3 @@ def test_an_ieee_operation_gives_the_same_bits_on_the_device(name: str) -> None:
 @pytest.mark.parametrize("name", sorted(FUNCTIONS))
 def test_an_exact_math_function_gives_the_same_bits_on_the_device(name: str) -> None:
     assert_same_bits(FUNCTIONS[name], name)
-
-
-if __name__ == "__main__":
-    for each in sorted(DRAWS):
-        test_a_draw_gives_the_same_bits_on_the_device(each)
-    for each in sorted(OPERATIONS):
-        test_an_ieee_operation_gives_the_same_bits_on_the_device(each)
-    for each in sorted(FUNCTIONS):
-        test_an_exact_math_function_gives_the_same_bits_on_the_device(each)

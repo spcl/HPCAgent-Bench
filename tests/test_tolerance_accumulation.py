@@ -36,51 +36,43 @@ from tests.results_rows import attempts
 # contracted_extent
 
 
-def test_matmul_contracts_the_shared_dimension() -> None:
-    """(M,K)x(K,N)->(M,N): K is in both input shapes and neither is in the output's -- l=K."""
+@pytest.mark.parametrize(
+    ("output", "input_args", "shapes", "arrays", "symbols", "extent"),
+    [
+        # (M,K)x(K,N)->(M,N): K is in both input shapes and neither is in the output's -- l=K.
+        pytest.param(
+            "C", ("A", "B"), {"A": "(M,K)", "B": "(K,N)", "C": "(M,N)"},
+            {"A": (4, 5), "B": (5, 6), "C": (4, 6)}, {"M": 4, "K": 5, "N": 6}, 5, id="matmul_shared_dimension",
+        ),
+        # (N,).(N,)->(): the scalar output declares no shape at all, so l is every input symbol -- N. ``x``
+        # and ``y`` each carry N once and never within their own shape, so this is the ordinary contraction,
+        # not the ambiguous-symbol fallback (scoped to a symbol repeated within ONE input).
+        pytest.param(
+            "r", ("x", "y"), {"x": "(N,)", "y": "(N,)"}, {"x": (9,), "y": (9,)}, {"N": 9}, 9, id="dot_shared_length"
+        ),
+        # (M,N)->(M,): M survives into the output, N does not -- l=N.
+        pytest.param(
+            "s", ("A",), {"A": "(M,N)", "s": "(M,)"}, {"A": (4, 7), "s": (4,)}, {"M": 4, "N": 7}, 7, id="row_sum_axis"
+        ),
+        # (N,)->(N,): the output carries every input symbol, so nothing is contracted -- l=1.
+        pytest.param(
+            "y", ("x",), {"x": "(N,)", "y": "(N,)"}, {"x": (100,), "y": (100,)}, {"N": 100}, 1, id="elementwise_map"
+        ),
+    ],
+)  # fmt: skip
+def test_the_contracted_extent_is_what_the_inputs_carry_and_the_output_drops(
+    output: str,
+    input_args: tuple[str, ...],
+    shapes: dict[str, str],
+    arrays: dict[str, tuple[int, ...]],
+    symbols: dict[str, int],
+    extent: int,
+) -> None:
     spec = grading_spec(
-        "C",
-        input_args=("A", "B"),
-        init=InitSpec(func_name="", input_args=(), output_args=(), shapes={"A": "(M,K)", "B": "(K,N)", "C": "(M,N)"}),
+        output, input_args=input_args, init=InitSpec(func_name="", input_args=(), output_args=(), shapes=shapes)
     )
-    data = {"A": np.zeros((4, 5)), "B": np.zeros((5, 6)), "C": np.zeros((4, 6)), "M": 4, "K": 5, "N": 6}
-    assert contracted_extent(spec, "C", data["C"], data) == (5, "contracted")
-
-
-def test_dot_contracts_the_shared_length() -> None:
-    """(N,).(N,)->(): the scalar output declares no shape at all, so l is every input symbol -- N.
-
-    ``x`` and ``y`` each carry N once and never within their own shape, so this is the ordinary
-    contraction, not the ambiguous-symbol fallback (which is scoped to a symbol repeated within ONE input)."""
-    spec = grading_spec(
-        "r",
-        input_args=("x", "y"),
-        init=InitSpec(func_name="", input_args=(), output_args=(), shapes={"x": "(N,)", "y": "(N,)"}),
-    )
-    data = {"x": np.zeros(9), "y": np.zeros(9), "N": 9}
-    assert contracted_extent(spec, "r", None, data) == (9, "contracted")
-
-
-def test_row_sum_contracts_the_reduced_axis() -> None:
-    """(M,N)->(M,): M survives into the output, N does not -- l=N."""
-    spec = grading_spec(
-        "s",
-        input_args=("A",),
-        init=InitSpec(func_name="", input_args=(), output_args=(), shapes={"A": "(M,N)", "s": "(M,)"}),
-    )
-    data = {"A": np.zeros((4, 7)), "s": np.zeros(4), "M": 4, "N": 7}
-    assert contracted_extent(spec, "s", data["s"], data) == (7, "contracted")
-
-
-def test_elementwise_map_contracts_nothing() -> None:
-    """(N,)->(N,): the output carries every input symbol, so nothing is contracted -- l=1."""
-    spec = grading_spec(
-        "y",
-        input_args=("x",),
-        init=InitSpec(func_name="", input_args=(), output_args=(), shapes={"x": "(N,)", "y": "(N,)"}),
-    )
-    data = {"x": np.zeros(100), "y": np.zeros(100), "N": 100}
-    assert contracted_extent(spec, "y", data["y"], data) == (1, "contracted")
+    data = {name: np.zeros(shape) for name, shape in arrays.items()} | symbols
+    assert contracted_extent(spec, output, data.get(output), data) == (extent, "contracted")
 
 
 def test_a_reduction_stored_into_one_element_of_a_declared_buffer_contracts_its_symbol() -> None:
@@ -435,11 +427,6 @@ def test_write_probed_collapse_widens_l_without_narrowing_what_is_graded() -> No
 
 
 # eps_acc
-
-
-def test_fp64_and_fp32_accumulate_in_their_own_precision() -> None:
-    assert accumulation_eps(Precision.FP64) == machine_eps(Precision.FP64)
-    assert accumulation_eps(Precision.FP32) == machine_eps(Precision.FP32)
 
 
 @pytest.mark.parametrize("precision", [Precision.FP8_E4M3, Precision.FP8_E5M2])

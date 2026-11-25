@@ -7,6 +7,8 @@ to one scalar ``rng.standard_normal()`` per entry. ``shipped_*`` below are the s
 verbatim; the rng state afterwards must match too, since ``kDivM`` draws on.
 """
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 from numpy.random import default_rng
@@ -76,20 +78,24 @@ def assert_same(got: tuple[np.ndarray, ...], ref: tuple[np.ndarray, ...]) -> Non
 
 @pytest.mark.parametrize("dtype", [np.float64, np.float32])
 @pytest.mark.parametrize(("batch", "order", "seed"), [(1, 7, 0), (5, 7, 3), (17, 9, 11), (4, 5, 42)])
-def test_batched_gemm_initialize_matches_shipped(batch: int, order: int, seed: int, dtype: type) -> None:
-    """Q, I and star equal the scalar-loop initializer's, and the rng is left in the same state."""
+@pytest.mark.parametrize(
+    ("initialize", "shipped"),
+    [
+        pytest.param(gemm.initialize, shipped_gemm_initialize, id="batched_gemm"),
+        pytest.param(contraction.initialize, shipped_contraction_initialize, id="tensor_contraction"),
+    ],
+)
+def test_the_vectorized_initializer_matches_the_shipped_scalar_one(
+    initialize: Callable[..., tuple[np.ndarray, ...]],
+    shipped: Callable[..., tuple[np.ndarray, ...]],
+    batch: int,
+    order: int,
+    seed: int,
+    dtype: type,
+) -> None:
+    """Every returned array (Q, I, star, and kDivM for the contraction) equals the scalar-loop initializer's, and the
+    rng is left in the same state."""
     ref_rng, new_rng = default_rng(seed), default_rng(seed)
-    assert_same(
-        gemm.initialize(batch, order, dtype, rng=new_rng), shipped_gemm_initialize(batch, order, dtype, ref_rng)
-    )
-    assert new_rng.random() == ref_rng.random()
-
-
-@pytest.mark.parametrize("dtype", [np.float64, np.float32])
-@pytest.mark.parametrize(("batch", "order", "seed"), [(1, 7, 0), (5, 7, 3), (17, 9, 11), (4, 5, 42)])
-def test_tensor_contraction_initialize_matches_shipped(batch: int, order: int, seed: int, dtype: type) -> None:
-    """Q, I, kDivM and star equal the scalar-loop initializer's, and the rng is left in the same state."""
-    ref_rng, new_rng = default_rng(seed), default_rng(seed)
-    got = contraction.initialize(batch, order, dtype, rng=new_rng)
-    assert_same(got, shipped_contraction_initialize(batch, order, dtype, ref_rng))
+    got = initialize(batch, order, dtype, rng=new_rng)
+    assert_same(got, shipped(batch, order, dtype, ref_rng))
     assert new_rng.random() == ref_rng.random()

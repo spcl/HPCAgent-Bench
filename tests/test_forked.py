@@ -4,6 +4,7 @@
 structured result instead of eating it -- the native-collection contract."""
 
 import faulthandler
+import itertools
 import multiprocessing
 import multiprocessing.queues
 import os
@@ -124,12 +125,6 @@ def test_segfault_decoded_to_signal() -> None:
     r = run_forked(_segfault, label="seg")
     assert not r.ok
     assert r.signal == "SIGSEGV"
-
-
-def test_timeout_terminates_child() -> None:
-    r = run_forked(_hang, timeout=0.5)
-    assert not r.ok
-    assert r.signal == "TIMEOUT"
 
 
 def test_timeout_reports_signal_and_detail() -> None:
@@ -292,44 +287,32 @@ def test_reparented_is_a_change_from_entry_not_a_literal_pid(
     assert forked.reparented(parent_at_entry, parent_now) is expected
 
 
-def test_die_with_parent_survives_a_pid_namespace_init_as_the_real_parent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A child of the sealed worker reads getppid() == 1 before AND after prctl setups -- no death."""
+@pytest.mark.parametrize(
+    ("ppids", "exited"),
+    [
+        # A child of the sealed worker reads getppid() == 1 before AND after prctl setups: no death.
+        pytest.param((1,), [], id="pid-namespace-init-is-the-real-parent"),
+        # A child of an ordinary (non-namespaced) parent reads the same real pid before and after.
+        pytest.param((4242,), [], id="normal-live-parent"),
+        # The parent that forked us is gone by the time prctl armed: entry reads the real parent, then the
+        # reparented 1 (the signal never comes).
+        pytest.param((5000, 1), [0], id="parent-died-in-the-arming-gap"),
+    ],
+)
+def test_a_child_exits_only_when_its_parent_changed_underneath_it(
+    monkeypatch: pytest.MonkeyPatch, ppids: tuple[int, ...], exited: list[int]
+) -> None:
+    """A live PID-1 parent (the sealed worker) must not be mistaken for a dead one."""
     monkeypatch.setattr(forked.osinfo, "IS_LINUX", True)
-    monkeypatch.setattr(forked.os, "getppid", lambda: 1)
-    monkeypatch.setattr(
-        forked.ctypes, "CDLL", lambda *a, **k: type("Libc", (), {"prctl": staticmethod(lambda *a: 0)})()
-    )
-    exited = []
-    monkeypatch.setattr(forked.os, "_exit", exited.append)
-    forked.die_with_parent()
-    assert exited == [], "a live PID-1 parent (the sealed worker) must not be mistaken for a dead one"
-
-
-def test_die_with_parent_survives_a_normal_live_parent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A child of an ordinary (non-namespaced) parent reads the same real pid before and after."""
-    monkeypatch.setattr(forked.osinfo, "IS_LINUX", True)
-    monkeypatch.setattr(forked.os, "getppid", lambda: 4242)
-    monkeypatch.setattr(
-        forked.ctypes, "CDLL", lambda *a, **k: type("Libc", (), {"prctl": staticmethod(lambda *a: 0)})()
-    )
-    exited = []
-    monkeypatch.setattr(forked.os, "_exit", exited.append)
-    forked.die_with_parent()
-    assert exited == []
-
-
-def test_die_with_parent_exits_when_the_parent_died_in_the_arming_gap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The parent that forked us is gone by the time prctl armed -- getppid() changed underneath us."""
-    monkeypatch.setattr(forked.osinfo, "IS_LINUX", True)
-    ppid_reads = iter([5000, 1])  # entry (real parent) -> after prctl (reparented, signal never comes)
+    ppid_reads = itertools.chain(ppids, itertools.repeat(ppids[-1]))
     monkeypatch.setattr(forked.os, "getppid", lambda: next(ppid_reads))
     monkeypatch.setattr(
         forked.ctypes, "CDLL", lambda *a, **k: type("Libc", (), {"prctl": staticmethod(lambda *a: 0)})()
     )
-    exited = []
-    monkeypatch.setattr(forked.os, "_exit", exited.append)
+    exits: list[int] = []
+    monkeypatch.setattr(forked.os, "_exit", exits.append)
     forked.die_with_parent()
-    assert exited == [0]
+    assert exits == exited
 
 
 def process_gone(pid: int, within: float) -> bool:

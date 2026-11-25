@@ -7,7 +7,6 @@ it (``KV_GUARD=warn`` only reports). Kimi's configuration must pass at the measu
 import json
 import os
 import pathlib
-import tempfile
 
 import pytest
 
@@ -89,19 +88,3 @@ def test_watch_cancels_the_job_whose_pool_is_below_the_floor_and_leaves_the_one_
     cancelled.unlink()
     assert serve_guard.watch(KIMI | {"KV_GUARD": "warn"}, run, "7", timeout=5) == 0
     assert not cancelled.exists()
-
-
-if __name__ == "__main__":
-
-    def scratch() -> pathlib.Path:
-        return pathlib.Path(tempfile.mkdtemp())
-
-    test_the_pool_is_the_smallest_any_pipeline_states()
-    test_the_floor_is_the_pipelines_agents_times_the_per_agent_figure_and_a_model_without_one_has_none()
-    test_a_replicas_server_holds_every_agent_of_the_job()
-    test_kimi_at_fraction_052_passes_and_at_048_fails()
-    test_check_writes_the_verdict_into_the_run_directory(scratch())
-    with pytest.MonkeyPatch.context() as patch:
-        test_the_cli_check_fails_below_the_floor_and_warns_with_kv_guard_warn(scratch(), patch)
-    with pytest.MonkeyPatch.context() as patch:
-        test_watch_cancels_the_job_whose_pool_is_below_the_floor_and_leaves_the_one_that_holds(scratch(), patch)

@@ -21,7 +21,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from types import ModuleType
 
 import pytest
@@ -609,43 +608,3 @@ def test_a_judge_built_llvm_library_loaded_before_numpy_maps_one_runtime_in_the_
         check=False,
     )
     assert done.returncode == 0, done.stdout + done.stderr
-
-
-if __name__ == "__main__":
-    test_one_file_reached_through_two_symlinks_is_one_runtime(pathlib.Path(tempfile.mkdtemp()))
-    test_libgomp_and_libomp_are_two_runtimes(pathlib.Path(tempfile.mkdtemp()))
-    test_a_wheels_hashed_libgomp_that_is_its_own_file_is_a_second_runtime(pathlib.Path(tempfile.mkdtemp()))
-    test_the_llvm_libgomp_shim_counts_as_the_libomp_it_links_to(pathlib.Path(tempfile.mkdtemp()))
-    for name in [
-        "libomptarget.so.22.1",
-        "libompd.so",
-        "libompi.so.40",
-        "libgomp_shim.so",
-        "libc.so.6",
-        "libopenblas.so.0",
-    ]:
-        test_libraries_that_are_not_an_openmp_runtime_are_not_counted(pathlib.Path(tempfile.mkdtemp()), name)
-    test_the_nvhpc_runtime_counts_beside_the_others(pathlib.Path(tempfile.mkdtemp()))
-    test_iomp5_counts_and_anonymous_and_deleted_mappings_are_handled(pathlib.Path(tempfile.mkdtemp()))
-    test_the_counter_reads_a_maps_file_and_reports_nothing_for_an_unreadable_one(pathlib.Path(tempfile.mkdtemp()))
-    test_more_than_one_runtime_raises_and_names_every_file()
-    test_the_image_build_carries_the_same_counter_as_the_package()
-    for image in IMAGES:
-        test_every_image_gates_one_runtime_over_the_launch_venv_after_its_last_install(image)
-    test_the_launch_venv_links_its_wheels_to_the_one_runtime_after_syncing()
-    for image in IMAGES:
-        test_every_image_builds_the_llvm_variants_with_runpath_and_clang_only_where_openmp_is_reached(image)
-    test_the_linker_points_every_gnu_copy_at_the_compilers_and_leaves_the_llvm_shim(pathlib.Path(tempfile.mkdtemp()))
-    test_the_linker_skips_a_libgomp_link_whose_target_directory_is_gone(pathlib.Path(tempfile.mkdtemp()))
-    test_the_linker_refuses_a_copy_that_needs_a_newer_libgomp_than_the_compilers(pathlib.Path(tempfile.mkdtemp()))
-    test_numpy_scipy_numba_prange_and_a_gcc_openmp_library_map_one_runtime()
-    test_the_judge_writes_every_rpath_as_runpath(pathlib.Path(tempfile.mkdtemp()))
-    test_every_link_line_the_judge_renders_asks_for_runpath(pathlib.Path(tempfile.mkdtemp()))
-    test_a_judge_linked_executable_carries_runpath_and_no_rpath(pathlib.Path(tempfile.mkdtemp()))
-    if omp_context.context_runtime("llvm") is not None and shutil.which("clang") is not None:
-        test_a_judge_built_llvm_library_loaded_before_numpy_maps_one_runtime_in_the_llvm_context(
-            pathlib.Path(tempfile.mkdtemp())
-        )
-    if shutil.which("clang") is not None:
-        test_clang_compiles_the_pragma_away_under_the_libgomp_spelling(pathlib.Path(tempfile.mkdtemp()))
-    test_a_dace_library_the_framework_builds_carries_no_rpath(pathlib.Path(tempfile.mkdtemp()))

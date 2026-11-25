@@ -74,8 +74,3 @@ def test_a_deferred_buffer_is_allocated_on_the_path_that_runs(case: str) -> None
     kir = lower(parse_source(HEADER + body, "k", ["a"], ["out"], {"a": "(N,)", "out": "(N,)"}, {"N": 8}))
     run = build_run_c(emit_c(kir, fn_name="k"), DRIVER.format(expected=expected), sanitize=True)
     assert run.returncode == 0, run.stderr[-2000:]
-
-
-if __name__ == "__main__":
-    for name in sorted(CASES):
-        test_a_deferred_buffer_is_allocated_on_the_path_that_runs(name)

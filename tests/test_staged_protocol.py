@@ -34,10 +34,3 @@ def test_a_deadline_that_cuts_the_wall_clock_is_refused_at_staging(tmp_path: pat
     assert done.returncode != 0
     assert "the staged run protocol differs: AGENT_TIMEOUT_SECONDS=" in done.stderr
     assert not list((root / "experiments").glob(".env.wave-*"))
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    test_the_rendered_protocol_and_a_packets_mode_pass_and_any_other_value_is_refused()
-    test_a_deadline_that_cuts_the_wall_clock_is_refused_at_staging(pathlib.Path(tempfile.mkdtemp()))

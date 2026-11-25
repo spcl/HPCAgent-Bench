@@ -80,11 +80,3 @@ def test_an_episode_with_grades_but_no_record_takes_its_kernel_from_the_grades(t
     assert rows[LABEL][1] == KERNEL
     with contextlib.closing(results_db.open_db(job_dir / "results.db")) as conn:
         assert conn.execute("SELECT count(*) FROM episodes WHERE kernel = ''").fetchone() == (0,)
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    test_an_episode_the_driver_ended_names_how_it_ended(pathlib.Path(tempfile.mkdtemp()))
-    test_an_episode_records_how_its_launch_confined_it(pathlib.Path(tempfile.mkdtemp()))
-    test_an_episode_with_grades_but_no_record_takes_its_kernel_from_the_grades(pathlib.Path(tempfile.mkdtemp()))

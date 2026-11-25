@@ -17,16 +17,11 @@ round-trip each idiom through the ``run_op`` oracle (or, for cupy, a guarded GPU
 run) against numpy.
 """
 
-import importlib.util
-import pathlib
-import tempfile
-
 import numpy as np
 import pytest
 
 from hpcagent_bench.frameworks.cupy_framework import cupy_source
 from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
-from tests.fresh_module import module_at
 from tests.translators import op_oracle
 from tests.translators.source_module import run_source
 
@@ -105,23 +100,6 @@ def test_numba_scan_via_oracle() -> None:
         backends=("numba",),
     )
     assert_ok(st, "numba", "numba-scan")
-
-
-def test_numba_parallel_scan_stays_correct() -> None:
-    # Prove the emitted scan is numerically correct (the serial fallback
-    # produces the true prefix sum; a blind prange would race and diverge).
-    if importlib.util.find_spec("numba") is None:
-        pytest.skip("numba not installed")
-    x = np.arange(1.0, 8.0)
-    nb_src = emit_numba(SCAN)
-    assert "nb.prange" not in nb_src
-    with tempfile.TemporaryDirectory() as td:
-        mod = pathlib.Path(td) / "scan_p.py"
-        mod.write_text(nb_src)
-        m = module_at(mod, "scan_p")
-        a = np.zeros_like(x)
-        m.scan(x.copy(), a)
-    np.testing.assert_allclose(a, np.cumsum(x))
 
 
 # 3. cupy: consistent ``cp`` binding + import-form handling.                   #

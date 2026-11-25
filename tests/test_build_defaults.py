@@ -89,32 +89,39 @@ def fingerprint(repo: pathlib.Path, target: str, *args: str, base: str = "docker
     return done.stdout.strip()
 
 
-def test_the_fingerprint_is_stable_for_the_same_inputs(repo: pathlib.Path) -> None:
-    assert fingerprint(repo, "agent", "--build-arg", "ROCM_ARCH=gfx90a") == fingerprint(
-        repo, "agent", "--build-arg", "ROCM_ARCH=gfx90a"
-    )
-
-
 def test_a_build_arg_moves_the_fingerprint(repo: pathlib.Path) -> None:
     assert fingerprint(repo, "agent", "--build-arg", "ROCM_ARCH=gfx90a") != fingerprint(
         repo, "agent", "--build-arg", "ROCM_ARCH=gfx942"
     )
 
 
-def test_mounts_and_a_local_base_copy_do_not_move_the_fingerprint(repo: pathlib.Path) -> None:
-    """A cache mount or ce_cache_base_image's dir: rewrite is where the bytes come from, not what they are."""
-    plain = fingerprint(repo, "agent", "--build-arg", "ROCM_ARCH=gfx90a")
-    mounted = fingerprint(
-        repo,
-        "agent",
-        "-v",
-        "/somewhere:/uv-cache:rw",
-        "--build-arg",
-        "ROCM_ARCH=gfx90a",
-        "--build-arg",
-        "BASE_IMAGE=dir:/cache/base",
-    )
-    assert mounted == plain
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        pytest.param(
+            ("--build-arg", "ROCM_ARCH=gfx90a"),
+            (
+                "-v",
+                "/somewhere:/uv-cache:rw",
+                "--build-arg",
+                "ROCM_ARCH=gfx90a",
+                "--build-arg",
+                "BASE_IMAGE=dir:/cache/base",
+            ),
+            id="cache-mount-and-local-base-copy",
+        ),
+        pytest.param(
+            ("--build-arg", "SPACK_BUILD_JOBS=64"), ("--build-arg", "SPACK_BUILD_JOBS=108"), id="spack-job-budget"
+        ),
+    ],
+)
+def test_where_the_bytes_come_from_and_how_fast_they_build_do_not_move_the_fingerprint(
+    repo: pathlib.Path, left: tuple[str, ...], right: tuple[str, ...]
+) -> None:
+    """A cache mount or ce_cache_base_image's dir: rewrite is where the bytes come from, not what they are. The spack
+    job budget sizes the build to its node; the image it builds is the same, so a GH200 build and an MI300A build of
+    one checkout pull and resume from each other's layers."""
+    assert fingerprint(repo, "agent", *left) == fingerprint(repo, "agent", *right)
 
 
 def test_the_base_image_reference_moves_the_fingerprint(repo: pathlib.Path) -> None:
@@ -141,18 +148,33 @@ def test_an_uncommitted_edit_to_a_copied_file_makes_the_inputs_unknown(repo: pat
     assert "no pull" in done.stderr
 
 
-def test_a_source_on_a_copy_continuation_line_is_a_build_input(repo: pathlib.Path) -> None:
-    """Every line of a COPY names sources, so an edit to any of them moves the fingerprint or blocks the pull."""
-    dockerfile = repo / "containers" / "images" / "Dockerfile"
-    dockerfile.write_text(
-        "FROM ${BASE_IMAGE} AS agent\nCOPY containers/images/lib/agent.sh \\\n     pkg/mod.py /opt/\n", encoding="utf-8"
-    )
-    git(repo, "commit", "-qam", "continuation")
+@pytest.mark.parametrize(
+    ("dockerfile", "named"),
+    [
+        pytest.param(
+            "FROM ${BASE_IMAGE} AS agent\nCOPY containers/images/lib/agent.sh \\\n     pkg/mod.py /opt/\n",
+            "pkg/mod.py",
+            id="copy-continuation-line",
+        ),
+        pytest.param(
+            "FROM ${BASE_IMAGE} AS agent\nRUN --mount=type=bind,source=pkg,target=/src \\\n    cp -r /src /opt/pkg\n",
+            "pkg",
+            id="bind-mounted-source",
+        ),
+    ],
+)
+def test_a_source_a_stage_reads_beyond_a_one_line_copy_is_a_build_input(
+    repo: pathlib.Path, dockerfile: str, named: str
+) -> None:
+    """Every line of a COPY names sources, so an edit to any of them moves the fingerprint or blocks the pull. A RUN
+    step that binds pkg/ bakes what it reads into its layer (the OpenMP catalog), as a COPY would."""
+    (repo / "containers" / "images" / "Dockerfile").write_text(dockerfile, encoding="utf-8")
+    git(repo, "commit", "-qam", "dockerfile")
     before = fingerprint(repo, "agent")
     (repo / "pkg" / "mod.py").write_text("X = 2\n", encoding="utf-8")
     done = bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" agent', repo)
     assert done.returncode == 1, done.stdout
-    assert "pkg/mod.py" in done.stderr
+    assert named in done.stderr
     git(repo, "commit", "-qam", "edit")
     assert fingerprint(repo, "agent") != before
 
@@ -164,23 +186,6 @@ def test_an_untracked_file_under_a_copied_path_makes_the_inputs_unknown(repo: pa
     assert done.returncode == 1, done.stdout
     assert "no pull" in done.stderr
     assert bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" agent', repo).returncode == 0
-
-
-def test_a_bind_mounted_source_is_a_build_input(repo: pathlib.Path) -> None:
-    """A RUN step that binds pkg/ bakes what it reads into its layer (the OpenMP catalog), as a COPY would."""
-    dockerfile = repo / "containers" / "images" / "Dockerfile"
-    dockerfile.write_text(
-        "FROM ${BASE_IMAGE} AS agent\nRUN --mount=type=bind,source=pkg,target=/src \\\n    cp -r /src /opt/pkg\n",
-        encoding="utf-8",
-    )
-    git(repo, "commit", "-qam", "bind")
-    before = fingerprint(repo, "agent")
-    (repo / "pkg" / "mod.py").write_text("X = 2\n", encoding="utf-8")
-    done = bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" agent', repo)
-    assert done.returncode == 1, done.stdout
-    assert "pkg" in done.stderr
-    git(repo, "commit", "-qam", "edit")
-    assert fingerprint(repo, "agent") != before
 
 
 def move_locked(lock: pathlib.Path, package: str) -> None:
@@ -353,14 +358,6 @@ def test_spack_builds_with_the_nodes_cores_one_job_per_8_gb(
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == str(jobs)
-
-
-def test_the_spack_job_budget_does_not_move_the_fingerprint(repo: pathlib.Path) -> None:
-    """The budget sizes the build to its node; the image it builds is the same, so a GH200 build and an MI300A build
-    of one checkout pull and resume from each other's layers."""
-    assert fingerprint(repo, "agent", "--build-arg", "SPACK_BUILD_JOBS=64") == fingerprint(
-        repo, "agent", "--build-arg", "SPACK_BUILD_JOBS=108"
-    )
 
 
 def test_a_dockerfile_libfabric_pin_is_the_commit_the_build_passes(repo: pathlib.Path) -> None:

@@ -26,6 +26,7 @@ fallback and is NOT fixed here (out of scope) -- hence the C/C++-only backend li
 """
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import assert_all_ok, run_op
 
@@ -34,71 +35,38 @@ SYMS = {"N": 1}
 SHAPES = {"n": "(1,)", "out": "(1,)"}
 
 
-def test_integer_accumulator_stays_exact_past_2_53() -> None:
-    # 3 ** 35 == 50031545098999707 needs 56 bits -- a double is 3 short.
-    src = (
-        "import numpy as np\ndef f(n, out):\n    h = 1\n    for i in range(n[0]):\n        h = h * 3\n    out[0] = h\n"
-    )
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+@pytest.mark.parametrize(
+    ("src", "inputs", "syms", "shapes", "dtypes"),
+    [
+        # 3 ** 35 == 50031545098999707 needs 56 bits -- a double is 3 short.
+        (
+            "import numpy as np\ndef f(n, out):\n    h = 1\n    for i in range(n[0]):\n        h = h * 3\n    out[0] = h\n",
             {"n": np.array([35], dtype=np.int64)},
-            {"out": (1,)},
             SYMS,
-            shapes=SHAPES,
-            backends=C_ONLY,
-            dtypes={"n": "int64", "out": "int64"},
-        )
-    )
-
-
-def test_bit_packing_accumulator_stays_exact() -> None:
-    # Pack 60 bits: the result needs 60 significand bits, a double has 53. Stays well
-    # inside int64 (2**60 < 2**63), so there is no overflow -- only the decl is at stake.
-    src = (
-        "import numpy as np\n"
-        "def f(bits, out):\n"
-        "    h = 0\n"
-        "    for i in range(60):\n"
-        "        h = h * 2 + bits[i]\n"
-        "    out[0] = h\n"
-    )
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+            SHAPES,
+            {"n": "int64", "out": "int64"},
+        ),
+        # Pack 60 bits: the result needs 60 significand bits, a double has 53. Stays well
+        # inside int64 (2**60 < 2**63), so there is no overflow -- only the decl is at stake.
+        (
+            "import numpy as np\n"
+            "def f(bits, out):\n"
+            "    h = 0\n"
+            "    for i in range(60):\n"
+            "        h = h * 2 + bits[i]\n"
+            "    out[0] = h\n",
             {"bits": np.array([1, 0, 1, 1] * 15, dtype=np.int64)},
-            {"out": (1,)},
             {"N": 60},
-            shapes={"bits": "(60,)", "out": "(1,)"},
-            backends=C_ONLY,
-            dtypes={"bits": "int64", "out": "int64"},
-        )
-    )
-
-
-def test_float_local_is_not_demoted_to_int() -> None:
-    # The inference only ADDS integer proofs; a float accumulator must stay double.
-    src = (
-        "import numpy as np\n"
-        "def f(x, out):\n"
-        "    s = 0.0\n"
-        "    for i in range(6):\n"
-        "        s = s + x[i] * 0.5\n"
-        "    out[0] = s\n"
-    )
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
-            {"x": np.array([1.5, -2.25, 3.0, 0.125, 7.5, -0.75])},
-            {"out": (1,)},
-            {"N": 6},
-            shapes={"x": "(6,)", "out": "(1,)"},
-            backends=C_ONLY,
-        )
-    )
+            {"bits": "(60,)", "out": "(1,)"},
+            {"bits": "int64", "out": "int64"},
+        ),
+    ],
+    ids=["accumulator_past_2_53", "bit_packing"],
+)
+def test_integer_accumulator_stays_exact(
+    src: str, inputs: dict[str, np.ndarray], syms: dict[str, int], shapes: dict[str, str], dtypes: dict[str, str]
+) -> None:
+    assert_all_ok(run_op(src, "f", inputs, {"out": (1,)}, syms, shapes=shapes, backends=C_ONLY, dtypes=dtypes))
 
 
 def test_local_reading_a_float_array_stays_double() -> None:

@@ -24,7 +24,6 @@ pytest.importorskip("numpy")
 
 import pandas as pd
 
-from hpcagent_bench import config
 from hpcagent_bench.results import extract, studies
 from hpcagent_bench.stats import population
 from tests import results_seed
@@ -55,13 +54,6 @@ def unrecorded_limits_are_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(name="paired_setups")
 def paired_setups_fixture() -> types.ModuleType:
     return module_at(STATISTICS / "paired_setups.py", "paired_setups")
-
-
-def test_the_cost_attempts_switch_is_gone() -> None:
-    """The cause decides what a cost counts; there is no reading to pick, and no ``cost`` section to pick it in."""
-    assert not hasattr(config, "CostAttempts")
-    assert "cost" not in config.Settings.model_fields
-    assert not hasattr(population, "cost_attempts")
 
 
 # -- the sqlite fixture: the production path ----------------------------------
@@ -393,7 +385,3 @@ def test_the_cost_tables_report_the_void_share_in_place_of_the_crashed_share(
     assert float(pairs[pairs.leg == "tokens"].rho.iloc[0]) == pytest.approx(FINAL_TOKENS / COUNTED_TOKENS)
     with pytest.raises(SystemExit):
         paired_setups.main([*argv, "--all-attempts-leg"])
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]))

@@ -39,9 +39,3 @@ def test_a_relay_dies_by_its_childs_signal(sig: int) -> None:
     status = relayed_status(sig)
     assert os.WIFSIGNALED(status), f"relay exited {os.waitstatus_to_exitcode(status)} instead of dying by {sig}"
     assert os.WTERMSIG(status) == sig
-
-
-if __name__ == "__main__":
-    test_a_relay_dies_by_its_childs_signal(signal.SIGKILL)
-    test_a_relay_dies_by_its_childs_signal(signal.SIGTERM)
-    test_a_relay_dies_by_its_childs_signal(signal.SIGSEGV)

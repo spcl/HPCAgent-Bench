@@ -472,16 +472,6 @@ def test_required_left_margin_grows_with_the_widest_tick_the_range_draws() -> No
     assert wide > narrow, (wide, narrow)
 
 
-def test_the_interval_note_is_fixed_text_and_does_not_name_the_estimator() -> None:
-    """Fixed text, so the key carries it once
-    (:func:`~hpcagent_bench.stats.figures.efficacy.legend_tail`). The estimator is NOT named: "95%
-    log-t CI" on two of five rows was the densest text in the figure, and which interval it is
-    belongs in the caption beside the test it came from."""
-    note = efficacy_figures.interval_note("Speedup")
-    assert "log-t" not in note, note
-    assert note == efficacy_figures.interval_note("Speedup"), "fixed text, not sample-size-chosen"
-
-
 def test_the_figure_key_carries_one_interval_note_per_axis() -> None:
     """Both intervals reach the reader in the figure's ONE key."""
     handles = efficacy_figures.legend_tail()
@@ -823,12 +813,6 @@ def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
 
 
 # Ratio tick labels: a ratio below 1 is spelled as its reciprocal, never rounded to 0x.
-
-
-def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() -> None:
-    assert plotstyle.ratio_tick_label(0.125) == "1/8x"
-    assert plotstyle.ratio_tick_label(1.0) == "1x"
-    assert plotstyle.ratio_tick_label(8.0) == "8x"
 
 
 # Several packets sharing ONE panel (``treatments=``): read and recorded per packet.

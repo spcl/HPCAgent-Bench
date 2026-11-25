@@ -6,11 +6,12 @@
 adds a NEW axis (out rank = operand rank + 1, the k-th extent = number of operands) and is
 lowered here. Both emit per-operand copy loops for the C / Fortran backends (numba
 runs the numpy verbatim). Validated numerically vs numpy across the full backend matrix
-(C / C++ / Fortran + numba, skip-tolerant). ``test_stack_negative_axis_appends``
+(C / C++ / Fortran + numba, skip-tolerant). The ``negative_axis_appends`` case
 subsumes the positive last-axis case (``-1`` normalizes to it).
 """
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import all_ok, run_op
 
@@ -43,24 +44,18 @@ def stack3d(axis: int, out_shape: tuple[int, int, int], out_sym: str, n_operands
     )
 
 
-def test_stack_axis0() -> None:
-    ok, res = all_ok(stack3d(0, (2, 2, 3), "(2, M, N)"))
-    assert ok, res
-
-
-def test_stack_axis1() -> None:
-    ok, res = all_ok(stack3d(1, (2, 2, 3), "(M, 2, N)"))
-    assert ok, res
-
-
-def test_stack_negative_axis_appends() -> None:
-    """``axis=-1`` (a UnaryOp literal, not Constant(-1)) appends the new axis."""
-    ok, res = all_ok(stack3d(-1, (2, 3, 2), "(M, N, 2)"))
-    assert ok, res
-
-
-def test_stack_three_operands() -> None:
-    ok, res = all_ok(stack3d(0, (3, 2, 3), "(3, M, N)", n_operands=3))
+@pytest.mark.parametrize(
+    ("axis", "out_shape", "out_sym"),
+    [
+        (0, (2, 2, 3), "(2, M, N)"),
+        (1, (2, 2, 3), "(M, 2, N)"),
+        # ``axis=-1`` (a UnaryOp literal, not Constant(-1)) appends the new axis.
+        (-1, (2, 3, 2), "(M, N, 2)"),
+    ],
+    ids=["axis0", "axis1", "negative_axis_appends"],
+)
+def test_stack_inserts_the_new_axis_where_asked(axis: int, out_shape: tuple[int, int, int], out_sym: str) -> None:
+    ok, res = all_ok(stack3d(axis, out_shape, out_sym))
     assert ok, res
 
 
@@ -88,16 +83,13 @@ def concat(axis: int, out_shape: tuple[int, int], out_sym: str, n_operands: int 
     )
 
 
-def test_concatenate_axis0() -> None:
-    ok, res = all_ok(concat(0, (4, 3), "(2 * M, N)"))
-    assert ok, res
-
-
-def test_concatenate_axis1() -> None:
-    ok, res = all_ok(concat(1, (2, 6), "(M, 2 * N)"))
-    assert ok, res
-
-
-def test_concatenate_three_operands() -> None:
-    ok, res = all_ok(concat(0, (6, 3), "(3 * M, N)", n_operands=3))
+@pytest.mark.parametrize(
+    ("axis", "out_shape", "out_sym", "n_operands"),
+    [(0, (4, 3), "(2 * M, N)", 2), (1, (2, 6), "(M, 2 * N)", 2), (0, (6, 3), "(3 * M, N)", 3)],
+    ids=["axis0", "axis1", "three_operands"],
+)
+def test_concatenate_joins_operands_along_an_existing_axis(
+    axis: int, out_shape: tuple[int, int], out_sym: str, n_operands: int
+) -> None:
+    ok, res = all_ok(concat(axis, out_shape, out_sym, n_operands))
     assert ok, res

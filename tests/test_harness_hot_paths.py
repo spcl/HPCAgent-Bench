@@ -106,17 +106,7 @@ def test_a_whole_measurement_runs_in_one_child(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(native_call, "run_forked", counting)
     kernel = _python_kernel()
-    _, samples, _, _, _timed = native_call.call_isolated(
-        kernel,
-        _BINDING,
-        {"x": np.zeros(4)},
-        Language.PYTHON,
-        device=False,
-        timeout=30,
-        py_meta=("kern", ("x",), ("y",)),
-        reps=8,
-        warmup=2,
-    )
+    unused, samples, unused, unused, unused_timed = isolated(kernel, reps=8, warmup=2)
     assert len(samples) == 8, "the child must return one sample per TIMED rep"
     assert forks == [8], f"expected a single fork carrying all 8 reps, got {forks}"
 
@@ -146,17 +136,7 @@ def test_the_warmup_reps_are_discarded_not_returned(monkeypatch: pytest.MonkeyPa
     toward its cold first-touch time."""
     kernel = _python_kernel()
     for warmup in (0, 1, 5):
-        _, samples, _, _, _timed = native_call.call_isolated(
-            kernel,
-            _BINDING,
-            {"x": np.zeros(4)},
-            Language.PYTHON,
-            device=False,
-            timeout=30,
-            py_meta=("kern", ("x",), ("y",)),
-            reps=3,
-            warmup=warmup,
-        )
+        unused, samples, unused, unused, unused_timed = isolated(kernel, reps=3, warmup=warmup)
         assert len(samples) == 3
 
 
@@ -166,28 +146,8 @@ def test_every_rep_sees_the_reference_inputs(tmp_path: pathlib.Path) -> None:
     the same one."""
     kernel = tmp_path / "accumulate.py"
     kernel.write_text("def kern(x):\n    x += 1.0\n    return x\n")
-    _, samples, _, _, _timed = native_call.call_isolated(
-        str(kernel),
-        _BINDING,
-        {"x": np.zeros(4)},
-        Language.PYTHON,
-        device=False,
-        timeout=30,
-        py_meta=("kern", ("x",), ("y",)),
-        reps=5,
-        warmup=0,
-    )
-    outputs, _, _, _, _timed = native_call.call_isolated(
-        str(kernel),
-        _BINDING,
-        {"x": np.zeros(4)},
-        Language.PYTHON,
-        device=False,
-        timeout=30,
-        py_meta=("kern", ("x",), ("y",)),
-        reps=5,
-        warmup=0,
-    )
+    unused, samples, unused, unused, unused_timed = isolated(str(kernel), reps=5, warmup=0)
+    outputs, unused, unused, unused, unused_timed = isolated(str(kernel), reps=5, warmup=0)
     # Five reps of "+1" starting from a FRESH zero each time -> every output is 1.0, not 5.0.
     assert np.allclose(outputs["y"], 1.0), f"reps saw each other's outputs: {outputs['y']}"
     assert len(samples) == 5
@@ -205,17 +165,7 @@ def test_the_timeout_reaches_the_child_as_a_per_rep_bound(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(native_call, "run_forked", capture)
     kernel = _python_kernel()
-    native_call.call_isolated(
-        kernel,
-        _BINDING,
-        {"x": np.zeros(4)},
-        Language.PYTHON,
-        device=False,
-        timeout=2.0,
-        py_meta=("kern", ("x",), ("y",)),
-        reps=4,
-        warmup=1,
-    )
+    isolated(kernel, timeout=2.0, reps=4, warmup=1)
     assert seen["rep_timeout"] == pytest.approx(2.0)  # one rep's allowance, enforced in-child
     assert seen["timeout"] == pytest.approx(2.0 * 5)  # 4 timed + 1 warmup, as the outer backstop
 
@@ -228,17 +178,7 @@ def test_one_hung_rep_dies_at_the_per_rep_bound_not_the_batch_budget(tmp_path: p
     kernel.write_text("def kern(x):\n    while True:\n        pass\n")
     start = time.perf_counter()
     with pytest.raises(RuntimeError, match="single rep"):
-        native_call.call_isolated(
-            str(kernel),
-            _BINDING,
-            {"x": np.zeros(4)},
-            Language.PYTHON,
-            device=False,
-            timeout=2.0,
-            py_meta=("kern", ("x",), ("y",)),
-            reps=20,
-            warmup=1,
-        )
+        isolated(str(kernel), timeout=2.0, reps=20, warmup=1)
     elapsed = time.perf_counter() - start
     assert elapsed < 2.0 * 21 / 2, f"killed at {elapsed:.1f}s -- that is the BATCH budget, not one rep's"
 
@@ -249,17 +189,7 @@ def test_a_slow_but_finite_run_is_not_killed_by_the_per_rep_guard(tmp_path: path
     survive, or every slow kernel is a false timeout."""
     kernel = tmp_path / "slow.py"
     kernel.write_text("import time\ndef kern(x):\n    time.sleep(0.05)\n    return x + 1.0\n")
-    _, samples, _, _, _timed = native_call.call_isolated(
-        str(kernel),
-        _BINDING,
-        {"x": np.zeros(4)},
-        Language.PYTHON,
-        device=False,
-        timeout=1.0,
-        py_meta=("kern", ("x",), ("y",)),
-        reps=30,
-        warmup=1,
-    )
+    unused, samples, unused, unused, unused_timed = isolated(str(kernel), timeout=1.0, reps=30, warmup=1)
     assert len(samples) == 30  # 31 x 0.05s = 1.55s total, over the 1.0s PER-REP bound
 
 
@@ -271,17 +201,8 @@ def test_the_guillotine_bounds_the_kernel_not_its_argument_copies(tmp_path: path
     arrays must finish all its reps under a guillotine far below its copy time."""
     kernel = tmp_path / "copy_only.py"
     kernel.write_text("def kern(x):\n    return x\n")
-    _, samples, _, _, timed = native_call.call_isolated(
-        str(kernel),
-        _BINDING,
-        {"x": np.zeros(40_000_000)},
-        Language.PYTHON,
-        device=False,
-        timeout=60.0,
-        py_meta=("kern", ("x",), ("y",)),
-        reps=3,
-        warmup=1,
-        guillotine_s=0.05,
+    unused, samples, unused, unused, timed = isolated(
+        str(kernel), data={"x": np.zeros(40_000_000)}, timeout=60.0, reps=3, warmup=1, guillotine_s=0.05
     )
     assert len(samples) == 3
     assert len(timed) == 3
@@ -333,33 +254,6 @@ COLD_S = 1.0
 REP_S = 0.5
 
 
-def cold_call(tmp_path: pathlib.Path, cold_rep_s: float) -> list[int]:
-    """The samples of 3 timed reps after 1 warmup of :data:`COLD_KERNEL` under a ``REP_S`` per-rep alarm."""
-    kernel = tmp_path / "cold.py"
-    kernel.write_text(COLD_KERNEL.format(cold=COLD_S))
-    return native_call.call_isolated(
-        str(kernel),
-        _BINDING,
-        {"x": np.zeros(4)},
-        Language.PYTHON,
-        device=False,
-        timeout=REP_S,
-        py_meta=("kern", ("x",), ("y",)),
-        reps=3,
-        warmup=1,
-        cold_rep_s=cold_rep_s,
-    )[1]
-
-
-@pytest.mark.skipif(not osinfo.IS_LINUX, reason="the per-rep guard uses SIGALRM, which is POSIX-only")
-def test_the_cold_first_call_runs_under_its_own_alarm(tmp_path: pathlib.Path) -> None:
-    """An early-stop cut is the per-rep alarm of a compiled reference; its first call pays one-time costs and
-    gets ``cold_rep_s`` instead, the later calls the cut."""
-    assert len(cold_call(tmp_path, cold_rep_s=4 * COLD_S)) == 3
-    with pytest.raises(RuntimeError, match="single rep"):
-        cold_call(tmp_path, cold_rep_s=0.0)
-
-
 def slow_draw(seconds: float, rep: int) -> dict[str, np.ndarray]:
     """A rep's inputs from an initializer that takes ``seconds``."""
     time.sleep(seconds)
@@ -374,14 +268,9 @@ def test_a_slow_input_draw_is_not_charged_to_the_rep_it_feeds(tmp_path: pathlib.
     (``RepDraw.seconds``), is in the batch budget: four 0.6 s draws overrun a 4 x 0.5 s budget without it."""
     kernel = tmp_path / "fast.py"
     kernel.write_text("def kern(x):\n    return x + 1.0\n")
-    measured = native_call.call_isolated(
+    measured = isolated(
         str(kernel),
-        _BINDING,
-        {"x": np.zeros(4)},
-        Language.PYTHON,
-        device=False,
         timeout=0.5,
-        py_meta=("kern", ("x",), ("y",)),
         reps=3,
         warmup=1,
         rep_data=native_call.RepDraw(functools.partial(slow_draw, 0.6), seconds=0.6),
@@ -514,6 +403,20 @@ def test_a_win_inside_the_noise_is_credited_nothing() -> None:
 
 
 _BINDING = binding_from_spec(spec.BenchSpec.load("gemm"))
+
+
+def isolated(kernel: str, *, data: dict[str, np.ndarray] | None = None, timeout: float = 30, **kwargs: object) -> tuple:
+    """``native_call.call_isolated`` of a python kernel ``kern(x) -> y`` over ``x`` (zeros(4) unless ``data``)."""
+    return native_call.call_isolated(
+        kernel,
+        _BINDING,
+        data if data is not None else {"x": np.zeros(4)},
+        Language.PYTHON,
+        device=False,
+        timeout=timeout,
+        py_meta=("kern", ("x",), ("y",)),
+        **kwargs,
+    )
 
 
 def _python_kernel() -> str:

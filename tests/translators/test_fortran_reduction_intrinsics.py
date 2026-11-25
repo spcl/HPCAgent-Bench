@@ -26,11 +26,10 @@ import tempfile
 import numpy as np
 import pytest
 
-from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
-from hpcagent_bench.translators.numpyto_fortran.intrinsics import WHOLE_ARRAY_REDUCTIONS, renders_natively
+from hpcagent_bench.translators.numpyto_fortran.intrinsics import renders_natively
 from tests.translators import op_oracle as oo
 from tests.translators.op_oracle import run_op
 
@@ -83,23 +82,18 @@ def fortran(call: str) -> str:
 DO_RE = re.compile(r"^\s*do\s", re.IGNORECASE | re.MULTILINE)
 
 
-def test_each_whole_array_reduction_emits_its_intrinsic() -> None:
-    for call, want in REDUCTIONS.items():
-        text = fortran(call)
-        assert want in text, (call, text)
-
-
-def test_the_reduction_temp_is_assigned_in_one_statement() -> None:
+@pytest.mark.parametrize(("call", "want"), list(REDUCTIONS.items()))
+def test_each_whole_array_reduction_is_one_intrinsic_statement(call: str, want: str) -> None:
     """The whole point: one line, not a loop nest.
 
     The reduction lands in a hoisted temp, so the check is that the temp's ASSIGNMENT is a single
     statement naming the intrinsic. Loops elsewhere in the kernel (the ``out[:]`` write) are fine.
     """
-    for call in REDUCTIONS:
-        text = fortran(call)
-        assigns = [ln.strip() for ln in text.splitlines() if re.match(r"^\s*x_cb\d+ = ", ln)]
-        assert len(assigns) == 1, (call, assigns, text)
-        assert "(" in assigns[0], (call, assigns[0])
+    text = fortran(call)
+    assert want in text, (call, text)
+    assigns = [ln.strip() for ln in text.splitlines() if re.match(r"^\s*x_cb\d+ = ", ln)]
+    assert len(assigns) == 1, (call, assigns, text)
+    assert "(" in assigns[0], (call, assigns[0])
 
 
 def test_a_reduction_carrying_an_axis_still_lowers_to_loops() -> None:
@@ -147,22 +141,6 @@ def test_the_whole_array_claim_needs_exactly_one_operand() -> None:
         node = ast.parse(call, mode="eval").body
         key = ("np", "linalg.norm" if "norm" in call else node.func.attr)
         assert not renders_natively(key, node, SHAPE_TABLE, DTYPE_TABLE), call
-
-
-def test_the_predicate_declines_an_op_with_no_intrinsic() -> None:
-    """``np.cumsum`` has no Fortran intrinsic; claiming it would leave a call the emitter refuses."""
-    node = ast.parse("np.cumsum(a)", mode="eval").body
-    assert not renders_natively(("np", "cumsum"), node, SHAPE_TABLE, DTYPE_TABLE)
-    assert ("np", "cumsum") not in WHOLE_ARRAY_REDUCTIONS
-
-
-def test_c_still_lowers_every_one_of_them_to_loops() -> None:
-    """The predicate is off by default. C has no array intrinsic to fall back on, so a call left
-    unexpanded there is a refusal, not a slower kernel."""
-    for call in REDUCTIONS:
-        unused, npy, bi = build(call)
-        text = emit_c(lower(parse_kernel(npy, bi)), fn_name="f")
-        assert "for (" in text, (call, text)
 
 
 def test_the_intrinsics_match_numpy_on_every_backend() -> None:

@@ -143,16 +143,3 @@ def test_a_failed_polygeist_build_leaves_the_published_outputs_whole(
     assert ll.read_text() == "; previous build\n"
     assert shim.read_text() == "/* previous shim */\n"
     assert set(tmp_path.iterdir()) == before, "the failed build left files in cpp_backend"
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    for test in (
-        test_a_rewritten_scop_is_retransformed_by_polycc_even_with_an_older_mtime,
-        test_changed_polycc_args_retransform,
-        test_a_rewritten_scop_is_retransformed_by_ppcg_even_with_an_older_mtime,
-        test_a_failed_polygeist_build_leaves_the_published_outputs_whole,
-    ):
-        with tempfile.TemporaryDirectory() as tmp, pytest.MonkeyPatch.context() as patch:
-            test(pathlib.Path(tmp), patch)

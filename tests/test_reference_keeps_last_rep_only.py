@@ -35,10 +35,3 @@ def test_the_timed_outputs_are_every_rep_or_only_the_last(monkeypatch: pytest.Mo
         assert [int(out["y"][0]) for out in timed] == [2, 3, 4, 5, 6]
     else:
         assert [int(out["y"][0]) for out in timed] == [6], "the last rep's outputs are the call's own"
-
-
-if __name__ == "__main__":
-    mp = pytest.MonkeyPatch()
-    for keep_outputs in (True, False):
-        test_the_timed_outputs_are_every_rep_or_only_the_last(mp, keep_outputs)
-    mp.undo()

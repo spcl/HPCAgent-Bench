@@ -7,7 +7,6 @@ the string as it was, the int4 checkpoint refuses expert parallelism without the
 import contextlib
 import io
 import pathlib
-import tempfile
 
 import pytest
 
@@ -95,24 +94,3 @@ def test_the_cli_prints_the_overlay_and_force_rules_skips_the_rules() -> None:
     printed = out.getvalue()
     assert printed.startswith("SGLANG_EXTRA_ARGS=")
     assert "--ep-size 4" in printed and "--moe-runner-backend triton" in printed
-
-
-if __name__ == "__main__":
-    for bad in ("positional --a", "--a 1 --a 2"):
-        test_a_string_that_is_not_a_flag_list_is_refused(bad)
-    test_apply_replaces_in_place_appends_and_drops_with_the_value()
-    test_apply_keeps_a_shell_reference_verbatim()
-    test_an_argument_string_that_is_not_a_flag_list_is_refused_not_raised()
-    for case in (
-        ("--ep-size 4", INT4, True),
-        ("--ep-size 4 --moe-runner-backend aiter", INT4, True),
-        ("--ep-size 4 --moe-runner-backend triton", INT4, False),
-        ("--ep-size 1", INT4, False),
-        ("--attention-backend aiter", INT4, False),
-        ("--ep-size 4", {}, False),
-    ):
-        test_expert_parallelism_on_the_int4_checkpoint_needs_the_triton_runner(*case)
-    test_every_bench_config_of_experiments_toml_applies_and_keeps_the_rules()
-    test_a_bench_config_for_another_model_or_none_is_refused()
-    test_the_rule_refuses_a_staged_kimi_env_with_ep_and_not_the_one_the_toml_renders(pathlib.Path(tempfile.mkdtemp()))
-    test_the_cli_prints_the_overlay_and_force_rules_skips_the_rules()

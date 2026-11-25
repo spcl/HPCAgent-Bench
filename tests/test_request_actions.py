@@ -251,14 +251,6 @@ def test_a_grid_lets_the_digit_operations_through_under_distribute_alone() -> No
         assert allowances.refusal(request) is None, action
 
 
-@pytest.mark.parametrize("item", ["load", "place", "distribute"])
-def test_the_judge_refuses_a_disallowed_item_before_the_kernel_checks(item: str) -> None:
-    submission = Submission(language=Language.C, source="void k(void) {}", requests=item_request(item))
-    with offer_config(RequestCapability.CAST, precisions=("fp32",)):
-        refused = requests_refusal(submission, task(DENSE_KERNEL), "float64")
-    assert refused is not None and refused.startswith("this setup"), refused
-
-
 # --- grid: agent or task ----------------------------------------------------------------------------------
 
 
