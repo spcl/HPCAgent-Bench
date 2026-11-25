@@ -346,3 +346,15 @@ def test_mpi_and_rccl_are_requestable_by_a_hip_submission() -> None:
     assert Language.HIP in libraries["mpi"].langs
     assert Language.HIP in libraries["rccl"].langs
     assert languages.toolset_link_tokens(libraries["rccl"].toolset) == ("-lrccl",)
+
+
+def test_a_cuda_trial_link_spells_the_rpath_as_nvcc_takes_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """nvcc refuses ``-Wl,-rpath``: a trial link that passed it raw refused OpenBLAS on the CUDA track, so a CUDA
+    submission asking ``startup.load`` for blas or lapack (ls3df_scf's CPF form) failed to build."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        languages, "probe_succeeds", lambda argv, source=None, env=None: seen.append(list(argv)) or True
+    )
+    languages.library_links.cache_clear()
+    assert languages.library_links(Language.CUDA, ("-L/opt/blas", "-lopenblas", "-Wl,-rpath,/opt/blas"))
+    assert seen[0][-3:] == ["-L/opt/blas", "-lopenblas", "-Xlinker=-rpath,/opt/blas"]

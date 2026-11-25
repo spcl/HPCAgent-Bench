@@ -1636,7 +1636,8 @@ def library_links(lang: Language, link_tokens: tuple[str, ...]) -> bool:
     ``.so``); unlike :func:`library_linkable`, it sees pkg-config prefixes."""
     block = compiler_for_lang(load_compilers(), lang).block
     exe = resolve_compiler(block.cc) or block.cc
-    argv = [exe, "-x", PROBE_INPUT_LANG.get(lang, "c"), "-", "-o", os.devnull, *link_tokens]
+    # Spelled as the build spells them: nvcc refuses the ``-Wl,-rpath`` a pkg-config library carries.
+    argv = [exe, "-x", PROBE_INPUT_LANG.get(lang, "c"), "-", "-o", os.devnull, *linker_flags(block, link_tokens)]
     return probe_succeeds(argv, "int main(void){return 0;}\n")
 
 

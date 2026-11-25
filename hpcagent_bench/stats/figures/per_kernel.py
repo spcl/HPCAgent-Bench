@@ -192,6 +192,8 @@ class KernelCell:
     pending: bool = False
     #: Every run of a designed repeat, in run order; ``episodes`` then holds the GRADED runs' values.
     runs: tuple[Run, ...] = ()
+    #: Timed-run bootstrap replicates of the cell's S_i (:func:`summary.rep_replicates`); empty = none kept.
+    replicates: tuple[float, ...] = ()
 
     @property
     def n(self) -> int:
@@ -221,12 +223,15 @@ def kernel_cells(
     low: Mapping[str, float] | None = None,
     high: Mapping[str, float] | None = None,
     pending: frozenset[str] = frozenset(),
+    replicates: Mapping[str, tuple[float, ...]] | None = None,
 ) -> tuple[KernelCell, ...]:
     """One single-value cell per kernel of ``kernels`` from a ``kernel -> value`` map: a missing value is an
     undelivered :data:`~hpcagent_bench.stats.population.NOT_DELIVERED` cell under ``fill`` (else left out);
-    ``low``/``high`` give an interval where ``low < high``; ``pending`` kernels are pending cells."""
+    ``low``/``high`` give an interval where ``low < high``; ``pending`` kernels are pending cells; ``replicates``
+    carry each kernel's timed-run S_i draws into the summary."""
     delivered = delivered or {}
     low, high = low or {}, high or {}
+    replicates = replicates or {}
     cells: list[KernelCell] = []
     for kernel in kernels:
         value = values.get(kernel, math.nan)
@@ -234,7 +239,12 @@ def kernel_cells(
             cells.append(KernelCell(kernel, (population.NOT_DELIVERED,), delivered=False, pending=True))
         elif usable(value):
             interval = kernel_interval(low.get(kernel, math.nan), high.get(kernel, math.nan))
-            cells.append(KernelCell(kernel, (float(value),), delivered.get(kernel, True), interval=interval))
+            cells.append(
+                KernelCell(
+                    kernel, (float(value),), delivered.get(kernel, True), interval=interval,
+                    replicates=replicates.get(kernel, ()),
+                )
+            )  # fmt: skip
         elif fill:
             cells.append(KernelCell(kernel, (population.NOT_DELIVERED,), delivered=False))
     return tuple(cells)
@@ -274,9 +284,17 @@ def kernel_medians(cells: Sequence[KernelCell]) -> np.ndarray:
 
 
 def summary_geomean(cells: Sequence[KernelCell]) -> tuple[float, float, float]:
-    """``(geomean, low, high)`` over the plotted kernels' own medians, with its 95% log-t interval
-    (:func:`hpcagent_bench.stats.summary.geomean_interval`)."""
-    interval = summary.geomean_interval(kernel_medians(cells))
+    """``(geomean, low, high)`` over the plotted kernels' own medians, with its 95% bootstrap interval, withheld below
+    :data:`~hpcagent_bench.stats.summary.MIN_PAIRS_FOR_INTERVAL` kernels: nested over the kernels and their timed
+    runs when any kernel kept its runs (:func:`~hpcagent_bench.stats.summary.nested_geomean_interval`), else BCa over
+    the kernels (:func:`~hpcagent_bench.stats.summary.geomean_interval`)."""
+    summarized = [cell for cell in cells if cell.delivered and not cell.flagged and math.isfinite(cell.median())]
+    points = kernel_medians(cells)
+    if any(cell.replicates for cell in summarized):
+        drawn = [np.asarray(cell.replicates if cell.n == 1 else (), dtype=np.float64) for cell in summarized]
+        interval = summary.nested_geomean_interval(points, drawn)
+    else:
+        interval = summary.geomean_interval(points)
     return interval.point, interval.low, interval.high
 
 

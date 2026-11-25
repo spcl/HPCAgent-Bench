@@ -42,6 +42,9 @@ __all__ = [
     "mean_interval",
     "mean_ratio_ci",
     "median_ci",
+    "nested_geomean_interval",
+    "rep_interval",
+    "rep_replicates",
     "sign_flip_interval",
     "sign_flip_pvalue",
     "sign_flips",
@@ -311,6 +314,67 @@ def geomean_interval(values: Samples, confidence: float | None = None) -> Interv
     if x.size < MIN_PAIRS_FOR_INTERVAL:
         return Interval("geomean", geomean(x), math.nan, math.nan, confidence, "underpowered", int(x.size))
     return geomean_ci(x, confidence=confidence)
+
+
+#: Replicates a timed-run bootstrap draws: per kernel, and per draw of the nested geomean.
+REP_RESAMPLES: int = 2000
+
+#: One timed input's runs: the candidate's, then the credited baseline's, in ns.
+InputReps = tuple[Sequence[float], Sequence[float]]
+
+
+def rep_replicates(inputs: Sequence[InputReps], draws: int = REP_RESAMPLES, seed: int = 0) -> FloatArray:
+    """``draws`` bootstrap replicates of one answer's S_i from its timed runs. Each replicate resamples both sides'
+    runs of every input with replacement, takes the input's ratio median(baseline) / median(native), and the geomean
+    of the ratios over the inputs, as :func:`hpcagent_bench.stats.score_rule.credit` folds them. No inputs: empty."""
+    if not inputs:
+        return np.empty(0, dtype=np.float64)
+    rng = np.random.default_rng(seed)
+    logs = np.zeros(draws, dtype=np.float64)
+    for native, baseline in inputs:
+        for side, sign in ((np.asarray(baseline, dtype=np.float64), 1.0), (np.asarray(native, dtype=np.float64), -1.0)):
+            drawn = side[rng.integers(0, side.size, size=(draws, side.size))]
+            logs += sign * np.log(np.median(drawn, axis=1))
+    return np.exp(logs / len(inputs))
+
+
+def rep_interval(point: float, replicates: FloatArray, confidence: float | None = None) -> Interval:
+    """``point`` (the recorded S_i) with the percentile interval of its timed-run :func:`rep_replicates`; none
+    (NaN ends, ``method`` ``"no-runs"``) without replicates."""
+    confidence = 1.0 - default_alpha() if confidence is None else confidence
+    if replicates.size == 0:
+        return Interval("S_i", point, math.nan, math.nan, confidence, "no-runs", 0)
+    tail = 50.0 * (1.0 - confidence)
+    low, high = np.percentile(replicates, (tail, 100.0 - tail))
+    return Interval(
+        "S_i", point, float(low), float(high), confidence, "bootstrap-percentile(runs)", int(replicates.size)
+    )
+
+
+def nested_geomean_interval(
+    points: Samples, replicates: Sequence[FloatArray], confidence: float | None = None, seed: int = 0
+) -> Interval:
+    """The geomean of the kernels' ``points`` with a two-level percentile bootstrap: each draw resamples the kernels
+    with replacement, then takes one timed-run replicate of each drawn kernel's S_i (its point where ``replicates``
+    holds none), so the interval carries both the kernel sample and the run-to-run noise. Withheld below
+    :data:`MIN_PAIRS_FOR_INTERVAL` kernels, as :func:`geomean_interval` is."""
+    confidence = 1.0 - default_alpha() if confidence is None else confidence
+    x: FloatArray = np.asarray(points, dtype=np.float64)
+    if x.size < MIN_PAIRS_FOR_INTERVAL:
+        return geomean_interval(x, confidence)
+    draws = REP_RESAMPLES
+    table = np.empty((x.size, draws), dtype=np.float64)
+    for row, (point, drawn) in enumerate(zip(x, replicates, strict=True)):
+        table[row] = drawn[:draws] if drawn.size >= draws else point
+    rng = np.random.default_rng(seed)
+    kernels = rng.integers(0, x.size, size=(draws, x.size))
+    columns = rng.integers(0, draws, size=(draws, x.size))
+    logs = np.log(table[kernels, columns]).mean(axis=1)
+    tail = 50.0 * (1.0 - confidence)
+    low, high = np.exp(np.percentile(logs, (tail, 100.0 - tail)))
+    return Interval(
+        "geomean", geomean(x), float(low), float(high), confidence, "bootstrap-percentile(nested)", int(x.size)
+    )
 
 
 def mean_ci(values: Samples, confidence: float | None = None) -> Interval:

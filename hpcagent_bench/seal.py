@@ -391,6 +391,17 @@ def build_view(plan: SealPlan) -> None:
             os.close(handle)
 
 
+def thread_note() -> str:
+    """The threads this process runs, by name, when it runs more than one: ``unshare(CLONE_NEWUSER)`` refuses a
+    multithreaded process with EINVAL, and a runtime that starts threads again in every fork child (a GPU runtime,
+    a tracer) is what makes one, so the names say which runtime to route through the forkserver."""
+    names = []
+    for task in sorted(pathlib.Path("/proc/self/task").iterdir()):
+        with contextlib.suppress(OSError):
+            names.append((task / "comm").read_text(encoding="ascii", errors="replace").strip())
+    return f" ({len(names)} threads: {', '.join(names)})" if len(names) > 1 else ""
+
+
 def enter(plan: SealPlan) -> None:
     """Seal THIS process per ``plan``; returns in the sealed process only (see module doc).
 
@@ -402,7 +413,7 @@ def enter(plan: SealPlan) -> None:
         os.unshare(NAMESPACES)
         map_ids(0, uid, 0, gid)
     except OSError as exc:
-        raise seal_worker.SealError(f"seal: cannot enter new namespaces: {exc}") from exc
+        raise seal_worker.SealError(f"seal: cannot enter new namespaces: {exc}{thread_note()}") from exc
     build_view(plan)
     signals, signalled = os.pipe()
     fork_and_relay(signals=signals, child_end=signalled)  # the child is pid 1 of the new pid namespace

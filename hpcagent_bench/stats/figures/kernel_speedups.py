@@ -5,6 +5,7 @@
 (:mod:`hpcagent_bench.stats.rules`)."""
 
 import dataclasses
+import json
 import logging
 import math
 import pathlib
@@ -20,7 +21,7 @@ from matplotlib.lines import Line2D
 from hpcagent_bench import packets, study_tags
 from hpcagent_bench.harness import denominator
 from hpcagent_bench.results.observation_columns import RowKind
-from hpcagent_bench.stats import canon, palette, population, rules, style
+from hpcagent_bench.stats import canon, palette, population, rules, style, summary
 from hpcagent_bench.stats.figures import per_kernel, setup_names
 from hpcagent_bench.stats.summary import geomean_ci, signed_change, usable_ratios
 
@@ -35,6 +36,7 @@ __all__ = [
     "Row",
     "agent_kernel_row",
     "answer_ratios",
+    "answer_replicates",
     "baseline_color",
     "baseline_label",
     "baseline_references",
@@ -93,6 +95,7 @@ class Row:
     pending: frozenset[str] = frozenset()  # kernels not attempted yet (mark_pending only)
     filled: bool = True  # hollow = the no-packet control (palette.CONTROL_MARKER)
     spends_tokens: bool = False  # an agent's row (agent_kernel_row): no token total is a missing one, not none spent
+    replicates: dict[str, tuple[float, ...]] = dataclasses.field(default_factory=dict)  # timed-run S_i draws
 
 
 def sign_test(ratios: Mapping[str, float]) -> tuple[int, int]:
@@ -314,6 +317,13 @@ def agent_kernel_row(
     kernels = set(tag_kernels)
     ratios, numerator_ms, denominator_ms = answer_ratios(answers, kernels)
     ratios_low, ratios_high = kernel_intervals(subset, ratios.keys(), setup)
+    replicates = answer_replicates(answers, ratios.keys())
+    # Under three episodes the episode bootstrap collapses onto the point: the timed runs' interval (run-to-run noise
+    # only) is drawn instead.
+    collapsed = [k for k in replicates if not ratios_low.get(k, math.nan) < ratios_high.get(k, math.nan)]
+    for kernel in collapsed:
+        interval = summary.rep_interval(ratios[kernel], np.asarray(replicates[kernel]))
+        ratios_low[kernel], ratios_high[kernel] = interval.low, interval.high
     raw_tokens, tokens_low, tokens_high = setup_names.setup_tokens(subset, setup)
     del tokens_low, tokens_high  # under "latest" both are empty; a repeat's own range is not this figure's concern
     tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
@@ -327,7 +337,7 @@ def agent_kernel_row(
     return Row(
         setup, label, ratios, numerator_ms, denominator_ms, "; ".join(notes) or "none",
         palette.model_color(model), palette.packet_marker(condition), ratios_low, ratios_high, tokens,
-        pending=pending, filled=bool(condition), spends_tokens=True,
+        pending=pending, filled=bool(condition), spends_tokens=True, replicates=replicates,
     )  # fmt: skip
 
 
@@ -349,6 +359,20 @@ def answer_ratios(
         numerator_ms[kernel] = float(baseline_ns) / 1.0e6
         denominator_ms[kernel] = float(native_ns) / 1.0e6
     return ratios, numerator_ms, denominator_ms
+
+
+def answer_replicates(answers: pd.DataFrame, kernels: Collection[str]) -> dict[str, tuple[float, ...]]:
+    """Each of ``kernels``' timed-run bootstrap replicates of its answer's S_i (:func:`summary.rep_replicates`), for
+    the answers whose final grade kept its runs."""
+    if population.CELL_REPS_COLUMN not in answers.columns:
+        return {}
+    replicates: dict[str, tuple[float, ...]] = {}
+    for name, reps in answers[population.CELL_REPS_COLUMN].items():
+        kernel = str(name)
+        if kernel in kernels and isinstance(reps, str) and reps:
+            inputs = [(native, baseline) for native, baseline in json.loads(reps)]
+            replicates[kernel] = tuple(summary.rep_replicates(inputs).tolist())
+    return replicates
 
 
 def kernel_intervals(
@@ -479,7 +503,7 @@ def kernel_metrics(
             row.label,
             per_kernel.kernel_cells(
                 row.ratios, kernels, delivered=row.delivered, low=row.ratios_low, high=row.ratios_high,
-                pending=row.pending,
+                pending=row.pending, replicates=row.replicates,
             ),
             row_color(row),
             row.marker,
