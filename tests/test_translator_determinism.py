@@ -39,6 +39,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from hpcagent_bench import paths
+
 #: Every emitter front door. One parse feeds the C family and Fortran; the source-to-source
 #: targets (dace/numba) run their own rewriters, so they get their own digest.
 TARGETS = ("c", "cpp", "pluto", "fortran", "dace", "numba")
@@ -140,11 +142,21 @@ def first_difference(left: dict[str, dict[str, str]], right: dict[str, dict[str,
     return ""
 
 
+def digest_twice(keys: list[str]) -> None:
+    """The seed-pinned child both axes read from: both passes over ``keys``, as JSON on stdout."""
+    json.dump(
+        {"first": {key: digest_kernel(key) for key in keys}, "second": {key: digest_kernel(key) for key in keys}},
+        sys.stdout,
+    )
+
+
 def child_digests(seed: str, keys: list[str]) -> dict[str, dict[str, dict[str, str]]]:
-    """Run this file as a script under ``PYTHONHASHSEED=seed``; read back both of its passes."""
+    """Run :func:`digest_twice` in a child under ``PYTHONHASHSEED=seed``; read back both of its passes."""
     env = {**os.environ, "PYTHONHASHSEED": seed}
+    child = "import sys; from tests.test_translator_determinism import digest_twice; digest_twice(sys.argv[1:])"
     proc = subprocess.run(
-        [sys.executable, str(pathlib.Path(__file__).resolve()), *keys],
+        [sys.executable, "-c", child, *keys],
+        cwd=paths.repo_root(),
         env=env,
         capture_output=True,
         text=True,

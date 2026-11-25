@@ -54,6 +54,11 @@
 - Per push, the dace-frontend sweep parses the measured coverage set only, as the e2e and numeric sweeps do; a
   dispatched run still parses every kernel.
 
+### Images
+
+- The agent images' launch gate stubs `agent/README.md` beside the agent package: `hpcagent-agent` names it as its
+  readme, and the editable build of the gate's venv failed without it (judge-agent-cuda, Daint 5455921).
+
 ### Skills
 
 - The `cpf-src` pages describe the form header as dace-extended 1.0.1 renders it: the reason table, the summary
