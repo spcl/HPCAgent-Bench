@@ -5,10 +5,10 @@ import copy
 from collections.abc import Callable
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_, walk_nodes
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, expr_of, name_, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.lib_nodes.fft import supplied
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank, rank_under_tuples
 
 __all__ = ["NATIVE_FFT_BACKENDS", "FftInline", "SubstituteFftCalls", "fft_axes", "fft_inline_stmts", "fft_real_dtype"]
 
@@ -111,10 +111,18 @@ class FftInline(ast.NodeTransformer):
     (numba) only binds each transform to its own assignment and keeps numpy's call, which the backend runs through
     its library (numba: ``objmode``) in place of the O(N^2) loop."""
 
-    __slots__ = ("_ctr", "array_dtypes", "changed", "keep_call", "ranks")
+    __slots__ = ("_ctr", "array_dtypes", "changed", "keep_call", "ranks", "tuples")
 
-    def __init__(self, ranks: dict[str, int], array_dtypes: dict[str, str], keep_call: bool = False) -> None:
+    def __init__(
+        self,
+        ranks: dict[str, int],
+        array_dtypes: dict[str, str],
+        keep_call: bool = False,
+        tuples: dict[str, int | None] | None = None,
+    ) -> None:
         self.ranks = ranks
+        #: The scope's shape tuples (:func:`scope_tuple_lengths`): ``col.reshape(shape)`` has ``shape``'s rank.
+        self.tuples = tuples or {}
         self.array_dtypes = array_dtypes
         self.keep_call = keep_call
         self.changed = False
@@ -143,7 +151,7 @@ class FftInline(ast.NodeTransformer):
         else:
             return node
         arg = call.args[0]
-        rank = expr_rank(arg, self.ranks)
+        rank = rank_under_tuples(arg, self.ranks, self.tuples)
         if rank is None or rank < 1:
             return node
         taxes, inverse = fft_axes(fattr, call, rank)
@@ -156,6 +164,15 @@ class FftInline(ast.NodeTransformer):
             sname = arg.id
         else:
             sname = f"__fti{self._ctr}"
+            if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute) and arg.func.attr == "reshape":
+                # numba reshapes only a C-contiguous array; a helper's parameter may be a strided view
+                # (qe_vexx_k's ``fwfft(result[ii, :, :], batch=npol)``). A contiguous one is not copied.
+                receiver = expr_of(f"np.ascontiguousarray({ast.unparse(arg.func.value)})")
+                arg = ast.Call(
+                    func=ast.Attribute(value=receiver, attr="reshape", ctx=ast.Load()),
+                    args=arg.args,
+                    keywords=arg.keywords,
+                )
             pre = ast.parse(f"{sname} = {ast.unparse(arg)}").body
         real_dtype = fft_real_dtype(sname, tname, self.array_dtypes)
         stmts = fft_inline_stmts(tname, sname, taxes, rank, inverse, self._ctr, alloc, real_dtype)

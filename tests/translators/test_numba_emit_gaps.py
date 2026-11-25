@@ -603,3 +603,202 @@ def test_an_offset_window_update_by_a_unit_column_times_a_vector_matches_numpy_o
     want[2:5, 1:3, :, 0] = want[2:5, 1:3, :, 0] + g[:, :, None] * c
     assert "g[:, :, None]" not in emitted, emitted
     np.testing.assert_array_equal(got["out"], want)
+
+
+def test_a_transposed_matrix_minus_a_scaled_batch_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """lulesh's ``hourgam = gamma.T - volinv[:, None, None] * term``: a rank-2 operand against a rank-3 batch with
+    a unit-axis scale; numba's parfor pass indexes the rank-2 ``gamma.T`` with three indices."""
+    src = (
+        "import numpy as np\n"
+        "GAMMA = np.array([[1.0, 2.0, -1.0], [0.5, -1.0, 1.0], [-1.0, 3.0, 1.0]])\n"
+        "def f(d, x, out):\n"
+        " v = 1.0 / d\n"
+        " gamma = GAMMA.astype(x.dtype)\n"
+        " t = x[:, :, None] * x[:, None, :]\n"
+        " h = gamma.T - v[:, None, None] * t\n"
+        " out[:] = h\n"
+    )
+    d = np.linspace(0.5, 1.5, 5)
+    x = np.linspace(2.0, 3.0, 5 * 3).reshape(5, 3)
+    shapes = {"d": "(N,)", "x": "(N, 3)", "out": "(N, 3, 3)"}
+    dtypes = dict.fromkeys(shapes, "float64")
+    emitted, got = numba_as_written(tmp_path, src, {"d": d, "x": x}, {"out": (5, 3, 3)}, {"N": 5}, shapes, dtypes)
+    gamma = np.array([[1.0, 2.0, -1.0], [0.5, -1.0, 1.0], [-1.0, 3.0, 1.0]])
+    assert "v[:, None, None]" not in emitted, emitted
+    np.testing.assert_array_equal(got["out"], gamma.T - (1.0 / d)[:, None, None] * (x[:, :, None] * x[:, None, :]))
+
+
+def test_a_nested_fft_helper_called_at_two_ranks_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """qe_vexx_k's ``invfft(col, batch=None)``: one closure takes a vector and a batch of rows and builds
+    ``grid if col.ndim == 1 else (batch,) + grid``, which numba cannot type as one tuple. Each rank gets its own
+    clone, the FFT's operand ranks through the enclosing ``grid``, the keyword ``batch`` reaches the clone, an int32
+    ``int(...)`` count joins the int64 grid, and the strided row view is reshaped."""
+    src = (
+        "import numpy as np\n"
+        "def f(x, xs, counts, out1, out2):\n"
+        " grid = (2, 3, 4)\n"
+        " n = int(counts[0])\n"
+        " def inv(col, batch=None):\n"
+        "  shape = grid if col.ndim == 1 else (batch,) + grid\n"
+        "  o = np.fft.ifftn(col.reshape(shape), axes=(-3, -2, -1))\n"
+        "  return o.reshape((24,) if col.ndim == 1 else (batch, 24))\n"
+        " out1[:] = inv(x).real\n"
+        " out2[:] = inv(xs[0, :, :], batch=n).real\n"
+    )
+    x = np.linspace(-1.0, 1.0, 24)
+    xs = np.linspace(0.5, 1.5, 2 * 3 * 24).reshape(2, 3, 24)
+    counts = np.array([3], dtype=np.int32)
+    shapes = {"x": "(24,)", "xs": "(2, N, 24)", "counts": "(1,)", "out1": "(24,)", "out2": "(N, 24)"}
+    dtypes = {"x": "float64", "xs": "float64", "counts": "int32", "out1": "float64", "out2": "float64"}
+    outs = {"out1": (24,), "out2": (3, 24)}
+    emitted, got = numba_as_written(tmp_path, src, {"x": x, "xs": xs, "counts": counts}, outs, {"N": 3}, shapes, dtypes)
+    assert "np.fft" not in emitted, emitted
+    np.testing.assert_allclose(got["out1"], np.fft.ifftn(x.reshape(2, 3, 4)).real.ravel(), rtol=1e-12, atol=1e-14)
+    want = np.fft.ifftn(xs[0].reshape(3, 2, 3, 4), axes=(-3, -2, -1)).real.reshape(3, 24)
+    np.testing.assert_allclose(got["out2"], want, rtol=1e-12, atol=1e-14)
+
+
+def test_a_flag_passed_down_two_helpers_drops_the_dead_arm_on_numba(tmp_path: pathlib.Path) -> None:
+    """qe_vexx_k's ``use_coulomb_vcut_ws``: the kernel passes ``False`` and ``None`` to one helper, which passes them
+    on to the next; that one's dead arm reads ``buf.shape`` of the ``None``, which numba cannot type."""
+    src = (
+        "import numpy as np\n"
+        "def inner(a, flag, buf):\n"
+        " if flag:\n"
+        "  return a * buf.shape[0]\n"
+        " return a * 2.0\n"
+        "def outer(a, flag, buf):\n"
+        " return inner(a, flag, buf)\n"
+        "def f(x, out):\n"
+        " out[:] = outer(x, False, None)\n"
+    )
+    x = np.linspace(-1.0, 1.0, 6)
+    shapes = {"x": "(N,)", "out": "(N,)"}
+    unused, got = numba_as_written(
+        tmp_path, src, {"x": x}, {"out": x.shape}, {"N": 6}, shapes, dict.fromkeys(shapes, "float64")
+    )
+    np.testing.assert_array_equal(got["out"], x * 2.0)
+
+
+def test_an_einsum_of_a_conjugated_operand_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """qe_vexx_k's ``np.einsum("aig,ai->ag", inner1, np.conj(becphi_r))``: an operand that is a call, not a name, kept
+    the whole einsum, which numba does not implement."""
+    src = "import numpy as np\ndef f(a, b, out):\n out[:] = np.einsum('ij,j->i', a, np.conj(b)).imag\n"
+    a = np.linspace(-1.0, 1.0, 12).reshape(4, 3)
+    b = np.linspace(0.5, 1.5, 3) + 1j * np.linspace(-2.0, 2.0, 3)
+    shapes = {"a": "(N, 3)", "b": "(3,)", "out": "(N,)"}
+    dtypes = {"a": "float64", "b": "complex128", "out": "float64"}
+    emitted, got = numba_as_written(tmp_path, src, {"a": a, "b": b}, {"out": (4,)}, {"N": 4}, shapes, dtypes)
+    assert "np.einsum" not in emitted, emitted
+    np.testing.assert_allclose(got["out"], (a @ np.conj(b)).imag, rtol=1e-14, atol=1e-15)
+
+
+def test_an_einsum_of_a_real_and_a_gathered_complex_operand_is_complex_on_numba(tmp_path: pathlib.Path) -> None:
+    """qe_vexx_k's ``np.einsum("aijb,ab->aij", qr, vc_box)``: a gathered operand has no known kind, and the loop
+    nest's temp took the first, real operand's dtype; numba refuses to store a complex product into it."""
+    src = (
+        "import numpy as np\n"
+        "def h(q, v, idx):\n"
+        " w = v[idx]\n"
+        " return np.einsum('ab,b->a', q, w)\n"
+        "def f(q, v, idx, out):\n"
+        " out[:] = h(q, v, idx).imag\n"
+    )
+    q = np.linspace(-1.0, 1.0, 12).reshape(4, 3)
+    v = np.linspace(0.5, 1.5, 5) + 1j * np.linspace(-2.0, 2.0, 5)
+    idx = np.array([4, 0, 2])
+    shapes = {"q": "(N, 3)", "v": "(5,)", "idx": "(3,)", "out": "(N,)"}
+    dtypes = {"q": "float64", "v": "complex128", "idx": "int64", "out": "float64"}
+    ins = {"q": q, "v": v, "idx": idx}
+    unused, got = numba_as_written(tmp_path, src, ins, {"out": (4,)}, {"N": 4}, shapes, dtypes)
+    np.testing.assert_allclose(got["out"], (q @ v[idx]).imag, rtol=1e-14, atol=1e-15)
+
+
+def test_a_real_or_complex_choice_by_a_runtime_flag_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """qe_vexx_k's ``d.real if gamma_only else d``: numba types both arms of a runtime choice and cannot unify a real
+    with a complex array."""
+    src = "import numpy as np\ndef f(d, s, out):\n out[:] = ((d.real if s > 0.0 else d) * 2.0).real\n"
+    d = np.linspace(0.5, 1.5, 4) + 1j * np.linspace(-2.0, 2.0, 4)
+    shapes = {"d": "(N,)", "s": "()", "out": "(N,)"}
+    dtypes = {"d": "complex128", "s": "float64", "out": "float64"}
+    unused, got = numba_as_written(
+        tmp_path, src, {"d": d, "s": np.float64(1.0)}, {"out": (4,)}, {"N": 4}, shapes, dtypes
+    )
+    np.testing.assert_array_equal(got["out"], d.real * 2.0)
+
+
+def test_a_corner_scatter_of_a_closure_helper_result_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """lulesh's ``normal[:, corners, 0] += areaX[:, None]`` with ``areaX = 0.25 * (c(x, n0) ...)``: the rank table
+    read the helper call inside the product as the constant's rank 0, so the loop over ``corners`` read the value's
+    element axis in place of its corner axis."""
+    src = (
+        "import numpy as np\n"
+        "def f(x, out):\n"
+        " def c(a, i):\n"
+        "  return a[:, i]\n"
+        " area = 0.5 * (c(x, 0) + c(x, 1))\n"
+        " corners = [0, 2]\n"
+        " out[:, corners, 0] += area[:, None]\n"
+    )
+    x = np.linspace(-1.0, 1.0, 5 * 3).reshape(5, 3)
+    shapes = {"x": "(N, 3)", "out": "(N, 3, 2)"}
+    unused, got = numba_as_written(
+        tmp_path, src, {"x": x}, {"out": (5, 3, 2)}, {"N": 5}, shapes, dict.fromkeys(shapes, "float64")
+    )
+    want = np.zeros((5, 3, 2))
+    want[:, [0, 2], 0] += (0.5 * (x[:, 0] + x[:, 1]))[:, None]
+    np.testing.assert_array_equal(got["out"], want)
+
+
+def test_a_closure_scaling_an_einsum_by_an_enclosing_vector_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """lulesh's ``fbforce`` returning ``coefficient[:, None] * np.einsum(...)``: the closure's table knew neither the
+    enclosing ``coefficient`` nor the einsum's temp, so the unit-axis broadcast stayed whole and numba's parfor pass
+    asserted ``Sizes of ... do not match``."""
+    src = (
+        "import numpy as np\n"
+        "def f(a, b, d, out):\n"
+        " coef = 1.0 / d\n"
+        " def g(vd):\n"
+        "  return coef[:, None] * np.einsum('ij,ij->ij', vd, a)\n"
+        " out[:] = g(b)\n"
+    )
+    a = np.linspace(-1.0, 1.0, 5 * 3).reshape(5, 3)
+    b = np.linspace(0.5, 1.5, 5 * 3).reshape(5, 3)
+    d = np.linspace(1.0, 2.0, 5)
+    shapes = {"a": "(N, 3)", "b": "(N, 3)", "d": "(N,)", "out": "(N, 3)"}
+    emitted, got = numba_as_written(
+        tmp_path, src, {"a": a, "b": b, "d": d}, {"out": (5, 3)}, {"N": 5}, shapes, dict.fromkeys(shapes, "float64")
+    )
+    assert "coef[:, None]" not in emitted, emitted
+    np.testing.assert_allclose(got["out"], (1.0 / d)[:, None] * (b * a), rtol=1e-15, atol=0)
+
+
+def test_a_helper_filling_a_slice_of_an_unranked_parameter_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """lulesh's ``determ[:] = volo * v``: a helper passes on a column of the gather ``x[nodelist]`` (a 2-D index into a
+    1-D table), which no rank rule sizes outside the kernel, and the slice store in the helper says ``det`` is an array, so
+    ``g - (1.0 / det)[:, None, None] * t`` is peeled instead of numba's parfor pass indexing the 2-D ``g`` with three
+    indices."""
+    src = (
+        "import numpy as np\n"
+        "def stress(x, nodelist):\n"
+        " xl = x[nodelist]\n"
+        " return xl[:, 0]\n"
+        "def control(det, g, v, t, out):\n"
+        " det[:] = v * 2.0\n"
+        " inv = 1.0 / det\n"
+        " out[:] = g - inv[:, None, None] * t\n"
+        "def force(x, nodelist, g, v, t, out):\n"
+        " control(stress(x, nodelist), g, v, t, out)\n"
+        "def f(x, nodelist, g, v, t, out):\n"
+        " force(x, nodelist, g, v, t, out)\n"
+    )
+    x = np.linspace(-1.0, 1.0, 7)
+    nodelist = np.arange(15).reshape(5, 3) % 7
+    g = np.linspace(-2.0, 2.0, 3 * 2).reshape(3, 2)
+    v = np.linspace(0.5, 1.5, 5)
+    t = np.linspace(2.0, 3.0, 5 * 3 * 2).reshape(5, 3, 2)
+    shapes = {"x": "(7,)", "nodelist": "(N, 3)", "g": "(3, 2)", "v": "(N,)", "t": "(N, 3, 2)", "out": "(N, 3, 2)"}
+    dtypes = dict.fromkeys(shapes, "float64") | {"nodelist": "int64"}
+    ins = {"x": x, "nodelist": nodelist, "g": g, "v": v, "t": t}
+    unused, got = numba_as_written(tmp_path, src, ins, {"out": t.shape}, {"N": 5}, shapes, dtypes)
+    np.testing.assert_allclose(got["out"], g - (1.0 / (v * 2.0))[:, None, None] * t, rtol=1e-15, atol=0)

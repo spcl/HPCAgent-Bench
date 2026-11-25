@@ -10,6 +10,7 @@ from typing import Any
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, const_int, literal_loads, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
+from hpcagent_bench.translators.numpyto_common.limits import CALL_GRAPH_ROUNDS
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import name_store_counts, newaxis_view_units
 
 __all__ = [
@@ -519,15 +520,22 @@ def fold_constant_helper_arguments(tree: ast.Module, kernel_name: str) -> bool:
     numba types both arms of ``if flag:`` even when every caller passes ``False``, so a ``None`` buffer
     read under the dead arm fails typing; the substituted literal lets :class:`DeadBranchElim` drop that
     arm first. A helper whose name escapes as a value, a call with keywords or a starred argument, or a
-    parameter the body rebinds is left alone."""
+    parameter the body rebinds is left alone. Rounds over the call graph: a literal substituted into one helper is
+    what it passes on to the next (qe_vexx_k's ``use_coulomb_vcut_ws`` reaches ``_g2_convolution`` through
+    ``_g2_convolution_all``)."""
     helpers = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name != kernel_name}
     sites, escaped = helper_call_sites(tree, helpers)
     changed = False
-    for name, fn in helpers.items():
-        calls = sites.get(name, [])
-        if not calls or name in escaped or not substitutable_helper(fn, calls):
-            continue
-        changed = substitute_loads(fn, constant_parameters(fn, calls)) or changed
+    for unused in range(CALL_GRAPH_ROUNDS):
+        substituted = False
+        for name, fn in helpers.items():
+            calls = sites.get(name, [])
+            if not calls or name in escaped or not substitutable_helper(fn, calls):
+                continue
+            substituted = substitute_loads(fn, constant_parameters(fn, calls)) or substituted
+        changed = changed or substituted
+        if not substituted:
+            break
     return changed
 
 
