@@ -141,6 +141,12 @@ def scalar_index(e: ast.expr, ranks: dict[str, int]) -> bool:
     reads as a scalar, as in :func:`expr_rank`."""
     if isinstance(e, ast.Constant):
         return isinstance(e.value, int) and not isinstance(e.value, bool)
+    if isinstance(e, (ast.BinOp, ast.UnaryOp)):
+        # A peeled row's ``lo + i`` (warpx's ``Jz[lox + ib + i0z + __ob4_i, ...]``): arithmetic over scalars.
+        nodes = list(walk_nodes(e))
+        return all(isinstance(n, ARITHMETIC_NODES) for n in nodes) and all(
+            scalar_index(n, ranks) for n in nodes if isinstance(n, (ast.Name, ast.Constant))
+        )
     return isinstance(e, ast.Name) and ranks.get(e.id, 0) == 0
 
 
@@ -370,7 +376,7 @@ class OuterBroadcastPeel(RankedRewritePass):
                     return None
                 ext = slice_extent_token(e, base[bi])
                 if ext is None and e.step is None:  # runtime bounds: the view's own extent, clipping included
-                    ext = f"({ast.unparse(sub)}).shape[{len(axes)}]"
+                    ext = f"({ast.unparse(self.spelled_at_zero(sub))}).shape[{len(axes)}]"
                 if ext is None:
                     return None
                 axes.append((i, "slice", ext))
@@ -389,6 +395,20 @@ class OuterBroadcastPeel(RankedRewritePass):
             return None
         axes.extend((None, "tail", base[k]) for k in range(bi, len(base)))
         return axes
+
+    def spelled_at_zero(self, sub: ast.Subscript) -> ast.Subscript:
+        """``sub`` with each scalar index read at 0, for an extent token: a view's shape does not depend on which
+        row it takes, and a token that names a peel's loop variable would stop the next peel (warpx's
+        ``Jz[lo + __ob4_i, a:b, c:d, 0]``)."""
+        entries = list(sub.slice.elts) if isinstance(sub.slice, ast.Tuple) else [sub.slice]
+        zeroed = [
+            ast.Constant(value=0)
+            if not isinstance(e, ast.Constant) and not isinstance(e, ast.Slice) and scalar_index(e, self.ranks)
+            else e
+            for e in entries
+        ]
+        index = ast.Tuple(elts=zeroed, ctx=ast.Load()) if isinstance(sub.slice, ast.Tuple) else zeroed[0]
+        return ast.Subscript(value=sub.value, slice=index, ctx=ast.Load())
 
     def shape_token(self, e: ast.expr) -> str:
         """The extent token of a shape entry, ``1`` where it reads a known unit axis: ``y.shape[k]`` of a name in

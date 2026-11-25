@@ -571,3 +571,35 @@ def test_a_flux_helper_called_with_a_newaxis_view_and_a_gather_matches_numpy_on_
     }
     ins = {"d": d, "m": m, "neigh": neigh, "normals": normals}
     assert numba(src, ins, {"out_d": (5,), "out_m": (5, 3)}, {"N": 5}, shapes, dtypes) == "ok"
+
+
+def test_an_offset_window_update_by_a_unit_column_times_a_vector_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
+    """warpx_esirkepov_deposition's ``Jz[lo:hi, a:b, c:d, 0] = Jz[...] + gz[:, :, None] * cum_z``: a size-1 axis
+    against an operand of lower rank asserts in numba's parfor pass as a same-rank one does, a peeled row indexes
+    its window at ``lo + i``, and the window's extents may not name the loop variable, or the peel stops a level
+    early and leaves the broadcast in the row."""
+    src = (
+        "import numpy as np\n"
+        "def f(J, g, c, lo, a, b, out):\n"
+        " out[:] = J\n"
+        " out[lo:lo + g.shape[0], a:b, :, 0] = out[lo:lo + g.shape[0], a:b, :, 0] + g[:, :, None] * c\n"
+    )
+    J = np.linspace(-1.0, 1.0, 6 * 5 * 3 * 2).reshape(6, 5, 3, 2)
+    g = np.linspace(0.5, 1.5, 3 * 2).reshape(3, 2)
+    c = np.linspace(2.0, 3.0, 3)
+    shapes = {"J": "(N, M, 3, 2)", "g": "(3, 2)", "c": "(3,)", "out": "(N, M, 3, 2)"}
+    dtypes = {
+        "J": "float64",
+        "g": "float64",
+        "c": "float64",
+        "lo": "int64",
+        "a": "int64",
+        "b": "int64",
+        "out": "float64",
+    }
+    ins = {"J": J, "g": g, "c": c, "lo": np.int64(2), "a": np.int64(1), "b": np.int64(3)}
+    emitted, got = numba_as_written(tmp_path, src, ins, {"out": J.shape}, {"N": 6, "M": 5}, shapes, dtypes)
+    want = J.copy()
+    want[2:5, 1:3, :, 0] = want[2:5, 1:3, :, 0] + g[:, :, None] * c
+    assert "g[:, :, None]" not in emitted, emitted
+    np.testing.assert_array_equal(got["out"], want)
