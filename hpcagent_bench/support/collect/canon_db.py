@@ -44,6 +44,7 @@ COLUMNS: tuple[str, ...] = (
     "execution",
     "ts_ms",
     "transform_time",
+    "tune_time",
     "codegen_time",
     "compile_time",
     "reps_ms",

@@ -3,7 +3,10 @@
 """A framework column's build time split into the canon table's phases (``<phase>_time``), cached work included.
 
 Time inside :func:`measuring` that no :func:`phase` marks is ``TRANSFORM``; a cache hit adds the seconds producing the
-artifact took (:func:`credit`). Measurements and marks are per context (:mod:`contextvars`)."""
+artifact took (:func:`credit`). A framework declares the phases it has (``Framework.build_phases``); the others are
+not timed. Reported, the phases are optimize (``TRANSFORM``), tune (``TUNE``, the compiles of a search included) and
+compile (``CODEGEN`` plus ``COMPILE``) (:data:`hpcagent_bench.stats.canon.REPORTED_PHASES`). Measurements and marks
+are per context (:mod:`contextvars`)."""
 
 import contextlib
 import contextvars
@@ -21,6 +24,7 @@ class Phase(Coded):
     """A build phase; its spelling names the canon column ``<phase>_time``."""
 
     TRANSFORM = enum.auto()
+    TUNE = enum.auto()
     CODEGEN = enum.auto()
     COMPILE = enum.auto()
 

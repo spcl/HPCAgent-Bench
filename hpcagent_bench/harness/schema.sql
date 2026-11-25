@@ -416,8 +416,11 @@ CREATE TABLE canon (
     execution    TEXT NOT NULL DEFAULT 'native' CHECK (execution IN ('native', 'container')),  -- record.execution
     ts_ms        INTEGER NOT NULL DEFAULT 0,            -- when the row was written; the latest wins a merge
     -- How long the column took to turn the kernel into a binary, by phase (hpcagent_bench.phase_clock), seconds, cached
-    -- work included; their sum is the total. NULL = not measured (a row from before user_version 14).
+    -- work included; their sum is the total. NULL = not measured: a phase the column does not have, or a row from
+    -- before user_version 14.
     transform_time REAL,                                -- parse, simplify, canonicalize, auto-optimize, polycc, ...
+    tune_time      REAL,                                -- a search: autotune, MetaSchedule, its trial compiles
+                                                        -- (user_version 39)
     codegen_time   REAL,                                -- emitting source: translators, DaCe codegen, a CPF render
     compile_time   REAL,                                -- the backend compiler
     reps_ms        TEXT NOT NULL DEFAULT '',            -- JSON list: the timed runs median_ms is the median of;
