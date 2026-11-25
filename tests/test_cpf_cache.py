@@ -201,7 +201,7 @@ def test_lookup_reads_the_form_under_the_key_its_inputs_give(tmp_path: pathlib.P
     with pytest.raises(cpf_cache.CacheMiss):
         cpf_prerender.lookup(cache, "gemm", "c++", "", HintDetail.PROOFS, Target.CPU)
     with pytest.raises(cpf_cache.CacheMiss):
-        cpf_prerender.lookup(cache, "gemm", "c", "", HintDetail.KINDS, Target.CPU)
+        cpf_prerender.lookup(cache, "gemm", "c", "", HintDetail.NONE, Target.CPU)
 
 
 def test_a_modified_form_is_a_miss(tmp_path: pathlib.Path) -> None:

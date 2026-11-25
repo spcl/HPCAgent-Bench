@@ -107,7 +107,7 @@ SPELLINGS: list[tuple[type[Coded], tuple[str, ...]]] = [
     (fuzz.Sentinel, ("unresolved",)),
     (harbor.Group, ("kernel", "dir")),
     (harbor.Layout, ("kernel", "repo")),
-    (cpf_cache.HintDetail, ("proofs", "kinds", "none")),
+    (cpf_cache.HintDetail, ("proofs", "none")),
     (cpf_cache.Role, ("source", "device", "binding", "sdfg")),
     (cpf_cache.Target, ("cpu", "gpu")),
     (cpf_cache.RenderVerdict, ("ok", "refused", "noemit", "noprogram", "fail", "timeout")),

@@ -36,7 +36,7 @@ def publish_form(
     target: Target = Target.CPU,
     hints: HintDetail = DEFAULT_HINTS,
     precision: str = "",
-    source: str = "void f(void) {}\n",
+    source: str = "// cpf: proven: all\nvoid f(void) {}\n",
     device: str = "",
     entry: str = "",
     libraries: tuple[str, ...] = (),
@@ -85,9 +85,17 @@ def publish_failure(
 def cache_with(
     tmp_path: pathlib.Path, kernel: str, dialect: str = "c", target: Target = Target.CPU, verified: bool = False
 ) -> pathlib.Path:
-    """``tmp_path/cache`` holding ``kernel``'s form in ``dialect`` for ``target`` (``// <kernel> form``; on gpu with
-    its device unit), graded correct when ``verified``."""
+    """``tmp_path/cache`` holding ``kernel``'s form in ``dialect`` for ``target`` (``// <kernel> form`` under the
+    proof line dace-extended >= 1.0.1 writes; on gpu with its device unit), graded correct when ``verified``."""
     cache = tmp_path / "cache"
     device = f"// {kernel} kernels\n" if target is Target.GPU else ""
-    publish_form(cache, kernel, dialect, target=target, source=f"// {kernel} form\n", device=device, verified=verified)
+    publish_form(
+        cache,
+        kernel,
+        dialect,
+        target=target,
+        source=f"// cpf: proven: all\n// {kernel} form\n",
+        device=device,
+        verified=verified,
+    )
     return cache

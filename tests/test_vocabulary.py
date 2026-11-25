@@ -58,13 +58,9 @@ PINNED_DEVICES = (
 PINNED_PACKETS = (
     "caveman",
     "cpf-cpu-src",
-    "cpf-cpu-src-kinds",
     "cpf-gpu-src",
-    "cpf-gpu-src-kinds",
     "cpf-tool-cpu",
-    "cpf-tool-cpu-kinds",
     "cpf-tool-gpu",
-    "cpf-tool-gpu-kinds",
     "divide-and-conquer",
     "nsys",
     "opt-reports",
@@ -91,8 +87,6 @@ PINNED_PACKETS = (
     "cpf-gpu-src-bare",
     "llm-friendly",
     # a plugin's packet registers after every shipped one, so a new shipped packet moves its slot
-    "cpf-cpu-src-v2",
-    "cpf-gpu-src-v2",
     "autokernel",
 )
 

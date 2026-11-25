@@ -115,33 +115,24 @@ def test_two_entities_sharing_a_colour_in_one_figure_warn(caplog: pytest.LogCapt
 PUBLISHED_PACKET_COLORS = {
     "": "#4d4d4d",
     "cpf-src": "#ff7f0e",
-    "cpf-tool": "#8c564b",
+    "cpf-tool": "#d62728",
     "cpf-cpu-src": "#ff7f0e",
-    "cpf-tool-cpu": "#8c564b",
-    "cpf-gpu-src": "#d62728",
-    "cpf-tool-gpu": "#7f7f7f",
-    "cpf-src-kinds": "#2ca02c",
-    "cpf-tool-kinds": "#e377c2",
-    "cpf-cpu-src-kinds": "#2ca02c",
-    "cpf-tool-cpu-kinds": "#e377c2",
-    "cpf-gpu-src-kinds": "#9467bd",
-    "cpf-tool-gpu-kinds": "#bcbd22",
-    "lang-skills": "#c5b0d5",
-    "divide-and-conquer": "#17becf",
-    "profiling": "#98df8a",
-    "repo": "#c49c94",
-    "no-score-tool": "#f7b6d2",
-    "perf-playbook-cpu": "#9edae5",
-    "kernel": "#6b6ecf",
+    "cpf-tool-cpu": "#d62728",
+    "cpf-gpu-src": "#2ca02c",
+    "cpf-tool-gpu": "#9467bd",
+    "lang-skills": "#aec7e8",
+    "divide-and-conquer": "#8c564b",
+    "profiling": "#bcbd22",
+    "repo": "#ffbb78",
+    "no-score-tool": "#98df8a",
+    "perf-playbook-cpu": "#c49c94",
+    "kernel": "#637939",
     "cpf-src+lang-skills": "#ffa250",
-    "divide-and-conquer+profiling": "#3fdaea",
+    "divide-and-conquer+profiling": "#af766a",
     "caveman": "#1f77b4",
-    "cpf-src-bare": "#8ca252",
-    "cpf-cpu-src-bare": "#8ca252",
-    "cpf-gpu-src-bare": "#bd9e39",
-    "cpf-src-v2": "#a55194",
-    "cpf-cpu-src-v2": "#a55194",
-    "cpf-gpu-src-v2": "#9c9ede",
+    "cpf-src-bare": "#e7ba52",
+    "cpf-cpu-src-bare": "#e7ba52",
+    "cpf-gpu-src-bare": "#d6616b",
 }
 
 #: Models are assigned from the front of `markers`, standalone optimizers from the back, so a new
@@ -198,10 +189,6 @@ PAPER_FIGURE_PACKETS: tuple[str, ...] = (
     "cpf-cpu-src",  # llr40_paired_cpf_src
     "cpf-tool-gpu",  # llr40's GPU half
     "cpf-gpu-src",  # llr40's GPU half
-    "cpf-tool-cpu-kinds",  # the CPF figure's hint-detail arms
-    "cpf-cpu-src-kinds",
-    "cpf-tool-gpu-kinds",
-    "cpf-gpu-src-kinds",
     "lang-skills",  # llr40_paired_skills, gpu_paired_skills
     "divide-and-conquer",  # scicomp perf-playbook panels
     "profiling",  # scicomp perf-playbook panels
