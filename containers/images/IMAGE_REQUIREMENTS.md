@@ -250,7 +250,7 @@ HPC-X Open MPI stays off `PATH`. No MKL, likwid or msr-tools (x86 only).
 
 **judge-agent-cpu.** Binary packages except gcc and the MPI stack (minutes, not hours, from the shared buildcache).
 gcc 16.2.0 from spack in `/opt/gcc`, the GPU images' release (the ubuntu-toolchain-r PPA has only a pre-release
-snapshot for noble); clang/flang 22 from apt.llvm.org with Polly (host OpenMP only, no
+snapshot for noble); clang/flang 22.1.8 (the GPU images' LLVM release) from apt.llvm.org, pinned to its exact package, with Polly (host OpenMP only, no
 offload, no MLIR); spack builds MPICH `~slurm` with ScaLAPACK, HDF5, Scotch and MUMPS, and the same pinned OpenBLAS
 as the GPU images, into `/opt/view` once, through the shared buildcache; MPICH only (the build fails if Open MPI
 arrives); torch is the CPU wheel. Absent by design: ROCm, CUDA, GPU-aware MPI, PETSc, SLEPc, hypre, MAGMA and the

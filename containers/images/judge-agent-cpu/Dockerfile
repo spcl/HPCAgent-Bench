@@ -101,6 +101,10 @@ ARG TARGETARCH
 ARG GCC_VERSION=16.2.0
 ARG GCC_MAJOR=16
 ARG LLVM_MAJOR=22
+# The GPU images' LLVM release, from apt.llvm.org pinned to its exact package: an archive that moves on fails the
+# build instead of silently changing the compiler. Bump both on purpose.
+ARG LLVM_VERSION=22.1.8
+ARG LLVM_APT_VERSION=1:22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80
 
 # /usr/lib/llvm-${LLVM_MAJOR}/bin puts clang, flang and llvm-objdump on PATH under their bare names,
 # which is what languages.resolve_compiler probes; bare gcc names are symlinked into /usr/local/bin (step 1c),
@@ -341,11 +345,14 @@ RUN set -eux; \
     echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${LLVM_MAJOR} main" \
       > /etc/apt/sources.list.d/llvm.list; \
     apt-get update; \
-    apt-get install -y --no-install-recommends \
-      "clang-${LLVM_MAJOR}" "flang-${LLVM_MAJOR}" "lld-${LLVM_MAJOR}" "llvm-${LLVM_MAJOR}" \
-      "libomp-${LLVM_MAJOR}-dev" "libclang-rt-${LLVM_MAJOR}-dev" "libpolly-${LLVM_MAJOR}-dev" \
-      "mlir-${LLVM_MAJOR}-tools"; \
+    m="${LLVM_MAJOR}"; \
+    pkgs="clang-${m} flang-${m} lld-${m} llvm-${m} libomp-${m}-dev libclang-rt-${m}-dev libpolly-${m}-dev mlir-${m}-tools"; \
+    apt-get install -y --no-install-recommends $(for pkg in ${pkgs}; do echo "${pkg}=${LLVM_APT_VERSION}"; done); \
     rm -rf /var/lib/apt/lists/*; \
+    for pkg in ${pkgs}; do \
+      [ "$(dpkg-query -W -f='${Version}' "${pkg}")" = "${LLVM_APT_VERSION}" ] \
+        || { echo "${pkg} is not ${LLVM_APT_VERSION}" >&2; exit 1; }; \
+    done; \
     # apt's clang finds the distro gcc 13 on its own: its config files name /opt/gcc's install dir, so C++ code takes
     # gcc 16.2.0's libstdc++ headers. clang 17 (Pluto, step 3) has its own and keeps gcc 13.
     gcc_dir="$(dirname "$(/opt/gcc/bin/gcc -print-libgcc-file-name)")"; \
@@ -370,8 +377,10 @@ RUN set -eux; \
         *) echo "${driver} is $(command -v "${driver}"), not LLVM ${LLVM_MAJOR}" >&2; exit 1;; \
       esac; \
     done; \
-    clang --version | head -1 | grep -q " ${LLVM_MAJOR}\." \
-      || { echo "bare clang is not LLVM ${LLVM_MAJOR}" >&2; exit 1; }; \
+    clang --version | head -1 | grep -q " ${LLVM_VERSION}" \
+      || { echo "bare clang is not LLVM ${LLVM_VERSION}" >&2; exit 1; }; \
+    flang --version | head -1 | grep -q " ${LLVM_VERSION}" \
+      || { echo "bare flang is not LLVM ${LLVM_VERSION}" >&2; exit 1; }; \
     printf '%s\n' 'void p(double *restrict a, const double *restrict b, int n){' \
       '  for (int i = 0; i < n; i++) a[i] = b[i] * 2.0;' '}' > "${work}/loop.c"; \
     gcc -O3 -fgraphite-identity -floop-nest-optimize -c "${work}/loop.c" -o "${work}/graphite.o"; \
