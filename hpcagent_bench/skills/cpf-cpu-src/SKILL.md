@@ -21,8 +21,8 @@ heuristics, not measurements.
 
 The file opens with a header. Read it first: it is written for this file alone.
 
-- **The legend** says what each class means, then gives a table with one row per reason this file uses:
-  its class, its opening words, what it means, and what would make the loop parallel or what to do. A
+- **The legend** explains every loop class and reason this file uses: what each class means, then a table with one row
+  per reason: its class, its opening words, what it means, and what would make the loop parallel or what to do. A
   summary lists each class's loops. A file whose work is only library calls has no table.
 - **`// cpf: proven: all`**: every loop's class is proven. No loop needs a check at run time beyond the
   entry preconditions. The parallelism is settled; scheduling and tuning remain.

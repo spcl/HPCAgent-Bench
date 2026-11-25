@@ -117,6 +117,8 @@ for file in "${VERSIONED[@]}"; do
     grep -q "^version = \"${new}\"$" "${file}" || die "could not set version ${new} in ${file}"
 done
 uv lock -q
+# The Harbor adapter's committed metadata carries the version (tests/test_harbor_adapter_registry.py).
+uv run -q python -m hpcagent_bench.export.harbor metadata > adapters/hpcagent_bench/adapter_metadata.json
 # Notes written ahead under "## X.Y.Z (unreleased)" become the release's section, dated, with the commit list after
 # them; otherwise the section is the commit list alone.
 python3 - "${new}" "$(date +%F)" "${commits}" <<'EOF'
