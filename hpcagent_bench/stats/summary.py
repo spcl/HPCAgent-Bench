@@ -43,6 +43,7 @@ __all__ = [
     "mean_ratio_ci",
     "median_ci",
     "nested_geomean_interval",
+    "percentile_ends",
     "rep_interval",
     "rep_replicates",
     "sign_flip_interval",
@@ -323,6 +324,13 @@ REP_RESAMPLES: int = 2000
 InputReps = tuple[Sequence[float], Sequence[float]]
 
 
+def percentile_ends(values: FloatArray, confidence: float) -> tuple[float, float]:
+    """The two-sided percentile interval of ``values`` at ``confidence``."""
+    tail = 50.0 * (1.0 - confidence)
+    low, high = np.percentile(values, (tail, 100.0 - tail))
+    return float(low), float(high)
+
+
 def rep_replicates(inputs: Sequence[InputReps], draws: int = REP_RESAMPLES, seed: int = 0) -> FloatArray:
     """``draws`` bootstrap replicates of one answer's S_i from its timed runs. Each replicate resamples both sides'
     runs of every input with replacement, takes the input's ratio median(baseline) / median(native), and the geomean
@@ -344,11 +352,8 @@ def rep_interval(point: float, replicates: FloatArray, confidence: float | None 
     confidence = 1.0 - default_alpha() if confidence is None else confidence
     if replicates.size == 0:
         return Interval("S_i", point, math.nan, math.nan, confidence, "no-runs", 0)
-    tail = 50.0 * (1.0 - confidence)
-    low, high = np.percentile(replicates, (tail, 100.0 - tail))
-    return Interval(
-        "S_i", point, float(low), float(high), confidence, "bootstrap-percentile(runs)", int(replicates.size)
-    )
+    low, high = percentile_ends(replicates, confidence)
+    return Interval("S_i", point, low, high, confidence, "bootstrap-percentile(runs)", int(replicates.size))
 
 
 def nested_geomean_interval(
@@ -369,11 +374,9 @@ def nested_geomean_interval(
     rng = np.random.default_rng(seed)
     kernels = rng.integers(0, x.size, size=(draws, x.size))
     columns = rng.integers(0, draws, size=(draws, x.size))
-    logs = np.log(table[kernels, columns]).mean(axis=1)
-    tail = 50.0 * (1.0 - confidence)
-    low, high = np.exp(np.percentile(logs, (tail, 100.0 - tail)))
+    low, high = percentile_ends(np.log(table[kernels, columns]).mean(axis=1), confidence)
     return Interval(
-        "geomean", geomean(x), float(low), float(high), confidence, "bootstrap-percentile(nested)", int(x.size)
+        "geomean", geomean(x), math.exp(low), math.exp(high), confidence, "bootstrap-percentile(nested)", int(x.size)
     )
 
 

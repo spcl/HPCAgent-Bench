@@ -9,6 +9,7 @@ ratio with a ``population.py`` speedup.
 
 import collections
 import dataclasses
+import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING
@@ -58,8 +59,6 @@ def read_times(frame: "pd.DataFrame") -> dict[str, dict[str, float]]:
 
 def read_reps(frame: "pd.DataFrame") -> dict[str, dict[str, tuple[float, ...]]]:
     """``column -> {kernel: timed runs in ms}`` for the validated rows that kept their runs (schema 38)."""
-    import json
-
     out: dict[str, dict[str, tuple[float, ...]]] = collections.defaultdict(dict)
     if "reps_ms" not in frame.columns:
         return out

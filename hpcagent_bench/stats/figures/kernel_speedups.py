@@ -10,7 +10,7 @@ import logging
 import math
 import pathlib
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 
 import matplotlib.figure
 import numpy as np
@@ -42,6 +42,7 @@ __all__ = [
     "baseline_references",
     "canon_kernel_row",
     "canon_label",
+    "canon_replicates",
     "distinct_canon_labels",
     "fallback_note",
     "kernel_comparison",
@@ -53,6 +54,7 @@ __all__ = [
     "pending_note",
     "require_one_sweep",
     "row_color",
+    "run_intervals",
     "sign_test",
     "solved_ratios",
     "summary_table",
@@ -229,9 +231,7 @@ def canon_kernel_row(
     )
     ratios_low: dict[str, float] = {}
     ratios_high: dict[str, float] = {}
-    for kernel, drawn in replicates.items():
-        interval = summary.rep_interval(ratios[kernel], np.asarray(drawn))
-        ratios_low[kernel], ratios_high[kernel] = interval.low, interval.high
+    run_intervals(ratios, replicates, replicates, ratios_low, ratios_high)
     nan = math.nan
     numerator_ms = {k: base.get(k, nan) for k in ratios}
     denominator_ms = {k: cur.get(k, nan) for k in ratios}
@@ -353,9 +353,7 @@ def agent_kernel_row(
     # Under three episodes the episode bootstrap collapses onto the point: the timed runs' interval (run-to-run noise
     # only) is drawn instead.
     collapsed = [k for k in replicates if not ratios_low.get(k, math.nan) < ratios_high.get(k, math.nan)]
-    for kernel in collapsed:
-        interval = summary.rep_interval(ratios[kernel], np.asarray(replicates[kernel]))
-        ratios_low[kernel], ratios_high[kernel] = interval.low, interval.high
+    run_intervals(ratios, replicates, collapsed, ratios_low, ratios_high)
     raw_tokens, tokens_low, tokens_high = setup_names.setup_tokens(subset, setup)
     del tokens_low, tokens_high  # under "latest" both are empty; a repeat's own range is not this figure's concern
     tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
@@ -393,6 +391,20 @@ def answer_ratios(
     return ratios, numerator_ms, denominator_ms
 
 
+def run_intervals(
+    ratios: Mapping[str, float],
+    replicates: Mapping[str, tuple[float, ...]],
+    kernels: Iterable[str],
+    low: dict[str, float],
+    high: dict[str, float],
+) -> None:
+    """Set ``kernels``' interval ends in ``low`` / ``high`` from their timed-run replicates
+    (:func:`summary.rep_interval`)."""
+    for kernel in kernels:
+        interval = summary.rep_interval(ratios[kernel], np.asarray(replicates[kernel]))
+        low[kernel], high[kernel] = interval.low, interval.high
+
+
 def answer_replicates(answers: pd.DataFrame, kernels: Collection[str]) -> dict[str, tuple[float, ...]]:
     """Each of ``kernels``' timed-run bootstrap replicates of its answer's S_i (:func:`summary.rep_replicates`), for
     the answers whose final grade kept its runs."""
@@ -402,8 +414,7 @@ def answer_replicates(answers: pd.DataFrame, kernels: Collection[str]) -> dict[s
     for name, reps in answers[population.CELL_REPS_COLUMN].items():
         kernel = str(name)
         if kernel in kernels and isinstance(reps, str) and reps:
-            inputs = [(native, baseline) for native, baseline in json.loads(reps)]
-            replicates[kernel] = tuple(summary.rep_replicates(inputs).tolist())
+            replicates[kernel] = tuple(summary.rep_replicates(json.loads(reps)).tolist())
     return replicates
 
 
