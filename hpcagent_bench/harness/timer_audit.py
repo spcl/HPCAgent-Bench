@@ -15,7 +15,9 @@ import re
 import shutil
 import subprocess
 from collections.abc import Iterator
+from typing import Literal
 
+from elftools.elf.dynamic import DynamicSection
 from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.sections import SymbolTableSection
@@ -88,13 +90,15 @@ def elf_reasons(library: pathlib.Path) -> list[str]:
         elf = ELFFile(handle)
         tables = [section for section in elf.iter_sections() if isinstance(section, SymbolTableSection)]
         names = function_names(tables)
-        imported = sorted({
-            symbol.name
-            for table in tables
-            if table.name == ".dynsym"
-            for symbol in table.iter_symbols()
-            if symbol["st_shndx"] == "SHN_UNDEF" and refused_import(symbol.name)
-        })
+        imported = sorted(
+            {
+                symbol.name
+                for table in tables
+                if table.name == ".dynsym"
+                for symbol in table.iter_symbols()
+                if symbol["st_shndx"] == "SHN_UNDEF" and refused_import(symbol.name)
+            }
+        )
         loaded = sorted(
             {names.get(address, f"0x{address:x}") for address in load_time_addresses(elf, tables, names)}
             - ADMITTED_CONSTRUCTORS
@@ -124,7 +128,7 @@ def load_time_addresses(elf: ELFFile, tables: list[SymbolTableSection], names: d
     """Every function ``elf`` runs when it loads: the ``.init_array`` and ``.preinit_array`` entries, ``DT_INIT``
     other than the C runtime's ``_init``, and each ifunc resolver whose name is not a compiler's."""
     width = elf.elfclass // 8
-    order = "little" if elf.little_endian else "big"
+    order: Literal["little", "big"] = "little" if elf.little_endian else "big"
     relocated = relocation_targets(elf)
     for name in (".init_array", ".preinit_array"):
         section = elf.get_section_by_name(name)
@@ -141,9 +145,10 @@ def load_time_addresses(elf: ELFFile, tables: list[SymbolTableSection], names: d
         if symbol["st_info"]["type"] == "STT_GNU_IFUNC" and symbol["st_value"] not in resolvers:
             yield symbol["st_value"]
     dynamic = elf.get_section_by_name(".dynamic")
-    for tag in dynamic.iter_tags() if dynamic is not None else ():
-        if tag.entry.d_tag == "DT_INIT" and names.get(tag.entry.d_val) != "_init":
-            yield tag.entry.d_val
+    if isinstance(dynamic, DynamicSection):
+        for tag in dynamic.iter_tags("DT_INIT"):
+            if names.get(tag.entry.d_val) != "_init":
+                yield tag.entry.d_val
 
 
 def relocation_targets(elf: ELFFile) -> dict[int, int]:
