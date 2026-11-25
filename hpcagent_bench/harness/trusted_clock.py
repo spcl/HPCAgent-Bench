@@ -518,8 +518,8 @@ class ClockServer:
         handshake, spread = handshake_cost(self.null_ns)
         findings = list(self.findings)
         if self.plan.device:
-            samples = tuple(self.events)
-            findings += event_findings(self.events, self.brackets, handshake)
+            samples, disagreeing = device_samples(self.events, self.brackets, handshake, spread)
+            findings += disagreeing
         else:
             samples = host_samples(self.brackets, handshake, spread)
         return ClockSummary(samples, tuple(self.brackets), handshake, spread, "; ".join(dict.fromkeys(findings)))
@@ -555,15 +555,30 @@ def host_samples(brackets: Sequence[int], handshake: int, spread: int) -> tuple[
     return tuple(max(floor, bracket - handshake) for bracket in brackets)
 
 
-def event_findings(events: Sequence[int], brackets: Sequence[int], handshake: int) -> list[str]:
-    """A GPU call's event time must fit in the parent's bracket and agree with it (:func:`timing.clocks_agree`)."""
+def device_samples(
+    events: Sequence[int], brackets: Sequence[int], handshake: int, spread: int
+) -> tuple[tuple[int, ...], list[str]]:
+    """Each GPU call's credited time, and the findings against the grade.
+
+    An event time above its bracket cannot be honest: the bracket holds the event pair. A call whose bracket, less
+    the handshake and its spread, does not agree with its event time (:func:`timing.clocks_agree`) is credited the
+    bracket less the handshake: work escaping the event pair is paid for, and a stalled device (ROCm evicting a
+    process's queues holds a 2 ms kernel ~150 ms, jobs 763497 and 763503) is a slow outlier. Disagreement on most
+    calls is a finding."""
+    samples: list[int] = []
     found: list[str] = []
+    disagreeing: list[str] = []
     for event, bracket in zip(events, brackets, strict=True):
+        host = bracket - handshake
         if event > bracket:
             found.append(f"event time {event} ns exceeds the parent's bracket {bracket} ns")
-        elif not timing.clocks_agree(event, bracket - handshake):
-            found.append(f"the parent's bracket {bracket - handshake} ns does not agree with event time {event} ns")
-    return found
+        elif not timing.clocks_agree(event, host - spread):
+            disagreeing.append(f"the parent's bracket {host} ns does not agree with event time {event} ns")
+            event = host
+        samples.append(event)
+    if 2 * len(disagreeing) > len(events):
+        found += disagreeing
+    return tuple(samples), found
 
 
 def ancestors(pid: int, root: int) -> list[int]:
