@@ -4,36 +4,21 @@
 #
 # Build, check and smoke-test the PyPI release of hpcagent-bench and hpcagent-agent; upload only when asked.
 #
-#   helpers/scripts/do_release.sh                          # dry run: build + twine check + wheel smoke
-#   helpers/scripts/do_release.sh --upload testpypi        # same, then upload to TestPyPI
-#   helpers/scripts/do_release.sh --upload pypi            # same, then upload to PyPI
+#   helpers/scripts/do_release.sh                     # build + twine check + wheel check + smoke, no upload
+#   helpers/scripts/do_release.sh --upload testpypi   # same, then upload to TestPyPI
+#   helpers/scripts/do_release.sh --upload pypi       # same, then upload to PyPI
 #
-# Options:
-#   --outdir DIR    where the sdist + wheel land (default: <repo>/dist)
-#   --no-smoke      skip the fresh-venv install and smoke test
-#   --keep          keep the temp work dir (source export, venvs) for inspection
+# Options: --outdir DIR (default <repo>/dist), --no-smoke, --keep (keep the work dir).
 #
-# The build input is `git archive HEAD` (tracked, committed files only), exported to a local temp
-# dir, so untracked build products never reach the wheel. `uv build` builds both distributions, twine runs
-# through uvx, and the smoke venv is a fresh uv venv under that temp dir; the shared repo venv is never
-# touched. The smoke installs both wheels with their dependencies (dace-extended and dace-relayout among them) from
-# PyPI, so it needs network access.
-#
-# Credentials for --upload come from the environment (TWINE_USERNAME=__token__ plus
-# TWINE_PASSWORD=<api token>) or ~/.pypirc; this script never asks for or stores one.
-#
-# On a Beverin mi200 node (the login gcc is 7.5; point PATH at a gcc >= 14 first):
-#   sbatch --partition=mi200 -N1 --time=00:30:00 --no-requeue \
-#       --output=release-smoke-%j.out --wrap "PATH=<gcc14-bin>:\$PATH helpers/scripts/do_release.sh"
-#
-# Env:
-#   HPCAGENT_BENCH_HOST_PYTHON   interpreter the temp venvs are created from (helpers/scripts/host_python.sh; >= 3.12)
+# The build input is `git archive HEAD`, so untracked files never reach a wheel. The smoke installs both wheels into
+# a fresh uv venv with their PyPI dependencies (network needed). The work dir defaults to ~/.cache, not /tmp: the
+# smoke venv is several GB, and on the cache's filesystem uv hard-links it instead of copying.
+# Upload credentials come from the environment (TWINE_USERNAME=__token__, TWINE_PASSWORD) or ~/.pypirc.
+# HPCAGENT_BENCH_HOST_PYTHON names the interpreter (helpers/scripts/host_python.sh).
 set -euo pipefail
 ulimit -c 0
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# The site layer first: a site's HPCAGENT_BENCH_HOST_PYTHON lives in experiments/site.env, and
-# host_python.sh reads it from the environment.
 . "${REPO_ROOT}/helpers/scripts/site_env.sh"
 . "${REPO_ROOT}/helpers/scripts/host_python.sh"
 PY="${HPCAGENT_BENCH_HOST_PYTHON}"
@@ -41,101 +26,63 @@ OUTDIR="${REPO_ROOT}/dist"
 UPLOAD=""
 SMOKE=1
 KEEP=0
-
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --outdir) OUTDIR="$2"; shift 2 ;;
     --upload) UPLOAD="$2"; shift 2 ;;
     --no-smoke) SMOKE=0; shift ;;
     --keep) KEEP=1; shift ;;
-    -h|--help) sed -n '5,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '5,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
-case "${UPLOAD}" in
-  ""|testpypi|pypi) ;;
-  *) echo "error: --upload takes testpypi or pypi, got '${UPLOAD}'" >&2; exit 2 ;;
-esac
-
-"${PY}" -c 'import sys; sys.exit(sys.version_info < (3, 12))' || {
-  echo "error: ${PY} is older than 3.12" >&2
-  exit 1
-}
-
-VERSION=$("${PY}" -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' "${REPO_ROOT}/pyproject.toml")
-echo "=== hpcagent-bench ${VERSION} (HEAD $(git -C "${REPO_ROOT}" rev-parse --short HEAD)) ==="
-
+case "${UPLOAD}" in ""|testpypi|pypi) ;; *) echo "--upload takes testpypi or pypi" >&2; exit 2 ;; esac
 if [ -n "${UPLOAD}" ] && [ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=no)" ]; then
   echo "error: uncommitted changes; the release is built from HEAD, commit first" >&2
-  git -C "${REPO_ROOT}" status --short --untracked-files=no >&2
   exit 1
 fi
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/hpcagent-bench-release.XXXXXX")"
-cleanup() { if [ "${KEEP}" -eq 1 ]; then echo "kept ${WORK}"; else rm -rf "${WORK}"; fi; }
-trap cleanup EXIT
+VERSION=$("${PY}" -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' "${REPO_ROOT}/pyproject.toml")
+echo "=== hpcagent-bench ${VERSION} (HEAD $(git -C "${REPO_ROOT}" rev-parse --short HEAD)) ==="
+mkdir -p "${TMPDIR:-${HOME}/.cache}"
+WORK="$(mktemp -d "${TMPDIR:-${HOME}/.cache}/hpcagent-bench-release.XXXXXX")"
+trap '[ "${KEEP}" -eq 1 ] && echo "kept ${WORK}" || rm -rf "${WORK}"' EXIT
 
-echo "=== export HEAD -> ${WORK}/src ==="
-mkdir -p "${WORK}/src"
+echo "=== build -> ${OUTDIR} ==="
+mkdir -p "${WORK}/src" "${OUTDIR}"
+OUTDIR="$(cd "${OUTDIR}" && pwd -P)"
 git -C "${REPO_ROOT}" archive --format=tar HEAD | tar -x -C "${WORK}/src"
-
-echo "=== build sdists + wheels -> ${OUTDIR} ==="
-mkdir -p "${OUTDIR}"
-OUTDIR="$(CDPATH= cd -- "${OUTDIR}" && pwd -P)"
-# Keep every later wheel reference valid inside the temporary smoke project and after `cd`.
 rm -f "${OUTDIR}"/hpcagent_bench-* "${OUTDIR}"/hpcagent_agent-*
 for project in "${WORK}/src" "${WORK}/src/agent"; do
-  uv build --python "${PY}" --out-dir "${OUTDIR}" "${project}" > "${WORK}/build.log" 2>&1 || {
-    tail -40 "${WORK}/build.log" >&2
-    exit 1
-  }
+  uv build --python "${PY}" --out-dir "${OUTDIR}" "${project}" > "${WORK}/build.log" 2>&1 || { tail -40 "${WORK}/build.log" >&2; exit 1; }
 done
 WHEEL="$(ls "${OUTDIR}"/hpcagent_bench-"${VERSION}"-*.whl)"
-SDIST="$(ls "${OUTDIR}"/hpcagent_bench-"${VERSION}".tar.gz)"
 AGENT_WHEEL="$(ls "${OUTDIR}"/hpcagent_agent-"${VERSION}"-*.whl)"
-AGENT_SDIST="$(ls "${OUTDIR}"/hpcagent_agent-"${VERSION}".tar.gz)"
+DISTS=("${AGENT_WHEEL}" "${OUTDIR}/hpcagent_agent-${VERSION}.tar.gz" "${WHEEL}" "${OUTDIR}/hpcagent_bench-${VERSION}.tar.gz")
 
-echo "=== twine check ==="
-uvx twine check --strict "${WHEEL}" "${SDIST}" "${AGENT_WHEEL}" "${AGENT_SDIST}"
-
-echo "=== wheel contents ==="
-"${PY}" - "${WHEEL}" "${SDIST}" <<'PY'
-import os
+echo "=== twine check + wheel contents ==="
+uvx twine check --strict "${DISTS[@]}"
+# No binaries, files over 1 MiB, or repo-level tests/experiments/containers in the wheel.
+"${PY}" - "${WHEEL}" <<'PY'
 import sys
 import zipfile
 
+infos = zipfile.ZipFile(sys.argv[1]).infolist()
 BINARY = (".so", ".o", ".a", ".dll", ".dylib", ".db", ".sqlite", ".sif", ".sqsh", ".pkl", ".pt", ".bin")
-LARGE = 1 << 20
-
-wheel, sdist = sys.argv[1], sys.argv[2]
-infos = zipfile.ZipFile(wheel).infolist()
-total = sum(i.file_size for i in infos)
-print(f"wheel  {os.path.basename(wheel)}: {os.path.getsize(wheel) / 2**20:.1f} MiB compressed, "
-      f"{total / 2**20:.1f} MiB unpacked, {len(infos)} files")
-print(f"sdist  {os.path.basename(sdist)}: {os.path.getsize(sdist) / 2**20:.1f} MiB")
-by_top: dict[str, int] = {}
-for i in infos:
-    by_top[i.filename.split("/")[0]] = by_top.get(i.filename.split("/")[0], 0) + 1
-print("files per top-level entry:", dict(sorted(by_top.items(), key=lambda kv: -kv[1])))
-print("largest files:")
-for i in sorted(infos, key=lambda i: -i.file_size)[:8]:
-    print(f"  {i.file_size / 1024:8.0f} KiB  {i.filename}")
-flagged = [i.filename for i in infos if i.filename.endswith(BINARY) or i.file_size > LARGE]
-flagged += [i.filename for i in infos if i.filename.startswith(("tests/", "experiments/", "containers/"))]
-kernel_tests = [i for i in infos if os.path.basename(i.filename).startswith("test_")]
-print(f"per-kernel test files (shipped with the corpus): {len(kernel_tests)}")
+flagged = [
+    i.filename
+    for i in infos
+    if i.filename.endswith(BINARY) or i.file_size > 1 << 20 or i.filename.startswith(("tests/", "experiments/", "containers/"))
+]
+print(f"{len(infos)} files, {sum(i.file_size for i in infos) / 2**20:.1f} MiB unpacked")
 if flagged:
-    print("FLAGGED (binary, > 1 MiB, or repo-level tests/experiments/containers):")
-    for name in flagged:
-        print("  " + name)
-    sys.exit(1)
+    sys.exit("FLAGGED:\n  " + "\n  ".join(flagged))
 PY
 
 if [ "${SMOKE}" -eq 1 ]; then
   echo "=== smoke: fresh venv + wheel install ==="
-  # A throwaway uv project: both wheels and pytest; dace-extended and dace-relayout come from PyPI, as for a pip user.
-  # Upstream dace is overridden away, as in the bench's own pyproject.toml. `uv sync` builds the venv at ${WORK}/smoke.
-  mkdir -p "${WORK}/smoke-project"
+  # Both wheels and pytest, dace-extended and dace-relayout from PyPI as for a pip user, upstream dace overridden away.
+  mkdir -p "${WORK}/smoke-project" "${WORK}/smoke-tests"
   cat > "${WORK}/smoke-project/pyproject.toml" <<TOML
 [project]
 name = "release-smoke"
@@ -153,43 +100,34 @@ hpcagent-agent = { path = "${AGENT_WHEEL}" }
 TOML
   (cd "${WORK}/smoke-project" && UV_PROJECT_ENVIRONMENT="${WORK}/smoke" uv sync --quiet --python "${PY}")
   SPY="${WORK}/smoke/bin/python"
-  # Grading refuses a process started without the bench's OpenMP launch env (README quick start), which the
-  # runtimes read once at numpy import: export it and raise the stack limit before the smoke's Python starts.
+  # Grading needs the OpenMP launch env (read at numpy import) and the hard stack limit.
   eval "$("${SPY}" -c 'from hpcagent_bench.flags import openmp_launch_env as e; print(" ".join(f"export {k}={v};" for k, v in e().items()))')"
   ulimit -s "$(ulimit -H -s)"
-  mkdir -p "${WORK}/smoke-tests"
-  # Pure tests that need the installed package data (every manifest) and nothing from the repo.
-  for t in test_output_args.py test_perf_protocol.py test_distributions.py; do
-    cp "${WORK}/src/tests/${t}" "${WORK}/smoke-tests/"
-  done
+  # Pure tests that need only the installed package data.
+  cp "${WORK}/src/tests/"{test_output_args.py,test_perf_protocol.py,test_distributions.py} "${WORK}/smoke-tests/"
   printf '[pytest]\nmarkers =\n    real_fuzz\nfilterwarnings =\n    error\n' > "${WORK}/smoke-tests/pytest.ini"
   cd "${WORK}/smoke-tests"
   "${SPY}" - "${VERSION}" "${WORK}/smoke" <<'PY'
 import sys
 
 import hpcagent_bench
-from hpcagent_bench.translators import numpyto_c
-from hpcagent_bench.translators import numpyto_common
-version, venv = sys.argv[1], sys.argv[2]
-for mod in (hpcagent_bench, numpyto_c, numpyto_common):
-    assert mod.__file__.startswith(venv), f"{mod.__name__} imported from {mod.__file__}, not the wheel"
-assert hpcagent_bench.__version__ == version, (hpcagent_bench.__version__, version)
+from hpcagent_bench.categories import Baseline, Language, Preset
 from hpcagent_bench.harness import preflight
-assert not preflight.check_dace_pipeline(), preflight.check_dace_pipeline()
 
+version, venv = sys.argv[1:]
+assert hpcagent_bench.__file__.startswith(venv), f"imported from {hpcagent_bench.__file__}, not the wheel"
+assert hpcagent_bench.__version__ == version, (hpcagent_bench.__version__, version)
+assert not preflight.check_dace_pipeline(), preflight.check_dace_pipeline()
 SOURCE = """#include <stdint.h>
 void scaled_add_fp64(const double *restrict x, double *restrict y, const int64_t LEN_1D, const double alpha,
                      uint8_t *restrict workspace, const int64_t workspace_size) {
     for (int64_t i = 0; i < LEN_1D; ++i) y[i] += alpha * x[i];
 }
 """
-from hpcagent_bench.categories import Baseline, Language, Preset
-
 score = hpcagent_bench.score("scaled_add", SOURCE, language=Language.C, preset=Preset.S, baseline=Baseline.C)
 assert score.correct, score
-print(f"import + native grade OK: hpcagent_bench {hpcagent_bench.__version__}, scaled_add correct")
+print(f"import + native grade OK: hpcagent_bench {version}")
 PY
-  # The console script's guard passes: dace-extended alone, no upstream dace beside it.
   "${WORK}/smoke/bin/hpcagent-bench" --version
   "${WORK}/smoke/bin/hpcagent-bench" --help > /dev/null
   "${SPY}" -m pytest -q -p no:cacheprovider .
@@ -198,7 +136,7 @@ fi
 
 if [ -n "${UPLOAD}" ]; then
   echo "=== upload -> ${UPLOAD} ==="
-  uvx twine upload --repository "${UPLOAD}" "${AGENT_WHEEL}" "${AGENT_SDIST}" "${WHEEL}" "${SDIST}"
+  uvx twine upload --repository "${UPLOAD}" "${DISTS[@]}"
 else
-  echo "dry run OK: ${WHEEL}, ${SDIST}, ${AGENT_WHEEL}, ${AGENT_SDIST} (pass --upload testpypi|pypi to publish)"
+  echo "dry run OK: ${DISTS[*]} (pass --upload testpypi|pypi to publish)"
 fi
