@@ -14,6 +14,7 @@
 #   add --dry-run to either to print the plan and change nothing.
 #   add --github-only to either for everything but the PyPI uploads: the GitHub releases carry the wheels and
 #   sdists (no TWINE_* needed). The next run without it first uploads exactly those attached dists to PyPI.
+#   add --without-green-ci to step 2 to release a HEAD whose CI has not finished (an owner's one-off; it warns).
 # Needs gh (authenticated), uv, and (unless --github-only) TWINE_USER and TWINE_TOKEN in the environment (never in
 # a file).
 # The user plugins (dace-alloy, tactics) import hpcagent-bench: they release after run 2 from their own
@@ -28,12 +29,14 @@ VERSIONED=(pyproject.toml agent/pyproject.toml adapters/hpcagent_bench/pyproject
 libraries=1
 dry=0
 github_only=0
+without_ci=0
 for arg in "$@"; do
     case "${arg}" in
         --skip-libraries) libraries=0 ;;
         --dry-run) dry=1 ;;
         --github-only) github_only=1 ;;
-        *) echo "usage: $0 [--skip-libraries] [--github-only] [--dry-run]" >&2; exit 2 ;;
+        --without-green-ci) without_ci=1 ;;
+        *) echo "usage: $0 [--skip-libraries] [--github-only] [--without-green-ci] [--dry-run]" >&2; exit 2 ;;
     esac
 done
 
@@ -71,8 +74,11 @@ fi
 
 head="$(git rev-parse HEAD)"
 runs="$(gh run list -R "${SLUG}" -c "${head}" -w CI -L 20 --json status,conclusion)"
-[[ "$(jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length' <<<"${runs}")" -gt 0 ]] ||
-    die "no green CI run on ${head:0:9}"
+if [[ "$(jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length' <<<"${runs}")" -eq 0 ]]; then
+    # --without-green-ci: an owner's one-off release of a commit whose CI has not finished; said aloud, never silent.
+    ((without_ci)) || die "no green CI run on ${head:0:9} (--without-green-ci releases it anyway)"
+    echo "release_patch.sh: WARNING: releasing ${head:0:9} without a green CI run (--without-green-ci)" >&2
+fi
 
 old="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
 [[ "${old}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || die "version '${old}' is not X.Y.Z"
