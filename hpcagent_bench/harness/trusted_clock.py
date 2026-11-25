@@ -519,10 +519,7 @@ class ClockServer:
             raise ClockError(f"{len(self.null_ns)} of {CALIBRATION_CALLS} calibration calls reached the parent")
         handshake, spread = handshake_cost(self.null_ns)
         findings = list(self.findings)
-        if self.plan.device:
-            samples = tuple(self.events)
-        else:
-            samples = host_samples(self.brackets, handshake, spread)
+        samples = tuple(self.events) if self.plan.device else host_samples(self.brackets, handshake, spread)
         return ClockSummary(samples, tuple(self.brackets), handshake, spread, "; ".join(dict.fromkeys(findings)))
 
     def release(self) -> None:
