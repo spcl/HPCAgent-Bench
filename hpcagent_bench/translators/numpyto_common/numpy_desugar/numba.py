@@ -171,7 +171,8 @@ class OuterBroadcastPeel(RankedRewritePass):
         self.once = (
             frozenset(name for name, count in name_store_counts(fn).items() if count == 1) if fn else frozenset()
         )
-        #: Extents of a once-bound name whose value has a literal unit axis (raman's ``g = w * w[None, :]``).
+        #: Extents of a once-bound name whose value has a literal unit axis (raman's ``g = w * w[None, :]``); read
+        #: only by :meth:`without_leading_unit`, never by a peel decision.
         self.known: dict[str, list[str]] = {}
 
     def operands_(self, node: ast.AST) -> list[ast.expr] | None:
@@ -214,8 +215,8 @@ class OuterBroadcastPeel(RankedRewritePass):
         if isinstance(expr, ast.Constant):
             return [] if isinstance(expr.value, (bool, int, float, complex)) else None
         if isinstance(expr, ast.Name):
-            if expr.id in self.known:
-                return list(self.known[expr.id])
+            # :attr:`known` stays out of here on purpose: a peel decided on a name's unit axis can leave a row
+            # ``x[i] * y[i]`` of shapes (1,) and (n,), which numba computes WRONG inside a prange, silently.
             return [f"{expr.id}.shape[{k}]" for k in range(self.ranks.get(expr.id, 0))]
         if isinstance(expr, ast.UnaryOp):
             return self.extents_(expr.operand)

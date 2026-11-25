@@ -143,3 +143,18 @@ def test_a_leading_unit_axis_absorbed_by_the_whole_expression_matches_numpy_on_n
     w = np.array([0.5, 1.0, 1.5])
     shapes = {"d": "(G, K)", "w": "(K,)", "out": "(G, K)", "out2": "(G, K)"}
     assert numba(src, {"d": d, "w": w}, {"out": (4, 3), "out2": (4, 3)}, {"G": 4, "K": 3}, shapes) == "ok"
+
+
+def test_a_named_unit_axis_never_decides_a_peel() -> None:
+    """Inside a prange numba computes ``g[i] * x[i]`` of shapes (1,) and (n,) WRONG, silently, where the whole-array
+    form asserts. A once-bound name's unit axis may drop a leading axis, but it never decides a peel that would leave
+    such a row: ``g = w[:, None] * 2.0; out[:] = g * x`` stays one statement and fails loudly if at all."""
+    import ast
+
+    from hpcagent_bench.translators.numpyto_common.numpy_desugar.numba import OuterBroadcastPeel
+
+    fn = ast.parse("def f(w, x, out):\n    g = w[:, None] * 2.0\n    out[:] = g * x\n").body[0]
+    assert isinstance(fn, ast.FunctionDef)
+    sut = OuterBroadcastPeel({"w": 1, "x": 2, "out": 2, "g": 2}, fn)
+    kept = [sut.visit(stmt) for stmt in fn.body]
+    assert [ast.unparse(k) for k in kept] == ["g = w[:, None] * 2.0", "out[:] = g * x"]
