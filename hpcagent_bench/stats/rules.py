@@ -10,6 +10,8 @@ from collections.abc import Sequence
 
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 
+from hpcagent_bench.stats import summary
+
 __all__ = ["CITATION", "RULE_TEXT", "RuleViolation", "require_costs", "require_interval"]
 
 #: Paper and rule text this module enforces, for a caption or an error message.
@@ -58,10 +60,13 @@ def require_costs(table: pd.DataFrame, ratio: str, costs: Sequence[str]) -> pd.D
     return table
 
 
-def require_interval(table: pd.DataFrame, point: str, low: str, high: str, deterministic: bool = False) -> pd.DataFrame:
+def require_interval(
+    table: pd.DataFrame, point: str, low: str, high: str, count: str = "n", deterministic: bool = False
+) -> pd.DataFrame:
     """Rules 5 and 7: a nondeterministic measurement is reported with an interval, or declared
     ``deterministic``. Raises naming rows with a missing or inverted interval, rather than
-    dropping them silently.
+    dropping them silently. A row whose ``count`` column holds fewer than ``summary.MIN_INTERVAL_SAMPLES`` values
+    has its interval withheld on purpose (its values are drawn as dots), so it needs none.
     """
     if deterministic:
         return table
@@ -69,6 +74,8 @@ def require_interval(table: pd.DataFrame, point: str, low: str, high: str, deter
     if missing:
         raise RuleViolation(5, f"nondeterministic data plotted without an interval; add columns {missing}")
     usable = table[point].notna()
+    if count in table.columns:
+        usable &= ~(table[count] < summary.MIN_INTERVAL_SAMPLES)
     if not usable.to_numpy().any():
         return table
     bare = table.index[usable & (table[low].isna() | table[high].isna())]

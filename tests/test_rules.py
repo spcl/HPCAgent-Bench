@@ -54,6 +54,17 @@ def test_rule_5_allows_a_single_degenerate_row_beside_real_intervals() -> None:
     assert rules.require_interval(frame, "speedup", "speedup_low", "speedup_high") is frame
 
 
+def test_rule_5_passes_rows_whose_interval_was_withheld_for_too_few_values() -> None:
+    """Below ``summary.MIN_INTERVAL_SAMPLES`` values the interval is withheld and the values drawn as dots; a row
+    with enough values and no interval is still refused."""
+    nan = float("nan")
+    frame = ratios(speedup_low=[nan, nan], speedup_high=[nan, nan], n=[3, 5])
+    assert rules.require_interval(frame, "speedup", "speedup_low", "speedup_high") is frame
+    frame = ratios(speedup_low=[nan, nan], speedup_high=[nan, nan], n=[3, 6])
+    with pytest.raises(rules.RuleViolation, match="empty interval"):
+        rules.require_interval(frame, "speedup", "speedup_low", "speedup_high")
+
+
 def test_rule_5_catches_interval_ends_the_wrong_way_round() -> None:
     frame = ratios(speedup_low=[2.0, 1.0], speedup_high=[1.0, 2.0])
     with pytest.raises(rules.RuleViolation, match="wrong way round"):
