@@ -12,19 +12,21 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_r
 __all__ = [
     "EINSUM_HOIST",
     "TENSORDOT_HOIST",
+    "bound_operands",
     "einsum_inline_stmts",
     "hoist_einsum",
     "hoist_tensordot",
+    "product_dtype",
     "tensordot_axes",
 ]
 
 
 def einsum_inline_stmts(
-    subs: str, operands: list[str], ctr: int, dtype_of: str, prefix: str = "__es"
+    subs: str, operands: list[str], ctr: int, dtype: str, prefix: str = "__es"
 ) -> tuple[list[ast.stmt], str] | tuple[None, None]:
     """``(stmts, temp)`` computing ``np.einsum(subs, *operands)`` as a contraction loop nest.
 
-    ``(None, None)`` for ellipsis or scalar output. The temp takes ``dtype_of``'s dtype."""
+    ``(None, None)`` for ellipsis or scalar output. The temp takes the dtype expression ``dtype``."""
     try:
         in_subs, out_sub = parse_einsum_subscripts(subs)
     except Exception:  # noqa: BLE001 -- ellipsis / malformed
@@ -47,7 +49,7 @@ def einsum_inline_stmts(
     out_chars = list(out_sub)
     contracted = [c for c in char_src if c not in out_sub]
     outshape = ", ".join(extent(c) for c in out_chars)
-    src = [f"{p} = np.empty(({outshape},), {dtype_of}.dtype)"]
+    src = [f"{p} = np.empty(({outshape},), {dtype})"]
     indent = ""
     for c in out_chars:
         src.append(f"{indent}for {p}_{c} in range({extent(c)}):")
@@ -63,26 +65,50 @@ def einsum_inline_stmts(
     return ast.parse("\n".join(src)).body, p
 
 
+def product_dtype(names: list[str], kinds: list[str | None]) -> str:
+    """The dtype expression of a product of the arrays ``names``: the widest one's dtype when every kind is known,
+    else numpy's promotion of a one-element product (a float ``qr`` times a complex ``vc_box`` is complex)."""
+    if None not in kinds:
+        return f"{names[max(range(len(kinds)), key=lambda at: KIND_RANK.get(kinds[at] or '', -1))]}.dtype"
+    return f"({' * '.join(f'np.zeros(1, {name}.dtype)' for name in names)}).dtype"
+
+
+def bound_operands(operands: list[ast.expr], hoist: ValueHoist, prefix: str) -> list[str]:
+    """Each operand's name, binding one that is not a Name (``np.conj(becphi_r)``) to ``<prefix><index>`` first."""
+    names = []
+    for at, operand in enumerate(operands):
+        if isinstance(operand, ast.Name):
+            names.append(operand.id)
+            continue
+        bound = f"{prefix}{at}"
+        hoist.queue([f"{bound} = {ast.unparse(operand)}"])
+        names.append(bound)
+    return names
+
+
 def hoist_einsum(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
-    """``np.einsum("<subs>", *names)`` -> the temp its contraction loop nest fills, also inside larger expressions."""
+    """``np.einsum("<subs>", *operands)`` -> the temp its contraction loop nest fills, also inside larger expressions."""
     if not isinstance(node, ast.Call) or numpy_call_attr(node) != "einsum" or not node.args:
         return None
     subs, operands = node.args[0], node.args[1:]
-    if not (isinstance(subs, ast.Constant) and isinstance(subs.value, str)):
+    if not (isinstance(subs, ast.Constant) and isinstance(subs.value, str)) or not operands:
         return None
-    names = [o.id for o in operands if isinstance(o, ast.Name)]
-    if not operands or len(names) != len(operands):
+    if any(isinstance(o, ast.Starred) for o in operands):
         return None
-    # numpy's result type is the widest operand kind. An unknown kind might be wider, so fall back to
-    # the first operand unless a known operand is already complex.
-    kinds = [dtype_kind(operand, hoist.tables.dtypes) for operand in operands]
-    widest = max(range(len(kinds)), key=lambda at: KIND_RANK.get(kinds[at] or "", -1))
-    dtype_of = names[widest] if None not in kinds or kinds[widest] == "complex" else names[0]
-    stmts, temp = einsum_inline_stmts(subs.value, names, hoist.ctr, dtype_of)
+    try:
+        in_subs, out_sub = parse_einsum_subscripts(subs.value)
+    except Exception:  # noqa: BLE001 -- ellipsis / malformed: einsum_inline_stmts refuses it too
+        return None
+    if len(in_subs) != len(operands):
+        return None
+    names = bound_operands(operands, hoist, f"__es{hoist.ctr}_o")
+    dtype = product_dtype(names, [dtype_kind(operand, hoist.tables.dtypes) for operand in operands])
+    stmts, temp = einsum_inline_stmts(subs.value, names, hoist.ctr, dtype)
     if stmts is None or temp is None:
         return None
     hoist.ctr += 1
     hoist.pre.extend(stmts)
+    hoist.tables.ranks[temp] = len(out_sub)  # a later peel reads it (lulesh's ``coefficient[:, None] * __es4``)
     return name_(temp)
 
 
@@ -130,18 +156,10 @@ def hoist_tensordot(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     out = [c for i, c in enumerate(sub_a) if i not in contracted[0]] + [
         c for i, c in enumerate(sub_b) if i not in contracted[1]
     ]
-    names = []
-    for side, operand in zip("ab", operands, strict=True):
-        if isinstance(operand, ast.Name):
-            names.append(operand.id)
-            continue
-        bound = f"__td{hoist.ctr}_{side}"
-        hoist.queue([f"{bound} = {ast.unparse(operand)}"])
-        names.append(bound)
-    kinds = [dtype_kind(o, hoist.tables.dtypes) for o in operands]
-    dtype_of = names[1] if kinds[1] == "complex" and kinds[0] != "complex" else names[0]
+    names = bound_operands(operands, hoist, f"__td{hoist.ctr}_")
+    dtype = product_dtype(names, [dtype_kind(o, hoist.tables.dtypes) for o in operands])
     subs = f"{''.join(sub_a)},{''.join(sub_b)}->{''.join(out)}"
-    stmts, temp = einsum_inline_stmts(subs, names, hoist.ctr, dtype_of, "__tdo")
+    stmts, temp = einsum_inline_stmts(subs, names, hoist.ctr, dtype, "__tdo")
     if stmts is None or temp is None:
         return None
     hoist.ctr += 1

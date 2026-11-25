@@ -1400,12 +1400,18 @@ class RollInline(RankedRewritePass):
 
 
 class NumbaDtypeFixups(ast.NodeTransformer):
-    """Two spellings numba's dtype-strict typing refuses where numpy accepts them (numba only).
+    """Four spellings numba's dtype-strict typing refuses or narrows where numpy accepts them (numba only).
 
     * ``dtype=bool``: numba does not accept the builtin ``bool`` as a dtype; ``np.bool_`` is the same.
+    * ``int(x)``: numba keeps an int32 ``x`` int32, where Python's ``int`` is 64-bit in practice; a shape tuple
+      mixing it with int64 extents is then heterogeneous and ``reshape`` refuses it (qe_vexx_k's
+      ``my_n = int(nibands[eg])``). ``np.int64(x)`` truncates as ``int`` does.
     * real ``@`` complex: numba requires equal dtypes. Casting the real side to the complex name's
       ``.dtype`` is numpy's promotion. Only fires when both kinds are known and the complex side is a
-      Name, so reading its dtype evaluates nothing twice."""
+      Name, so reading its dtype evaluates nothing twice.
+    * a float and a complex arm of one ``a if flag else b``: numba types both arms and cannot unify them (qe_vexx_k's
+      ``d.real if gamma_only else d`` under a runtime flag). The float arm is cast to the complex Name's dtype: the
+      values are unchanged, and only the arm's dtype widens."""
 
     __slots__ = ("changed", "kinds")
 
@@ -1414,8 +1420,12 @@ class NumbaDtypeFixups(ast.NodeTransformer):
         self.changed = False
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
-        """Respell a bool dtype argument of a NumPy call as ``np.bool_``."""
+        """Respell a bool dtype argument of a NumPy call as ``np.bool_``, and ``int(x)`` as ``np.int64(x)``."""
         self.generic_visit(node)
+        if isinstance(node.func, ast.Name) and node.func.id == "int" and len(node.args) == 1 and not node.keywords:
+            node.func = ast.copy_location(expr_of("np.int64"), node.func)
+            self.changed = True
+            return node
         attr = numpy_call_attr(node)
         if attr is None:
             return node
@@ -1428,6 +1438,19 @@ class NumbaDtypeFixups(ast.NodeTransformer):
             if isinstance(dt, ast.Name) and dt.id == "bool":
                 node.args[1] = ast.copy_location(expr_of("np.bool_"), dt)
                 self.changed = True
+        return node
+
+    def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        """Cast the float arm of a float and complex conditional expression to complex."""
+        self.generic_visit(node)
+        body, orelse = dtype_kind(node.body, self.kinds), dtype_kind(node.orelse, self.kinds)
+        if body == "float" and orelse == "complex" and isinstance(node.orelse, ast.Name):
+            node.body = cast_like(node.body, node.orelse.id)
+        elif body == "complex" and orelse == "float" and isinstance(node.body, ast.Name):
+            node.orelse = cast_like(node.orelse, node.body.id)
+        else:
+            return node
+        self.changed = True
         return node
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
