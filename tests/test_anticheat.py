@@ -38,6 +38,7 @@ PINNED_GATES = (
     "foreign_library",
     "identity_output",
     "trusted_clock",
+    "timer_tampering",
 )
 
 
