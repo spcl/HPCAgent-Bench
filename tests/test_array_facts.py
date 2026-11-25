@@ -167,9 +167,3 @@ def test_the_translation_hands_the_facts_to_dace_only_when_active() -> None:
         assert not isinstance(sdfg, cpf_canonical.RenderFailure)
         assert [fact.kind.name for fact in sdfg.data_assumptions("A_indptr")] == ["NONDECREASING"]
         assert [fact.segments for fact in sdfg.data_assumptions("B_indices")] == ["B_indptr"]
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__]))

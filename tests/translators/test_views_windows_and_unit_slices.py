@@ -123,6 +123,19 @@ def f(a, N, M, out):
 """
 
 
+def check(
+    src: str,
+    inputs: dict[str, object],
+    out_shape: tuple[int, ...],
+    syms: dict[str, int],
+    shapes: dict[str, str],
+    label: str,
+) -> None:
+    """Run ``src`` on every native backend against numpy; ``inputs`` carries the scalar ABI arguments too."""
+    res = run_op(src, "f", inputs, {"out": out_shape}, syms, shapes=shapes, backends=NATIVE)
+    assert_all_ok(res, label)
+
+
 @pytest.mark.parametrize(
     ("src", "cols", "n_cols"),
     [(STORE_THROUGH_A_GROUP_VIEW, "2 * M", 8), (STRIDED_STORE_THROUGH_A_VIEW_IN_A_LOOP, "2 * M + 1", 9)],
@@ -130,115 +143,95 @@ def f(a, N, M, out):
 )
 def test_a_store_through_a_slice_view_reaches_the_array_it_views(src: str, cols: str, n_cols: int) -> None:
     n, m = 3, 4
-    res = run_op(
+    check(
         src,
-        "f",
         {"a": RNG.random((n, m)), "N": n, "M": m},
-        {"out": (n, n_cols)},
+        (n, n_cols),
         {"N": n, "M": m},
-        shapes={"a": "(N, M)", "out": f"(N, {cols})"},
-        backends=NATIVE,
+        {"a": "(N, M)", "out": f"(N, {cols})"},
+        "store through a view",
     )
-    assert_all_ok(res, "store through a view")
 
 
 def test_a_window_returned_by_a_helper_keeps_its_bounds() -> None:
     n = 6
-    res = run_op(
+    check(
         WINDOW_FROM_A_HELPER,
-        "f",
         {"a": RNG.random(n), "N": n},
-        {"out": (n - 1,)},
+        (n - 1,),
         {"N": n},
-        shapes={"a": "(N,)", "out": "(N - 1,)"},
-        backends=NATIVE,
+        {"a": "(N,)", "out": "(N - 1,)"},
+        "helper window",
     )
-    assert_all_ok(res, "helper window")
 
 
 def test_a_concatenated_pad_width_list_lowers_like_a_tuple() -> None:
     n = 4
-    res = run_op(
+    check(
         CONCATENATED_PAD_WIDTHS,
-        "f",
         {"a": RNG.random((n, n)), "N": n},
-        {"out": (n, n + 2)},
+        (n, n + 2),
         {"N": n},
-        shapes={"a": "(N, N)", "out": "(N, N + 2)"},
-        backends=NATIVE,
+        {"a": "(N, N)", "out": "(N, N + 2)"},
+        "concatenated pad widths",
     )
-    assert_all_ok(res, "concatenated pad widths")
 
 
 def test_a_negative_start_unit_slice_broadcasts_against_the_full_axis() -> None:
     n, m = 3, 5
-    res = run_op(
+    check(
         NEGATIVE_START_UNIT_SLICE,
-        "f",
         {"a": RNG.random((n, m)), "N": n, "M": m},
-        {"out": (n, m)},
+        (n, m),
         {"N": n, "M": m},
-        shapes={"a": "(N, M)", "out": "(N, M)"},
-        backends=NATIVE,
+        {"a": "(N, M)", "out": "(N, M)"},
+        "a[:, -1:] - a",
     )
-    assert_all_ok(res, "a[:, -1:] - a")
 
 
 def test_a_subscript_with_implicit_trailing_axes_binds_its_leading_axes_first() -> None:
     n, k, l_ = 2, 3, 4
-    res = run_op(
+    check(
         IMPLICIT_TRAILING_AXES,
-        "f",
         {"a": RNG.random((n, 5)), "b": RNG.random((5, k, l_)), "N": n, "K": k, "L": l_},
-        {"out": (n, l_)},
+        (n, l_),
         {"N": n, "K": k, "L": l_},
-        shapes={"a": "(N, 5)", "b": "(5, K, L)", "out": "(N, L)"},
-        backends=NATIVE,
+        {"a": "(N, 5)", "b": "(5, K, L)", "out": "(N, L)"},
+        "t[:, -1] on a 3-D temp",
     )
-    assert_all_ok(res, "t[:, -1] on a 3-D temp")
 
 
 def test_a_literal_tuple_argument_decides_the_guards_of_a_kept_helper() -> None:
     n, m = 2, 4
-    res = run_op(
+    check(
         TUPLE_ARGUMENT_DECIDES_A_KEPT_HELPER,
-        "f",
         {"a": RNG.random((n, m, m)), "N": n, "M": m},
-        {"out": (n, 1, 1)},
+        (n, 1, 1),
         {"N": n, "M": m},
-        shapes={"a": "(N, M, M)", "out": "(N, 1, 1)"},
-        backends=NATIVE,
+        {"a": "(N, M, M)", "out": "(N, 1, 1)"},
+        "pool(a, (1, 1))",
     )
-    assert_all_ok(res, "pool(a, (1, 1))")
 
 
 def test_a_helper_parameter_does_not_capture_the_caller_symbol_of_the_same_name() -> None:
     n, w, k, p = 2, 9, 3, 2
-    res = run_op(
+    check(
         HELPER_PARAMETER_NAMED_LIKE_A_CALLER_SYMBOL,
-        "f",
         {"a": RNG.random((n, w)), "P": p, "N": n, "W": w, "K": k},
-        {"out": (n, w - k - p + 2)},
+        (n, w - k - p + 2),
         {"N": n, "W": w, "K": k, "P": p},
-        shapes={"a": "(N, W)", "out": "(N, W - K - P + 2)"},
-        backends=NATIVE,
+        {"a": "(N, W)", "out": "(N, W - K - P + 2)"},
+        "helper K vs caller K",
     )
-    assert_all_ok(res, "helper K vs caller K")
 
 
 def test_a_helper_local_does_not_capture_the_caller_local_of_the_same_name() -> None:
     n, m = 2, 6
-    res = run_op(
+    check(
         HELPER_LOCAL_NAMED_LIKE_A_CALLER_LOCAL,
-        "f",
         {"a": RNG.random((n, m + 2)), "N": n, "M": m},
-        {"out": (n, m // 2 + 1)},
+        (n, m // 2 + 1),
         {"N": n, "M": m},
-        shapes={"a": "(N, M + 2)", "out": "(N, M // 2 + 1)"},
-        backends=NATIVE,
+        {"a": "(N, M + 2)", "out": "(N, M // 2 + 1)"},
+        "helper om vs caller om",
     )
-    assert_all_ok(res, "helper om vs caller om")
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]))

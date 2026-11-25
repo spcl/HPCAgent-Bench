@@ -25,8 +25,3 @@ def test_the_requests_field_schema_is_relayouts() -> None:
     assert schema == self_contained(requests_schema())
     assert "$ref" not in json.dumps(schema)
     assert "$defs" not in schema
-
-
-if __name__ == "__main__":
-    test_the_agent_tool_ships_the_generated_request_schema()
-    test_the_requests_field_schema_is_relayouts()

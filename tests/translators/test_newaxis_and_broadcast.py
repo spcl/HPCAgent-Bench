@@ -15,6 +15,8 @@ points straight at the failing rule.
 
 import ast
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, scalarize_at_iters
 
 
@@ -33,119 +35,7 @@ def ivar(name: str) -> ast.Name:
 # A. Plain shape lookup                                                        #
 
 
-def test_bare_name_returns_full_shape() -> None:
-    """``A`` with shape (N, M) -> extent (N, M)."""
-    ext = iter_extent_of(expr_("A"), {"A": ("N", "M")})
-    assert unparse_ext(ext) == ("N", "M")
-
-
-def test_unknown_name_returns_none() -> None:
-    assert iter_extent_of(expr_("A"), {}) is None
-
-
-# B. Slicing                                                                   #
-
-
-def test_full_slice_yields_full_extent() -> None:
-    # Zero-lower-bound is folded -- ``A[:]`` yields the raw upper bound.
-    ext = iter_extent_of(expr_("A[:]"), {"A": ("N",)})
-    assert unparse_ext(ext) == ("N",)
-
-
-def test_subscript_partial_indexing_preserves_trailing_extent() -> None:
-    """``A[i, :]`` on (N, M) -> extent (M,) (scalar axis 0, slice 1)."""
-    ext = iter_extent_of(expr_("A[i, :]"), {"A": ("N", "M")})
-    assert unparse_ext(ext) == ("M",)
-
-
-def test_subscript_negative_upper_resolves_against_axis_len() -> None:
-    """``A[1:-1]`` on (N,) -> extent (N - 1 - 1,)."""
-    ext = iter_extent_of(expr_("A[1:-1]"), {"A": ("N",)})
-    # hi = N - 1, lo = 1, extent = N - 1 - 1.
-    (s,) = ext
-    assert ast.unparse(s) == "N - 1 - 1"
-
-
-# C. ``np.newaxis`` (== ``None``) extent                                       #
-
-
-def test_newaxis_leading_inserts_length_1_at_front() -> None:
-    """``Y[None, :]`` on (N,) -> extent (1, N) (row-vector form)."""
-    ext = iter_extent_of(expr_("Y[None, :]"), {"Y": ("N",)})
-    assert unparse_ext(ext) == ("1", "N")
-
-
-def test_newaxis_both_sides_keeps_middle_axis() -> None:
-    """``A[None, :, None]`` on (N,) -> extent (1, N, 1)."""
-    ext = iter_extent_of(expr_("A[None, :, None]"), {"A": ("N",)})
-    assert unparse_ext(ext) == ("1", "N", "1")
-
-
-def test_newaxis_between_existing_axes_on_2d() -> None:
-    """``A[:, None, :]`` on (N, M) -> extent (N, 1, M) (the
-    conv2d ``input[:, i:i+K, j:j+K, :, np.newaxis]`` shape after
-    indexing the slice axes scalar)."""
-    ext = iter_extent_of(expr_("A[:, None, :]"), {"A": ("N", "M")})
-    assert unparse_ext(ext) == ("N", "1", "M")
-
-
-# D. Broadcast extents through BinOp                                           #
-
-
-def test_binop_broadcast_equal_rank() -> None:
-    """``A + B`` with both (N, M) -> (N, M); no stretching needed."""
-    ext = iter_extent_of(expr_("A + B"), {"A": ("N", "M"), "B": ("N", "M")})
-    assert unparse_ext(ext) == ("N", "M")
-
-
-# E. Scalarisation -- iter consumption                                         #
-
-
-def test_scalarize_bare_name_uses_single_iter() -> None:
-    """``A`` with shape (N,) scalarised at iter ``i`` -> ``A[i]``."""
-    out = scalarize_at_iters(expr_("A"), [ivar("i")], {"A": ("N",)})
-    assert ast.unparse(out) == "A[i]"
-
-
-def test_scalarize_2d_name_uses_tuple() -> None:
-    """``A`` shape (N, M) at iters (i, j) -> ``A[i, j]``."""
-    out = scalarize_at_iters(expr_("A"), [ivar("i"), ivar("j")], {"A": ("N", "M")})
-    assert ast.unparse(out) == "A[i, j]"
-
-
-def test_scalarize_broadcasted_1d_subscripts_trailing_iter() -> None:
-    """``b`` shape (M,) at iters (i, j) -> ``b[j]`` (numpy
-    broadcasts a vector against the trailing axis of the iter
-    nest)."""
-    out = scalarize_at_iters(expr_("b"), [ivar("i"), ivar("j")], {"b": ("M",)})
-    assert ast.unparse(out) == "b[j]"
-
-
-# F. Scalarisation -- newaxis drops its iter                                   #
-
-
-def test_scalarize_y_newaxis_leading_drops_outer_iter() -> None:
-    """``Y[None, :]`` at iters (i, j) -> ``Y[j]`` (leading
-    None consumes i; the slice consumes j)."""
-    out = scalarize_at_iters(expr_("Y[None, :]"), [ivar("i"), ivar("j")], {"Y": ("N",)})
-    assert ast.unparse(out) == "Y[j]"
-
-
-def test_scalarize_conv2d_pattern_simplified() -> None:
-    """Simplified conv2d-style: ``input[:, :, :, np.newaxis] *
-    weights[np.newaxis, :, :, :]`` at iters (n, h, w, c_out)
-    sees input as ``input[n, h, w]`` (newaxis drops c_out from
-    input subscript) and weights as ``weights[h, w, c_out]``
-    (leading newaxis drops n)."""
-    out = scalarize_at_iters(
-        expr_("input[:, :, :, None] * weights[None, :, :, :]"),
-        [ivar("n"), ivar("h"), ivar("w"), ivar("c")],
-        {"input": ("N", "H", "W"), "weights": ("H", "W", "C")},
-    )
-    assert ast.unparse(out) == "input[n, h, w] * weights[h, w, c]"
-
-
-# F. Advanced (gather) indexing under a newaxis                                #
+# B-C. Extents: slicing, ``np.newaxis`` (== ``None``) and chained indexing                #
 
 GATHER_SHAPES = {
     "x": ("n_atoms", "3"),
@@ -159,7 +49,61 @@ GATHER_SHAPES = {
 }
 
 
-def test_chained_scalar_index_still_drops_its_axis() -> None:
-    """The scalar-chain case the gather rule must not break: ``psi[f]`` drops axis 0."""
-    ext = iter_extent_of(expr_("psi[f][..., 0]"), GATHER_SHAPES)
-    assert unparse_ext(ext) == ("X", "Y")
+@pytest.mark.parametrize(
+    ("src", "shapes", "extent"),
+    [
+        # Zero-lower-bound is folded: ``A[:]`` yields the raw upper bound.
+        ("A[:]", {"A": ("N",)}, ("N",)),
+        # Scalar axis 0, slice axis 1.
+        ("A[i, :]", {"A": ("N", "M")}, ("M",)),
+        # hi = N - 1, lo = 1, extent = N - 1 - 1.
+        ("A[1:-1]", {"A": ("N",)}, ("N - 1 - 1",)),
+        # Row-vector form.
+        ("Y[None, :]", {"Y": ("N",)}, ("1", "N")),
+        ("A[None, :, None]", {"A": ("N",)}, ("1", "N", "1")),
+        # The conv2d ``input[:, i:i+K, j:j+K, :, np.newaxis]`` shape after indexing the slice axes scalar.
+        ("A[:, None, :]", {"A": ("N", "M")}, ("N", "1", "M")),
+        # The scalar-chain case the gather rule must not break: ``psi[f]`` drops axis 0.
+        ("psi[f][..., 0]", GATHER_SHAPES, ("X", "Y")),
+    ],
+    ids=[
+        "full_slice_yields_full_extent",
+        "partial_indexing_preserves_trailing_extent",
+        "negative_upper_resolves_against_axis_len",
+        "newaxis_leading_inserts_length_1_at_front",
+        "newaxis_both_sides_keeps_middle_axis",
+        "newaxis_between_existing_axes_on_2d",
+        "chained_scalar_index_still_drops_its_axis",
+    ],
+)
+def test_iteration_extent_follows_numpy_slicing_and_newaxis(
+    src: str, shapes: dict[str, tuple[str, ...]], extent: tuple[str, ...]
+) -> None:
+    assert unparse_ext(iter_extent_of(expr_(src), shapes)) == extent
+
+
+# E-F. Scalarisation: iter consumption, and newaxis dropping its iter                       #
+
+
+@pytest.mark.parametrize(
+    ("src", "iters", "shapes", "scalarized"),
+    [
+        # A vector broadcasts against the trailing axis of the iter nest.
+        ("b", ["i", "j"], {"b": ("M",)}, "b[j]"),
+        # The leading None consumes i; the slice consumes j.
+        ("Y[None, :]", ["i", "j"], {"Y": ("N",)}, "Y[j]"),
+        # Simplified conv2d: newaxis drops c_out from input's subscript, the leading newaxis drops n from weights.
+        (
+            "input[:, :, :, None] * weights[None, :, :, :]",
+            ["n", "h", "w", "c"],
+            {"input": ("N", "H", "W"), "weights": ("H", "W", "C")},
+            "input[n, h, w] * weights[h, w, c]",
+        ),
+    ],
+    ids=["broadcast_1d_takes_trailing_iter", "leading_newaxis_drops_outer_iter", "conv2d_pattern_simplified"],
+)
+def test_scalarization_consumes_one_iter_per_axis(
+    src: str, iters: list[str], shapes: dict[str, tuple[str, ...]], scalarized: str
+) -> None:
+    out = scalarize_at_iters(expr_(src), [ivar(i) for i in iters], shapes)
+    assert ast.unparse(out) == scalarized

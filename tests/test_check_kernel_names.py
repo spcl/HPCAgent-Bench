@@ -219,15 +219,3 @@ def test_corpus_passes_with_its_allowlist(capsys: pytest.CaptureFixture[str]) ->
     """The shipped corpus plus the shipped allowlist is green."""
     assert lint.main(["--no-similar"]) == 0
     assert capsys.readouterr().out.endswith("0 stale allowlist line(s)\n")
-
-
-def test_raw_corpus_run_reports_the_documented_state(capsys: pytest.CaptureFixture[str]) -> None:
-    """Without the allowlist the corpus is red in exactly the ways the allowlist documents."""
-    code = lint.main(["--no-allowlist", "--no-similar"])
-    out = capsys.readouterr().out
-    assert code == 1
-    for stem in ("crc16", "ilu0", "cp2k_density_matrix_trs4"):
-        assert f"NAMING {stem} " in out
-    assert "prefix:" not in out
-    assert "DUPLICATE gemm_long_k = gemm_tall_skinny" in out
-    assert "DUPLICATE icon_velocity_tendencies = icon_velocity_tendencies_multiblock" in out

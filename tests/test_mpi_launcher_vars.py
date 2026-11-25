@@ -21,20 +21,16 @@ def launcher_env_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SLURM_PROCID", "2")
 
 
-def test_the_launcher_variables_are_removed(launcher_env: None) -> None:
-    removed = drop_mpi_launcher_vars()
-    assert set(removed) == {"PMIX_RANK", "PMI_RANK"}
-    assert not [var for var in MPI_LAUNCHER_VARS if var in os.environ]
-
-
-def test_slurm_procid_survives(launcher_env: None) -> None:
+def test_the_launcher_variables_are_removed_and_slurm_procid_survives(launcher_env: None) -> None:
     """The sweep shards on SLURM_PROCID and names per-rank build folders with it.
 
     DaCe excludes it from its own MPI trigger for the same reason -- it says a launcher started the
     process, not that the process is an MPI rank -- so stripping it would break sharding while
     fixing nothing.
     """
-    drop_mpi_launcher_vars()
+    removed = drop_mpi_launcher_vars()
+    assert set(removed) == {"PMIX_RANK", "PMI_RANK"}
+    assert not [var for var in MPI_LAUNCHER_VARS if var in os.environ]
     assert os.environ["SLURM_PROCID"] == "2"
 
 

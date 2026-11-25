@@ -11,6 +11,7 @@ and is left to the slice lowering (it already works).
 """
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import all_ok, parse_source, run_op
 
@@ -30,76 +31,46 @@ def emit_c_(src: str, inputs: list[str], shapes: dict[str, str], syms: dict[str,
     return emit_c(lower(parse_source(src, "f", inputs, [], shapes, syms)), fn_name="f")
 
 
-def test_c_emit_leaves_positive_index_alone() -> None:
-    c = emit_c_(
-        "import numpy as np\ndef f(a, out):\n out[0] = a[2]\n", ["a", "out"], {"a": "(N,)", "out": "(2,)"}, {"N": 6}
-    )
-    assert "a[2]" in c
-
-
 # numerical: bit-exact vs numpy across every backend                          #
 
 
-def test_bare_negative_index_read() -> None:
-    a = np.arange(6, dtype=np.float64)
-    ok, res = all_ok(
-        run_op(
+@pytest.mark.parametrize(
+    ("src", "a", "out_shape", "syms", "shapes"),
+    [
+        (
             "import numpy as np\ndef f(a, out):\n out[0] = a[-1]\n out[1] = a[-2]\n",
-            "f",
-            {"a": a},
-            {"out": (2,)},
+            np.arange(6, dtype=np.float64),
+            (2,),
             {"N": 6},
-            shapes={"a": "(N,)", "out": "(2,)"},
-            backends=ALL,
-        )
-    )
-    assert ok, res
-
-
-def test_negative_index_write() -> None:
-    a = np.arange(6, dtype=np.float64)
-    ok, res = all_ok(
-        run_op(
+            {"a": "(N,)", "out": "(2,)"},
+        ),
+        (
             "import numpy as np\ndef f(a, out):\n out[:] = a\n out[-1] = 99.0\n",
-            "f",
-            {"a": a},
-            {"out": (6,)},
+            np.arange(6, dtype=np.float64),
+            (6,),
             {"N": 6},
-            shapes={"a": "(N,)", "out": "(N,)"},
-            backends=ALL,
-        )
-    )
-    assert ok, res
-
-
-def test_negative_index_2d_mixed_axes() -> None:
-    a = np.arange(12, dtype=np.float64).reshape(3, 4)
-    ok, res = all_ok(
-        run_op(
+            {"a": "(N,)", "out": "(N,)"},
+        ),
+        (
             "import numpy as np\ndef f(a, out):\n out[0] = a[-1, -1]\n out[1] = a[1, -1]\n out[2] = a[-1, 2]\n",
-            "f",
-            {"a": a},
-            {"out": (3,)},
+            np.arange(12, dtype=np.float64).reshape(3, 4),
+            (3,),
             {"M": 3, "N": 4},
-            shapes={"a": "(M, N)", "out": "(3,)"},
-            backends=ALL,
-        )
-    )
-    assert ok, res
-
-
-def test_negative_slice_bound_still_works() -> None:
-    # ``a[:-1]`` is a slice bound, NOT an index -- left to the slice lowering.
-    a = np.arange(6, dtype=np.float64)
-    ok, res = all_ok(
-        run_op(
+            {"a": "(M, N)", "out": "(3,)"},
+        ),
+        # ``a[:-1]`` is a slice bound, NOT an index -- left to the slice lowering.
+        (
             "import numpy as np\ndef f(a, out):\n out[:] = a[1:] - a[:-1]\n",
-            "f",
-            {"a": a},
-            {"out": (5,)},
+            np.arange(6, dtype=np.float64),
+            (5,),
             {"N": 6},
-            shapes={"a": "(N,)", "out": "(5,)"},
-            backends=ALL,
-        )
-    )
+            {"a": "(N,)", "out": "(5,)"},
+        ),
+    ],
+    ids=["bare_read", "write", "2d_mixed_axes", "negative_slice_bound_still_works"],
+)
+def test_negative_index_matches_numpy_on_every_backend(
+    src: str, a: np.ndarray, out_shape: tuple[int, ...], syms: dict[str, int], shapes: dict[str, str]
+) -> None:
+    ok, res = all_ok(run_op(src, "f", {"a": a}, {"out": out_shape}, syms, shapes=shapes, backends=ALL))
     assert ok, res

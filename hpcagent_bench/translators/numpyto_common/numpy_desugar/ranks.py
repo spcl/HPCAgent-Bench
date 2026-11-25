@@ -22,6 +22,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     tuple_len,
 )
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.parallelism import enclosing_blocks
 from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_newaxis
 
 __all__ = [
@@ -930,15 +931,14 @@ def param_body_rank_evidence(fn: ast.FunctionDef) -> dict[str, int]:
 def return_rank(fn: ast.FunctionDef, ranks: dict[str, int], seed_ranks: dict[str, int] | None = None) -> int | None:
     """Rank of ``fn``'s returned value (the max over its ``return`` statements),
     given a rank table for its body -- so a caller can propagate it."""
-    global active_tuple_lengths
-    prev = active_tuple_lengths
-    active_tuple_lengths = build_tuple_lengths(fn, ranks, seed_ranks=seed_ranks)
-    try:
-        rs = [expr_rank(n.value, ranks) for n in walk_nodes(fn) if isinstance(n, ast.Return) and n.value is not None]
-        known = [r for r in rs if r is not None]
-        return max(known) if known else None
-    finally:
-        active_tuple_lengths = prev
+    lengths = build_tuple_lengths(fn, ranks, seed_ranks=seed_ranks)
+    rs = [
+        rank_under_tuples(n.value, ranks, lengths)
+        for n in walk_nodes(fn)
+        if isinstance(n, ast.Return) and n.value is not None
+    ]
+    known = [r for r in rs if r is not None]
+    return max(known) if known else None
 
 
 def infer_param_ranks(
@@ -1062,11 +1062,6 @@ def split_helpers_by_ndim(
         sites.setdefault(call.func.id, []).append((call, passed))
     callees = {id(call.func) for calls in sites.values() for call, unused in calls}
     escaped = {n.id for n in walk_nodes(tree) if isinstance(n, ast.Name) and n.id in by_name and id(n) not in callees}
-    bodies = [
-        n.body
-        for n in walk_nodes(tree)
-        if isinstance(n, (ast.Module, ast.FunctionDef, ast.If, ast.For, ast.While, ast.With))
-    ]
     changed = False
     for name, calls in sites.items():
         fn = by_name[name]
@@ -1086,8 +1081,10 @@ def split_helpers_by_ndim(
             isinstance(c.func, ast.Name) and c.func.id == name for c in walk_nodes(fn) if isinstance(c, ast.Call)
         ):
             continue
-        body = next(b for b in bodies if any(stmt is fn for stmt in b))
-        at = next(i for i, stmt in enumerate(body) if stmt is fn)
+        path = enclosing_blocks(tree, fn)
+        if path is None:
+            continue
+        body, at, unused_owner = path[-1]
         clones: dict[tuple[int | None, ...], str] = {}
         for (call, unused), key in zip(calls, keys, strict=True):
             if key not in clones:

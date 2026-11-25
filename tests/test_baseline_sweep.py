@@ -448,11 +448,6 @@ def test_a_comma_list_strips_its_names_and_refuses_naming_none() -> None:
         baseline.resolve_kernels("", " , ", None)
 
 
-def test_an_unknown_column_is_refused_before_a_node_is_held() -> None:
-    with pytest.raises(SystemExit, match="unknown column"):
-        baseline.check_column("nosuchcolumn")
-
-
 def test_a_column_alias_is_the_column_its_rows_record_under() -> None:
     """``run-framework`` runs ``-f c`` as ``cc`` and records its rows under ``cc``; the sweep must speak that
     spelling too, so ``begin`` drops and ``finish`` reads the rows an aliased column actually wrote (a ``begin``

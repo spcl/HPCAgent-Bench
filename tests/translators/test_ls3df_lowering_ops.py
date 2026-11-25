@@ -20,6 +20,8 @@ These are pure AST transforms, so no compiler is needed.
 
 import ast
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_common.frontend import collect_inlined_scalar_defs
 from hpcagent_bench.translators.numpyto_common.lib_nodes import expand_copy
 from hpcagent_bench.translators.numpyto_common.lowering import ShapeMidExpressionRewriter, TupleLocalPropagator
@@ -32,17 +34,19 @@ def unparse_(node: ast.AST) -> str:
 # .shape / .shape[k] on a newaxis-subscript base                              #
 
 
-def test_shape_index_on_newaxis_subscript_folds_to_static_dim() -> None:
-    # ``v[..., None].shape[-1]`` on a 3-D ``v`` -> the inserted size-1 axis (1).
-    tree = ast.parse("y = v[:, :, :, None].shape[-1]")
+@pytest.mark.parametrize(
+    ("src", "folded"),
+    [
+        # ``v[..., None].shape[-1]`` on a 3-D ``v`` -> the inserted size-1 axis (1).
+        ("y = v[:, :, :, None].shape[-1]", "1"),
+        ("y = v[:, :, :, None].shape[0]", "Lb"),
+    ],
+    ids=["negative_axis_is_the_inserted_size_1", "positive_axis_is_a_source_extent"],
+)
+def test_shape_index_on_newaxis_subscript_folds_to_static_dim(src: str, folded: str) -> None:
+    tree = ast.parse(src)
     ShapeMidExpressionRewriter({"v": ["Lb", "Lb", "Lb"]}).visit(tree)
-    assert unparse_(tree.body[0].value) == "1"
-
-
-def test_shape_index_on_newaxis_subscript_positive_axis() -> None:
-    tree = ast.parse("y = v[:, :, :, None].shape[0]")
-    ShapeMidExpressionRewriter({"v": ["Lb", "Lb", "Lb"]}).visit(tree)
-    assert unparse_(tree.body[0].value) == "Lb"
+    assert unparse_(tree.body[0].value) == folded
 
 
 def test_bare_shape_on_subscript_base_folds_to_tuple() -> None:

@@ -241,17 +241,3 @@ def test_a_search_answer_is_the_json_the_search_tool_built() -> None:
     assert list(CrawledPageAnswer.model_fields) == [
         item.name for item in dataclasses.fields(judge_web_search.CrawledPage)
     ]
-
-
-if __name__ == "__main__":
-    test_the_score_answer_is_the_json_the_score_route_sent()
-    test_the_full_grade_answer_is_the_json_the_submit_route_sent()
-    test_a_verdict_carries_only_the_keys_that_apply()
-    test_a_refusal_is_the_error_object_it_was()
-    test_a_recording_outcome_names_only_what_happened()
-    test_a_non_finite_error_travels_as_the_json_constant_stdlib_reads()
-    test_the_client_reads_back_the_grade_the_judge_sent()
-    test_an_answer_with_an_unknown_field_is_refused()
-    test_the_answer_models_track_the_grade_field_for_field()
-    test_a_router_error_is_fastapi_s_own_envelope()
-    test_a_search_answer_is_the_json_the_search_tool_built()

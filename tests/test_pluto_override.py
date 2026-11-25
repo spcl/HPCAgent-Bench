@@ -97,17 +97,6 @@ def test_the_override_file_itself_is_never_written_to(tmp_path: pathlib.Path) ->
     assert (override.read_bytes(), override.stat().st_mtime_ns) == before
 
 
-def test_scop_inputs_falls_back_to_generated_without_an_override(tmp_path: pathlib.Path) -> None:
-    """A kernel with no tracked override still resolves to the translator's generated scop."""
-    bench_dir = tmp_path / "kern2"
-    cpp_backend = bench_dir / "cpp_backend"
-    generated = _generated(cpp_backend, "kern2")
-
-    resolved = pluto_transform.scop_inputs(cpp_backend, "kern2", bench_dir=bench_dir)
-
-    assert resolved == [generated]
-
-
 def test_override_transform_output_stays_out_of_the_tracked_source_dir(tmp_path: pathlib.Path) -> None:
     """polycc's output for an override lands under the kernel's gitignored ``cpp_backend``, not
     beside the tracked ``_pluto_reference.c`` -- a build artifact must never dirty ``git status``."""

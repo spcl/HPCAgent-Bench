@@ -320,28 +320,27 @@ def test_distributed_suspect_default_threshold_flags_an_unreachable_speedup(monk
     assert ts.iterations[0].suspect is True
 
 
-def test_distributed_suspect_lowered_threshold_flags_previously_ok_speedup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A speedup that clears the default 1000.0 bound (4.0x) gets flagged once the config
-    threshold is lowered below it -- proves the compare reads the config value, not a constant."""
-    ts = run_distributed(monkeypatch, rank_counts=[], speedup=4.0, suspect_above=2.0)
-    assert ts.suspect_count == 1
-    assert ts.iterations[0].suspect is True
-
-
-def test_distributed_suspect_raised_threshold_stops_flagging(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A speedup flagged at the default 1000.0 bound (5000x) clears once the config threshold is
-    raised above it -- the high side must also read config, not just short-circuit past it."""
-    ts = run_distributed(monkeypatch, rank_counts=[], speedup=5000.0, suspect_above=10000.0)
-    assert ts.suspect_count == 0
-    assert ts.iterations[0].suspect is False
-
-
-def test_distributed_suspect_nonfinite_ignores_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-finite speedup stays suspect even under an enormous configured threshold -- the
-    isfinite check must keep short-circuiting ahead of the config-sourced compare."""
-    ts = run_distributed(monkeypatch, rank_counts=[], speedup=float("inf"), suspect_above=1e18)
-    assert ts.suspect_count == 1
-    assert ts.iterations[0].suspect is True
+@pytest.mark.parametrize(
+    ("speedup", "suspect_above", "flagged"),
+    [
+        # A speedup that clears the default bound (4.0x) gets flagged once the config threshold is lowered below it:
+        # proves the compare reads the config value, not a constant.
+        (4.0, 2.0, 1),
+        # A speedup flagged at the default bound (5000x) clears once the config threshold is raised above it: the high
+        # side must also read config, not just short-circuit past it.
+        (5000.0, 10000.0, 0),
+        # A non-finite speedup stays suspect even under an enormous configured threshold: the isfinite check must
+        # keep short-circuiting ahead of the config-sourced compare.
+        (float("inf"), 1e18, 1),
+    ],
+    ids=["lowered_threshold_flags_an_ok_speedup", "raised_threshold_stops_flagging", "nonfinite_ignores_threshold"],
+)
+def test_distributed_suspect_flag_follows_the_configured_threshold(
+    monkeypatch: pytest.MonkeyPatch, speedup: float, suspect_above: float, flagged: int
+) -> None:
+    ts = run_distributed(monkeypatch, rank_counts=[], speedup=speedup, suspect_above=suspect_above)
+    assert ts.suspect_count == flagged
+    assert ts.iterations[0].suspect is bool(flagged)
 
 
 def test_grade_surfaces_scaling_dict(monkeypatch: pytest.MonkeyPatch) -> None:

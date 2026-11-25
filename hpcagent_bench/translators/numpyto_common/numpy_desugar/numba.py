@@ -1444,6 +1444,8 @@ class NumbaDtypeFixups(ast.NodeTransformer):
         """Cast the float arm of a float and complex conditional expression to complex."""
         self.generic_visit(node)
         body, orelse = dtype_kind(node.body, self.kinds), dtype_kind(node.orelse, self.kinds)
+        if isinstance(node.body, ast.Constant) or isinstance(node.orelse, ast.Constant):
+            return node  # a literal is a scalar, which numba unifies with a complex arm itself
         if body == "float" and orelse == "complex" and isinstance(node.orelse, ast.Name):
             node.body = cast_like(node.body, node.orelse.id)
         elif body == "complex" and orelse == "float" and isinstance(node.body, ast.Name):

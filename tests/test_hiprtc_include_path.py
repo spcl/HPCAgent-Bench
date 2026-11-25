@@ -19,27 +19,19 @@ SCRAPED = (
 )
 
 
-def test_wrapper_directory_is_removed() -> None:
-    kept = hiprtc_include_dirs(SCRAPED)
-    assert not any(CLANG_CUDA_WRAPPERS in d for d in kept)
-
-
-def test_every_other_directory_survives_in_order() -> None:
+def test_wrapper_directory_is_removed_and_every_other_directory_survives_in_order() -> None:
     # Only the one entry goes. Dropping more would take libstdc++ or the ROCm headers with it,
     # and REORDERING is not a fix here -- the wrapper dir fails from any position -- so the
     # surviving order must be the scraped order.
-    assert hiprtc_include_dirs(SCRAPED) == tuple(d for d in SCRAPED if CLANG_CUDA_WRAPPERS not in d)
+    kept = hiprtc_include_dirs(SCRAPED)
+    assert not any(CLANG_CUDA_WRAPPERS in d for d in kept)
+    assert kept == tuple(d for d in SCRAPED if CLANG_CUDA_WRAPPERS not in d)
 
 
 def test_filtering_is_idempotent() -> None:
     # Both device entry points call the repair, so it runs twice in one process.
     once = hiprtc_include_dirs(SCRAPED)
     assert hiprtc_include_dirs(once) == once
-
-
-def test_a_clean_list_is_left_alone() -> None:
-    clean = tuple(d for d in SCRAPED if CLANG_CUDA_WRAPPERS not in d)
-    assert hiprtc_include_dirs(clean) == clean
 
 
 class FakeRuntime:
@@ -50,11 +42,6 @@ class FakeRuntime:
 class FakeCupy:
     def __init__(self, is_hip: bool) -> None:
         self.cuda = type("cuda", (), {"runtime": FakeRuntime(is_hip)})
-
-
-def test_cuda_build_is_left_alone() -> None:
-    # A CUDA cupy has no hipcc list to repair; reaching for the HIP-only hook would raise.
-    repair_hiprtc_include_path(FakeCupy(is_hip=False))
 
 
 def test_missing_cupy_hook_raises_rather_than_skipping_silently() -> None:

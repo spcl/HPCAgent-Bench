@@ -41,10 +41,3 @@ def test_another_checkouts_package_is_refused_and_a_scripts_only_tree_is_not(tmp
     # A judge container mounts the repository twice, so the package may be named by either path of it
     assert pathlib.Path(named).samefile(paths.ROOT), done.stderr
     assert f"not this checkout ({tmp_path})" in done.stderr
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    test_the_checkouts_own_package_is_accepted()
-    test_another_checkouts_package_is_refused_and_a_scripts_only_tree_is_not(pathlib.Path(tempfile.mkdtemp()))

@@ -9,6 +9,8 @@ emitted C, since the emitted text is what polycc reads.
 
 import re
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from tests.translators.op_oracle import parse_source
@@ -39,53 +41,55 @@ def assigns_to(text: str, name: str) -> list[str]:
     return re.findall(rf"^\s*{name} = .*;$", text, re.MULTILINE)
 
 
-def test_declines_when_the_source_array_is_written_in_the_nest() -> None:
-    # Condition 4: replaying the read would cross a store to its own buffer.
-    body = emit_(
-        CONV.replace("conv_op", "alias_op").replace(
-            "                    out_grid[i, j] += w * padded[i + di, j + dj]\n",
-            "                    out_grid[i, j] += w * padded[i + di, j + dj]\n"
-            "                    w_box[di, dj] = out_grid[i, j]\n",
+@pytest.mark.parametrize(
+    ("src", "func", "extra_args", "reason"),
+    [
+        # Condition 4: replaying the read would cross a store to its own buffer.
+        (
+            CONV.replace("conv_op", "alias_op").replace(
+                "                    out_grid[i, j] += w * padded[i + di, j + dj]\n",
+                "                    out_grid[i, j] += w * padded[i + di, j + dj]\n"
+                "                    w_box[di, dj] = out_grid[i, j]\n",
+            ),
+            "alias_op",
+            (),
+            "a written source array",
         ),
-        "alias_op",
-    )
-    assert assigns_to(body, "w"), f"a written source array must decline the substitution:\n{body}"
-
-
-def test_declines_when_the_scalar_is_read_after_the_loop() -> None:
-    # Condition 6: a read past the loop sees the last iteration's value.
-    body = emit_(
-        CONV.replace("conv_op(w_box, padded, out_grid, K, N)", "live_op(w_box, padded, tail, out_grid, K, N)").replace(
-            "def conv_op", "def live_op"
-        )
-        + "    tail[0] = w\n",
-        "live_op",
-        extra_args=("tail",),
-    )
-    assert assigns_to(body, "w"), f"a scalar live past its loop must decline:\n{body}"
-
-
-def test_declines_when_an_operand_is_reassigned() -> None:
-    # Condition 5: ``k`` is written twice, so a deeper replay reads the second binding.
-    body = emit_(
-        CONV.replace("conv_op", "unstable_op").replace(
-            "            w = w_box[di, dj]\n",
-            "            k = dj\n            w = w_box[di, k]\n            k = dj + 1\n",
+        # Condition 6: a read past the loop sees the last iteration's value.
+        (
+            CONV.replace(
+                "conv_op(w_box, padded, out_grid, K, N)", "live_op(w_box, padded, tail, out_grid, K, N)"
+            ).replace("def conv_op", "def live_op")
+            + "    tail[0] = w\n",
+            "live_op",
+            ("tail",),
+            "a scalar live past its loop",
         ),
-        "unstable_op",
-    )
-    assert assigns_to(body, "w"), f"an unstable operand must decline the substitution:\n{body}"
-
-
-def test_declines_when_no_read_is_deeper() -> None:
-    # Condition 7: a same-depth read is not the defect, so replaying is pure growth.
-    body = emit_(
-        CONV.replace("conv_op", "flat_op").replace(
-            "            w = w_box[di, dj]\n            for i in range(N):\n                for j in range(N):\n",
-            "            for i in range(N):\n"
-            "                for j in range(N):\n"
-            "                    w = w_box[di, dj]\n",
+        # Condition 5: ``k`` is written twice, so a deeper replay reads the second binding.
+        (
+            CONV.replace("conv_op", "unstable_op").replace(
+                "            w = w_box[di, dj]\n",
+                "            k = dj\n            w = w_box[di, k]\n            k = dj + 1\n",
+            ),
+            "unstable_op",
+            (),
+            "an unstable operand",
         ),
-        "flat_op",
-    )
-    assert assigns_to(body, "w"), f"a same-depth read must decline the substitution:\n{body}"
+        # Condition 7: a same-depth read is not the defect, so replaying is pure growth.
+        (
+            CONV.replace("conv_op", "flat_op").replace(
+                "            w = w_box[di, dj]\n            for i in range(N):\n                for j in range(N):\n",
+                "            for i in range(N):\n"
+                "                for j in range(N):\n"
+                "                    w = w_box[di, dj]\n",
+            ),
+            "flat_op",
+            (),
+            "a same-depth read",
+        ),
+    ],
+    ids=["source_array_written_in_the_nest", "scalar_read_after_the_loop", "operand_reassigned", "no_read_deeper"],
+)
+def test_substitution_declines(src: str, func: str, extra_args: tuple[str, ...], reason: str) -> None:
+    body = emit_(src, func, extra_args=extra_args)
+    assert assigns_to(body, "w"), f"{reason} must decline the substitution:\n{body}"

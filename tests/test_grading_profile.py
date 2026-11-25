@@ -48,9 +48,3 @@ def test_a_pair_graded_under_different_settings_is_refused() -> None:
         limits.check_grading([("a", "b")], gradings)
     assert limits.check_grading([("a", "c")], gradings) == ["pair a,c -- grading settings not recorded for every grade"]
     assert limits.check_grading([("c", "c")], gradings) == [], "neither side records its settings: nothing to compare"
-
-
-if __name__ == "__main__":
-    test_the_strict_profile_sets_its_keys_and_an_explicit_key_wins()
-    test_every_grade_records_its_profile_and_input_switches()
-    test_a_pair_graded_under_different_settings_is_refused()

@@ -183,17 +183,3 @@ def test_the_dace_sdfg_render_caches_the_simplified_base_per_device() -> None:
         path.unlink(missing_ok=True)
     prepare.render_kernel(KERNEL, "dace-sdfg", "float64")
     assert all(path.is_file() for path in wanted), wanted
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    def tmp() -> pathlib.Path:
-        return pathlib.Path(tempfile.mkdtemp())
-
-    test_the_tasks_split_the_tag_without_overlap(tmp())
-    test_an_unknown_step_is_refused(tmp())
-    test_the_dace_step_caches_the_parsed_base_sdfg()
-    test_an_unknown_render_is_refused(tmp())
-    test_the_dace_sdfg_render_caches_the_simplified_base_per_device()
-    print("ok (monkeypatched tests run under pytest)")

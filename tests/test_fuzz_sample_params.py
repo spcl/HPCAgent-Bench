@@ -50,19 +50,6 @@ def test_construct_satisfies_divisibility_by_construction() -> None:
         assert out["N"] % out["R"] == 0
 
 
-def test_config_valid_picks_an_enumerated_tuple() -> None:
-    cfg = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
-    seen = {
-        (
-            fuzz.sample_params({"fuzzed": {}}, it, configs=cfg)["a"],
-            fuzz.sample_params({"fuzzed": {}}, it, configs=cfg)["b"],
-        )
-        for it in range(30)
-    }
-    assert seen <= {(1, 2), (3, 4)}
-    assert len(seen) >= 1
-
-
 def test_config_flag_is_visible_to_derive() -> None:
     cfg = [{"noncolin": False}, {"noncolin": True}]
     p = _fuzzed(npol={"derive": "2 if noncolin else 1"})

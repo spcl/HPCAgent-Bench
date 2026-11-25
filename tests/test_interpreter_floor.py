@@ -101,9 +101,3 @@ def test_the_floor_rules_flag_the_defects_that_reached_a_judge(
     """Each rule is shown the exact text a py3.12 judge failed to import, and the fallback or
     ordering that makes the same line safe, so a rule that stops firing fails here."""
     assert bool(rule(source)) is flagged, rule(source)
-
-
-if __name__ == "__main__":
-    test_the_too_new_lists_name_only_what_the_floor_cannot_run()
-    for source, rule, flagged in FLOOR_DEFECTS:
-        test_the_floor_rules_flag_the_defects_that_reached_a_judge(source, rule, flagged)

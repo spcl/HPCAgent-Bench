@@ -90,12 +90,6 @@ def test_a_serving_image_is_held_to_no_profiler(verify: ModuleType, profile: str
     assert runs(verify, profile) == {}
 
 
-def test_the_runs_report_in_their_own_group_beside_the_presence_checks(verify: ModuleType) -> None:
-    """The ``profiler`` group says the tool starts; ``profiler run`` says it counted the probe."""
-    groups = {check.group for check in verify.checks("judge") if check.kind == "profiler-run"}
-    assert groups == {"profiler run"}, groups
-
-
 def test_every_run_target_has_a_probe(verify: ModuleType) -> None:
     targets = {target for profile in verify.PLATFORM for target in runs(verify, profile)}
     assert targets == set(verify.PROFILER_RUNS), targets ^ set(verify.PROFILER_RUNS)

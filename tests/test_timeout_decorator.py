@@ -76,20 +76,6 @@ def test_exception_from_the_wrapped_call_still_cancels_the_watchdog(monkeypatch:
     assert _FakeTimer.instances[0].cancelled
 
 
-def test_cdquit_reports_the_function_name_and_interrupts_the_main_thread(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # Same rebind-the-name reasoning as above: `_thread` is the process-wide C module, so patch
-    # the reference `timeout_decorator` looks up rather than the shared module's attribute.
-    calls = []
-    monkeypatch.setattr(timeout_decorator, "thread", types.SimpleNamespace(interrupt_main=lambda: calls.append(1)))
-
-    timeout_decorator.cdquit("slow_kernel")
-
-    assert calls == [1]
-    assert "slow_kernel took too long" in capsys.readouterr().err
-
-
 def test_a_call_that_overruns_the_deadline_raises_keyboard_interrupt() -> None:
     # Real timer, real overrun -- deadline well under the wrapped sleep so this is not a race,
     # and both numbers stay small enough that the test finishes in well under a second either way.

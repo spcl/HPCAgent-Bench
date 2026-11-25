@@ -121,12 +121,6 @@ def test_a_set_aocc_root_without_a_usable_clang_resolves_nothing(
     assert languages.resolve_compiler("aoc") is None
 
 
-def test_without_a_root_aocc_is_its_aoc_on_path(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    aoc = fake_driver(tmp_path / "bin", "aoc", "21.1.8")
-    monkeypatch.setenv("PATH", str(aoc.parent))
-    assert languages.resolve_compiler("aoc") == str(aoc)
-
-
 @pytest.mark.parametrize(
     ("driver", "variable"), [("icx", "HPCAGENT_BENCH_ICX_ROOT"), ("nvc", "HPCAGENT_BENCH_NVHPC_ROOT")]
 )

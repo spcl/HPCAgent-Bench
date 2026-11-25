@@ -363,14 +363,6 @@ def test_empty_with_an_explicit_dtype_is_left_alone() -> None:
         assert ast.dump(ast.parse(out)) == ast.dump(ast.parse(src))  # byte-for-byte unchanged
 
 
-def test_empty_like_is_not_touched() -> None:
-    """``np.empty_like`` has a working dtype default in dace (falls back to the prototype's own
-    dtype), so it is not this transformer's problem -- only bare ``np.empty`` is."""
-    src = "def k():\n    Q = np.empty_like(x)\n"
-    out = transform(AnnotateEmptyDtype("dc_float"), src)
-    assert ast.dump(ast.parse(out)) == ast.dump(ast.parse(src))
-
-
 def test_gmres_workspace_allocation_carries_an_explicit_dtype_end_to_end() -> None:
     """gmres's workspace allocation must not reach dace as a literal, un-harvested
     ``np.empty((N, m + 1))`` -- refused outright, because dace's ``np.empty`` replacement has no

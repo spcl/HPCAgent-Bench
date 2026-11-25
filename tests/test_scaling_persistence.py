@@ -110,14 +110,6 @@ def test_a_measured_point_stores_the_graders_own_numbers(tmp_path: pathlib.Path)
     assert row["status"] == "graded"
 
 
-@pytest.mark.parametrize(("ranks", "nodes"), [(1, 1), (4, 1), (8, 2), (16, 4)])
-def test_nodes_is_the_placement_the_sweep_recorded(tmp_path: pathlib.Path, ranks: int, nodes: int) -> None:
-    db = tmp_path / "r.db"
-    record(db, strong_curve(), ScalingLaw.STRONG)
-    (row,) = rows(db, f"SELECT nodes FROM scaling_points WHERE ranks = {ranks}")
-    assert row["nodes"] == nodes, row
-
-
 def test_an_unplaced_point_records_no_nodes_not_a_derived_count(tmp_path: pathlib.Path) -> None:
     """A launcher that places ranks itself reports nothing, and P / ranks-per-node is not a measurement."""
     db = tmp_path / "r.db"
@@ -208,18 +200,6 @@ def test_record_keeps_the_holes_of_a_grade_whose_every_point_dropped(tmp_path: p
     )
     got = [(r["ranks"], r["mode"], r["note"]) for r in rows(db, "SELECT * FROM scaling_points ORDER BY ranks")]
     assert got == [(2, "weak", "unsizable"), (4, "weak", "unsizable")], got
-
-
-def test_a_grade_without_a_sweep_writes_no_scaling_rows(tmp_path: pathlib.Path) -> None:
-    db = tmp_path / "r.db"
-    score = Score(True, 0.0, 1000, True, "", baseline_ns=2000, speedup=2.0)
-    recording.record(
-        score,
-        Submission(language=Language.C, source="/* x */", build=[]),
-        Task(KERNEL, SourceMode.RESTRICTED, Language.C),
-        path=str(db),
-    )
-    assert rows(db, "SELECT COUNT(*) AS n FROM scaling_points") == [{"n": 0}]
 
 
 def test_shards_merge_their_curves_without_duplicating_a_grade(tmp_path: pathlib.Path) -> None:

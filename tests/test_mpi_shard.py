@@ -92,20 +92,15 @@ def test_the_plan_carries_the_judges_strict_gate_and_relative_atol() -> None:
     )
 
 
-def test_the_plan_names_inputs_in_make_inputs_order_and_outputs_in_reference_order() -> None:
+def test_the_plan_names_its_inputs_and_outputs_and_gives_each_rank_its_tile_and_localized_sizes() -> None:
     """make_inputs returns the reference argument order (init arrays minus outputs), and
     reference_dist returns spec.output_args order; the kernel's binding order is alphabetical, each size symbol's
-    padded extent after the scalars."""
+    padded extent after the scalars. 10 rows over 4 ranks is the load-balanced 3,3,2,2 block the torch
+    make_inputs also cuts, every tile allocated at the 3 rows of the largest (``M_padded``)."""
     plan = plan_for(4, ROW_SPLIT)
     assert plan["inputs"] == ["x", "A"]
     assert plan["outputs"] == ["out"]
     assert [a["name"] for a in plan["args"]] == ["A", "out", "x", "M", "N", "M_padded", "N_padded"]
-
-
-def test_the_plan_gives_each_rank_its_tile_and_localized_sizes() -> None:
-    """10 rows over 4 ranks is the load-balanced 3,3,2,2 block the torch make_inputs also cuts, every tile
-    allocated at the 3 rows of the largest (``M_padded``)."""
-    plan = plan_for(4, ROW_SPLIT)
     assert [r["shapes"]["A"] for r in plan["ranks"]] == [[3, 6], [3, 6], [2, 6], [2, 6]]
     assert plan["padded"]["A"] == [3, 6]
     assert [r["scalars"] for r in plan["ranks"]] == [
@@ -548,11 +543,6 @@ def test_a_shard_that_disagrees_with_the_distribution_is_refused() -> None:
     plan = plan_for(2, col_split)
     with pytest.raises(ValueError, match="distribution tile"):
         mpi_shard_driver.rank_tensors(plan, 0, 2, StubTorchModule(torch), torch, "cpu")
-
-
-def test_the_rank_driver_rejects_a_malformed_command_line(capsys: pytest.CaptureFixture[str]) -> None:
-    assert mpi_shard_driver.main(["only-one-arg"]) == 2
-    assert "usage" in capsys.readouterr().err
 
 
 def test_the_rank_driver_module_imports_without_torch_or_mpi() -> None:

@@ -10,7 +10,6 @@ import os
 import pathlib
 import subprocess
 import sys
-import tempfile
 import threading
 
 import pytest
@@ -188,11 +187,6 @@ def test_a_failure_is_an_entry_with_no_files(tmp_path: pathlib.Path) -> None:
         cpf_cache.form(cache, PINNED_KEY)
 
 
-def test_a_key_nothing_was_rendered_for_is_a_miss_naming_it(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(cpf_cache.CacheMiss, match=PINNED_KEY):
-        cpf_cache.form(tmp_path / "cache", PINNED_KEY)
-
-
 def test_lookup_reads_the_form_under_the_key_its_inputs_give(tmp_path: pathlib.Path) -> None:
     cache = tmp_path / "cache"
     key = publish_form(cache, "gemm", "c", source="// gemm form\n")
@@ -336,38 +330,3 @@ def test_a_failed_render_is_a_miss_naming_its_error(tmp_path: pathlib.Path) -> N
     (line,) = cpf_prerender.missing(cache, ["gemm"], "c", "", Target.CPU, HintDetail.PROOFS)
     assert key in line and "while loop" in line
     assert form_key("gemm", "c") == key
-
-
-if __name__ == "__main__":
-    test_the_key_is_pinned_and_blind_to_dict_order()
-    test_the_key_is_the_same_in_every_interpreter()
-    for case in KEY_CHANGES:
-        test_every_input_moves_the_key(*case)
-    test_an_ok_entry_lists_its_files()
-    for test in (
-        test_a_published_key_is_an_entry_and_publishing_it_again_writes_nothing,
-        test_concurrent_publishes_to_one_key_never_let_a_reader_see_a_mismatched_entry,
-        test_an_entry_that_fails_verification_is_replaced_by_the_next_publish,
-        test_the_manifest_carries_the_key_and_no_timestamp,
-        test_a_canonical_entry_serves_its_sdfg_until_the_file_is_modified,
-        test_a_failure_is_an_entry_with_no_files,
-        test_a_key_nothing_was_rendered_for_is_a_miss_naming_it,
-        test_lookup_reads_the_form_under_the_key_its_inputs_give,
-        test_a_modified_form_is_a_miss,
-        test_a_registry_key_resolves_like_its_short_name,
-        test_an_unknown_kernel_is_a_miss_naming_it,
-        test_a_gpu_form_stages_as_the_two_units_a_gpu_submission_is,
-        test_check_prints_one_line_per_missing_kernel_and_fails,
-        test_stage_copies_the_form_under_the_task_basename,
-        test_stage_refuses_a_kernel_the_cache_cannot_serve,
-        test_check_verified_refuses_a_form_the_judge_never_graded,
-        test_check_verified_refuses_an_unverified_verdict_and_passes_an_ok_one,
-        test_a_failed_render_is_a_miss_naming_its_error,
-    ):
-        test(pathlib.Path(tempfile.mkdtemp()))
-    for backend, device_suffix in (("hip", ".hip"), ("cuda", ".cu")):
-        with pytest.MonkeyPatch.context() as patch:
-            test_a_gpu_setup_is_served_the_device_form_of_its_hosts_backend_for_a_host_dialect(
-                pathlib.Path(tempfile.mkdtemp()), patch, backend, device_suffix
-            )
-    test_check_and_stage_strip_the_kernel_names_the_render_and_verify_commands_strip(pathlib.Path(tempfile.mkdtemp()))

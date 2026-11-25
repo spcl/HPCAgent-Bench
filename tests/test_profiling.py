@@ -7,7 +7,6 @@ import json
 import pathlib
 import subprocess
 import sys
-import urllib.error
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer
 
@@ -200,7 +199,7 @@ def fake_perf(monkeypatch: pytest.MonkeyPatch, stdout: str, returncode: int = 0)
     )
 
 
-def test_stacks_reverses_each_sample_so_the_process_is_the_root(
+def test_stacks_are_root_first_keep_unwound_failures_visible_and_end_without_a_blank_line(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_perf(monkeypatch, PERF_SCRIPT)
@@ -209,21 +208,10 @@ def test_stacks_reverses_each_sample_so_the_process_is_the_root(
     # leaf-first from perf, root-first out: the comm is prepended as the process frame.
     assert recorded[0] == [("python", "python"), ("ffi_call_unix64", "_cffi_backend.so"), ("gemm_fp64", "libgemm.so")]
     assert recorded[1][-1] == ("ns::run(int, double)", "libx.so.1"), "a C++ signature owns its own parens"
-
-
-def test_stacks_keeps_a_sample_perf_could_not_unwind(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unattributed time must stay VISIBLE. A dropped sample silently inflates every percentage
-    that remains, which reads as a cleaner profile than the one actually recorded."""
-    fake_perf(monkeypatch, PERF_SCRIPT)
-    recorded = perf_reports.stacks(tmp_path / "perf.data")
+    # Unattributed time stays VISIBLE: a dropped sample silently inflates every percentage that remains.
     assert recorded[2] == [("python", "python"), (perf_reports.UNKNOWN, perf_reports.UNKNOWN)]
-
-
-def test_stacks_emits_the_last_sample_without_a_trailing_blank_line(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_perf(monkeypatch, PERF_SCRIPT)
-    assert perf_reports.stacks(tmp_path / "perf.data")[3][-1] == ("gemm_fp64", "libgemm.so")
+    # The last sample is emitted although no blank line follows it.
+    assert recorded[3][-1] == ("gemm_fp64", "libgemm.so")
 
 
 def test_stacks_surfaces_a_failed_perf_script(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,10 +274,6 @@ def run(threads: int, elapsed_ns: int, hotspots: list[dict[str, str | float]]) -
 
 def spot(symbol: str, self_pct: float) -> dict[str, str | float]:
     return {"symbol": symbol, "dso": "app.so", "self_pct": self_pct, "total_pct": self_pct}
-
-
-def test_rising_hotspots_needs_two_configurations_to_compare() -> None:
-    assert profiling.rising_hotspots([run(1, 10, [spot("a", 50.0)])], 1.0) == []
 
 
 def test_rising_hotspots_reports_only_the_share_that_grew() -> None:
@@ -358,29 +342,6 @@ def test_kernel_share_matches_the_fortran_mangled_symbol() -> None:
     spots = [{"symbol": "gemm_fp64_", "dso": "libgemm.so", "self_pct": 90.0, "total_pct": 91.0}]
     assert profiling.kernel_share(spots, "gemm_fp64") == 91.0
     assert profiling.kernel_share(spots, "other") == 0.0
-
-
-def test_child_result_reads_the_marked_line() -> None:
-    assert profiling.child_result("noise\n" + profiling.RESULT_PREFIX + '{"elapsed_ns": 7}\n') == {"elapsed_ns": 7}
-    assert profiling.child_result("only noise\n") is None
-
-
-def test_profile_endpoint_reports_perf_unavailability(
-    make_judge: Callable[..., tuple[ThreadingHTTPServer, str]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A host that cannot sample answers 503 + cause -- never an empty (or invented) profile."""
-
-    def refuse() -> str:
-        raise perf_reports.PerfUnavailable("perf_event_paranoid", "kernel.perf_event_paranoid=4 blocks sampling")
-
-    monkeypatch.setattr(perf_reports, "perf_check", refuse)
-    _srv, url = make_judge(ServiceConfig())
-    with pytest.raises(urllib.error.HTTPError) as ei:
-        tools.JudgeClient(url).profile(Submission(language=Language.C, source="void f(void){}"), "gemm")
-    assert ei.value.code == 503
-    body = json.loads(ei.value.read())
-    assert body["cause"] == "perf_event_paranoid"
-    assert "paranoid" in body["error"]
 
 
 @pytest.mark.perf

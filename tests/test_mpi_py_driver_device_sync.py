@@ -31,21 +31,6 @@ def test_host_only_tiles_never_import_cupy(monkeypatch: pytest.MonkeyPatch) -> N
     assert "cupy" not in sys.modules
 
 
-def test_device_resident_tiles_synchronize_the_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A device-resident pointer must call cupy's deviceSynchronize -- the C driver's
-    gpuDeviceSynchronize twin -- so the async kernel launch has actually finished before the
-    timed window's Barrier/Wtime read it as done."""
-    calls: list[str] = []
-    fake_cupy = types.SimpleNamespace(
-        cuda=types.SimpleNamespace(runtime=types.SimpleNamespace(deviceSynchronize=lambda: calls.append("sync")))
-    )
-    monkeypatch.setitem(sys.modules, "cupy", fake_cupy)
-
-    mpi_py_driver.device_sync(frozenset({0}))
-
-    assert calls == ["sync"]
-
-
 def test_run_brackets_each_kernel_call_with_a_device_sync(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

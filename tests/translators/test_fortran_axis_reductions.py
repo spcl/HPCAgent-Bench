@@ -26,6 +26,7 @@ import re
 import tempfile
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
@@ -64,33 +65,34 @@ def fortran(body: str, shapes: dict[str, str] | None = None, syms: dict[str, int
 AXIS_TO_DIM = {0: 3, 1: 2, 2: 1}
 
 
-def test_each_numpy_axis_maps_to_its_reversed_fortran_dim() -> None:
-    for axis, dim in AXIS_TO_DIM.items():
-        text = fortran(f"    c = np.sum(a, axis={axis})\n    out[:] = c[:, 0] * 2.0\n")
-        assert f"SUM(a, dim={dim})" in text, (axis, text)
+@pytest.mark.parametrize(
+    ("axis", "dim"),
+    [
+        (0, 3),
+        (1, 2),
+        (2, 1),
+        # ``axis=-1`` is numpy axis 2 on a rank-3 operand, so ``dim=1`` -- the fastest-varying one.
+        (-1, 1),
+    ],
+)
+def test_each_numpy_axis_maps_to_its_reversed_fortran_dim(axis: int, dim: int) -> None:
+    text = fortran(f"    c = np.sum(a, axis={axis})\n    out[:] = c[:, 0] * 2.0\n")
+    assert f"SUM(a, dim={dim})" in text, text
 
 
-def test_a_negative_axis_resolves_against_the_rank_first() -> None:
-    """``axis=-1`` is numpy axis 2 on a rank-3 operand, so ``dim=1`` -- the fastest-varying one."""
-    text = fortran("    c = np.sum(a, axis=-1)\n    out[:] = c[:, 0] * 2.0\n")
-    assert "SUM(a, dim=1)" in text, text
-
-
-def test_every_per_axis_reduction_emits_its_intrinsic() -> None:
-    want = {
-        "np.sum(a, axis=1)": "SUM(a, dim=2)",
-        "np.prod(a, axis=1)": "PRODUCT(a, dim=2)",
-        "np.mean(a, axis=1)": "SUM(a, dim=2)",
-    }
-    for call, marker in want.items():
-        text = fortran(f"    c = {call}\n    out[:] = c[:, 0] * 2.0\n")
+@pytest.mark.parametrize(
+    ("call", "markers"),
+    [
+        ("np.sum(a, axis=1)", ("SUM(a, dim=2)",)),
+        ("np.prod(a, axis=1)", ("PRODUCT(a, dim=2)",)),
+        # ``SIZE(a)`` is the element count of ALL of it; the per-axis mean divides by ONE extent.
+        ("np.mean(a, axis=1)", ("SUM(a, dim=2)", "SIZE(a, 2)")),
+    ],
+)
+def test_every_per_axis_reduction_emits_its_intrinsic(call: str, markers: tuple[str, ...]) -> None:
+    text = fortran(f"    c = {call}\n    out[:] = c[:, 0] * 2.0\n")
+    for marker in markers:
         assert marker in text, (call, text)
-
-
-def test_the_mean_divides_by_the_reduced_axis_not_the_whole_array() -> None:
-    """``SIZE(a)`` is the element count of ALL of it; the per-axis mean divides by ONE extent."""
-    text = fortran("    c = np.mean(a, axis=1)\n    out[:] = c[:, 0] * 2.0\n")
-    assert "SIZE(a, 2)" in text, text
 
 
 #: A ``do`` opening a loop, so a declined case can be shown to still lower to one.

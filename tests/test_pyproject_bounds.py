@@ -83,23 +83,17 @@ def test_every_upper_bound_or_pin_says_why(entry: Entry) -> None:
     assert commented(entry.text, source()), f"{entry.where}: {entry.text} caps a version without a comment"
 
 
-def workspace_members() -> set[str]:
-    """The packages ``[tool.uv.sources]`` takes from this workspace: released together with this one."""
-    sources = tomllib.loads(source())["tool"]["uv"]["sources"]
-    return {
-        canonicalize_name(name) for name, spec in sources.items() if isinstance(spec, dict) and spec.get("workspace")
-    }
+#: The packages released together pin each other exactly (release_patch.sh moves the pins).
+RELEASED_TOGETHER = frozenset({"hpcagent-agent", "hpcagent-bench"})
 
 
 def test_exact_pins_live_only_in_the_dependency_groups() -> None:
-    """A workspace member released with this package is the one exception: it is pinned to exactly its release."""
-    members = workspace_members()
     pinned = [
         f"{entry.where}: {entry.text}"
         for entry in entries()
         if any(spec.operator in ("==", "===") for spec in entry.req.specifier)
         and not entry.where.startswith("dependency-groups.")
-        and canonicalize_name(entry.req.name) not in members
+        and entry.req.name not in RELEASED_TOGETHER
     ]
     assert pinned == [], pinned
 

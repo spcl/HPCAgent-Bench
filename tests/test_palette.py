@@ -7,8 +7,6 @@ the same colour in every figure, dropping a series does not repaint the survivor
 reads as its lead packet's family, and identity is never carried by colour alone.
 """
 
-import logging
-
 import pytest
 
 from hpcagent_bench import packets, vocabulary
@@ -213,26 +211,6 @@ def test_the_packets_the_paper_draws_have_pairwise_distinct_hues() -> None:
     assert not clashes, clashes
 
 
-def test_the_paper_packets_never_take_the_control_colour() -> None:
-    """The control is the reference every treatment is read against, so no treatment may wear it."""
-    treatments = [name for name in PAPER_FIGURE_PACKETS if name]
-    assert palette.control_color() not in {palette.color(name) for name in treatments}
-    assert palette.color("") == palette.control_color()
-
-
-def test_every_intervention_git_scicomp_and_llrblind_name_has_a_registered_hue(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A scope is an intervention: `kernel` (the bare kernel), `repo` (the whole repository) and
-    `no-score-tool` (the blind condition) are compared exactly like a skill packet, so each has to come
-    out of the same table with its own global hue instead of falling through to a hash colour."""
-    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        chosen = {name: palette.color(name) for name in ("kernel", "repo", "no-score-tool")}
-    assert "not registered" not in caplog.text
-    assert palette.control_color() not in chosen.values()
-    assert len(set(chosen.values())) == len(chosen), chosen
-
-
 def test_every_registered_treatment_wears_its_own_shape_and_none_wears_the_control_circle() -> None:
     """ "repository" and "perf playbook" drew the same plus. The shape of a packet or
     a harness comes from one registry pool, one per treatment, so two treatments can never be told
@@ -259,13 +237,6 @@ def test_an_unregistered_packet_marker_is_stable_and_warns(caplog: pytest.LogCap
         first = palette.packet_marker("mystery")
     assert first == palette.packet_marker("mystery")
     assert "is not registered" in caplog.text
-
-
-def test_model_colour_is_reused_by_the_packet_efficacy_panels() -> None:
-    """The packet efficacy panels read colour off ``model_color`` too, so a model's hue is the same
-    one everywhere."""
-    assert palette.model_color("qwen38") == palette.ordered_color("models", "qwen38")
-    assert len({palette.model_color(m) for m in ("qwen38", "oss120b", "kimi27sglang")}) == 3
 
 
 def test_a_control_is_the_hollow_circle_in_a_lighter_shade_of_its_models_colour_in_every_figure() -> None:

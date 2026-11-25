@@ -175,13 +175,6 @@ def test_build_commands_kernel_lib_links_the_kernel_objects_alone_as_a_pic_share
     assert "d.hip.o" in " ".join(exe_link)
 
 
-def test_build_commands_without_kernel_lib_are_unchanged() -> None:
-    cmds = build_mpi_executable_commands([(Language.C, Path("k.c"))], Path("d.c"), Path("bench"))
-    assert len(cmds) == 3
-    assert not any("-shared" in c for c in cmds)
-    assert all(c[-1] != "-fPIC" for c in cmds[:2])  # no PIC appended after the matrix flags
-
-
 #: What the judge image's ``mpicc.mpich -show`` prints (MPICH 4 on Ubuntu): the underlying compiler
 #: line with the wrapper's own include, rpath/hardening and library tokens.
 MPICH_SHOW = (
@@ -212,12 +205,6 @@ def test_mpi_wrapper_flags_missing_wrapper_is_empty() -> None:
 
 
 # with_oversubscribe: family-aware, idempotent launcher rewrite (pure, no launch)
-def test_oversubscribe_no_op_for_mpich_hydra() -> None:
-    # Hydra oversubscribes by default and rejects --oversubscribe (OpenMPI-only), so it stays untouched.
-    assert mpi_call.with_oversubscribe(["mpiexec.mpich", "-n"]) == ["mpiexec.mpich", "-n"]
-    assert mpi_call.with_oversubscribe(["mpiexec", "-n"]) == ["mpiexec", "-n"]
-
-
 def test_the_default_launcher_starts_every_rank_on_this_node() -> None:
     """Inside a Slurm step plain Hydra bootstraps through ``srun`` and fails; ``-launcher fork`` keeps
     the ranks on this node, and ``-hosts localhost`` keeps Hydra off the job's node list, which crashes it
@@ -227,21 +214,26 @@ def test_the_default_launcher_starts_every_rank_on_this_node() -> None:
     assert mpi_call.with_oversubscribe(list(launcher)) == list(launcher)
 
 
-def test_oversubscribe_adds_flag_for_openmpi_mpirun() -> None:
-    # OpenMPI's mpirun REFUSES to oversubscribe without the flag; insert it before the -n tail.
-    assert mpi_call.with_oversubscribe(["mpirun", "-n"]) == ["mpirun", "--oversubscribe", "-n"]
-    assert mpi_call.with_oversubscribe(["mpirun.openmpi", "-n"]) == ["mpirun.openmpi", "--oversubscribe", "-n"]
-
-
-def test_oversubscribe_is_idempotent() -> None:
-    already = ["mpirun", "--oversubscribe", "-n"]
-    assert mpi_call.with_oversubscribe(already) == already
-
-
-def test_oversubscribe_leaves_srun_to_the_scheduler() -> None:
-    # srun oversubscription is a site allocation concern (--overcommit), not this runner's job.
-    assert mpi_call.with_oversubscribe(["srun", "--mpi=pmi2", "-n"]) == ["srun", "--mpi=pmi2", "-n"]
-    assert mpi_call.with_oversubscribe([]) == []
+@pytest.mark.parametrize(
+    ("launcher", "rewritten"),
+    [
+        # Hydra oversubscribes by default and rejects --oversubscribe (OpenMPI-only), so it stays untouched.
+        (["mpiexec.mpich", "-n"], ["mpiexec.mpich", "-n"]),
+        (["mpiexec", "-n"], ["mpiexec", "-n"]),
+        # OpenMPI's mpirun REFUSES to oversubscribe without the flag; it goes before the -n tail.
+        (["mpirun", "-n"], ["mpirun", "--oversubscribe", "-n"]),
+        (["mpirun.openmpi", "-n"], ["mpirun.openmpi", "--oversubscribe", "-n"]),
+        (["mpirun", "--oversubscribe", "-n"], ["mpirun", "--oversubscribe", "-n"]),  # idempotent
+        # srun oversubscription is a site allocation concern (--overcommit), not this runner's job.
+        (["srun", "--mpi=pmi2", "-n"], ["srun", "--mpi=pmi2", "-n"]),
+        ([], []),
+    ],
+    ids=["mpich-hydra", "mpiexec", "openmpi-mpirun", "openmpi-mpirun-openmpi", "already-flagged", "srun", "empty"],
+)
+def test_oversubscribe_is_added_only_for_the_openmpi_family_and_only_once(
+    launcher: list[str], rewritten: list[str]
+) -> None:
+    assert mpi_call.with_oversubscribe(launcher) == rewritten
 
 
 # Sandbox.build_mpi: delivery handling

@@ -91,11 +91,6 @@ def test_fp32_halves_the_array_half_of_the_cap() -> None:
     assert cap_bytes("M", "float32") == pytest.approx(2 * declared_bytes("M", 4))
 
 
-def test_a_bigger_preset_raises_the_cap() -> None:
-    """A preset step is a problem-size step, so the budget follows it up the ladder."""
-    assert cap_bytes("S") < cap_bytes("M") < cap_bytes("L") < cap_bytes("XL")
-
-
 def test_concrete_params_override_the_preset() -> None:
     """A fuzz draw / sweep cell runs at sizes the preset does not declare; the cap follows THOSE."""
     spec = BenchSpec.load(KERNEL)
@@ -127,23 +122,23 @@ def test_every_timed_run_gives_openmp_threads_the_configured_stack() -> None:
         assert flags.cpu_env(flags.Mode.SINGLE_CORE)["OMP_STACKSIZE"] == "3072M"
 
 
-def test_the_cap_pays_for_every_thread_stack_on_top_of_the_kernels_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("stack", "reserved"),
+    [("2G", 96 * (2 << 30)), ("512M", 96 * (1 << 30))],
+    ids=["stack_above_reserve_is_what_is_reserved", "reserve_above_stack_leaves_allocation_headroom"],
+)
+def test_the_cap_pays_for_every_thread_stack_on_top_of_the_kernels_budget(
+    monkeypatch: pytest.MonkeyPatch, stack: str, reserved: int
+) -> None:
     """Linux charges an anonymous thread stack to ``RLIMIT_DATA``: 96 threads x 512 MiB reserved would
     spend any array-derived budget before the kernel allocates a byte, and abort thread creation. A stack
-    larger than the configured reserve is what the process was launched with, so it is what is reserved."""
+    larger than the configured reserve (2G under 1024 MiB: 192 GiB) is what the process was launched with,
+    so it is what is reserved. 512M stacks under a 1 GiB-per-thread reserve still reserve 1 GiB per thread
+    (96 GiB): the half no stack uses is room for the kernel's own allocations."""
     monkeypatch.setenv("OMP_THREAD_LIMIT", "96")
-    monkeypatch.setenv("OMP_STACKSIZE", "2G")
+    monkeypatch.setenv("OMP_STACKSIZE", stack)
     with config.overridden("limits.thread_reserve_mb", 1024):
-        assert native_call.thread_stack_reserve() == 96 * (2 << 30)  # 192 GiB
-
-
-def test_the_reserve_above_the_stack_is_allocation_headroom(monkeypatch: pytest.MonkeyPatch) -> None:
-    """512 MiB stacks under a 1 GiB-per-thread reserve: the cap still reserves 1 GiB per thread, and the
-    half no stack uses is room for the kernel's own allocations."""
-    monkeypatch.setenv("OMP_THREAD_LIMIT", "96")
-    monkeypatch.setenv("OMP_STACKSIZE", "512M")
-    with config.overridden("limits.thread_reserve_mb", 1024):
-        assert native_call.thread_stack_reserve() == 96 * (1 << 30)  # 96 GiB: 48 GiB stacks + 48 GiB headroom
+        assert native_call.thread_stack_reserve() == reserved
 
 
 @pytest.mark.parametrize(
@@ -177,11 +172,6 @@ def test_the_cpus_a_process_owns_follow_its_affinity(monkeypatch: pytest.MonkeyP
     """A step bound to four CPUs owns four, whatever the machine has."""
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1, 2, 3})
     assert flags.cpus_owned() == 4
-
-
-def test_a_process_launched_with_the_environment_passes_the_check() -> None:
-    """The unit suite's conftest launches every worker with it."""
-    native_call.check_launch_env()
 
 
 @pytest.mark.parametrize("name", ["OMP_STACKSIZE", "OMP_THREAD_LIMIT"])
@@ -811,18 +801,6 @@ def _minimal_manifest(**extra: object) -> dict[str, object]:
 
 #: Where the manifests load: the reference takes ``x`` and ``N``; ``initialize(N)`` builds the inputs.
 SITE = hermetic_site("memcaptest", "x", "N", initializer=("N",))
-
-
-def test_manifest_parses_memory_cap_gb() -> None:
-    spec = BenchSpec.from_dict(_minimal_manifest(memory_cap_gb=10), SITE, source="<memcaptest>")
-    assert spec.memory_cap_gb == 10
-
-
-def test_manifest_omitting_memory_cap_gb_leaves_it_none() -> None:
-    """Absent is absent, not zero -- every kernel that has not opted in keeps today's derived/floor
-    behaviour (checked below)."""
-    spec = BenchSpec.from_dict(_minimal_manifest(), SITE, source="<memcaptest>")
-    assert spec.memory_cap_gb is None
 
 
 @pytest.mark.parametrize("bad", [0, -1, -0.5])

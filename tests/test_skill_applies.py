@@ -5,7 +5,6 @@ every setup shape."""
 
 import functools
 import itertools
-import pathlib
 import re
 
 import pytest
@@ -43,21 +42,16 @@ def applies_block(page: str) -> dict[str, object]:
 
 
 @pytest.mark.parametrize("page", PAGES)
-def test_an_applies_block_names_only_keys_the_resolver_reads(page: str) -> None:
+def test_an_applies_block_names_only_what_the_resolver_reads(page: str) -> None:
     """A key outside :data:`KNOWN_KEYS` is ignored in silence, so the page keeps riding on setups the
-    author believed they had excluded."""
-    unknown = sorted(set(applies_block(page)) - KNOWN_KEYS)
-    assert not unknown, f"{page}: applies names {unknown}, which packets.applies_to never reads"
-
-
-@pytest.mark.parametrize("page", PAGES)
-def test_an_applies_block_names_only_registered_languages_and_real_images(page: str) -> None:
-    """``languages`` is matched against the run's language and ``images`` against the image name the
-    launcher passes, both by equality. A value neither side ever produces excludes the page from
-    every setup without saying so."""
+    author believed they had excluded. ``languages`` is matched against the run's language and ``images``
+    against the image name the launcher passes, both by equality: a value neither side ever produces
+    excludes the page from every setup without saying so."""
     rule = applies_block(page)
+    unknown = sorted(set(rule) - KNOWN_KEYS)
     bad_languages = sorted(set(map(str, rule.get("languages") or ())) - set(LANGUAGES))
     bad_images = sorted(set(map(str, rule.get("images") or ())) - set(IMAGES))
+    assert not unknown, f"{page}: applies names {unknown}, which packets.applies_to never reads"
     assert not bad_languages, f"{page}: applies.languages names {bad_languages}; registered are {list(LANGUAGES)}"
     assert not bad_images, f"{page}: applies.images names {bad_images}; the images are {list(IMAGES)}"
     for flag in ("multinode", "explicit"):
@@ -204,15 +198,6 @@ def test_a_staged_page_is_a_directory_with_a_page_in_it() -> None:
     named = {page for d in tags.registry().packet_defs.values() for page in d.skills} - {"lang", "*"}
     missing = sorted(page for page in named if not (SKILLS / page / "SKILL.md").is_file())
     assert not missing, f"registered packets name pages with no SKILL.md: {missing}"
-
-
-def test_the_page_files_a_packet_stages_are_all_under_the_skills_tree() -> None:
-    """Staging copies by page name into one flat folder, so two pages may not share a basename and
-    a name may not climb out of the tree."""
-    for page in PAGES:
-        resolved = (SKILLS / page).resolve()
-        assert resolved.parent == SKILLS.resolve(), f"{page} resolves outside {SKILLS}"
-        assert pathlib.Path(page).name == page, f"{page!r} is not a plain directory name"
 
 
 def test_the_device_triton_setup_gets_the_triton_language_pages() -> None:

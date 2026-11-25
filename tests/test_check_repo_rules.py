@@ -3,7 +3,10 @@
 """The patterns of ``helpers/scripts/checks/check_repo_rules.py`` on synthetic text: each must catch the
 offence it names and pass its lookalikes, or the hook is green for nothing."""
 
+import pathlib
 import types
+
+import pytest
 
 from hpcagent_bench import paths
 from tests.fresh_module import module_at
@@ -135,14 +138,6 @@ def test_the_user_pattern_matches_a_name_only_as_a_path_component_or_address() -
         assert not pattern.search(text), text
 
 
-def test_the_running_user_pattern_is_off_under_a_generic_account() -> None:
-    """Under ``root``/``runner`` a ``/root/`` or ``/home/runner`` path is generic: no running-user pattern."""
-    module = rules()
-    assert {"root", "runner"} <= module.GENERIC_ACCOUNTS
-    labels = list(module.USER_PATTERNS)
-    assert labels == ([] if module.RUNNING_USER in module.GENERIC_ACCOUNTS else [labels[0]])
-
-
 def test_the_private_address_and_prose_node_patterns() -> None:
     """A private IPv4 host address is flagged outside tests; a CIDR block, a dashed or assigned version and a
     documentation address (RFC 5737) are not; a lockfile is not scanned for them. Markdown naming a node is
@@ -194,12 +189,19 @@ def test_the_root_climb_and_shell_patterns() -> None:
     assert not module.EDF_HOME.search('"${EDF_PATH%%:*}/x.toml"')
 
 
-if __name__ == "__main__":
-    test_the_import_path_pattern_tells_an_edit_from_a_read()
-    test_the_site_scan_catches_every_kind_of_hit()
-    test_the_storage_pattern_matches_only_real_mounts()
-    test_the_user_pattern_matches_a_name_only_as_a_path_component_or_address()
-    test_the_running_user_pattern_is_off_under_a_generic_account()
-    test_the_private_address_and_prose_node_patterns()
-    test_the_package_literal_scan_names_layout_joins_and_absolute_prefixes()
-    test_the_root_climb_and_shell_patterns()
+def test_a_test_module_with_a_main_runner_is_refused_and_the_tree_has_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    sut = rules()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_x.py").write_text(
+        'def test_a() -> None:\n    pass\n\n\nif __name__ == "__main__":\n    test_a()\n'
+    )
+    (tmp_path / "tests" / "helper.py").write_text('if __name__ == "__main__":\n    pass\n')
+    monkeypatch.setattr(sut, "REPO", tmp_path)
+    sut.text_of.cache_clear()
+    refused = sut.pytest_only(["tests/test_x.py", "tests/helper.py"])
+    sut.text_of.cache_clear()
+    monkeypatch.undo()
+    assert refused == ['tests/test_x.py: `if __name__ == "__main__"` runner in a test module (run it with pytest)']
+    assert sut.pytest_only(list(sut.tracked())) == []

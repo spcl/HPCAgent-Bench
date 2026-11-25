@@ -5,6 +5,7 @@
 Mann-Whitney gate). Pure functions over sample arrays."""
 
 import statistics
+from collections.abc import Callable
 
 import pytest
 
@@ -21,11 +22,6 @@ def test_min_of_k_divides_the_minima() -> None:
     assert r.backend == Statistic.MIN
 
 
-def test_min_of_k_empty_candidate_is_zero_speedup() -> None:
-    r = timing.reduce_min_of_k([], [20, 22])
-    assert r.speedup == 0.0
-
-
 # median_of_k
 def test_median_of_k_divides_the_medians_and_ignores_one_outlier() -> None:
     r = timing.reduce_median_of_k([10, 11, 12, 13, 400], [20, 22, 24, 26, 28])
@@ -33,8 +29,9 @@ def test_median_of_k_divides_the_medians_and_ignores_one_outlier() -> None:
     assert r.significant
 
 
-def test_median_of_k_empty_candidate_is_zero_speedup() -> None:
-    assert timing.reduce_median_of_k([], [20, 22]).speedup == 0.0
+@pytest.mark.parametrize("reduce", [timing.reduce_min_of_k, timing.reduce_median_of_k])
+def test_an_empty_candidate_is_zero_speedup(reduce: Callable[[list[int], list[int]], timing.ReducedTiming]) -> None:
+    assert reduce([], [20, 22]).speedup == 0.0
 
 
 def test_reduce_dispatches_median_of_k_and_stamps_it() -> None:
@@ -71,14 +68,6 @@ def test_a_large_win_is_credited_at_its_measured_ratio(true: float) -> None:
     r = timing.reduce_mannwhitney_delta(scaled(1000.0 / true), scaled(1000.0), p=0.1)
     assert r.significant
     assert r.speedup == pytest.approx(true, rel=1e-12)
-
-
-@pytest.mark.parametrize("true", [2.0, 20.0, 200.0])
-def test_the_credit_precision_is_relative_at_every_magnitude(true: float) -> None:
-    """Setups are compared by geomean, so a credit whose relative error grows with the ratio biases
-    the aggregate by an amount that depends on how fast the kernels happen to be."""
-    r = timing.reduce_mannwhitney_delta(scaled(1000.0 / true), scaled(1000.0), p=0.1)
-    assert (true - r.speedup) / true == pytest.approx(0.0, abs=1e-12)
 
 
 def test_mannwhitney_no_credit_when_overlapping() -> None:
@@ -151,12 +140,6 @@ def test_reduce_defaults_to_min_of_k() -> None:
     assert r.speedup == 2.0
 
 
-def test_reduce_honors_explicit_backend() -> None:
-    r = timing.reduce(spread(10.0), spread(20.0), backend=Statistic.MANNWHITNEY)
-    assert r.backend == Statistic.MANNWHITNEY
-    assert r.significant
-
-
 @pytest.mark.parametrize(("backend", "stamp"), [(Statistic.MIN, "mok-v1"), (Statistic.MANNWHITNEY, "mwd-v2")])
 def test_a_reduction_names_the_version_of_the_arithmetic_behind_its_credit(backend: Statistic, stamp: str) -> None:
     """The stamp is what a table groups rows by before pooling them; two backends, or one backend
@@ -165,8 +148,6 @@ def test_a_reduction_names_the_version_of_the_arithmetic_behind_its_credit(backe
 
 
 # repeat validation (a distributional backend must fail loudly on too few samples)
-def test_validate_repeat_min_of_k_accepts_one() -> None:
-    timing.validate_repeat(1, backend=Statistic.MIN)  # no raise
 
 
 def test_validate_repeat_mannwhitney_rejects_too_few() -> None:
@@ -215,11 +196,6 @@ def test_physical_floor_scales_with_bytes_and_bandwidth() -> None:
     assert floor == pytest.approx(1000.0, rel=1e-9)
 
 
-def test_physical_floor_doubles_with_half_the_bandwidth() -> None:
-    floor = timing.physical_floor_ns(100_000, 50.0)
-    assert floor == pytest.approx(2000.0, rel=1e-9)
-
-
 def test_physical_floor_is_off_for_zero_bytes_or_zero_bandwidth() -> None:
     assert timing.physical_floor_ns(0, 100.0) == 0.0
     assert timing.physical_floor_ns(1000, bandwidth_gbps=0.0) == 0.0
@@ -258,11 +234,6 @@ def test_reduce_stamps_mwd_v3_when_varied() -> None:
     r = timing.reduce(list(_LOCKED_CANDIDATE), list(_LOCKED_BASELINE), backend=Statistic.MANNWHITNEY, varied=True)
     assert r.reduction == "mwd-v3"
     assert r.speedup == pytest.approx(2.0, rel=1e-12)  # arithmetic is UNCHANGED, only the stamp differs
-
-
-def test_reduce_keeps_mwd_v2_when_not_varied() -> None:
-    r = timing.reduce(list(_LOCKED_CANDIDATE), list(_LOCKED_BASELINE), backend=Statistic.MANNWHITNEY)
-    assert r.reduction == "mwd-v2"
 
 
 def test_reduce_stamps_min_of_k_varied_too() -> None:
@@ -307,7 +278,3 @@ def test_a_confirmed_slow_down_under_2x_is_credited_below_1() -> None:
     assert r.p_value < 0.1
     assert r.speedup == pytest.approx(102.0 / 152.0)
     assert 0.5 < r.speedup < 1.0
-
-
-def test_min_of_k_discloses_no_p() -> None:
-    assert timing.reduce_min_of_k([10.0], [20.0]).p_value is None

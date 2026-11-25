@@ -9,7 +9,6 @@ import contextlib
 import io
 import json
 import pathlib
-import tempfile
 
 import pytest
 
@@ -115,16 +114,3 @@ def test_an_empty_problems_file_is_refused(tmp_path: pathlib.Path) -> None:
     with pytest.raises(SystemExit, match="holds no problem"):
         pipelines.split(env, problems)
     assert env.read_text() == ENV
-
-
-if __name__ == "__main__":
-
-    def scratch() -> pathlib.Path:
-        return pathlib.Path(tempfile.mkdtemp())
-
-    test_deal_balances_sizes_and_levels_by_turns()
-    test_forty_problems_become_two_jobs_of_one_pipeline_each(scratch())
-    test_a_small_rerun_keeps_its_env_and_runs_one_pipeline(scratch())
-    test_a_model_with_no_pipeline_size_is_not_split(scratch())
-    test_the_cli_prints_the_env_files_in_order(scratch())
-    test_an_empty_problems_file_is_refused(scratch())

@@ -81,14 +81,12 @@ def check(cpp: bool) -> None:
         assert g == pytest.approx(e), f"got {g}, expected {e}"
 
 
-@have_gcc
-def test_c_division_helpers_match_python() -> None:
-    check(cpp=False)
-
-
-@have_gpp
-def test_cpp_division_helpers_match_python() -> None:
-    check(cpp=True)
+@pytest.mark.parametrize(
+    "cpp",
+    [pytest.param(False, marks=have_gcc, id="c"), pytest.param(True, marks=have_gpp, id="cpp")],
+)
+def test_division_helpers_match_python(cpp: bool) -> None:
+    check(cpp=cpp)
 
 
 # the _Generic association list must cover every dtype the corpus can reach

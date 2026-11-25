@@ -33,9 +33,3 @@ def test_an_environment_pin_to_another_generator_is_refused(monkeypatch: pytest.
         cpf_bridge.gpu_codegen_pinned(Target.GPU),
     ):
         pass
-
-
-if __name__ == "__main__":
-    test_a_gpu_render_uses_the_experimental_generator_even_after_a_pipeline_selected_legacy()
-    test_a_cpu_render_leaves_the_gpu_generator_alone()
-    test_an_environment_pin_to_another_generator_is_refused(pytest.MonkeyPatch())

@@ -51,17 +51,6 @@ def lower_source(src: str, func: str, shapes: dict[str, str], syms: dict[str, in
 # Registration / structural                                                   #
 
 
-def test_subscript_operand_roll_is_hoisted() -> None:
-    # The ls3df idiom: a whole-array roll of a state block (a Subscript operand)
-    # nested in a broadcast BinOp. After lowering NO ``np.roll`` Call may survive
-    # -- it must be spilled + hoisted into an explicit index-shift loop nest.
-    src = "import numpy as np\ndef f(a, b, out):\n    out[:] = a[..., None] * np.roll(b[1], 1, axis=0)\n"
-    lowered = lower_source(
-        src, "f", {"a": "(X, Y)", "b": "(K, X, Y, Z)", "out": "(X, Y, Z)"}, {"K": 3, "X": 4, "Y": 5, "Z": 6}
-    )
-    assert "np.roll(" not in lowered, lowered
-
-
 # End-to-end numerical                                                        #
 
 

@@ -126,7 +126,3 @@ def test_a_pre_release_shard_converts_into_the_rows_the_worklist_reads(
     assert problems == [f"no stored source: {out} {RUN} icon_aes_graupel 300"]
     with pytest.raises(FileExistsError):
         convert_v0.convert(shard, out)
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]))

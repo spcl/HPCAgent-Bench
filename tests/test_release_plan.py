@@ -90,12 +90,3 @@ def test_every_experiment_submits_once_but_the_november_multi_comparisons_and_on
 def test_every_launched_tag_is_pinned(tag: str, pinned: tuple[int, str]) -> None:
     """A changed tag file changes its version: update the pin and the plan together, never one alone."""
     assert (len(tags.resolve(tag)), tags.version(tag)) == pinned
-
-
-if __name__ == "__main__":
-    for one in REVISION_BASES:
-        test_every_revision_base_runs_under_the_global_limit(*one)
-    test_the_submission_mode_is_set_in_experiments_toml_only()
-    test_every_experiment_submits_once_but_the_november_multi_comparisons_and_only_no_score_tool_is_blind()
-    for item in PINNED_TAGS.items():
-        test_every_launched_tag_is_pinned(*item)

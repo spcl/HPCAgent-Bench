@@ -50,11 +50,6 @@ def test_scripted_agent_step_kinds() -> None:
         agent.solve(TASK)  # a scripted crash surfaces as the agent raising (a scored agent_error round)
 
 
-def test_scripted_agent_rejects_empty_script() -> None:
-    with pytest.raises(ValueError, match="at least one step"):
-        ScriptedAgent([])
-
-
 # the full status ladder through the improve loop (fast: score is faked)
 #
 # A tag in the source drives a fake Score, so every branch of the loop is walked

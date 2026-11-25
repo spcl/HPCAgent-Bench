@@ -7,7 +7,6 @@ spack and image-build trees, run data, a running job's build folder and a symlin
 import contextlib
 import io
 import pathlib
-import tempfile
 
 import pytest
 
@@ -91,15 +90,3 @@ def test_a_dry_run_counts_and_removes_nothing_and_apply_removes_only_the_candida
 def test_clean_uv_is_refused() -> None:
     with pytest.raises(SystemExit, match="never cleaned"):
         clean_caches.main(["uv"])
-
-
-if __name__ == "__main__":
-
-    def scratch() -> pathlib.Path:
-        return pathlib.Path(tempfile.mkdtemp())
-
-    test_only_the_allowlisted_caches_are_candidates(scratch())
-    test_a_protected_root_and_a_running_jobs_build_folder_are_left_alone(scratch())
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_dry_run_counts_and_removes_nothing_and_apply_removes_only_the_candidates(scratch(), patch)
-    test_clean_uv_is_refused()

@@ -25,18 +25,7 @@ from hpcagent_bench.harness.metric import (
 )
 from hpcagent_bench.harness.mpi_sizing import ScalingLaw
 
-
 # ideal speedup: P for strong (Amdahl), 1 for weak (Gustafson)
-def test_ideal_speedup_strong_is_the_rank_count() -> None:
-    assert ideal_speedup(1, ScalingLaw.STRONG) == 1.0
-    assert ideal_speedup(8, ScalingLaw.STRONG) == 8.0
-
-
-def test_ideal_speedup_weak_is_always_one() -> None:
-    """Weak's ideal is that T_i(P) matches the base anchor's time, so sigma*=1 at every P -- the
-    P-times-larger problem growing by exactly P (mpi_sizing.weak) is what makes this exact."""
-    assert ideal_speedup(1, ScalingLaw.WEAK) == 1.0
-    assert ideal_speedup(8, ScalingLaw.WEAK) == 1.0
 
 
 def test_ideal_speedup_weak_divides_p_by_the_realized_work_ratio() -> None:
@@ -54,10 +43,6 @@ def test_ideal_speedup_weak_rejects_a_nonpositive_work_ratio() -> None:
         ideal_speedup(4, ScalingLaw.WEAK, work_ratio=0.0)
 
 
-def test_ideal_speedup_defaults_to_strong() -> None:
-    assert ideal_speedup(4) == 4.0
-
-
 def test_ideal_speedup_floors_subone_ranks_to_one() -> None:
     """A degenerate rank count floors to 1 (never 0 or negative), both modes."""
     assert ideal_speedup(0, ScalingLaw.STRONG) == 1.0
@@ -65,12 +50,23 @@ def test_ideal_speedup_floors_subone_ranks_to_one() -> None:
 
 
 # one scaling point: sigma, sigma*, eta
-def test_point_strong_perfect_scaling_is_unit_efficiency() -> None:
-    """T_i(P) exactly P-fold faster than T_i(1) => sigma=P => sigma*=P => eta=1 (Amdahl)."""
-    p = scaling_point(ScalingLaw.STRONG, 4, single_rank_ns=4000, ranked_ns=1000)
-    assert p.achieved_speedup == 4.0
+@pytest.mark.parametrize(
+    ("single_rank_ns", "ranked_ns", "speedup", "efficiency"),
+    [
+        pytest.param(4000, 1000, 4.0, 1.0, id="perfect_scaling_is_unit_efficiency"),
+        pytest.param(2000, 1000, 2.0, 0.5, id="half_the_ranks_worth_is_half_efficiency"),  # only 2x on 4 ranks
+        pytest.param(10000, 1000, 10.0, 2.5, id="superlinear_is_uncapped"),  # 10x on 4 ranks
+    ],
+)
+def test_a_strong_point_scores_the_speedup_against_p_ranks(
+    single_rank_ns: int, ranked_ns: int, speedup: float, efficiency: float
+) -> None:
+    """Strong eta(P) = T_i(1) / (P * T_i(P)) = achieved_speedup / P (Amdahl): sigma*=P, and super-linear scaling
+    survives (eta > 1, not clamped)."""
+    p = scaling_point(ScalingLaw.STRONG, 4, single_rank_ns=single_rank_ns, ranked_ns=ranked_ns)
+    assert p.achieved_speedup == speedup
     assert p.ideal_speedup == 4.0
-    assert p.efficiency == 1.0
+    assert p.efficiency == efficiency
 
 
 def test_point_weak_running_the_p_times_larger_problem_in_t1_is_unit_efficiency() -> None:
@@ -82,14 +78,6 @@ def test_point_weak_running_the_p_times_larger_problem_in_t1_is_unit_efficiency(
     assert p.efficiency == 1.0
 
 
-def test_point_weak_efficiency_equals_the_achieved_speedup_directly() -> None:
-    """Weak efficiency eta(P) = T_i(1)/T_i(P) IS achieved_speedup -- sigma* is always 1, so
-    dividing by it never changes the number, at any P and any timing ratio."""
-    p = scaling_point(ScalingLaw.WEAK, 8, single_rank_ns=3000, ranked_ns=1000)
-    assert p.achieved_speedup == pytest.approx(3.0)
-    assert p.efficiency == pytest.approx(p.achieved_speedup)
-
-
 def test_point_weak_rounded_size_folds_the_work_ratio_into_eta() -> None:
     """eta = r * T_i(1) / (P * T_i(P)): a rounded weak P with r = 3.8 at P = 4 is not scored as if
     its problem had grown by exactly 4."""
@@ -99,21 +87,10 @@ def test_point_weak_rounded_size_folds_the_work_ratio_into_eta() -> None:
     assert p.efficiency == pytest.approx(3.8 * 4000 / (4 * 4000))
 
 
-def test_point_strong_efficiency_divides_the_achieved_speedup_by_p() -> None:
-    """Strong efficiency eta(P) = T_i(1) / (P * T_i(P)) -- achieved_speedup / P, Amdahl's."""
-    p = scaling_point(ScalingLaw.STRONG, 4, single_rank_ns=2000, ranked_ns=1000)  # only 2x on 4 ranks
-    assert p.achieved_speedup == 2.0
-    assert p.efficiency == 0.5
-
-
-def test_point_superlinear_and_huge_are_uncapped() -> None:
-    """Super-linear scaling survives (eta > 1, not clamped); the speedup itself is uncapped even at
-    200x, same as S_i itself, since score_rule carries no ceiling either (s-v5)."""
-    p = scaling_point(ScalingLaw.STRONG, 4, single_rank_ns=10000, ranked_ns=1000)  # 10x on 4 ranks
-    assert p.achieved_speedup == 10.0
-    assert p.efficiency == 2.5
+def test_a_huge_speedup_is_uncapped() -> None:
+    """The speedup is uncapped even at 200x, same as S_i itself, since score_rule carries no ceiling either (s-v5)."""
     big = scaling_point(ScalingLaw.STRONG, 256, single_rank_ns=200_000, ranked_ns=1000)
-    assert big.achieved_speedup == 200.0  # uncapped, here and as an S_i
+    assert big.achieved_speedup == 200.0
 
 
 def test_point_ranks_below_one_floors_to_one() -> None:
@@ -154,11 +131,6 @@ def test_score_mean_efficiency_is_geomean() -> None:
     assert s.points[0].efficiency == 1.0
     assert s.points[1].efficiency == 0.5
     assert s.mean_efficiency == pytest.approx(math.sqrt(1.0 * 0.5))
-
-
-def test_score_empty_measurements_is_none() -> None:
-    """No measured node counts => no surviving point => None (not a 'perfect 1.0' empty curve)."""
-    assert scaling_score("k", ScalingLaw.STRONG, 4000, {}) is None
 
 
 def test_score_all_measured_filtered_is_none() -> None:

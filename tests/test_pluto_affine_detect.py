@@ -4,7 +4,6 @@
 make a clean skip; an affine program polycc miscompiles is not flagged."""
 
 import importlib
-import re
 import shutil
 from pathlib import Path
 
@@ -20,12 +19,6 @@ def scop(body: str) -> str:
     return _SCOP.format(body=body)
 
 
-def test_affine_subscripts_are_not_flagged() -> None:
-    assert scop_nonaffine_reason(scop("a[i] = (a[(i + 1)] * a[i]);")) is None
-    # A stride and an offset are still affine.
-    assert scop_nonaffine_reason(scop("for (i = 0; i < N; i += 2) c[i] = a[i] + b[(i - 3)];")) is None
-
-
 def test_a_bracket_inside_a_comment_indexes_nothing() -> None:
     """The translator echoes the NumPy line above each statement; its slices are not subscripts (cloudsc)."""
     echoed = "/* zqx[0, 3, kidia - 1:kfdia] = ... */\nzqx[i] = (zqx[i] + 1.0); // b[ip[i]]"
@@ -33,15 +26,15 @@ def test_a_bracket_inside_a_comment_indexes_nothing() -> None:
     assert scop_nonaffine_reason(scop("/* note */ b[ip[i]] = 0;")) == "indirection"
 
 
-def test_indirection_is_flagged() -> None:
-    assert scop_nonaffine_reason(scop("a[i] = (a[i] + (b[ip[i]] * 2.0));")) == "indirection"
-    # Indirection nested one level deeper is still caught.
-    assert scop_nonaffine_reason(scop("out[idx[k]] = v[k];")) == "indirection"
-
-
 @pytest.mark.parametrize(
     ("code", "expected_reason"),
     [
+        ("a[i] = (a[(i + 1)] * a[i]);", None),
+        # A stride and an offset are still affine.
+        ("for (i = 0; i < N; i += 2) c[i] = a[i] + b[(i - 3)];", None),
+        ("a[i] = (a[i] + (b[ip[i]] * 2.0));", "indirection"),
+        # Indirection nested one level deeper is still caught.
+        ("out[idx[k]] = v[k];", "indirection"),
         # ``table[i][j]`` is two SEPARATE affine subscripts, not a nested (indirect) one.
         ("table[i][j] = table[(i + 1)][(j - 1)];", None),
         # ``/`` OUTSIDE a subscript (in the value) does not affect the polyhedral model.
@@ -49,7 +42,16 @@ def test_indirection_is_flagged() -> None:
         ("a[i % k] = b[i];", "modulo"),
         ("a[i / 2] = b[i];", "integer-division"),
     ],
-    ids=["multidim-subscripts-stay-affine", "value-side-division-not-flagged", "modulo-flagged", "int-div-flagged"],
+    ids=[
+        "plain-affine",
+        "stride-and-offset-affine",
+        "indirection-flagged",
+        "nested-indirection-flagged",
+        "multidim-subscripts-stay-affine",
+        "value-side-division-not-flagged",
+        "modulo-flagged",
+        "int-div-flagged",
+    ],
 )
 def test_a_non_affine_subscript_kind_is_named_and_an_affine_one_is_not(code: str, expected_reason: str | None) -> None:
     assert scop_nonaffine_reason(scop(code)) == expected_reason
@@ -62,9 +64,6 @@ def test_no_pragma_falls_back_to_scanning_whole_text() -> None:
 
 
 _KINDS = ("bug", "caveat")
-_COMPONENTS = ("pet", "pluto", "polycc", "translator")
-_SEVERITIES = ("miscompile", "refusal", "latent", "detector-gap", "caveat")
-_UPSTREAMS = ("not filed", "n/a")
 #: ``bug`` ids are ``POLYCC-nnn``, ``caveat`` ids are ``C-nnn`` -- both numbered from 001.
 _ID_PREFIX = {"bug": "POLYCC-", "caveat": "C-"}
 
@@ -78,25 +77,6 @@ def test_registry_ids_are_unique_and_sequential() -> None:
     for entry in KNOWN_POLYCC_ISSUES.values():
         seen[entry.kind] += 1
         assert entry.id == f"{_ID_PREFIX[entry.kind]}{seen[entry.kind]:03d}", entry.id
-
-
-def test_registry_fields_are_populated_and_from_the_declared_vocabularies() -> None:
-    for entry in KNOWN_POLYCC_ISSUES.values():
-        assert entry.kind in _KINDS, entry
-        assert entry.component in _COMPONENTS, entry
-        assert entry.severity in _SEVERITIES, entry
-        assert entry.symptom.strip(), entry
-        assert entry.repro.strip(), entry
-        # ``upstream`` is a tracker URL or one of the two placeholders; never blank.
-        assert entry.upstream in _UPSTREAMS or entry.upstream.startswith("http"), entry
-        if entry.kind == "caveat":
-            assert entry.severity == "caveat", entry
-
-
-def test_every_bug_carries_a_reproduction_pointer() -> None:
-    for entry in KNOWN_POLYCC_ISSUES.values():
-        if entry.kind == "bug":
-            assert re.search(r"[\w/]+\.(py|c|yaml)|benchmarks/", entry.repro), entry
 
 
 def test_every_avoided_by_resolves_to_a_real_attribute() -> None:

@@ -46,14 +46,19 @@ def bound(source: str, **values: object) -> dict[str, object]:
 
 
 @pytest.mark.parametrize("make", EVERY_BACKEND)
-def test_a_starred_element_has_no_per_target_spelling(make: Callable[[], SplitTupleUnpack]) -> None:
-    """``a = *p`` is not python, so no split may emit it."""
-    assert split(make(), "a, b = *p, q") == unchanged("a, b = *p, q")
-
-
-@pytest.mark.parametrize("make", EVERY_BACKEND)
-def test_a_call_returning_a_tuple_binds_once(make: Callable[[], SplitTupleUnpack]) -> None:
-    assert split(make(), "a, b = f(x)") == unchanged("a, b = f(x)")
+@pytest.mark.parametrize(
+    "source",
+    [
+        # ``a = *p`` is not python, so no split may emit it.
+        "a, b = *p, q",
+        "a, b = f(x)",
+    ],
+    ids=["starred_element", "call_returning_a_tuple"],
+)
+def test_a_right_side_without_a_per_target_spelling_stays_whole(
+    make: Callable[[], SplitTupleUnpack], source: str
+) -> None:
+    assert split(make(), source) == unchanged(source)
 
 
 @pytest.mark.parametrize("make", LATCHING_BACKENDS)

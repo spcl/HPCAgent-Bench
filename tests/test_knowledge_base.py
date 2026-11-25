@@ -77,16 +77,14 @@ def test_a_valid_base_loads_with_its_manifest_and_its_text_documents(base_dir: p
     assert base.readable == {"isa/arithmetic.md", "isa/conversion.md", "notes.txt"}
 
 
-@pytest.mark.parametrize("missing", ["name", "version", "licence", "source", "content_hash"])
-def test_a_manifest_missing_a_required_field_is_refused(tmp_path: pathlib.Path, missing: str) -> None:
-    root = write_base(tmp_path / "kb", **{missing: None})
-    with pytest.raises(knowledge.KnowledgeError, match=missing):
-        knowledge.load(root)
-
-
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        ("name", None),
+        ("version", None),
+        ("licence", None),
+        ("source", None),
+        ("content_hash", None),
         ("name", "Sample ISA"),
         ("version", ""),
         ("licence", ""),
@@ -94,8 +92,24 @@ def test_a_manifest_missing_a_required_field_is_refused(tmp_path: pathlib.Path, 
         ("content_hash", "md5:" + "0" * 64),
         ("author", "someone"),
     ],
+    ids=[
+        "name_missing",
+        "version_missing",
+        "licence_missing",
+        "source_missing",
+        "content_hash_missing",
+        "name_with_a_space",
+        "version_empty",
+        "licence_empty",
+        "content_hash_too_short",
+        "content_hash_wrong_algorithm",
+        "unknown_field",
+    ],
 )
-def test_a_malformed_or_unknown_manifest_field_is_refused(tmp_path: pathlib.Path, field: str, value: str) -> None:
+def test_a_manifest_with_a_missing_malformed_or_unknown_field_is_refused(
+    tmp_path: pathlib.Path, field: str, value: str | None
+) -> None:
+    """``None`` removes the required key; any other value replaces or adds it."""
     root = write_base(tmp_path / "kb", **{field: value})
     with pytest.raises(knowledge.KnowledgeError, match=field):
         knowledge.load(root)

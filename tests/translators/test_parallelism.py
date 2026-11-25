@@ -33,178 +33,147 @@ def sub_(src: str) -> ast.Subscript:
     return ast.parse(src).body[0].value
 
 
-# timestep detection
-def test_timestep_for_is_flagged() -> None:
-    assert is_timestep_loop(stmt_("for t in range(TSTEPS):\n    step(t)\n"))
-
-
-def test_plain_range_is_not_timestep() -> None:
-    assert not is_timestep_loop(stmt_("for i in range(N):\n    a[i] = 0\n"))
-
-
-def test_niter_counts_as_timestep() -> None:
-    assert is_timestep_loop(stmt_("for k in range(NITER):\n    pass\n"))
-
-
-def test_non_for_node_is_not_timestep() -> None:
-    assert not is_timestep_loop(stmt_("a[1:-1] = b[:-2] + b[2:]\n"))
-
-
-# subscript_idx_safe
-def test_bare_index_is_safe() -> None:
-    assert subscript_idx_safe(sub_("a[i]"), "i")
-
-
-def test_shifted_index_is_unsafe() -> None:
-    assert not subscript_idx_safe(sub_("a[i - 1]"), "i")
-
-
-def test_scaled_index_is_unsafe() -> None:
-    assert not subscript_idx_safe(sub_("a[2 * i]"), "i")
-
-
-def test_indirect_index_is_unsafe() -> None:
-    assert not subscript_idx_safe(sub_("a[p[i]]"), "i")
-
-
-def test_absent_index_is_unsafe() -> None:
-    assert not subscript_idx_safe(sub_("a[0]"), "i")
-
-
-def test_multidim_bare_in_one_axis_is_safe() -> None:
-    assert subscript_idx_safe(sub_("a[i, j]"), "i")
-
-
-# loop_is_parallel_safe
-def test_elementwise_map_is_parallel_safe() -> None:
-    assert loop_is_parallel_safe(stmt_("for i in range(N):\n    c[i] = a[i] + b[i]\n"))
-
-
-def test_jacobi_read_only_neighbours_is_parallel_safe() -> None:
-    # b written idx-safe; a is READ-ONLY (never written), so its shifted read does not race.
-    assert loop_is_parallel_safe(stmt_("for i in range(N):\n    b[i] = a[i - 1] + a[i + 1]\n"))
-
-
-def test_scalar_reduction_is_not_parallel_safe() -> None:
-    assert not loop_is_parallel_safe(stmt_("for i in range(N):\n    s = s + a[i]\n"))
-
-
-def test_inplace_stencil_is_not_parallel_safe() -> None:
-    # a is written AND read shifted -> loop-carried dependence.
-    assert not loop_is_parallel_safe(stmt_("for i in range(N):\n    a[i] = a[i - 1] + a[i + 1]\n"))
-
-
-def test_scatter_is_not_parallel_safe() -> None:
-    assert not loop_is_parallel_safe(stmt_("for i in range(N):\n    a[p[i]] = a[p[i]] + b[i]\n"))
-
-
-# loop_reduction
-def test_sum_reduction_assign_form() -> None:
-    assert loop_reduction(stmt_("for i in range(N):\n    s = s + a[i]\n")) == ("+", "s")
-
-
-def test_sum_reduction_augassign_form() -> None:
-    assert loop_reduction(stmt_("for i in range(N):\n    s += a[i]\n")) == ("+", "s")
-
-
-def test_product_reduction() -> None:
-    assert loop_reduction(stmt_("for i in range(N):\n    p = p * a[i]\n")) == ("*", "p")
-
-
-def test_max_reduction_via_np_maximum() -> None:
-    assert loop_reduction(stmt_("for i in range(N):\n    m = np.maximum(m, a[i])\n")) == ("max", "m")
-
-
-def test_min_reduction_via_builtin() -> None:
-    assert loop_reduction(stmt_("for i in range(N):\n    m = min(m, a[i])\n")) == ("min", "m")
-
-
-def test_pure_map_has_no_reduction() -> None:
-    assert loop_reduction(stmt_("for i in range(N):\n    c[i] = a[i] + b[i]\n")) is None
-
-
-def test_two_accumulators_is_not_a_single_reduction() -> None:
-    assert loop_reduction(stmt_("for i in range(N):\n    s = s + a[i]\n    t = t + b[i]\n")) is None
-
-
-def test_private_temp_is_not_a_reduction() -> None:
-    # ``x`` is recomputed each iteration (not self-referential) -> not an accumulator.
-    assert loop_reduction(stmt_("for i in range(N):\n    x = a[i] * 2.0\n    c[i] = x\n")) is None
-
-
-# collapsible_depth
-def test_collapse_depth_perfectly_nested_rectangular_map() -> None:
-    # 3 perfectly-nested, rectangular, independent levels -> the whole nest collapses.
-    node = stmt_(
-        "for i in range(N):\n"
-        "    for j in range(M):\n"
-        "        for k in range(K):\n"
-        "            out[i, j, k] = a[i, j, k] * 2.0\n"
-    )
-    assert collapsible_depth(node) == 3
-
-
-def test_collapse_depth_single_loop_is_one() -> None:
-    assert collapsible_depth(stmt_("for i in range(N):\n    out[i] = a[i] * 2.0\n")) == 1
-
-
-def test_collapse_depth_stops_before_inner_reduction() -> None:
-    # gemm-shaped: i, j are independent (subscript accumulator, not a bare-Name reduction);
-    # the innermost k is a genuine reduction and must NOT be folded into the collapse.
-    node = stmt_(
-        "for i in range(N):\n"
-        "    for j in range(M):\n"
-        "        out[i, j] = 0.0\n"
-        "        for k in range(K):\n"
-        "            out[i, j] += a[i, k] * b[k, j]\n"
-    )
-    assert collapsible_depth(node) == 2
-
-
-def test_collapse_depth_stops_at_non_rectangular_bound() -> None:
-    # A triangular inner bound (range(i)) makes the iteration space non-rectangular --
-    # collapse must not fold it in, however independent the writes look.
-    node = stmt_("for i in range(N):\n    for j in range(i):\n        out[i, j] = a[i, j] * 2.0\n")
-    assert collapsible_depth(node) == 1
-
-
-def test_collapse_depth_stops_at_sibling_statement() -> None:
-    # A statement alongside the nested loop breaks OpenMP's canonical perfectly-nested form.
-    node = stmt_("for i in range(N):\n    total = 0.0\n    for j in range(N):\n        out[i, j] = a[i, j] * 2.0\n")
-    assert collapsible_depth(node) == 1
-
-
-def test_collapse_depth_stops_when_inner_index_absent_from_write() -> None:
-    # out[i] does not depend on j -- every j iteration of a fixed i overwrites the same cell,
-    # so the j level alone is unsafe to reorder even though the outer i level is fine.
-    node = stmt_("for i in range(N):\n    for j in range(M):\n        out[i] = a[i, j]\n")
-    assert collapsible_depth(node) == 1
-
-
-def test_collapse_depth_stops_at_timestep_bound() -> None:
-    node = stmt_("for i in range(N):\n    for t in range(TSTEPS):\n        out[i, t] = a[i, t]\n")
-    assert collapsible_depth(node) == 1
-
-
-# has_indirect_scatter / any_parallelizable_loop
-def test_scatter_write_is_indirect() -> None:
-    assert has_indirect_scatter(ast.parse("for i in range(N):\n    out[idx[i]] += x[i]\n"))
-
-
-def test_affine_write_is_not_indirect() -> None:
-    assert not has_indirect_scatter(ast.parse("for i in range(N):\n    out[i] += x[i]\n"))
-
-
-def test_any_parallelizable_true_for_map() -> None:
-    assert any_parallelizable_loop(ast.parse("for i in range(N):\n    c[i] = a[i]\n"))
-
-
-def test_any_parallelizable_true_for_reduction() -> None:
-    assert any_parallelizable_loop(ast.parse("for i in range(N):\n    s = s + a[i]\n"))
-
-
-def test_any_parallelizable_false_for_scatter_only() -> None:
-    assert not any_parallelizable_loop(ast.parse("for i in range(N):\n    out[idx[i]] += x[i]\n"))
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        ("for t in range(TSTEPS):\n    step(t)\n", True),
+        ("for i in range(N):\n    a[i] = 0\n", False),
+        ("for k in range(NITER):\n    pass\n", True),
+    ],
+    ids=["timestep_for", "plain_range", "niter"],
+)
+def test_loops_over_a_timestep_bound_are_timestep_loops(src: str, expected: bool) -> None:
+    assert bool(is_timestep_loop(stmt_(src))) is expected
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        ("a[i]", True),
+        ("a[i - 1]", False),
+        ("a[2 * i]", False),
+        ("a[p[i]]", False),
+        ("a[0]", False),
+        ("a[i, j]", True),  # bare in one axis
+    ],
+    ids=["bare", "shifted", "scaled", "indirect", "absent", "multidim_bare_in_one_axis"],
+)
+def test_only_a_bare_loop_index_subscript_is_safe(src: str, expected: bool) -> None:
+    assert bool(subscript_idx_safe(sub_(src), "i")) is expected
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        ("for i in range(N):\n    c[i] = a[i] + b[i]\n", True),
+        # b written idx-safe; a is READ-ONLY (never written), so its shifted read does not race.
+        ("for i in range(N):\n    b[i] = a[i - 1] + a[i + 1]\n", True),
+        ("for i in range(N):\n    s = s + a[i]\n", False),
+        # a is written AND read shifted -> loop-carried dependence.
+        ("for i in range(N):\n    a[i] = a[i - 1] + a[i + 1]\n", False),
+        ("for i in range(N):\n    a[p[i]] = a[p[i]] + b[i]\n", False),
+    ],
+    ids=["elementwise_map", "jacobi_read_only_neighbours", "scalar_reduction", "inplace_stencil", "scatter"],
+)
+def test_loop_is_parallel_safe_only_without_a_carried_dependence(src: str, expected: bool) -> None:
+    assert bool(loop_is_parallel_safe(stmt_(src))) is expected
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        ("for i in range(N):\n    s = s + a[i]\n", ("+", "s")),
+        ("for i in range(N):\n    s += a[i]\n", ("+", "s")),
+        ("for i in range(N):\n    p = p * a[i]\n", ("*", "p")),
+        ("for i in range(N):\n    m = np.maximum(m, a[i])\n", ("max", "m")),
+        ("for i in range(N):\n    m = min(m, a[i])\n", ("min", "m")),
+        ("for i in range(N):\n    c[i] = a[i] + b[i]\n", None),
+        ("for i in range(N):\n    s = s + a[i]\n    t = t + b[i]\n", None),
+        # ``x`` is recomputed each iteration (not self-referential) -> not an accumulator.
+        ("for i in range(N):\n    x = a[i] * 2.0\n    c[i] = x\n", None),
+    ],
+    ids=[
+        "sum_assign_form",
+        "sum_augassign_form",
+        "product",
+        "max_via_np_maximum",
+        "min_via_builtin",
+        "pure_map_has_none",
+        "two_accumulators_are_not_one_reduction",
+        "private_temp_is_not_a_reduction",
+    ],
+)
+def test_loop_reduction_names_its_single_accumulator(src: str, expected: tuple[str, str] | None) -> None:
+    assert loop_reduction(stmt_(src)) == expected
+
+
+@pytest.mark.parametrize(
+    ("src", "depth"),
+    [
+        # 3 perfectly-nested, rectangular, independent levels -> the whole nest collapses.
+        (
+            "for i in range(N):\n"
+            "    for j in range(M):\n"
+            "        for k in range(K):\n"
+            "            out[i, j, k] = a[i, j, k] * 2.0\n",
+            3,
+        ),
+        # gemm-shaped: i, j are independent (subscript accumulator, not a bare-Name reduction);
+        # the innermost k is a genuine reduction and must NOT be folded into the collapse.
+        (
+            "for i in range(N):\n"
+            "    for j in range(M):\n"
+            "        out[i, j] = 0.0\n"
+            "        for k in range(K):\n"
+            "            out[i, j] += a[i, k] * b[k, j]\n",
+            2,
+        ),
+        # A triangular inner bound (range(i)) makes the iteration space non-rectangular --
+        # collapse must not fold it in, however independent the writes look.
+        ("for i in range(N):\n    for j in range(i):\n        out[i, j] = a[i, j] * 2.0\n", 1),
+        # A statement alongside the nested loop breaks OpenMP's canonical perfectly-nested form.
+        ("for i in range(N):\n    total = 0.0\n    for j in range(N):\n        out[i, j] = a[i, j] * 2.0\n", 1),
+        # out[i] does not depend on j -- every j iteration of a fixed i overwrites the same cell,
+        # so the j level alone is unsafe to reorder even though the outer i level is fine.
+        ("for i in range(N):\n    for j in range(M):\n        out[i] = a[i, j]\n", 1),
+        ("for i in range(N):\n    for t in range(TSTEPS):\n        out[i, t] = a[i, t]\n", 1),
+    ],
+    ids=[
+        "perfectly_nested_rectangular_map",
+        "stops_before_inner_reduction",
+        "stops_at_non_rectangular_bound",
+        "stops_at_sibling_statement",
+        "stops_when_inner_index_absent_from_write",
+        "stops_at_timestep_bound",
+    ],
+)
+def test_collapse_depth_covers_only_independent_rectangular_levels(src: str, depth: int) -> None:
+    assert collapsible_depth(stmt_(src)) == depth
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        ("for i in range(N):\n    out[idx[i]] += x[i]\n", True),
+        ("for i in range(N):\n    out[i] += x[i]\n", False),
+    ],
+    ids=["scatter_write", "affine_write"],
+)
+def test_only_a_data_indexed_write_is_an_indirect_scatter(src: str, expected: bool) -> None:
+    assert bool(has_indirect_scatter(ast.parse(src))) is expected
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        ("for i in range(N):\n    c[i] = a[i]\n", True),
+        ("for i in range(N):\n    s = s + a[i]\n", True),
+        ("for i in range(N):\n    out[idx[i]] += x[i]\n", False),
+    ],
+    ids=["map", "reduction", "scatter_only"],
+)
+def test_a_nest_is_parallelizable_unless_it_only_scatters(src: str, expected: bool) -> None:
+    assert bool(any_parallelizable_loop(ast.parse(src))) is expected
 
 
 # emit_c_omp (end to end: parse -> lower -> emit)

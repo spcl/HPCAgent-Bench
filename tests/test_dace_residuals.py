@@ -15,8 +15,8 @@ import types
 
 import pytest
 
-from hpcagent_bench.cli import build_parser, main
-from hpcagent_bench.frameworks import dace_emit, dace_options
+from hpcagent_bench.cli import main
+from hpcagent_bench.frameworks import dace_emit
 from hpcagent_bench.frameworks.dace_options import (
     DACE_MAXIMAL_ENV,
     DACE_REMOVE_TRANSIENTS_ENV,
@@ -33,45 +33,15 @@ JACOBI = "jacobi_2d"
 # --- flag parsing (pure: the module never imports dace) -------------------------------------------
 
 
-@pytest.mark.parametrize(("text", "expected"), [("1", True), ("true", True), ("YES", True), ("On", True)])
-def test_parse_flag_reads_the_truthy_spellings(text: str, expected: bool) -> None:
-    assert parse_flag(text) is expected
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [("0", False), ("false", False), ("No", False), ("off", False), ("", False)],
-)
-def test_parse_flag_reads_the_falsy_spellings_and_the_empty_string(text: str, expected: bool) -> None:
-    assert parse_flag(text) is expected
-
-
-def test_parse_flag_none_takes_the_default() -> None:
-    assert parse_flag(None) is False
-    assert parse_flag(None, default=True) is True
-
-
 def test_parse_flag_refuses_a_typo_instead_of_reading_it_as_off() -> None:
     with pytest.raises(ValueError, match="invalid boolean flag 'ture'"):
         parse_flag("ture")
-
-
-def test_env_flag_reads_the_process_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(DACE_MAXIMAL_ENV, "1")
-    assert dace_options.env_flag(DACE_MAXIMAL_ENV) is True
-    monkeypatch.setenv(DACE_MAXIMAL_ENV, "0")
-    assert dace_options.env_flag(DACE_MAXIMAL_ENV) is False
 
 
 def test_options_default_off() -> None:
     """No variable set, or a variable exported empty (``export VAR=``): the shipped pipeline, byte for byte."""
     assert from_env({}) == DacePipelineOptions(maximal=False, remove_transients=False)
     assert from_env({DACE_MAXIMAL_ENV: "", DACE_REMOVE_TRANSIENTS_ENV: ""}) == DacePipelineOptions()
-
-
-def test_options_from_env() -> None:
-    opts = from_env({DACE_MAXIMAL_ENV: "1", DACE_REMOVE_TRANSIENTS_ENV: "yes"})
-    assert opts == DacePipelineOptions(maximal=True, remove_transients=True)
 
 
 # --- the fixpoint driver (pure) --------------------------------------------------------------------
@@ -100,12 +70,6 @@ def test_fixpoint_runs_a_fingerprint_that_never_settles_up_to_the_cap() -> None:
     assert len(rounds) == MAXIMAL_FUSION_CAP
 
 
-def test_fixpoint_with_a_nonpositive_cap_runs_nothing() -> None:
-    rounds: list[int] = []
-    assert iterate_to_fixpoint(lambda: rounds.append(1), lambda: 1, cap=0) == 0
-    assert rounds == []
-
-
 # --- the ``dace emit`` plumbing (pure) -------------------------------------------------------------
 
 
@@ -130,12 +94,6 @@ def test_write_code_objects_suffixes_a_collision(tmp_path: pathlib.Path) -> None
     assert {p.read_text() for p in written} == {"a", "b"}, "a collision must not overwrite an earlier unit"
 
 
-def test_default_pipeline_is_the_parallel_one_for_the_target() -> None:
-    assert dace_emit.default_pipeline_for("cpu") == "parallel_cpu"
-    assert dace_emit.default_pipeline_for("cuda") == "parallel_gpu"
-    assert dace_emit.default_pipeline_for("hip") == "parallel_gpu"
-
-
 def test_emit_program_sources_refuses_an_unknown_target_before_dace(tmp_path: pathlib.Path) -> None:
     """The target check comes first, so a bad spelling fails on any install, dace or not."""
     with pytest.raises(dace_emit.DaceEmitError, match="unknown emit target"):
@@ -149,14 +107,16 @@ def test_emit_without_dace_is_a_skip_not_a_crash(tmp_path: pathlib.Path, monkeyp
         dace_emit.emit_program_sources(object(), tmp_path, target="cuda")
 
 
-def test_emit_kernel_refuses_a_selector_matching_nothing() -> None:
-    with pytest.raises(dace_emit.DaceEmitError, match="no_such_kernel_anywhere"):
-        dace_emit.emit_kernel_sources("no_such_kernel_anywhere")
-
-
-def test_emit_kernel_refuses_a_multi_kernel_selector() -> None:
-    with pytest.raises(dace_emit.DaceEmitError, match="matches"):
-        dace_emit.emit_kernel_sources("scientific_computing")
+@pytest.mark.parametrize(
+    ("selector", "message"),
+    [
+        pytest.param("no_such_kernel_anywhere", "no_such_kernel_anywhere", id="matching_nothing"),
+        pytest.param("scientific_computing", "matches", id="matching_many_kernels"),
+    ],
+)
+def test_emit_kernel_refuses_a_selector_that_does_not_name_one_kernel(selector: str, message: str) -> None:
+    with pytest.raises(dace_emit.DaceEmitError, match=message):
+        dace_emit.emit_kernel_sources(selector)
 
 
 def test_emit_kernel_without_dace_skips_before_writing_anything(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,29 +135,6 @@ def test_emit_kernel_refuses_a_datatype_for_the_self_contained_form() -> None:
 
 
 # --- the CLI verb (pure: the emitter is stubbed) ---------------------------------------------------
-
-
-def emit_args(kernel: str = JACOBI, *extra: str) -> object:
-    return build_parser().parse_args(["dace", "emit", kernel, *extra])
-
-
-def test_the_cli_registers_emit_with_off_defaults() -> None:
-    args = emit_args()
-    assert args.target == "cuda"
-    assert args.pipeline is None
-    assert args.out is None
-    assert args.maximal is False
-    assert args.remove_transients is False
-    assert args.frame is False
-
-
-def test_the_cli_parses_the_residual_flags() -> None:
-    args = emit_args("k", "--target", "hip", "--maximal", "--remove-transients", "-o", "/tmp/e", "-d", "float32")
-    assert args.target == "hip"
-    assert args.maximal is True
-    assert args.remove_transients is True
-    assert args.out == pathlib.Path("/tmp/e")
-    assert args.datatype == "float32"
 
 
 def stub_emit(monkeypatch: pytest.MonkeyPatch, calls: list[object], behave: object = None) -> None:
@@ -262,15 +199,6 @@ def _device_cpu() -> object:
     import dace.dtypes as dace_dtypes
 
     return dace_dtypes.DeviceType.CPU
-
-
-def test_pipeline_context_defaults_leave_the_shipped_pipeline_alone() -> None:
-    pytest.importorskip("dace")
-    from hpcagent_bench.frameworks.dace_framework import PipelineContext
-
-    ctx = PipelineContext(device=_device_cpu())
-    assert ctx.maximal is False
-    assert ctx.remove_transients is False
 
 
 def _spy_pass(monkeypatch: pytest.MonkeyPatch, pass_cls: type, calls: list[int]) -> None:

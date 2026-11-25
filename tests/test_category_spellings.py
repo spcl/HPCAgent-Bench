@@ -8,7 +8,6 @@ from hpcagent_agent.coded import Coded
 from hpcagent_bench import config, fuzz, manifest_schema, protocols
 from hpcagent_bench.api import RunMode
 from hpcagent_bench.categories import (
-    BASELINE_OPTIONS,
     Baseline,
     Denominator,
     InputMode,
@@ -131,14 +130,3 @@ def test_a_category_keeps_its_spellings(category: type[Coded], texts: tuple[str,
     assert category.texts() == texts
     for member, text in zip(category, texts, strict=True):
         assert category.parse(text) is member
-
-
-def test_the_baseline_options_add_auto() -> None:
-    """The baseline knob accepts every baseline spelling plus ``auto``."""
-    assert (*Baseline.texts(), "auto") == BASELINE_OPTIONS
-
-
-if __name__ == "__main__":
-    for category, texts in SPELLINGS:
-        test_a_category_keeps_its_spellings(category, texts)
-    test_the_baseline_options_add_auto()

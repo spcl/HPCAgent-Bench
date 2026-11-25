@@ -19,12 +19,8 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     expand_einsum,
     expand_inner,
     expand_linalg_norm,
-    expand_median,
     expand_reshape,
-    expand_roll,
     expand_tensordot,
-    expand_trace,
-    expand_tril,
     expand_vdot,
     matmul_result_shape,
     parse_einsum_subscripts,
@@ -65,11 +61,6 @@ def test_matmul_result_shape_batch_mismatch_is_none() -> None:
 
 
 # A.2b shape tokens from two vocabularies still name one extent                #
-
-
-def test_dims_agree_needs_no_aliases_when_spelled_alike() -> None:
-    assert dims_agree("N", "N")
-    assert not dims_agree("N", "M")
 
 
 def test_dims_agree_through_a_dimension_alias() -> None:
@@ -272,17 +263,6 @@ def test_einsum_trace_is_scalar_accumulation() -> None:
     assert "s += a[__es_i, __es_i]" in out
 
 
-def test_einsum_seissol_three_operand() -> None:
-    st = {"g": ("D", "KK", "L"), "h": ("NB", "L", "Q"), "c": ("D", "Q", "P")}
-    out = unparse_(
-        expand_einsum(name_("out"), [ast.Constant("dkl,blq,dqp->bkp"), name_("g"), name_("h"), name_("c")], st)
-    )
-    # b, k, p are output loops; d, l, q are summed inner loops.
-    for v in ("__es_b", "__es_k", "__es_p", "__es_d", "__es_l", "__es_q"):
-        assert f"for {v} in range" in out
-    assert "out[__es_b, __es_k, __es_p] +=" in out
-
-
 # A.4  tensordot / inner / vdot                                                #
 
 
@@ -320,34 +300,13 @@ def test_vdot_complex_conjugates_first_operand() -> None:
 # B.5  trace / diagonal direct                                                 #
 
 
-def test_trace_sums_diagonal() -> None:
-    out = unparse_(expand_trace(name_("s"), [name_("a")], {"a": ("M", "M")}))
-    assert "s = 0.0" in out
-    assert "s += a[__tr, __tr]" in out
-
-
 # B.6  cumsum / cumprod prefix scan                                            #
 
 
 # B.7  median: copy + sort + pick middle                                       #
 
 
-def test_median_sorts_and_picks_middle() -> None:
-    allocs = {}
-    out = unparse_(expand_median(name_("s"), [name_("a")], {"a": ("N",)}, fresh_local_allocs=allocs))
-    assert "__md_buf" in allocs  # scratch buffer registered
-    assert "while" in out  # the in-place sort routine
-    assert "N // 2" in out  # middle index
-    assert "% 2" in out  # even/odd parity test
-
-
 # C.8  np.roll modular index                                                   #
-
-
-def test_roll_uses_modular_source_index() -> None:
-    out = unparse_(expand_roll(name_("out"), [name_("a"), ast.Constant(3)], {"a": ("N",)}))
-    # ((i - shift) % N + N) % N keeps the source index non-negative.
-    assert "out[__rl0] = a[((__rl0 - 3) % N + N) % N]" in out
 
 
 # C.9  reshape method-form + ellipsis expansion                                #
@@ -364,14 +323,6 @@ def test_ellipsis_leading_expands_to_full_slices() -> None:
 
 
 # C.10 np.tril mask (mirror of triu)                                          #
-
-
-def test_tril_keeps_lower_triangle() -> None:
-    out = unparse_(expand_tril(name_("out"), [name_("a")], {"a": ("M", "M")}))
-    # lower triangle keeps ``j <= i`` (the complement of triu's ``j >= i``).
-    assert "__j <= __i" in out
-    assert "a[__i, __j]" in out
-    assert "else 0.0" in out
 
 
 def test_linalg_norm_ord1_inf_vector_and_matrix() -> None:

@@ -61,16 +61,6 @@ def test_probe_is_ok_for_gcc_tree_parallelize_loops() -> None:
     assert "GOMP=0" not in probe.detail
 
 
-def test_probe_is_lru_cached() -> None:
-    """``@lru_cache(typed=True)``: identical args must not re-invoke the compiler a second time."""
-    flags.probe_autopar.cache_clear()
-    first = flags.probe_autopar("definitely-not-a-real-compiler-xyz", "-O3", "x")
-    second = flags.probe_autopar("definitely-not-a-real-compiler-xyz", "-O3", "x")
-    assert first == second
-    info = flags.probe_autopar.cache_info()
-    assert info.hits >= 1
-
-
 def test_gate_declines_polly_when_the_probe_is_vacuous(monkeypatch: pytest.MonkeyPatch) -> None:
     """``native_runtime.assert_autopar_capable`` must raise :class:`NotSupportedByFramework` --
     the framework's existing "deliberate, correct decline" mechanism -- when the probe is not OK.

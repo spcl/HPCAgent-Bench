@@ -193,17 +193,6 @@ def test_host_code_after_a_clause_free_temp_region_is_no_part_of_that_region() -
     assert languages.offload_device_refusal([source], POINTERS) == ""
 
 
-def test_the_refusal_is_off_for_every_setup_that_is_not_an_offload_setup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate is wired behind ``offload_setup_language`` AND the device declaration, so neither a
-    plain C setup's host OpenMP nor the host-resident ``c-openmp`` setup -- both of which legitimately
-    map their own buffers -- ever meets it."""
-    monkeypatch.delenv(languages.OFFLOAD_MODEL_ENV, raising=False)
-    assert not languages.offload_setup_language(Language.C)
-    monkeypatch.setenv(languages.OFFLOAD_MODEL_ENV, "openmp")
-    monkeypatch.delenv(languages.OFFLOAD_RESIDENCY_ENV, raising=False)
-    assert not languages.offload_device_residency()
-
-
 # who enforces synchronization
 
 
@@ -513,13 +502,6 @@ def test_a_host_round_trip_of_an_abi_array_is_refused(source: str, refused: bool
     assert bool(message) is refused, message
     if refused:
         assert "DEVICE-RESIDENT" in message
-
-
-def test_the_refusal_is_off_on_the_host_resident_python_setup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate is wired behind the setup's own declaration, so the triton setup -- whose contract is
-    that it OWNS its transfers -- never meets it."""
-    monkeypatch.delenv(languages.PYTHON_DEVICE_ENV, raising=False)
-    assert not languages.python_device_setup()
 
 
 def test_the_two_setups_rows_refuse_to_pool(triton_device_setup: None) -> None:

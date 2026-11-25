@@ -35,8 +35,15 @@ def _arr(*values: float) -> np.ndarray:
 
 
 # agreement
-def test_identical_arrays_agree_with_zero_error() -> None:
-    ok, err, detail = compare_arrays(_arr(1.0, -2.0, 0.0), _arr(1.0, -2.0, 0.0))
+@pytest.mark.parametrize(
+    "values",
+    [(1.0, -2.0, 0.0), (np.nan, INF, -INF, 1.0)],
+    ids=["finite", "nan_and_inf_at_matching_positions"],
+)
+def test_identical_arrays_agree_with_zero_error(values: tuple[float, ...]) -> None:
+    # equal_nan and Inf == Inf both hold, and the NaN that Inf - Inf produces internally must not
+    # leak into the reported error.
+    ok, err, detail = compare_arrays(_arr(*values), _arr(*values))
     assert (ok, err, detail) == (True, 0.0, "")
 
 
@@ -44,13 +51,6 @@ def test_within_tolerance_reports_the_max_relative_error() -> None:
     ok, err, _ = compare_arrays(_arr(1.0, 100.0), _arr(1.0, 100.000001))
     assert ok
     assert err == pytest.approx(1e-8, rel=1e-3)  # 1e-6 absolute on 100.0
-
-
-def test_matching_nan_and_inf_positions_agree() -> None:
-    # equal_nan and Inf == Inf both hold, and the NaN that Inf - Inf produces internally must not
-    # leak into the reported error.
-    ok, err, detail = compare_arrays(_arr(np.nan, INF, -INF, 1.0), _arr(np.nan, INF, -INF, 1.0))
-    assert (ok, err, detail) == (True, 0.0, "")
 
 
 def test_a_complex_nan_in_another_component_is_a_position_mismatch() -> None:
@@ -155,14 +155,20 @@ def test_python_scalars_are_accepted() -> None:
 
 
 # tolerance plumbing
-def test_rtol_is_honoured() -> None:
-    assert not compare_arrays(_arr(1.0), _arr(1.05), rtol=1e-5, atol=1e-8).ok
-    assert compare_arrays(_arr(1.0), _arr(1.05), rtol=1e-1, atol=1e-8).ok
-
-
-def test_atol_is_honoured() -> None:
-    assert not compare_arrays(_arr(0.0), _arr(1e-6), rtol=1e-5, atol=1e-8).ok
-    assert compare_arrays(_arr(0.0), _arr(1e-6), rtol=1e-5, atol=1e-5).ok
+@pytest.mark.parametrize(
+    ("ref", "val", "rtol", "atol", "agrees"),
+    [
+        (1.0, 1.05, 1e-5, 1e-8, False),
+        (1.0, 1.05, 1e-1, 1e-8, True),
+        (0.0, 1e-6, 1e-5, 1e-8, False),
+        (0.0, 1e-6, 1e-5, 1e-5, True),
+    ],
+    ids=["tight_rtol_refuses", "loose_rtol_accepts", "tight_atol_refuses", "loose_atol_accepts"],
+)
+def test_the_tolerances_decide_whether_close_values_agree(
+    ref: float, val: float, rtol: float, atol: float, agrees: bool
+) -> None:
+    assert compare_arrays(_arr(ref), _arr(val), rtol=rtol, atol=atol).ok is agrees
 
 
 def test_identical_complex_inf_is_not_a_sign_mismatch() -> None:

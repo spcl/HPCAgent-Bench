@@ -40,57 +40,100 @@ def run_(
 
 A = np.linspace(0.5, 3.0, 6)
 
-# reverse / strided slices
+S1 = {"N": 6}
+VEC6 = {"a": "(N,)", "out": "(N,)"}
+SCALAR_OUT = {"a": "(N,)", "out": "(1,)"}
+MASKED_MAX_A = np.array([10.0, 1.0, 2.0, 3.0])
+ROWS_2X3 = np.array([[0.0, 1.0, 0.0], [2.0, 0.0, 3.0]])
+S = np.linspace(-1.0, 3.0, 6)  # ~ (bitwise-not on a boolean mask = logical negation) inputs
+NOT_BODY = " m1 = a > 0.0\n m2 = a < 2.0\n out[:] = np.where(~({}), a, 0.0)"
 
 
-def test_reverse_whole_array_assign() -> None:
-    ok, res = run_(" out[:] = a[::-1]", {"a": A}, {"out": (6,)}, {"N": 6}, {"a": "(N,)", "out": "(N,)"})
-    assert ok, res
-
-
-def test_strided_reverse_step2() -> None:
-    ok, res = run_(
-        " b = a[::-2]\n for i in range(3):\n  out[i] = b[i]",
-        {"a": A},
-        {"out": (3,)},
-        {"N": 6},
-        {"a": "(N,)", "out": "(3,)"},
-    )
-    assert ok, res
-
-
-# boolean-mask reductions
-
-
-def test_masked_sum_inline() -> None:
-    ok, res = run_(
-        " m = a > 1.5\n out[0] = np.sum(a[m])", {"a": A}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"}
-    )
-    assert ok, res
-
-
-def test_masked_max_seed_excludes_index0() -> None:
-    """Index 0 is masked OUT and holds the global max; the accumulator must seed
-    from the first masked HIT, not ``arr[0]`` (correct masked-max = 3.0)."""
-    a = np.array([10.0, 1.0, 2.0, 3.0])
-    ok, res = run_(
-        " m = a < 5.0\n out[0] = np.max(a[m])", {"a": a}, {"out": (1,)}, {"N": 4}, {"a": "(N,)", "out": "(1,)"}
-    )
-    assert ok, res
-
-
-def test_integer_gather_reduction_not_masked() -> None:
-    """``np.sum(a[idx])`` with an INTEGER index array is a gather-sum, NOT a
-    masked reduction -- it must stay a gather (the mask peephole is gated on a
-    known-boolean index)."""
-    a = np.linspace(0.5, 3.0, 6)
-    ok, res = run_(
-        " out[0] = np.sum(a[idx])",
-        {"a": a, "idx": np.array([0, 2, 4])},
-        {"out": (1,)},
-        {"N": 6},
-        {"a": "(N,)", "idx": "(3,)", "out": "(1,)"},
-    )
+@pytest.mark.parametrize(
+    ("body", "ins", "outs", "syms", "shapes"),
+    [
+        # reverse / strided slices
+        (" out[:] = a[::-1]", {"a": A}, {"out": (6,)}, S1, VEC6),
+        (
+            " b = a[::-2]\n for i in range(3):\n  out[i] = b[i]",
+            {"a": A},
+            {"out": (3,)},
+            S1,
+            {"a": "(N,)", "out": "(3,)"},
+        ),
+        # boolean-mask reductions
+        (" m = a > 1.5\n out[0] = np.sum(a[m])", {"a": A}, {"out": (1,)}, S1, SCALAR_OUT),
+        # Index 0 is masked OUT and holds the global max; the accumulator must seed
+        # from the first masked HIT, not ``arr[0]`` (correct masked-max = 3.0).
+        (" m = a < 5.0\n out[0] = np.max(a[m])", {"a": MASKED_MAX_A}, {"out": (1,)}, {"N": 4}, SCALAR_OUT),
+        # ``np.sum(a[idx])`` with an INTEGER index array is a gather-sum, NOT a masked reduction --
+        # it must stay a gather (the mask peephole is gated on a known-boolean index).
+        (
+            " out[0] = np.sum(a[idx])",
+            {"a": A, "idx": np.array([0, 2, 4])},
+            {"out": (1,)},
+            S1,
+            {"a": "(N,)", "idx": "(3,)", "out": "(1,)"},
+        ),
+        # any / all / count_nonzero
+        (" m = a > 1.5\n out[0] = np.any(m)", {"a": A}, {"out": (1,)}, S1, SCALAR_OUT),
+        (" m = a > 0.0\n out[0] = np.all(m)", {"a": A}, {"out": (1,)}, S1, SCALAR_OUT),
+        (" m = a > 1.5\n out[0] = np.count_nonzero(m)", {"a": A}, {"out": (1,)}, S1, SCALAR_OUT),
+        (
+            " out[0] = np.count_nonzero(a)",
+            {"a": np.array([0.0, 1.5, 0.0, 2.0, 3.0, 0.0])},
+            {"out": (1,)},
+            S1,
+            SCALAR_OUT,
+        ),
+        (
+            " m = a > 1.0\n out[:] = np.any(m, axis=0)",
+            {"a": ROWS_2X3},
+            {"out": (3,)},
+            {"M": 2, "N": 3},
+            {"a": "(M, N)", "out": "(N,)"},
+        ),
+        (
+            " m = a >= 0.0\n out[:] = np.all(m, axis=1)",
+            {"a": ROWS_2X3},
+            {"out": (2,)},
+            {"M": 2, "N": 3},
+            {"a": "(M, N)", "out": "(M,)"},
+        ),
+        (" m = a > 1.0\n out[:] = np.where(~m, a, 0.0)", {"a": S}, {"out": (6,)}, S1, VEC6),
+        # ``~`` applied to a ``& | ^`` COMBINE (De Morgan), not just a bare Name -- the operand is a
+        # BinOp, so the bool-detection must recurse. C bitwise ``~`` on the 0/1 combine would give the
+        # truthy -2 (always-true where); Fortran NOT() on a logical is a compile error.
+        (NOT_BODY.format("m1 & m2"), {"a": S}, {"out": (6,)}, S1, VEC6),
+        (NOT_BODY.format("m1 | m2"), {"a": S}, {"out": (6,)}, S1, VEC6),
+        (NOT_BODY.format("m1 ^ m2"), {"a": S}, {"out": (6,)}, S1, VEC6),
+    ],
+    ids=[
+        "reverse_whole_array_assign",
+        "strided_reverse_step2",
+        "masked_sum_inline",
+        "masked_max_seed_excludes_index0",
+        "integer_gather_reduction_is_not_masked",
+        "any_over_named_mask",
+        "all_over_named_mask",
+        "count_nonzero_of_mask",
+        "count_nonzero_of_float",
+        "any_along_axis",
+        "all_along_axis",
+        "not_mask_in_where",
+        "not_over_and_combine",
+        "not_over_or_combine",
+        "not_over_xor_combine",
+    ],
+)
+def test_slice_and_mask_forms_match_numpy_on_every_backend(
+    body: str,
+    ins: dict[str, np.ndarray | float],
+    outs: dict[str, tuple[int, ...]],
+    syms: dict[str, int],
+    shapes: dict[str, str],
+) -> None:
+    ok, res = run_(body, ins, outs, syms, shapes)
     assert ok, res
 
 
@@ -129,86 +172,4 @@ M = np.linspace(-1.0, 2.0, 8)
 )
 def test_masked_explicit_loop_staged_scalar(body: str) -> None:
     ok, res = run_(body, {"a": M, "K": 0.5, "v": 0.0}, {"out": (1,)}, {"N": 8}, {"a": "(N,)", "out": "(1,)"})
-    assert ok, res
-
-
-# any / all / count_nonzero
-
-
-def test_any_all_named_mask() -> None:
-    for op, expect_body in (("any", " m = a > 1.5\n"), ("all", " m = a > 0.0\n")):
-        ok, res = run_(
-            expect_body + f" out[0] = np.{op}(m)", {"a": A}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"}
-        )
-        assert ok, (op, res)
-
-
-def test_count_nonzero_mask_and_float() -> None:
-    ok, res = run_(
-        " m = a > 1.5\n out[0] = np.count_nonzero(m)", {"a": A}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"}
-    )
-    assert ok, res
-    x = np.array([0.0, 1.5, 0.0, 2.0, 3.0, 0.0])
-    ok, res = run_(" out[0] = np.count_nonzero(a)", {"a": x}, {"out": (1,)}, {"N": 6}, {"a": "(N,)", "out": "(1,)"})
-    assert ok, res
-
-
-def test_any_all_axis() -> None:
-    a = np.array([[0.0, 1.0, 0.0], [2.0, 0.0, 3.0]])
-    ok, res = run_(
-        " m = a > 1.0\n out[:] = np.any(m, axis=0)",
-        {"a": a},
-        {"out": (3,)},
-        {"M": 2, "N": 3},
-        {"a": "(M, N)", "out": "(N,)"},
-    )
-    assert ok, res
-    ok, res = run_(
-        " m = a >= 0.0\n out[:] = np.all(m, axis=1)",
-        {"a": a},
-        {"out": (2,)},
-        {"M": 2, "N": 3},
-        {"a": "(M, N)", "out": "(M,)"},
-    )
-    assert ok, res
-
-
-# ~ (bitwise-not on a boolean mask = logical negation)
-
-S = np.linspace(-1.0, 3.0, 6)
-
-
-def test_not_mask_in_where() -> None:
-    ok, res = run_(
-        " m = a > 1.0\n out[:] = np.where(~m, a, 0.0)", {"a": S}, {"out": (6,)}, {"N": 6}, {"a": "(N,)", "out": "(N,)"}
-    )
-    assert ok, res
-
-
-def test_not_over_compound_mask() -> None:
-    """``~`` applied to a ``& | ^`` COMBINE (De Morgan), not just a bare Name -- the
-    operand is a BinOp, so the bool-detection must recurse. C bitwise ``~`` on the
-    0/1 combine would give the truthy -2 (always-true where); Fortran NOT() on a
-    logical is a compile error."""
-    for combine in ("m1 & m2", "m1 | m2", "m1 ^ m2"):
-        ok, res = run_(
-            f" m1 = a > 0.0\n m2 = a < 2.0\n out[:] = np.where(~({combine}), a, 0.0)",
-            {"a": S},
-            {"out": (6,)},
-            {"N": 6},
-            {"a": "(N,)", "out": "(N,)"},
-        )
-        assert ok, (combine, res)
-
-
-def test_logical_xor_combine() -> None:
-    """``m1 ^ m2`` on boolean masks is elementwise XOR (Fortran ``.neqv.``, not the
-    integer IEOR that rejects a logical operand)."""
-    ok, res = run_(
-        " m1 = a > 0.0\n m2 = a < 2.0\n out[:] = np.where(m1 ^ m2, a, 0.0)",
-        {"a": S},
-        {"out": (6,)},
-        {"N": 6},
-        {"a": "(N,)", "out": "(N,)"},
-    )
     assert ok, res

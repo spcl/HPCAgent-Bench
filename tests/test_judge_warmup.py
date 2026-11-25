@@ -7,6 +7,7 @@ import json
 import pathlib
 import threading
 import time
+from collections.abc import Callable
 
 import pytest
 
@@ -32,6 +33,17 @@ def problems_file(tmp_path: pathlib.Path, kernels: list[str]) -> pathlib.Path:
         encoding="utf-8",
     )
     return path
+
+
+def slot_acquirer(pool: service.SlotPool) -> Callable[[int], DeviceSlot]:
+    """The warmer's ``acquire`` callback over ``pool``: a slot at the given priority, never a refusal."""
+
+    def acquire(priority: int) -> DeviceSlot:
+        slot = pool.acquire(priority, threading.Event())
+        assert slot is not None
+        return slot
+
+    return acquire
 
 
 def test_a_plugin_routes_terminal_work_queues_as_a_submission() -> None:
@@ -68,10 +80,7 @@ def test_a_waiting_request_takes_the_slot_before_the_warm_up(monkeypatch: pytest
     monkeypatch.setattr(torch_baseline, "warm_cell", lambda *unused: order.append("warm") or "")
     monkeypatch.setattr(torch_baseline, "publish_warm", lambda kind: None)
 
-    def acquire(priority: int) -> DeviceSlot:
-        slot = pool.acquire(priority, threading.Event())
-        assert slot is not None
-        return slot
+    acquire = slot_acquirer(pool)
 
     warmer = Warmer([Cell(ML_KERNEL, Baseline.TORCH_AUTOTUNE_CPU, None)], acquire, pool.release, Preset.S, "float64")
     (thread,) = warmer.start(1)
@@ -114,10 +123,7 @@ def test_every_cell_is_compiled_once_a_refused_kernel_is_dropped_and_the_end_pub
     kind = Baseline.TORCH_AUTOTUNE_CPU
     cells = [Cell("a", kind, {"n": 1}), Cell("b", kind, {"n": 1}), Cell("b", kind, None), Cell("a", kind, None)]
 
-    def acquire(priority: int) -> DeviceSlot:
-        slot = pool.acquire(priority, threading.Event())
-        assert slot is not None
-        return slot
+    acquire = slot_acquirer(pool)
 
     warmer = Warmer(cells, acquire, pool.release, Preset.S, "float64")
     for thread in warmer.start(1):
@@ -155,10 +161,7 @@ def test_a_score_cell_grades_the_kernel_as_score_does_on_a_warm_slot(monkeypatch
     monkeypatch.setattr(prepare, "grade_reference", grade)
     pool = service.SlotPool([DeviceSlot("cpu", 0)])
 
-    def acquire(priority: int) -> DeviceSlot:
-        slot = pool.acquire(priority, threading.Event())
-        assert slot is not None
-        return slot
+    acquire = slot_acquirer(pool)
 
     warmer = Warmer(
         [Cell("bad", None, None, ("score",)), Cell(SCICOMP_KERNEL, None, None, ("score",))],
@@ -190,10 +193,7 @@ def test_a_kernel_whose_score_grade_fails_skips_its_submit_grade_under_parallel_
     monkeypatch.setattr(prepare, "grade_reference", grade)
     pool = service.SlotPool([DeviceSlot("cpu", 0), DeviceSlot("cpu", 1)])
 
-    def acquire(priority: int) -> DeviceSlot:
-        slot = pool.acquire(priority, threading.Event())
-        assert slot is not None
-        return slot
+    acquire = slot_acquirer(pool)
 
     warmer = Warmer([Cell("bad", None, None), Cell("good", None, None)], acquire, pool.release, Preset.S, "float64")
     for thread in warmer.start(2):

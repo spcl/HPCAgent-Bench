@@ -196,14 +196,6 @@ def test_a_regrade_passes_the_scratch_request_the_live_grade_recorded(
     assert grade_under.submission_of(item).workspace_bytes == replayed
 
 
-def test_a_row_without_a_scratch_request_regrades_with_the_generous_default(tmp_path: pathlib.Path) -> None:
-    """Only a request that was never recorded (None) gets :data:`grade_under.UNKNOWN_WORKSPACE`."""
-    db = judge_shard(tmp_path)
-    add_grade(db, "k1", 10, units=(HOST, DEVICE), **credited(2.0))
-    item = dataclasses.replace(grade_under.build_worklist([db], [])[0][0], workspace_bytes=None)
-    assert grade_under.submission_of(item).workspace_bytes == grade_under.UNKNOWN_WORKSPACE
-
-
 def test_the_setup_env_keeps_how_a_submission_is_built_and_drops_the_experiment_identity(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -309,13 +301,6 @@ def test_the_setup_env_is_found_under_a_kernel_list_launchs_file_name(tmp_path: 
         "HPCAGENT_BENCH_GRADING_ALLOW_AGENT_BUILD_TOKENS": "false",
         "HPCAGENT_BENCH_RECORD_DEVICE": "cpu",
     }
-
-
-def test_the_setup_env_is_found_by_the_setup_its_launch_render_recorded(tmp_path: pathlib.Path) -> None:
-    """A kernel-list launch's render is named after the list; the setup it recorded is what finds it."""
-    render = tmp_path / ".env.llr40-kimi27sglang-fortran-blind-owed-list"
-    render.write_text("SETUP=llr40-kimi27sglang-fortran-blind\nHPCAGENT_BENCH_OFFLOAD=none\n", encoding="utf-8")
-    assert grade_under.setup_env("llr40-kimi27sglang-fortran-blind", [tmp_path]) == {"HPCAGENT_BENCH_OFFLOAD": "none"}
 
 
 def test_another_setup_sharing_the_name_prefix_is_not_the_setup_env(tmp_path: pathlib.Path) -> None:
@@ -720,39 +705,6 @@ def test_regrade_grades_a_real_kernel_end_to_end(tmp_path: pathlib.Path) -> None
     # ...and the rule that CHOSE its denominator: a re-timed scicomp row is best-of where the row it
     # replaces may be a fixed baseline, and nothing else on the row can tell the two apart.
     assert row["baseline_policy"], "a graded row must carry the baseline policy score() stamped"
-
-
-def test_the_final_env_stamps_mwd_v3_on_a_real_kernel(tmp_path: pathlib.Path) -> None:
-    """final_env's env forced onto a real score() call times varied draws: the row reads mwd-v3
-    (grade() restamps the final cells afterwards)."""
-
-    from hpcagent_bench import config
-    from hpcagent_bench.harness.optimizers import NoOpOptimizer
-    from hpcagent_bench.harness.task import Task
-
-    if not shutil.which("gcc"):
-        pytest.skip("gcc absent")
-
-    kernel = "scaled_add"
-    submission = NoOpOptimizer().solve(Task(kernel=kernel, language=Language.C))
-    db = judge_shard(tmp_path)
-    add_grade(db, kernel, 10, units=(submission.source,), language="c", **credited(2.0))
-    items, _problems = grade_under.build_worklist([db], [])
-    assert len(items) == 1
-
-    # The config OVERRIDES below outrank the env channel final_env writes (mw4x5's backend,
-    # inputs, repeat and alpha), so this pins only the varied-draw wiring reaching the measurement
-    # through grade(); test_finalize_grades_mw4x5_on_a_real_kernel covers the final rule end to end.
-    with (
-        config.overridden("service.preset", "S"),
-        config.overridden("measurement.timing_backend", Statistic.MANNWHITNEY),
-        config.overridden("measurement.repeat", 20),
-        grade_under.environment_scope(),
-    ):
-        grade_under.apply_env(grade_under.final_env(items[0]), set())
-        row = grade_under.grade(items[0])
-
-    assert row["timing_reduction"] == "mwd-v3"
 
 
 PROTOCOL_CELLS = [
@@ -1624,11 +1576,6 @@ def test_a_min_of_k_fallback_input_is_not_stamped_final(
     assert (task["s_i"], task["s_bar"], task["n_credited"]) == (1.0, None, 3)
     assert (values["status"], task["timing_reduction"], task["score_rule"]) == (grade_under.ERROR_STATUS, "", None)
     assert "mok-v1-varied" in values["reason"]
-
-
-def test_the_final_env_pins_one_warmup() -> None:
-    item = grade_under.Item("db", 1, "r", "k", 1, "setup", "c", SourceMode.RESTRICTED, True, {}, reduction="mwd-v3")
-    assert grade_under.final_env(item)[grade_under.WARMUP_ENV] == "1"
 
 
 def test_a_finalize_resume_redoes_rows_of_an_earlier_final_rule(

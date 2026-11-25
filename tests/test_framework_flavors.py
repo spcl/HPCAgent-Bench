@@ -158,11 +158,6 @@ def test_every_framework_resolves_to_its_adapter_class_and_package_export() -> N
         assert cls.__name__ in frameworks.__all__
 
 
-def test_a_misspelled_class_name_is_not_exported() -> None:
-    """The convention matches case-insensitively to FIND a class, never to invent a second public name."""
-    assert not hasattr(frameworks, "TvmFramework")
-
-
 def test_an_adapter_without_its_module_names_it(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = "hpcagent_bench.frameworks.nosuchbase_framework:NoSuchBaseFramework"
     monkeypatch.setitem(

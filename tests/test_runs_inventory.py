@@ -10,7 +10,6 @@ import json
 import os
 import pathlib
 import subprocess
-import tempfile
 
 import pytest
 
@@ -213,20 +212,3 @@ def test_an_umbrella_instance_is_counted_from_its_launch_stamp_never_from_sacct(
     assert [(row["nodes"], row["node_hours"], row["state"], row["name"]) for row in rows] == [
         ("6", "12.0", inventory.ENDED, "rev-scicomp40-kimi27sglang-noscore")
     ]
-
-
-if __name__ == "__main__":
-
-    def fresh() -> pathlib.Path:
-        root = pathlib.Path(tempfile.mkdtemp()) / "rev-scicomp40-20261115"
-        job(root, "100", "rev-scicomp40-kimi27sglang-c", "kimi27sglang", 40, "hpcagent-bench-sglang-mi300-latest")
-        job(root, "101", "rev-scicomp40-qwen38-c", "qwen38", 4, None)
-        (root / "not-a-job").mkdir()
-        return root
-
-    test_inventory_has_one_row_per_setup_of_a_job_read_from_its_db(fresh())
-    test_the_cli_writes_the_csv_and_the_generated_page_outside_the_run_root(fresh(), pathlib.Path(tempfile.mkdtemp()))
-    test_the_output_may_not_lie_in_a_run_root_and_the_dbs_are_not_written(fresh())
-    test_nodehours_are_nodes_times_hours_with_medians_per_model_over_the_full_corpus_jobs(
-        fresh(), pathlib.Path(tempfile.mkdtemp())
-    )

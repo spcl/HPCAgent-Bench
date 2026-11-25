@@ -27,6 +27,7 @@ import re
 import tempfile
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.lib_nodes import reduction_misses_target, retarget_scalar_accumulator
@@ -82,17 +83,22 @@ LOCAL_SCALAR_REAL = re.compile(r"^\s*real\(c_\w+\) :: (\w+)\s*$", re.MULTILINE)
 # A  the rewrite                                                               #
 
 
-def test_a_non_add_assign_step_is_left_alone() -> None:
-    # ``s = s * f(k)`` is a product, not the reduction this fold is sound for.
-    node, prelude = pattern("out[i]", "a[__mml1]")
-    prelude[1].body = ast.parse("__mm1 = __mm1 * a[__mml1]").body
-    assert retarget_scalar_accumulator(node, prelude) is None
-
-
-def test_an_assign_step_that_does_not_read_the_scalar_is_left_alone() -> None:
-    # ``s = f(k) + g(k)`` overwrites rather than accumulates -- folding it would sum every term.
-    node, prelude = pattern("out[i]", "a[__mml1]")
-    prelude[1].body = ast.parse("__mm1 = a[__mml1] + b[__mml1]").body
+@pytest.mark.parametrize(
+    ("target", "step"),
+    [
+        # ``s = s * f(k)`` is a product, not the reduction this fold is sound for.
+        ("out[i]", "__mm1 = __mm1 * a[__mml1]"),
+        # ``s = f(k) + g(k)`` overwrites rather than accumulates -- folding it would sum every term.
+        ("out[i]", "__mm1 = a[__mml1] + b[__mml1]"),
+        # A bare-Name destination is already the accumulator; there is nothing to retarget.
+        ("s", "__mm1 += a[__mml1] * b[__mml1]"),
+        ("t[j]", "__mm1 += a[__mml1] * __mm1"),
+    ],
+    ids=["non_add_assign_step", "assign_step_not_reading_the_scalar", "scalar_target", "self_referential_body"],
+)
+def test_a_pattern_that_is_not_a_scalar_accumulation_into_a_cell_is_left_alone(target: str, step: str) -> None:
+    node, prelude = pattern(target, "a[__mml1]")
+    prelude[1].body = ast.parse(step).body
     assert retarget_scalar_accumulator(node, prelude) is None
 
 
@@ -108,15 +114,6 @@ def test_aug_assign_retargets_without_a_zero_init() -> None:
     assert "__mm1" not in text
 
 
-def test_scalar_target_is_left_alone() -> None:
-    # A bare-Name destination is already the accumulator; there is nothing to retarget.
-    assert retarget_scalar_accumulator(*pattern("s", "a[__mml1] * b[__mml1]")) is None
-
-
-def test_self_referential_body_is_left_alone() -> None:
-    assert retarget_scalar_accumulator(*pattern("t[j]", "a[__mml1] * __mm1")) is None
-
-
 # B  the aliasing guard                                                        #
 
 
@@ -125,30 +122,35 @@ def misses(target: str, body: str, iterable: str = "range(i)") -> bool:
     return reduction_misses_target(ast.parse(target).body[0].value, loop, ast.parse(body).body[0].value)
 
 
-def test_body_that_never_touches_the_destination_array_is_safe() -> None:
-    assert misses("temp2[j]", "B[__mml1, j] * A[i, __mml1]")
+@pytest.mark.parametrize(
+    ("target", "body"),
+    [
+        ("temp2[j]", "B[__mml1, j] * A[i, __mml1]"),
+        # trmm: k runs from i + 1, so B[i, j] is never read back mid-accumulation.
+        ("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]"),
+    ],
+    ids=["body_never_touches_the_destination_array", "read_offset_past_the_destination_cell"],
+)
+def test_a_reduction_that_cannot_read_its_destination_cell_is_safe(target: str, body: str) -> None:
+    assert misses(target, body)
 
 
-def test_read_offset_past_the_destination_cell_is_safe() -> None:
-    # trmm: k runs from i + 1, so B[i, j] is never read back mid-accumulation.
-    assert misses("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]")
-
-
-def test_read_that_may_hit_the_destination_cell_is_refused() -> None:
-    # B[__mml1, j] covers B[i, j] when __mml1 == i -- retargeting would feed the
-    # partial sum back into itself.
-    assert not misses("B[i, j]", "A[__mml1, i] * B[__mml1, j]")
-
-
-def test_whole_array_read_of_the_destination_is_refused() -> None:
-    assert not misses("B[i, j]", "A[__mml1, i] * B")
-
-
-def test_non_zero_based_iterable_is_refused() -> None:
-    # The miss proof rests on ``__mml1 >= 0``; without a bare ``range(n)`` there is
-    # nothing to rest it on, so the same trmm shape must be declined.
-    assert not misses("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", iterable="range(-M, M)")
-    assert not misses("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", iterable="ks")
+@pytest.mark.parametrize(
+    ("body", "iterable"),
+    [
+        # B[__mml1, j] covers B[i, j] when __mml1 == i -- retargeting would feed the
+        # partial sum back into itself.
+        ("A[__mml1, i] * B[__mml1, j]", "range(i)"),
+        ("A[__mml1, i] * B", "range(i)"),
+        # The miss proof rests on ``__mml1 >= 0``; without a bare ``range(n)`` there is
+        # nothing to rest it on, so the same trmm shape must be declined.
+        ("A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", "range(-M, M)"),
+        ("A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", "ks"),
+    ],
+    ids=["read_that_may_hit_the_cell", "whole_array_read", "negative_based_iterable", "non_range_iterable"],
+)
+def test_a_reduction_that_may_read_its_destination_cell_is_refused(body: str, iterable: str) -> None:
+    assert not misses("B[i, j]", body, iterable=iterable)
 
 
 def test_guard_declines_the_retarget_end_to_end() -> None:
@@ -255,28 +257,17 @@ int main(void) {{
 """
 
 
-def check(short: str, cpp: bool) -> None:
+@pytest.mark.parametrize(
+    ("short", "cpp"),
+    [
+        pytest.param("symm", False, marks=tu.have_gcc, id="symm_c"),
+        pytest.param("symm", True, marks=tu.have_gpp, id="symm_cpp"),
+        pytest.param("trmm", False, marks=tu.have_gcc, id="trmm_c"),
+        pytest.param("trmm", True, marks=tu.have_gpp, id="trmm_cpp"),
+    ],
+)
+def test_the_retargeted_kernel_matches_numpy_natively(short: str, cpp: bool) -> None:
     args = inputs(short)
     want = reference(short, args)
     run = tu.build_run_c(emit_(short, cpp), driver(short, args, want), cpp=cpp)
     assert run.returncode == 0, run.stdout + run.stderr
-
-
-@tu.have_gcc
-def test_symm_native_c_matches_numpy() -> None:
-    check("symm", cpp=False)
-
-
-@tu.have_gpp
-def test_symm_native_cpp_matches_numpy() -> None:
-    check("symm", cpp=True)
-
-
-@tu.have_gcc
-def test_trmm_native_c_matches_numpy() -> None:
-    check("trmm", cpp=False)
-
-
-@tu.have_gpp
-def test_trmm_native_cpp_matches_numpy() -> None:
-    check("trmm", cpp=True)

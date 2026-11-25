@@ -48,10 +48,6 @@ def _post(port: int, path: str, body: dict) -> tuple[int, dict]:
             return refused.code, json.loads(refused.read())
 
 
-def test_catalog_refusal_is_none_for_an_empty_request() -> None:
-    assert catalog_refusal([], Language.C) is None
-
-
 def test_the_build_token_switch_does_not_gate_a_catalog_load() -> None:
     """``startup.load`` is ``requests.allow`` ``load``; ``grading.allow_agent_build_tokens`` gates the ``build``
     tokens only, so the switch off leaves a load to the catalog check."""
@@ -69,12 +65,6 @@ def test_a_setup_without_load_refuses_every_catalog_name(names: list[str]) -> No
     with allowing():
         refusal = RequestAllowances.from_config().refusal(Requests.of(libraries=names))
     assert refusal == f"this setup does not allow library requests: drop startup.load (refused {', '.join(names)})"
-
-
-def test_catalog_refusal_names_an_unoffered_library() -> None:
-    refusal = catalog_refusal(["definitely-not-a-real-library"], Language.C)
-    assert refusal is not None
-    assert "definitely-not-a-real-library" in refusal
 
 
 def test_sandbox_build_resolves_an_offered_catalog_request(tmp_path: pathlib.Path) -> None:

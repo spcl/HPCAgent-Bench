@@ -16,7 +16,3 @@ def test_a_share_under_min_share_cpus_is_not_pinned() -> None:
     assert pin_worker_cpus(env) == cpus
     assert PINNED_ENV not in env
     assert frozenset(os.sched_getaffinity(0)) == cpus
-
-
-if __name__ == "__main__":
-    test_a_share_under_min_share_cpus_is_not_pinned()

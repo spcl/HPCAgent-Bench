@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from hpcagent_bench import paths
+from tests.fresh_module import module_at
 
 REPO = paths.ROOT
 WORKFLOW = REPO / ".github" / "workflows" / "tests.yml"
@@ -378,14 +379,20 @@ def test_every_job_sets_a_timeout_at_all() -> None:
     assert not missing, f"no timeout-minutes on {missing}"
 
 
-def test_the_unit_sweep_matrix_runs_every_slice_it_deals_into() -> None:
-    """``awk 'NR % N == I'`` deals the file list; a missing I is test files nothing runs."""
+def test_the_unit_sweep_runs_every_shard_it_deals_and_each_file_once() -> None:
+    """The deal names a shard count; a leg missing from the matrix is test files nothing runs, and the shards must
+    partition the sweep."""
     legs = workflow_jobs()["unit"]["strategy"]["matrix"]["include"]
     indices = {int(leg["shard"]) for leg in legs if str(leg["shard"]).isdigit()}
-    deals = set(re.findall(r"awk 'NR % (\d+) == \$\{\{ matrix\.shard \}\}'", WORKFLOW.read_text()))
-    assert len(deals) == 1, f"the unit sweep deals {deals or 'nothing'}; it has to deal exactly one modulus"
+    deals = set(re.findall(r"deal_shards\.py \$\{\{ matrix\.shard \}\} (\d+)", WORKFLOW.read_text()))
+    assert len(deals) == 1, f"the unit sweep deals {deals or 'nothing'}; it has to deal exactly one shard count"
     count = int(deals.pop())
     assert indices == set(range(count)), f"unit runs shards {sorted(indices)} of {count}"
+    sut = module_at(REPO / ".github" / "scripts" / "deal_shards.py")
+    files = sut.sweep_files()
+    dealt = sut.deal(files, {files[0]: 1000.0}, count)
+    assert sorted(f for shard in dealt for f in shard) == files
+    assert dealt[0] == [files[0]]  # the heavy file alone fills a shard; the rest spread over the others
 
 
 def test_the_unit_sweep_runs_the_python_floor_and_the_default() -> None:

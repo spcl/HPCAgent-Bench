@@ -16,6 +16,8 @@ Each test pins one rule so a regression points straight at it.
 
 import ast
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_common.lib_nodes import CallHoister
 from hpcagent_bench.translators.numpyto_common.lowering import SubscriptifyNames, WholeArrayAssignRewriter
 
@@ -31,27 +33,23 @@ def subscriptify(src: str, iters: list[str], shapes: dict[str, tuple[str, ...]])
     return ast.unparse(SubscriptifyNames(shapes, iters).visit(expr_(src)))
 
 
-def test_newaxis_trailing_binds_leading_iter() -> None:
-    # ``V[:, None]`` at iters (w0, w1): the slice is axis 0 -> V[w0]; the
-    # None axis consumes w1 but adds no source index. (Was wrongly V[w1].)
-    assert subscriptify("V[:, None]", ["__w0", "__w1"], {"V": ("K",)}) == "V[__w0]"
-
-
-def test_newaxis_leading_binds_trailing_iter() -> None:
-    # ``V[None, :]`` at iters (w0, w1): None consumes w0, slice -> V[w1].
-    assert subscriptify("V[None, :]", ["__w0", "__w1"], {"V": ("K",)}) == "V[__w1]"
-
-
-def test_newaxis_between_axes_on_2d() -> None:
-    # ``A[:, None, :]`` on (N, M) at iters (w0, w1, w2) -> A[w0, w2].
-    out = subscriptify("A[:, None, :]", ["__w0", "__w1", "__w2"], {"A": ("N", "M")})
-    assert out == "A[__w0, __w2]"
-
-
-def test_plain_slice_pair_unchanged_by_newaxis_fix() -> None:
-    # Regression guard: no newaxis -> the right-alignment is unchanged.
-    out = subscriptify("A[:, j]", ["__w0"], {"A": ("N", "M")})
-    assert out == "A[__w0, j]"
+@pytest.mark.parametrize(
+    ("src", "iters", "shapes", "want"),
+    [
+        # The slice is axis 0 -> V[w0]; the None axis consumes w1 but adds no source index. (Was wrongly V[w1].)
+        ("V[:, None]", ["__w0", "__w1"], {"V": ("K",)}, "V[__w0]"),
+        # None consumes w0, slice -> V[w1].
+        ("V[None, :]", ["__w0", "__w1"], {"V": ("K",)}, "V[__w1]"),
+        ("A[:, None, :]", ["__w0", "__w1", "__w2"], {"A": ("N", "M")}, "A[__w0, __w2]"),
+        # Regression guard: no newaxis -> the right-alignment is unchanged.
+        ("A[:, j]", ["__w0"], {"A": ("N", "M")}, "A[__w0, j]"),
+    ],
+    ids=["trailing_newaxis", "leading_newaxis", "newaxis_between_axes", "plain_slice_pair"],
+)
+def test_a_newaxis_binds_the_slice_to_the_iterator_of_its_own_axis(
+    src: str, iters: list[str], shapes: dict[str, tuple[str, ...]], want: str
+) -> None:
+    assert subscriptify(src, iters, shapes) == want
 
 
 # B. ``np.argmax(a, axis=k)`` hoists to an int64 INDEX ARRAY                    #
@@ -68,20 +66,18 @@ def hoist(
     return array_temps, scalar_temps, local_dtypes
 
 
-def test_argmax_axis_hoists_to_int64_array_temp() -> None:
-    arr, scal, dts = hoist("np.argmax(scores, axis=0)", {"scores": ("K", "K")})
+@pytest.mark.parametrize(
+    ("src", "shapes"),
+    [("np.argmax(scores, axis=0)", {"scores": ("K", "K")}), ("np.argmin(scores, axis=1)", {"scores": ("K", "M")})],
+    ids=["argmax", "argmin"],
+)
+def test_an_axis_argmax_or_argmin_hoists_to_an_int64_array_temp(src: str, shapes: dict[str, tuple[str, ...]]) -> None:
+    arr, scal, dts = hoist(src, shapes)
     assert arr
     assert not scal
     ((name, shape),) = arr.items()
-    assert shape == ("K",)  # kept axis (axis 1)
+    assert shape == ("K",)  # the kept axis
     assert dts[name] == "int64"  # index dtype, not double
-
-
-def test_argmin_axis_hoists_to_int64_array_temp() -> None:
-    arr, scal, dts = hoist("np.argmin(scores, axis=1)", {"scores": ("K", "M")})
-    ((name, shape),) = arr.items()
-    assert shape == ("K",)
-    assert dts[name] == "int64"
 
 
 def test_argmax_no_axis_stays_scalar() -> None:

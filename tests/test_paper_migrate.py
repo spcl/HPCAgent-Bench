@@ -87,11 +87,3 @@ def test_repeats_make_each_episode_a_slot_and_latest_keeps_the_newest() -> None:
     assert migrate.migrate(three, repeats=True).slot.tolist() == [1, 2, 3, 2]
     latest = migrate.migrate(old_rows(), latest=True)
     assert latest.job.unique().tolist() == [2]
-
-
-if __name__ == "__main__":
-    test_episode_id_takes_the_folded_setup()
-    test_final_status_only_on_answers()
-    test_live_pooled_answer_is_credited_unless_final_only()
-    test_rows_map_one_to_one_with_derived_launches()
-    test_repeats_make_each_episode_a_slot_and_latest_keeps_the_newest()

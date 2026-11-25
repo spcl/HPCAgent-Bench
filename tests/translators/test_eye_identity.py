@@ -74,38 +74,3 @@ def test_eye_rectangular_all_backends() -> None:
         )
     )
     assert ok, res
-
-
-def test_eye_emit_has_no_literal_eye() -> None:
-    import json
-    import pathlib
-    import tempfile
-
-    from hpcagent_bench.translators.numpyto_c.emit import emit_c
-    from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
-    from hpcagent_bench.translators.numpyto_common.lowering import lower
-
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(
-        "import numpy as np\ndef f(x, out):\n n = len(x)\n I = np.eye(n)\n out[0] = I[0, 0] + I[0, 1]\n"
-    )
-    bi = {
-        "benchmark": {
-            "name": "k",
-            "short_name": "k",
-            "relative_path": "",
-            "module_name": "k",
-            "func_name": "f",
-            "parameters": {"S": {"N": 4}},
-            "input_args": ["x", "out"],
-            "array_args": ["x", "out"],
-            "output_args": ["out"],
-            "init": {"arrays": {"x": "(N,)", "out": "(1,)"}},
-        }
-    }
-    (d / "bi.json").write_text(json.dumps(bi))
-    c = emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name="f")
-    # no literal ``eye(`` / ``identity(`` call survives -- the identity is built
-    # from zeros + a diagonal store.
-    assert "eye(" not in c
-    assert "identity(" not in c

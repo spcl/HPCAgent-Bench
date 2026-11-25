@@ -168,17 +168,6 @@ def test_an_agent_launch_venv_drops_the_kernel_sources_relayout_ships() -> None:
     assert hook.index("flock 9") < hook.index(prune), "a venv built before the prune existed is pruned too"
 
 
-def test_the_rocprof_compute_environment_is_a_locked_project_synced_into_its_venv() -> None:
-    project = IMAGES / "judge-agent-amd" / "rocprof-compute"
-    deps = pyproject(project / "pyproject.toml")["project"]["dependencies"]  # type: ignore[index]
-    assert "pandas==2.2.3" in deps
-    assert "astunparse==1.6.2" in deps
-    assert (project / "uv.lock").is_file()
-    text = recipe("judge-agent-amd")
-    assert "/opt/rocprof-compute/" in text
-    assert "UV_PROJECT_ENVIRONMENT=/opt/rocprof-compute-venv" in text
-
-
 def test_the_extras_are_three_exclusive_framework_sets_that_each_carry_dev() -> None:
     project = pyproject()
     extras = project["project"]["optional-dependencies"]  # type: ignore[index]
@@ -197,13 +186,6 @@ def test_the_extras_are_three_exclusive_framework_sets_that_each_carry_dev() -> 
     assert indexes["pytorch-cuda"].rstrip("/").rsplit("/", 1)[1].startswith("cu13")
 
 
-def test_rocm_jax_and_hip_cupy_are_part_of_the_amdgpu_extra() -> None:
-    amdgpu = pyproject()["project"]["optional-dependencies"]["amdgpu"]  # type: ignore[index]
-    names = {re.split(r"[=;\s\[<>]", item, maxsplit=1)[0] for item in amdgpu}
-    assert {"jaxlib", "jax-rocm7-plugin", "jax-rocm7-pjrt", "cupy", "torch", "triton"} <= names
-    assert "cupy-rocm" not in pyproject()["dependency-groups"]  # type: ignore[operator]
-
-
 def test_the_harness_groups_live_in_the_agent_project_and_conflict_with_the_proxy_stack() -> None:
     agent = pyproject(ROOT / "agent" / "pyproject.toml")
     root = pyproject()
@@ -212,46 +194,3 @@ def test_the_harness_groups_live_in_the_agent_project_and_conflict_with_the_prox
     conflicts = [item for group in root["tool"]["uv"]["conflicts"] for item in group]  # type: ignore[index]
     for name in HARNESS_GROUPS:
         assert {"package": "hpcagent-agent", "group": name} in conflicts, name
-
-
-def test_the_harbor_adapter_is_a_workspace_member_not_an_editable_install() -> None:
-    members = pyproject()["tool"]["uv"]["workspace"]["members"]  # type: ignore[index]
-    assert "adapters/hpcagent_bench" in members
-    action = (ROOT / ".github" / "actions" / "setup" / "action.yml").read_text(encoding="utf-8")
-    assert "editable" not in action
-
-
-def test_the_openblas_build_tools_are_a_locked_group() -> None:
-    groups = pyproject()["dependency-groups"]
-    assert {"meson-python", "Cython", "pybind11", "patchelf"} <= set(groups["openblas-build"])  # type: ignore[index]
-
-
-def test_the_sglang_image_syncs_its_tiny_locked_project_into_the_vendor_venv() -> None:
-    project = pyproject(IMAGES / "sglang" / "pyproject.toml")
-    assert project["project"]["dependencies"] == ["flydsl==0.3.2", "cupy==14.2.0"]  # type: ignore[index]
-    assert (IMAGES / "sglang" / "uv.lock").is_file()
-    text = recipe("sglang")
-    assert "COPY containers/images/sglang/pyproject.toml containers/images/sglang/uv.lock /opt/sglang-extras/" in text
-    assert "UV_PROJECT_ENVIRONMENT=/opt/venv" in text
-    assert "uv sync --frozen --inexact" in text
-    assert "--no-install-package numpy" in text
-    assert "--no-binary-package cupy" in text
-
-
-if __name__ == "__main__":
-    test_no_installer_uses_the_pip_interface()
-    for name in JUDGE_AGENT:
-        test_a_judge_agent_image_installs_only_what_it_builds_from_source(name)
-        test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_build(name)
-        test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(name)
-        test_the_openblas_rebuild_syncs_the_image_group_only(name)
-    test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild()
-    test_the_launch_hook_builds_one_locked_venv_per_pin_beside_the_image_python()
-    test_an_agent_launch_venv_drops_the_kernel_sources_relayout_ships()
-    test_the_rocprof_compute_environment_is_a_locked_project_synced_into_its_venv()
-    test_the_extras_are_three_exclusive_framework_sets_that_each_carry_dev()
-    test_rocm_jax_and_hip_cupy_are_part_of_the_amdgpu_extra()
-    test_the_harness_groups_live_in_the_agent_project_and_conflict_with_the_proxy_stack()
-    test_the_harbor_adapter_is_a_workspace_member_not_an_editable_install()
-    test_the_openblas_build_tools_are_a_locked_group()
-    test_the_sglang_image_syncs_its_tiny_locked_project_into_the_vendor_venv()

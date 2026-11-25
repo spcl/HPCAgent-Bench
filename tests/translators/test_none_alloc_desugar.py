@@ -13,6 +13,7 @@ alone, and a numerical end-to-end check that the always-allocated form still mat
 import ast
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.translators.numpyto_common.lowering import ConditionalNoneAllocRewriter
 from tests.translators.op_oracle import run_op
@@ -25,12 +26,16 @@ def rw(body_src: str) -> str:
     return ast.unparse(tree.body[0].body[0])
 
 
-def test_alloc_then_none_takes_the_alloc_branch() -> None:
-    assert rw("x = np.zeros((n,)) if cond else None") == "x = np.zeros((n,))"
-
-
-def test_none_then_alloc_mirror_takes_the_alloc_branch() -> None:
-    assert rw("x = None if cond else np.ones((n,))") == "x = np.ones((n,))"
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        ("x = np.zeros((n,)) if cond else None", "x = np.zeros((n,))"),
+        ("x = None if cond else np.ones((n,))", "x = np.ones((n,))"),
+    ],
+    ids=["alloc_then_none", "none_then_alloc_mirror"],
+)
+def test_a_conditional_none_allocation_takes_the_alloc_branch(src: str, expected: str) -> None:
+    assert rw(src) == expected
 
 
 def test_name_observed_via_is_none_is_not_forced() -> None:

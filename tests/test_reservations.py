@@ -7,7 +7,6 @@ deferred past the reservation (an experiment's minimum is its whole time)."""
 import datetime
 import os
 import pathlib
-import tempfile
 
 import pytest
 
@@ -85,13 +84,3 @@ def test_the_cli_reads_scontrol_and_prints_walltime_and_begin(
     assert [one.name for one in reservations.read()] == ["cscs", "maintenance", "mine", "other-partition"]
     assert reservations.fit(hours(6), hours(6), "mi300", "ybudanaz", []).seconds == hours(6)
     assert reservations.seconds_of("1-02:00:00") == hours(26) and reservations.clock_of(hours(6)) == "06:00:00"
-
-
-if __name__ == "__main__":
-    test_only_the_reservations_a_job_could_run_into_are_avoided()
-    test_a_job_that_ends_before_the_reservation_is_given_what_it_asked()
-    test_a_job_that_reaches_into_it_is_shortened_down_to_its_minimum()
-    test_an_experiment_whose_minimum_is_its_whole_time_waits_for_the_reservation_to_end()
-    test_a_later_reservation_defers_past_the_first_too()
-    with pytest.MonkeyPatch.context() as patch:
-        test_the_cli_reads_scontrol_and_prints_walltime_and_begin(pathlib.Path(tempfile.mkdtemp()), patch)

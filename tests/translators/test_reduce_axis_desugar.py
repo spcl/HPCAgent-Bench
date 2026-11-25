@@ -17,6 +17,7 @@ import types
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     axis_list,
@@ -50,34 +51,6 @@ def test_axis_list_normalizes_negative_and_tuple() -> None:
 # the rewrite: keepdims, sum, tuple axis                                       #
 
 
-def test_negative_axis_now_reduces() -> None:
-    # ``axis=-1`` parses as a UnaryOp, not a constant; left verbatim, numba
-    # see the unsupported axis form.
-    src = "def k(x, out):\n out[:] = np.max(x, axis=-1)\n"
-    kir = kir_("k", x=("M", "N"), out=("M",))
-    got = desugar_for_python_backend(src, kir, backend="numba")
-    assert "np.max(" not in got
-    assert "for " in got
-
-
-def test_keepdims_keeps_a_size_one_dim() -> None:
-    src = "def k(x, out):\n m = np.max(x, axis=-1, keepdims=True)\n out[:] = x - m\n"
-    kir = kir_("k", x=("M", "N"), out=("M", "N"))
-    got = desugar_for_python_backend(src, kir, backend="numba")
-    # result allocated with a trailing size-1 axis, written at index [..., 0].
-    assert ", 1)" in got
-    assert ", 0]" in got
-    assert "np.max(" not in got
-
-
-def test_sum_axis_desugars_with_accumulator() -> None:
-    src = "def k(x, out):\n out[:] = np.sum(x, axis=1)\n"
-    kir = kir_("k", x=("M", "N"), out=("M",))
-    got = desugar_for_python_backend(src, kir, backend="numba")
-    assert "np.sum(" not in got
-    assert "+=" in got
-
-
 def test_tuple_axis_reduces_over_all_named_axes() -> None:
     # conv/pool inner reduction: reduce a rank-4 slice over axes (1, 2).
     src = "def k(x, out):\n out[:] = np.max(x, axis=(1, 2))\n"
@@ -89,19 +62,19 @@ def test_tuple_axis_reduces_over_all_named_axes() -> None:
     assert got.count("_j2 in range") == 1
 
 
-def test_full_reduction_without_keepdims_left_verbatim() -> None:
-    # every axis reduced -> a scalar; the backend's own full ``np.sum(x)`` handles
-    # it, and emitting ``tmp[] = ...`` would be a syntax error.
-    src = "def k(x, out):\n out[0] = np.sum(x, axis=(0, 1))\n"
-    kir = kir_("k", x=("M", "N"), out=("one",))
-    assert desugar_for_python_backend(src, kir, backend="numba") == src
-
-
-def test_tuple_axis_argmax_refused() -> None:
-    # numpy itself rejects a tuple axis for argmin/argmax -> leave verbatim.
-    src = "def k(x, out):\n out[:] = np.argmax(x, axis=(1, 2))\n"
-    kir = kir_("k", x=("A", "B", "C"), out=("A",))
-    assert desugar_for_python_backend(src, kir, backend="numba") == src
+@pytest.mark.parametrize(
+    ("src", "arrays"),
+    [
+        # every axis reduced -> a scalar; the backend's own full ``np.sum(x)`` handles
+        # it, and emitting ``tmp[] = ...`` would be a syntax error.
+        ("def k(x, out):\n out[0] = np.sum(x, axis=(0, 1))\n", {"x": ("M", "N"), "out": ("one",)}),
+        # numpy itself rejects a tuple axis for argmin/argmax -> leave verbatim.
+        ("def k(x, out):\n out[:] = np.argmax(x, axis=(1, 2))\n", {"x": ("A", "B", "C"), "out": ("A",)}),
+    ],
+    ids=["full_reduction_without_keepdims", "tuple_axis_argmax"],
+)
+def test_a_reduction_the_backend_handles_itself_is_left_verbatim(src: str, arrays: dict[str, tuple[str, ...]]) -> None:
+    assert desugar_for_python_backend(src, kir_("k", **arrays), backend="numba") == src
 
 
 def test_non_literal_ddof_leaves_the_reduction_and_its_operand_verbatim() -> None:

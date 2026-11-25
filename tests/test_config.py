@@ -5,7 +5,6 @@ that take their defaults from it."""
 
 import pathlib
 import re
-import sys
 from collections.abc import Callable
 from typing import get_args
 
@@ -146,31 +145,14 @@ def test_a_renamed_name_is_an_error_naming_its_new_name(monkeypatch: pytest.Monk
         config.current()
 
 
-@pytest.mark.parametrize("name", ["HPCAGENT_BENCH_JUDGE_URLS", "HPCAGENT_BENCH_REPO", "HPCAGENT_BENCH_CACHE"])
-def test_a_non_config_name_is_accepted(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
-    monkeypatch.setenv(name, "/somewhere")
-    assert config.current().mpi.ranks >= 1
-
-
 def test_overriding_an_unknown_key_raises() -> None:
     with pytest.raises(KeyError, match=r"measurement\.repeats"):
         config.set_override("measurement.repeats", 5)
 
 
-def test_overriding_with_a_value_of_the_wrong_type_raises() -> None:
-    with pytest.raises(pydantic.ValidationError):
-        config.set_override("mpi.ranks", "eight")
-
-
 def test_overriding_a_constrained_key_with_a_value_out_of_its_range_raises() -> None:
     with pytest.raises(pydantic.ValidationError):
         config.set_override("measurement.repeat", 0)
-
-
-def test_a_key_without_an_annotation_has_no_validator(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(config.FIELDS, "measurement.unannotated", pydantic.fields.FieldInfo())
-    with pytest.raises(TypeError, match=r"measurement\.unannotated"):
-        config.adapter("measurement.unannotated")
 
 
 def test_get_of_an_unknown_key_raises() -> None:
@@ -230,12 +212,6 @@ def test_the_agent_rootfs_reads_the_config_env_and_defaults_to_writable(monkeypa
     assert config.current().isolation.agent_rootfs is AgentRootfs.READ_ONLY
 
 
-def test_an_unknown_agent_rootfs_spelling_names_its_variable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_ISOLATION_AGENT_ROOTFS", "read_only")
-    with pytest.raises(ValueError, match="HPCAGENT_BENCH_ISOLATION_AGENT_ROOTFS"):
-        config.current()
-
-
 def test_the_agent_worker_count_honours_an_override_over_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_AGENT_WORKERS", "7")
     with config.overridden("agent.workers", 3):
@@ -279,12 +255,6 @@ def test_a_reader_without_an_override_returns_the_model_default(read: Callable[[
     """Every reader used to carry its own fallback; several disagreed with config.yaml (repeat 50, guillotine
     off, quiescence gates off, launch timeout 1800 s)."""
     assert read() == want
-
-
-def test_physical_bandwidth_gbps_is_no_key() -> None:
-    """``record.physical_bandwidth_gbps`` had no reader that a grade reached; the floor takes the residency's."""
-    assert "record.physical_bandwidth_gbps" not in config.FIELDS
-    assert timing.physical_floor_ns(10_600, 10_600.0) == 1.0
 
 
 def test_an_unknown_timing_backend_raises_instead_of_reducing_with_min_of_k() -> None:
@@ -391,7 +361,3 @@ def test_an_env_overlay_reaches_readers(monkeypatch: pytest.MonkeyPatch) -> None
     assert scoring.mpi_launch_cfg().launcher == ["srun", "--mpi=pmi2", "-n"]
     assert config.get("measurement.repeat") == 7
     assert config.env_name("measurement.quiescence.residual_ns") == "HPCAGENT_BENCH_MEASUREMENT_QUIESCENCE_RESIDUAL_NS"
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

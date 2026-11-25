@@ -135,13 +135,3 @@ def test_markdown_has_one_row_per_kernel() -> None:
     lines = provenance.markdown(rows).splitlines()
     assert lines[2] == "| a | 10 | 12 | 4 | 2 | 8 |  | not run |"
     assert lines[3] == "| b |  |  |  |  |  |  | FileNotFoundError: x |"
-
-
-if __name__ == "__main__":
-    test_restore_decorators_adds_jit_only_where_the_dump_cut_it()
-    test_prelude_stops_before_the_first_kernel_and_its_decorator()
-    test_normalize_gives_the_baseline_entry_over_the_generated_host()
-    test_normalize_binds_renamed_and_refuses_unbound_host_parameters()
-    test_compare_counts_significant_lines_through_difflib()
-    test_read_sources_takes_the_body_from_triton_py_and_the_prelude_from_the_build()
-    test_markdown_has_one_row_per_kernel()

@@ -4,6 +4,7 @@
 statistic from being applied to the wrong population."""
 
 import math
+from collections.abc import Callable
 
 import pandas as pd
 import pytest
@@ -54,20 +55,22 @@ def test_a_blank_or_adhoc_setup_is_not_a_condition() -> None:
     assert population.condition_rows(frame).setup.tolist() == ["llr40v9-m-c"]
 
 
-def test_an_aggregate_refuses_a_slice_that_mixes_denominators() -> None:
+@pytest.mark.parametrize(
+    ("denominators", "message"),
+    [
+        pytest.param(["c", "numba"], "mixes baseline denominators", id="mixed"),
+        pytest.param([None, "", float("nan")], "no baseline recorded", id="none-recorded"),
+    ],
+)
+def test_an_aggregate_refuses_a_slice_without_exactly_one_denominator(denominators: list[object], message: str) -> None:
     """A speedup over a single-core reference and one over a parallel reference are ratios of
     different quantities, so their mean has no denominator. Taking the majority and warning is what
     an aggregate may not do: the same agent work can read 95.3x under one
-    reference and 1.82x under the other."""
-    with pytest.raises(population.MixedPopulationError, match="mixes baseline denominators"):
-        population.one_denominator(["c", "numba"])
-
-
-def test_an_aggregate_refuses_a_slice_with_no_denominator_at_all() -> None:
-    """A blank denominator column is not a default. A ratio whose reference nobody recorded cannot
-    be pooled with one whose reference is known, and silently supplying one invents the claim."""
-    with pytest.raises(population.MixedPopulationError, match="no baseline recorded"):
-        population.one_denominator([None, "", float("nan")])
+    reference and 1.82x under the other. A blank denominator column is not a default either: a ratio
+    whose reference nobody recorded cannot be pooled with one whose reference is known, and silently
+    supplying one invents the claim."""
+    with pytest.raises(population.MixedPopulationError, match=message):
+        population.one_denominator(denominators)
 
 
 def test_a_recoverable_blank_denominator_is_not_read_as_a_second_reference() -> None:
@@ -279,12 +282,24 @@ def test_two_jobs_that_reused_one_episode_id_stay_two_episodes() -> None:
     assert sorted(kept.speedup) == [1.82, 95.3]
 
 
-def test_a_reduction_that_cannot_identify_an_episode_refuses_to_guess() -> None:
+ORDER = ("ts_ms", "attempt_index")
+
+
+@pytest.mark.parametrize(
+    "reduce",
+    [
+        pytest.param(lambda rows: population.last_per_episode(rows, ORDER), id="last-per-episode"),
+        pytest.param(lambda rows: population.per_episode_max(rows, "tokens"), id="per-episode-max"),
+    ],
+)
+def test_an_episode_reduction_that_cannot_identify_an_episode_refuses_to_guess(
+    reduce: Callable[[pd.DataFrame], pd.DataFrame],
+) -> None:
     """A frame missing ``job`` cannot say whether two ``episode_id`` rows are one agent or two, and the
     only reductions available are both wrong. Raising names the missing column."""
-    rows = submissions([{"episode_id": "w0", "speedup": 4.0, "ts_ms": 1}]).drop(columns=["job"])
+    rows = submissions([{"episode_id": "w0", "speedup": 4.0, "ts_ms": 1, "tokens": 5.0}]).drop(columns=["job"])
     with pytest.raises(population.MixedPopulationError, match="job"):
-        population.last_per_episode(rows, ("ts_ms", "attempt_index"))
+        reduce(rows)
 
 
 def test_within_one_episode_the_last_submission_is_the_answer() -> None:
@@ -327,14 +342,6 @@ def test_an_episode_total_is_scoped_by_the_job_not_by_the_episode_id_alone() -> 
     totals = population.per_episode_max(rows, "tokens", keep=("setup",))
     assert sorted(totals.tokens) == [40.0, 90.0]
     assert float(totals.groupby("setup").tokens.sum().iloc[0]) == 130.0
-
-
-def test_an_episode_reduction_without_the_key_refuses_to_guess() -> None:
-    """A frame with no ``job`` cannot say whether two ``episode_id`` rows are one agent or two, and both
-    available groupings are wrong. Raising names the missing column."""
-    rows = submissions([{"episode_id": "w0", "tokens": 5.0}]).drop(columns=["job"])
-    with pytest.raises(population.MixedPopulationError, match="job"):
-        population.per_episode_max(rows, "tokens")
 
 
 def test_graded_episode_rows_keeps_every_episodes_own_final_answer() -> None:
@@ -389,13 +396,22 @@ def rerun(first: dict[str, object], second: dict[str, object]) -> pd.DataFrame:
     )
 
 
-def test_a_rerun_supersedes_the_run_it_repeats_even_when_the_earlier_answer_was_faster() -> None:
+@pytest.mark.parametrize(
+    ("first_ts", "second_ts", "answer"),
+    [
+        pytest.param(10, 20, 3.0, id="later-rerun-beats-faster-earlier-run"),
+        pytest.param(10, None, 9.0, id="undated-rerun-never-supersedes"),
+    ],
+)
+def test_the_latest_dated_run_answers_whatever_its_speedup(first_ts: int, second_ts: int | None, answer: float) -> None:
     """A kernel is resubmitted because its run did not complete or submitted a broken answer, so the
-    setup's answer is what the latest run delivered, never the best of every wave."""
+    setup's answer is what the latest run delivered, never the best of every wave; a run with no
+    timestamp is never the latest."""
     rows = rerun(
-        {"row_kind": "submission", "speedup": 9.0, "ts_ms": 10}, {"row_kind": "submission", "speedup": 3.0, "ts_ms": 20}
+        {"row_kind": "submission", "speedup": 9.0, "ts_ms": first_ts},
+        {"row_kind": "submission", "speedup": 3.0, "ts_ms": second_ts},
     )
-    assert population.kernel_answers(rows).speedup.tolist() == [3.0]
+    assert population.kernel_answers(rows).speedup.tolist() == [answer]
 
 
 def test_a_rerun_that_verified_nothing_leaves_the_kernel_unanswered() -> None:
@@ -524,14 +540,6 @@ def test_each_kernel_answer_keeps_the_stamp_it_was_graded_under() -> None:
         "k2": FINAL["timing_reduction"],
         "k3": "",
     }
-
-
-def test_an_undated_run_never_supersedes_a_dated_one() -> None:
-    rows = rerun(
-        {"row_kind": "submission", "speedup": 4.0, "ts_ms": 10},
-        {"row_kind": "submission", "speedup": 2.0, "ts_ms": None},
-    )
-    assert population.kernel_answers(rows).speedup.tolist() == [4.0]
 
 
 def test_picking_the_latest_run_without_timestamps_refuses_to_guess() -> None:
@@ -903,12 +911,3 @@ def test_select_setups_keeps_the_experiment_prefix_and_the_full_regex_match() ->
     assert list(population.select_setups(frame)["setup"]) == list(frame["setup"])
     assert list(population.select_setups(frame, "llr40")["setup"]) == list(frame["setup"][:3])
     assert list(population.select_setups(frame, "llr40", r".*-c")["setup"]) == ["llr40-qwen38-c", "llr40-oss120b-c"]
-
-
-def test_the_selection_arguments_parse_to_the_documented_defaults() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    population.add_selection_arguments(parser)
-    args = parser.parse_args([])
-    assert (args.experiment, args.setups, args.include_incomplete) == ("", "", False)

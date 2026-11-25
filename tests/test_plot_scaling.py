@@ -68,14 +68,6 @@ def only(curves: list[scaling.Curve]) -> scaling.Curve:
     return curves[0]
 
 
-def test_the_figure_and_quantity_arguments_keep_their_spellings() -> None:
-    """``--figure`` and ``--quantity`` read these spellings, and a figure's file name ends in its own."""
-    from hpcagent_bench.stats.commands import scaling as command
-
-    assert command.Figure.texts() == ("all", "efficiency", "speedup", "per-kernel", "summary", "mode-grid")
-    assert scaling.Quantity.texts() == ("efficiency", "speedup")
-
-
 def test_strong_efficiency_is_t1_over_p_times_tp() -> None:
     """eta(P) = T(1)/(P*T(P)): halving the time on four ranks is an efficiency of exactly 0.5."""
     rows = [row("mlscale-strong-qwen38-hip", "dist_softmax", "strong", 4, 500.0, single_rank_ns=1000.0)]
@@ -120,15 +112,6 @@ def test_the_curve_score_is_the_geomean_over_p_and_not_the_mean() -> None:
     curve = only(scaling.curves(frame(rows)))
     assert curve.mean_efficiency() == pytest.approx(math.sqrt(0.5))
     assert curve.mean_efficiency() != pytest.approx(0.75)
-
-
-def test_a_perfect_sweep_scores_one_at_every_p_in_both_modes() -> None:
-    """The fixtures are on the ideal, so every eta and every geomean is 1.0 -- weak and strong."""
-    rows = perfect_strong("mlscale-strong-qwen38-hip", "dist_softmax")
-    rows += perfect_weak("mlscale-weak-qwen38-hip", "dist_softmax")
-    for curve in scaling.curves(frame(rows)):
-        assert [p.efficiency for p in curve.points] == pytest.approx([1.0] * len(RANKS))
-        assert curve.mean_efficiency() == pytest.approx(1.0)
 
 
 def test_a_failed_p_is_dropped_with_its_reason_and_leaves_a_hole_not_a_zero() -> None:
@@ -421,10 +404,6 @@ def test_a_panel_spanning_four_decades_still_labels_its_ticks() -> None:
     low, high = fig.axes[0].get_ylim()
     shown = [t for t in fig.axes[0].yaxis.get_majorticklocs() if low <= t <= high]
     assert len(shown) >= 2, (low, high, shown)
-
-
-def test_the_baseline_is_named_without_a_packet_it_never_ran() -> None:
-    assert scaling.series_label("", scaling.TORCH_DIST_SETUP) == scaling.TORCH_DIST_LABEL
 
 
 def test_model_lines_are_thinner_than_the_baseline_and_the_geomean_column_is_wider() -> None:

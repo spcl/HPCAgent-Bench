@@ -5,8 +5,6 @@ fails when it goes. The parametrised cases below are that consumer, and name the
 moves it knows who pays.
 """
 
-import importlib
-
 import pytest
 
 from hpcagent_bench import paths, study_tags
@@ -16,12 +14,6 @@ CALLERS = (
     "hpcagent_bench/stats/commands/efficacy.py",
     "hpcagent_bench/results/studies.py",
 )
-
-
-def test_model_of_exists_and_is_importable() -> None:
-    """The bare existence check: losing it is an AttributeError at figure time and nothing else."""
-    module = importlib.import_module("hpcagent_bench.study_tags")
-    assert callable(module.model_of)
 
 
 @pytest.mark.parametrize("script", CALLERS)
@@ -44,26 +36,22 @@ def test_every_caller_still_reaches_it(script: str) -> None:
         ("glm53llr20-glm53-c", "glm53"),
         ("llr4-qwen30b-c", "other"),
         ("", "other"),
+        # Dash-bounded tokens: the language ``c`` must not match inside ``kimi27sglang``, nor a
+        # model inside a longer word.
+        ("llr40-kimi27sglang-c", "kimi27sglang"),
+        ("prefix-notglm53here-c", "other"),
+        ("llr40-oss120bx-c", "other"),
+        ("xoss120b-c", "other"),
+        ("something-entirely-new", "other"),  # an unrecognised setup gets the explicit "other"
     ],
 )
 def test_a_setup_resolves_to_the_model_that_ran_it(setup: str, expected: str) -> None:
     assert study_tags.model_of(setup) == expected
 
 
-def test_a_language_token_cannot_match_inside_a_model_name() -> None:
-    """THE dash-bounded case. A substring search for the language ``c`` finds one inside
-    ``kimi27sglang``, and the same search for a MODEL finds ``glm53`` inside a longer word. The
-    match is on whole dash-delimited tokens, so neither can happen."""
-    assert study_tags.model_of("llr40-kimi27sglang-c") == "kimi27sglang"
-    assert study_tags.model_of("prefix-notglm53here-c") == "other"
-    assert study_tags.model_of("llr40-oss120bx-c") == "other"
-    assert study_tags.model_of("xoss120b-c") == "other"
-
-
 def test_the_fallback_is_a_registered_word_and_not_a_fragment() -> None:
     """An unrecognised setup gets the explicit ``other``, never a half-parsed token that the palette
     would then colour and label as though it were a model."""
-    assert study_tags.model_of("something-entirely-new") == "other"
     assert study_tags.model_of("something-entirely-new", unknown="") == ""
 
 

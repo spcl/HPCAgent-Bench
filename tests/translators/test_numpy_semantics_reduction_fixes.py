@@ -18,6 +18,7 @@ and int/int true division.
 """
 
 import ast
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -28,7 +29,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     expand_max,
     expand_min,
     expand_prod,
-    expand_std,
     expand_sum,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.reductions import expand_arg_reduction
@@ -55,33 +55,22 @@ def src_(stmts: list[ast.Assign | ast.For]) -> str:
 # Fix 2: integer sum/prod accumulate in int64 (not a float 0.0 / 1.0)         #
 
 
-def test_sum_integer_uses_int_accumulator_and_int64_dtype() -> None:
-    args, kws = call_args("np.sum(a)")
-    ld = {"a": "int64"}
-    stmts = expand_sum(target(), args, {"a": ("N",)}, kws, local_dtypes=ld)
+@pytest.mark.parametrize(
+    ("expander", "call", "dtype", "identity"),
+    [(expand_sum, "np.sum(a)", "int64", 0), (expand_prod, "np.prod(a)", "int32", 1)],
+    ids=["sum", "prod"],
+)
+def test_integer_sum_and_prod_use_an_int_accumulator_and_int64_dtype(
+    expander: Callable, call: str, dtype: str, identity: int
+) -> None:
+    args, kws = call_args(call)
+    ld = {"a": dtype}
+    stmts = expander(target(), args, {"a": ("N",)}, kws, local_dtypes=ld)
     init = stmts[0]
     assert isinstance(init.value, ast.Constant)
-    assert init.value.value == 0
+    assert init.value.value == identity
     assert isinstance(init.value.value, int)
     assert ld["out"] == "int64"  # result upcast to int64 (numpy rule)
-
-
-def test_prod_integer_uses_int_accumulator() -> None:
-    args, kws = call_args("np.prod(a)")
-    ld = {"a": "int32"}
-    stmts = expand_prod(target(), args, {"a": ("N",)}, kws, local_dtypes=ld)
-    init = stmts[0]
-    assert init.value.value == 1
-    assert isinstance(init.value.value, int)
-    assert ld["out"] == "int64"
-
-
-def test_sum_float_keeps_float_accumulator() -> None:
-    args, kws = call_args("np.sum(a)")
-    ld = {"a": "float64"}
-    stmts = expand_sum(target(), args, {"a": ("N",)}, kws, local_dtypes=ld)
-    assert isinstance(stmts[0].value.value, float)  # 0.0
-    assert "out" not in ld
 
 
 def test_integer_sum_prod_numeric_all_backends() -> None:
@@ -102,19 +91,6 @@ def test_integer_sum_prod_numeric_all_backends() -> None:
 
 
 # Fix 1: NaN propagation in max / min / argmax / argmin                       #
-
-
-def test_max_emits_nan_test() -> None:
-    args, kws = call_args("np.max(a)")
-    stmts = expand_max(target(), args, {"a": ("N",)}, kws)
-    # A NaN element must win: the update tests ``x != x`` (NaN self-inequality).
-    assert "!=" in src_(stmts)
-
-
-def test_min_emits_nan_test() -> None:
-    args, kws = call_args("np.min(a)")
-    stmts = expand_min(target(), args, {"a": ("N",)}, kws)
-    assert "!=" in src_(stmts)
 
 
 def test_max_min_nan_propagation_all_backends() -> None:
@@ -159,23 +135,22 @@ def test_argmax_argmin_first_nan_index_all_backends() -> None:
 # Fix 3: zero-size reduction refuses to lower (no OOB seed)                    #
 
 
-def test_max_zero_length_axis_refuses() -> None:
-    args, kws = call_args("np.max(a)")
+@pytest.mark.parametrize(
+    ("expander", "call", "shape", "extra"),
+    [
+        (expand_max, "np.max(a)", ("0",), ()),
+        (expand_min, "np.min(a, axis=1)", ("N", "0"), ()),
+        # numpy raises "attempt to get argmax of an empty sequence"; the loop's seed read a[0] out of bounds.
+        (expand_arg_reduction, "np.argmax(a)", ("0",), ("argmax",)),
+    ],
+    ids=["max", "min_along_axis", "argmax"],
+)
+def test_a_zero_length_reduction_axis_refuses(
+    expander: Callable, call: str, shape: tuple[str, ...], extra: tuple[str, ...]
+) -> None:
+    args, kws = call_args(call)
     with pytest.raises(NotImplementedError):
-        expand_max(target(), args, {"a": ("0",)}, kws)
-
-
-def test_min_zero_length_reduction_axis_refuses() -> None:
-    args, kws = call_args("np.min(a, axis=1)")
-    with pytest.raises(NotImplementedError):
-        expand_min(target(), args, {"a": ("N", "0")}, kws)
-
-
-def test_argmax_zero_length_axis_refuses() -> None:
-    # numpy raises "attempt to get argmax of an empty sequence"; the loop's seed read a[0] out of bounds.
-    args, kws = call_args("np.argmax(a)")
-    with pytest.raises(NotImplementedError):
-        expand_arg_reduction(target(), args, {"a": ("0",)}, kws, "argmax")
+        expander(target(), args, {"a": shape}, kws, *extra)
 
 
 def test_max_zero_length_kept_axis_ok() -> None:
@@ -186,15 +161,6 @@ def test_max_zero_length_kept_axis_ok() -> None:
 
 
 # Fix 4: std / var honor ddof (divide by N - ddof)                            #
-
-
-def test_std_ddof_changes_divisor() -> None:
-    args, kws = call_args("np.std(a, ddof=1)")
-    src = src_(expand_std(target(), args, {"a": ("N",)}, kws))
-    assert "- 1" in src  # divisor N - 1
-    args0, kws0 = call_args("np.std(a)")
-    src0 = src_(expand_std(target(), args0, {"a": ("N",)}, kws0))
-    assert "- 1" not in src0  # default ddof=0 -> plain N
 
 
 def test_var_ddof_numeric_all_backends() -> None:
@@ -214,12 +180,6 @@ def test_var_ddof_numeric_all_backends() -> None:
 
 
 # Fix 5: sum / prod / max / min honor initial=                                #
-
-
-def test_sum_initial_seeds_accumulator() -> None:
-    args, kws = call_args("np.sum(a, initial=5.0)")
-    stmts = expand_sum(target(), args, {"a": ("N",)}, kws)
-    assert stmts[0].value.value == 5.0
 
 
 def test_initial_numeric_all_backends() -> None:

@@ -78,9 +78,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The full sweep on the latest release, in four shards (one of three ran past 33 min: the round-robin deals
-        # files, not minutes). Shard 0 also runs the requires-python floor (the images' interpreter, a second
-        # environment, 4 min: lint, import every module, collect) and the docs build.
+        # The full sweep on the latest release, in four shards dealt by measured runtime (.github/scripts/deal_shards.py).
+        # Shard 0 also runs the requires-python floor (the images' interpreter, a second environment, 4 min: lint,
+        # import every module, collect) and the docs build.
         include:
           - { shard: 0, floor: true }
           - { shard: 1 }
@@ -95,29 +95,19 @@ jobs:
           # The lint step diffs against the merge base.
           fetch-depth: 0
 
-      # Dealt before setup: nvc++ (a multi-minute install) goes only to the shards whose files include
-      # its consumers (test_parallelism_dispatch.py, test_autopar_probe.py's stdpar probe), wherever the
-      # round-robin puts them this commit.
-      - name: Setup -- deal this shard's files (round-robin over the discovered sweep)
+      - name: Setup -- deal this shard's files (by measured runtime over the discovered sweep)
         id: sweep
         run: |
-          excl=$(mktemp)
-          grep -vE '^\s*(#|$)' .github/dedicated_tests.txt > "$excl"
-          # Round-robin over the sorted list, so the shards partition it.
-          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 4 == ${{ matrix.shard }}' | tr '\n' ' ')
-          test -n "$files" || { echo 'unit sweep selected no files'; exit 1; }
+          # Weighted by .github/unit_durations.json, so the shards finish together; every shard computes the
+          # same partition.
+          files=$(python3 .github/scripts/deal_shards.py ${{ matrix.shard }} 4)
           echo "files=$files" >> "$GITHUB_OUTPUT"
-          case " $files " in
-            *" tests/test_parallelism_dispatch.py "*|*" tests/test_autopar_probe.py "*)
-              echo "vendor-compilers=nvhpc" >> "$GITHUB_OUTPUT" ;;
-          esac
 
       - uses: ./.github/actions/setup
         with:
           # docs: the floor leg also builds docs/ (harbor and gym come with every job's setup).
           sync-args: ${{ matrix.floor && '--extra docs' || '' }}
           ccache: unit-${{ matrix.shard }}
-          vendor-compilers: ${{ steps.sweep.outputs.vendor-compilers }}
 
       # Format (ruff / clang-format / fprettify) and ruff's pyupgrade rules at the py312 floor, on
       # the files the change touches. Once, on the floor leg.
@@ -843,7 +833,6 @@ jobs:
             tests/test_mpi_driver_matrix_and_timing.py \
             tests/test_mpi_shard_torch_real_launch.py \
             tests/test_mpi_shard_driver_cpu_gloo_real_launch.py \
-            tests/test_mpi_scaling_curve_real_timing.py \
             tests/test_torch_dist_curve.py \
             tests/test_mpi_requesting_judge_distribution.py \
             tests/test_mpi_dtensor_layout_parity.py

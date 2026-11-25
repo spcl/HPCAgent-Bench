@@ -33,16 +33,13 @@ def rewrite_(src: str, sparse: list[str] | tuple[()] = ()) -> str:
 # desugar: every transpose spelling -> np.transpose(...)                       #
 
 
-def test_dot_T_desugars_to_np_transpose() -> None:
-    assert rewrite_("y = x.T") == "y = np.transpose(x)"
-
-
-def test_method_no_args_desugars() -> None:
-    assert rewrite_("y = x.transpose()") == "y = np.transpose(x)"
-
-
-def test_method_tuple_arg_preserved() -> None:
-    assert rewrite_("y = x.transpose((0, 2, 1))") == "y = np.transpose(x, (0, 2, 1))"
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [("y = x.T", "y = np.transpose(x)"), ("y = x.transpose((0, 2, 1))", "y = np.transpose(x, (0, 2, 1))")],
+    ids=["dot_T", "method_with_tuple_arg"],
+)
+def test_transpose_spelling_desugars_to_np_transpose(src: str, expected: str) -> None:
+    assert rewrite_(src) == expected
 
 
 def test_sparse_transpose_not_densified() -> None:
@@ -61,23 +58,26 @@ def parse_(src: str, input_args: list[str], shapes: dict[str, str], syms: dict[s
     return lower(parse_source(src, "f", input_args, [], shapes, syms))
 
 
-def test_return_transpose_promotes_reversed_shape() -> None:
-    kir = parse_("import numpy as np\ndef f(x):\n return x.T\n", ["x"], {"x": "(M, N)"}, {"M": 3, "N": 4})
+@pytest.mark.parametrize(
+    ("src", "shapes", "syms", "expected"),
+    [
+        ("import numpy as np\ndef f(x):\n return x.T\n", {"x": "(M, N)"}, {"M": 3, "N": 4}, ("N", "M")),
+        (
+            "import numpy as np\ndef f(x):\n return np.transpose(x, (0, 2, 1))\n",
+            {"x": "(A, B, C)"},
+            {"A": 2, "B": 3, "C": 4},
+            ("A", "C", "B"),
+        ),
+    ],
+    ids=["reversed_shape", "permuted_shape"],
+)
+def test_return_transpose_promotes_the_permuted_shape(
+    src: str, shapes: dict[str, str], syms: dict[str, int], expected: tuple[str, ...]
+) -> None:
+    kir = parse_(src, ["x"], shapes, syms)
     outs = [a for a in kir.arrays if a.is_output]
     assert len(outs) == 1
-    assert tuple(outs[0].shape) == ("N", "M")
-
-
-def test_return_transpose_axes_promotes_permuted_shape() -> None:
-    kir = parse_(
-        "import numpy as np\ndef f(x):\n return np.transpose(x, (0, 2, 1))\n",
-        ["x"],
-        {"x": "(A, B, C)"},
-        {"A": 2, "B": 3, "C": 4},
-    )
-    outs = [a for a in kir.arrays if a.is_output]
-    assert len(outs) == 1
-    assert tuple(outs[0].shape) == ("A", "C", "B")
+    assert tuple(outs[0].shape) == expected
 
 
 def test_tuple_return_with_transpose_promotes_both_into_outputs() -> None:
@@ -137,21 +137,18 @@ def validate_native(
         assert st == "ok", f"{b}: {st}"
 
 
-def test_return_dot_T_matches_numpy_native() -> None:
+@pytest.mark.parametrize(
+    ("src", "perm"),
+    [
+        ("import numpy as np\ndef f(x):\n return x.T\n", None),
+        ("import numpy as np\ndef f(x):\n return x.transpose(1, 0)\n", (1, 0)),
+    ],
+    ids=["dot_T", "method_transpose"],
+)
+def test_return_transpose_matches_numpy_native(src: str, perm: tuple[int, int] | None) -> None:
     x = np.arange(12, dtype=np.float64).reshape(3, 4)
-    validate_native("import numpy as np\ndef f(x):\n return x.T\n", x, x.T, (4, 3), {"x": "(M, N)"}, {"M": 3, "N": 4})
-
-
-def test_return_method_transpose_matches_numpy_native() -> None:
-    x = np.arange(12, dtype=np.float64).reshape(3, 4)
-    validate_native(
-        "import numpy as np\ndef f(x):\n return x.transpose(1, 0)\n",
-        x,
-        x.transpose(1, 0),
-        (4, 3),
-        {"x": "(M, N)"},
-        {"M": 3, "N": 4},
-    )
+    expected = x.T if perm is None else x.transpose(*perm)
+    validate_native(src, x, expected, (4, 3), {"x": "(M, N)"}, {"M": 3, "N": 4})
 
 
 # a permutation may not write into the buffer it reads                         #

@@ -5,7 +5,6 @@
 import json
 import pathlib
 import re
-import tempfile
 import tomllib
 from importlib import metadata
 
@@ -107,22 +106,3 @@ def test_pyproject_depends_on_dace_extended_from_pypi_and_never_on_upstream_dace
     sources = project["tool"]["uv"]["sources"]
     assert "dace" not in sources and "dace-extended" not in sources and "dace-relayout" not in sources
     assert "dace ; sys_platform == 'never'" in project["tool"]["uv"]["override-dependencies"]
-
-
-if __name__ == "__main__":
-    for case in (
-        ({"dace-extended": FakeDist("1.0.0", None)}, ""),
-        ({"dace": FakeDist("2.0.0b2", CHECKOUT)}, ""),
-        ({"dace": FakeDist("2.0.0b2", GIT)}, ""),
-        ({}, "not installed"),
-        ({"dace": FakeDist("1.0.2", None)}, "upstream DaCe 1.0.2"),
-        ({"dace": FakeDist("1.0.2", None), "dace-extended": FakeDist("1.0.0", None)}, "upstream DaCe 1.0.2"),
-        ({"dace": FakeDist("2.0.0b2", CHECKOUT), "dace-extended": FakeDist("1.0.0", None)}, "both installed"),
-    ):
-        with pytest.MonkeyPatch.context() as patch:
-            test_the_guard_accepts_dace_extended_or_a_checkout_alone(patch, *case)
-    with pytest.MonkeyPatch.context() as patch, tempfile.TemporaryDirectory() as folder:
-        test_a_release_reports_the_spcl_dace_commit_it_records(patch, pathlib.Path(folder))
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_git_install_reports_its_commit_and_an_index_install_without_one_is_refused(patch)
-    test_pyproject_depends_on_dace_extended_from_pypi_and_never_on_upstream_dace()

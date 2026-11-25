@@ -18,8 +18,6 @@ alone would have said "wrong answer" without saying which operand.
 
 import ast
 
-import pytest
-
 from hpcagent_bench.translators.numpyto_common.lib_nodes import scalarize_at_iters
 
 
@@ -42,7 +40,3 @@ def test_an_equal_rank_subscript_operand_is_unchanged() -> None:
     # The offset is zero when the ranks already agree -- the arithmetic that was there before.
     got = scalarised("cxyz[:a, :b, :c]", {"cxyz": ("A", "B", "C")}, 3)
     assert got == "cxyz[__w0, __w1, __w2]", got
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))

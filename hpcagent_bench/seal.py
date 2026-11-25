@@ -407,13 +407,16 @@ def enter(plan: SealPlan) -> None:
 
     Raises :class:`SealError` when a namespace or mount is refused."""
     uid, gid = os.getuid(), os.getgid()
-    if len(list(pathlib.Path("/proc/self/task").iterdir())) > 1:
+    threads = len(list(pathlib.Path("/proc/self/task").iterdir()))
+    if threads > 1:
         fork_and_relay()
     try:
         os.unshare(NAMESPACES)
         map_ids(0, uid, 0, gid)
     except OSError as exc:
-        raise seal_worker.SealError(f"seal: cannot enter new namespaces: {exc}{thread_note()}") from exc
+        # Whether the threads predate the relay fork or a fork handler restarted them in its child.
+        forked = f"; {threads} before the relay fork" if threads > 1 else ""
+        raise seal_worker.SealError(f"seal: cannot enter new namespaces: {exc}{thread_note()}{forked}") from exc
     build_view(plan)
     signals, signalled = os.pipe()
     fork_and_relay(signals=signals, child_end=signalled)  # the child is pid 1 of the new pid namespace

@@ -237,23 +237,3 @@ def test_llms_and_standalone_optimizers_never_share_a_shape() -> None:
     shapes = [palette.marker(tag) for tag in tags]
     assert len(set(shapes)) == len(shapes), dict(zip(tags, shapes, strict=True))
     assert palette.marker("dace_gpu_canon") == palette.marker("cpf")
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    test_the_registry_parses_and_every_section_a_figure_reads_is_populated()
-    for registered in sorted(study_tags.registry().models):
-        test_every_registered_model_has_a_name_and_a_checkpoint(registered)
-    test_the_registered_checkpoint_is_what_the_setups_served()
-    test_every_model_the_palette_colours_also_has_a_name()
-    test_an_unknown_tag_falls_back_instead_of_raising()
-    test_a_registered_identity_draws_and_an_unregistered_value_is_named()
-    with tempfile.TemporaryDirectory() as tmp:
-        test_record_identity_refuses_a_half_stamped_setup(pathlib.Path(tmp))
-    test_a_kernel_tick_carries_the_manifest_name_and_falls_back_to_the_identifier()
-    test_no_two_benchmarks_share_a_display_name()
-    test_every_short_name_fits_and_no_two_benchmarks_share_one()
-    test_every_loop_and_scientific_kernel_has_a_short_label()
-    test_a_manifest_without_a_short_name_ticks_its_full_name()
-    test_llms_and_standalone_optimizers_never_share_a_shape()

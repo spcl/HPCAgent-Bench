@@ -85,9 +85,15 @@ def step_logs(tmp_path: pathlib.Path) -> list[dict[str, str]]:
     ]
 
 
-def test_grade_under_runs_every_shard_as_its_own_step_where_its_task_would_run(tmp_path: pathlib.Path) -> None:
+def test_grade_under_runs_every_shard_as_its_own_step_with_its_own_thread_limit_where_its_task_would_run(
+    tmp_path: pathlib.Path,
+) -> None:
     """Shard r of 4 on 2 nodes: node r // 2, GPU slot r % 2, the first thread of the slot's two cores. Every step
-    survives a dead sibling whatever slurm.conf says (--kill-on-bad-exit=0 --oom-kill-step=0)."""
+    survives a dead sibling whatever slurm.conf says (--kill-on-bad-exit=0 --oom-kill-step=0).
+
+    The batch shell's whole-node OMP_THREAD_LIMIT would loosen every graded child's memory cap by the stacks of
+    threads the shard does not own; the step re-derives it from its own cores, and reads its core count as its
+    shard's, not the node's the --overlap step asks for."""
     done = run_job(tmp_path, "grade-under.sbatch", str(tmp_path / "w.jsonl"), str(tmp_path / "out"))
     assert done.returncode == 0, done.stderr
     steps = sorted((tmp_path / "srun.log").read_text().splitlines())
@@ -105,6 +111,12 @@ def test_grade_under_runs_every_shard_as_its_own_step_where_its_task_would_run(t
         f"--out-dir {tmp_path / 'out'}"
         for shard in range(4)
     ]
+    owned = str(len(os.sched_getaffinity(0)))
+    for log in step_logs(tmp_path):
+        assert log["threads"] == owned != BATCH_THREAD_LIMIT
+        assert log["cpus"] == "2"
+        soft, hard = log["stack"].split()
+        assert soft == hard
 
 
 def test_an_srun_without_oom_kill_step_launches_every_shard_without_it(tmp_path: pathlib.Path) -> None:
@@ -114,20 +126,6 @@ def test_an_srun_without_oom_kill_step_launches_every_shard_without_it(tmp_path:
     steps = (tmp_path / "srun.log").read_text().splitlines()
     assert len(steps) == 4
     assert not any("--oom-kill-step" in step for step in steps)
-
-
-def test_a_shard_step_rederives_its_thread_limit_and_its_cores(tmp_path: pathlib.Path) -> None:
-    """The batch shell's whole-node OMP_THREAD_LIMIT would loosen every graded child's memory cap by the stacks of
-    threads the shard does not own; the step re-derives it from its own cores, and reads its core count as its
-    shard's, not the node's the --overlap step asks for."""
-    done = run_job(tmp_path, "grade-under.sbatch", str(tmp_path / "w.jsonl"), str(tmp_path / "out"))
-    assert done.returncode == 0, done.stderr
-    owned = str(len(os.sched_getaffinity(0)))
-    for log in step_logs(tmp_path):
-        assert log["threads"] == owned != BATCH_THREAD_LIMIT
-        assert log["cpus"] == "2"
-        soft, hard = log["stack"].split()
-        assert soft == hard
 
 
 def test_a_failing_prepare_shard_stops_no_other_and_leaves_the_job_zero(tmp_path: pathlib.Path) -> None:

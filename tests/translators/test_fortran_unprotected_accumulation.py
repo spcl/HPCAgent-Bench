@@ -52,17 +52,3 @@ def test_a_conditional_sum_matches_numpy_in_fortran() -> None:
         COND_SUM, "f", {"a": a}, {"out": (1,)}, {"n": 16}, shapes={"a": "(n,)", "out": "(1,)"}, backends=("fortran",)
     )
     assert res["fortran"] == "ok", res
-
-
-if __name__ == "__main__":
-    for case in (
-        ("(s + a(i))", "s + a(i)"),
-        ("((a + b) + c)", "(a + b) + c"),
-        ("(a + b) * (c + d)", "(a + b) * (c + d)"),
-        ("(1.0_c_double, 2.0_c_double)", "(1.0_c_double, 2.0_c_double)"),
-        ("(f(x, y))", "f(x, y)"),
-        ("a + b", "a + b"),
-    ):
-        test_only_one_enclosing_pair_is_dropped(*case)
-    test_a_conditional_sum_accumulates_without_parentheses()
-    test_a_conditional_sum_matches_numpy_in_fortran()

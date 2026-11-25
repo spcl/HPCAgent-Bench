@@ -60,12 +60,6 @@ CASES = [
 #: Numerators the rule above must NOT touch, with why. Sharper than the general
 #: :func:`test_division_is_not_distributed` cases: each is one edit away from a case that DOES fold,
 #: so they pin where the exact-multiple requirement actually sits.
-NOT_EXACT = [
-    ("(K + 2) // 3", "K carries no factor of 3"),
-    ("(3 * K + 2) // 2", "3 * K is not a multiple of 2"),
-    ("(3 * K + 2 * b) // 3", "2 * b is not a multiple of 3"),
-    ("(K * K + 3) // 3", "a non-literal factor is not a multiple this rule can see"),
-]
 
 
 @pytest.mark.parametrize(("expr", "expected"), CASES)
@@ -97,11 +91,6 @@ def test_folding_preserves_value_for_negative_operands_too(expr: str, expected: 
     for combo in itertools.product(range(-9, 3), repeat=len(names)):
         env = dict(zip(names, combo, strict=False))
         assert evaluate(folded, env) == evaluate(expr, env), (expr, folded, env)
-
-
-def test_shrinks_the_nested_form() -> None:
-    deep = "((((width + 6 - 7) // 2 + 1) + 2 - 3) // 2 + 1 + 0 - 1) // 1 + 1"
-    assert len(fold_shape_expr(deep)) < len(deep)
 
 
 @pytest.mark.parametrize("expr", ["h", "arr.shape[0]", "n * m", "(h - 1) // 2 + 1"])

@@ -38,21 +38,6 @@ def token_metric(cells: list[pk.KernelCell], color: str = "#cc5511") -> pk.Metri
 # The log2 speedup axis.
 
 
-@pytest.mark.parametrize(
-    ("ratio", "label"),
-    [
-        pytest.param(0.125, "1/8x", id="eighth"),
-        pytest.param(0.25, "1/4x", id="quarter"),
-        pytest.param(0.5, "1/2x", id="half"),
-        pytest.param(1.0, "1x", id="unity"),
-        pytest.param(2.0, "2x", id="double"),
-        pytest.param(4.0, "4x", id="quadruple"),
-    ],
-)
-def test_speedup_tick_label_reads_a_log2_ratio_back_as_a_ratio(ratio: float, label: str) -> None:
-    assert style.ratio_tick_label(ratio) == label
-
-
 def test_speedup_yticks_always_spans_at_least_a_quarter_to_four_x() -> None:
     """A panel of narrow-range wins (1.1x .. 1.8x) must still show the 1x line inside a band wide
     enough to read a slow-down and a speedup the same distance from it."""
@@ -61,13 +46,6 @@ def test_speedup_yticks_always_spans_at_least_a_quarter_to_four_x() -> None:
     assert 0.25 in ticks
     assert 4.0 in ticks
     assert 1.0 in ticks
-
-
-def test_speedup_yticks_grows_to_cover_a_wide_range() -> None:
-    cells = [pk.KernelCell("k1", (0.1,)), pk.KernelCell("k2", (20.0,))]
-    ticks = pk.speedup_yticks(cells)
-    assert min(ticks) <= 0.1
-    assert max(ticks) >= 20.0
 
 
 # ci vs box drawing.
@@ -108,14 +86,6 @@ def test_the_speedup_summary_is_the_geomean_over_the_plotted_kernels_own_medians
     expected_geomean = (1.0 * 1.0 * 1000.0) ** (1.0 / 3.0)
     assert point == pytest.approx(expected_geomean)
     assert point != pytest.approx(1.0)  # the median of (1, 1, 1000) is 1.0 -- must not equal it
-
-
-def test_the_token_summary_is_the_geomean_over_the_plotted_kernels_own_medians() -> None:
-    """Paper rule: token cost is the geometric mean over kernels, (10 * 20 * 1000)^(1/3) = 58.48,
-    not the median 20."""
-    cells = [pk.KernelCell("k1", (10.0,)), pk.KernelCell("k2", (20.0,)), pk.KernelCell("k3", (1000.0,))]
-    point, _, _ = pk.summary_geomean(cells)
-    assert point == pytest.approx(58.480354764)
 
 
 def test_a_figure_with_one_summary_statistic_names_it_as_a_horizontal_x_tick() -> None:

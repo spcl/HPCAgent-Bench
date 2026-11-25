@@ -71,16 +71,3 @@ def test_divide_by_real_divides_each_part() -> None:
     got = exact_math.divide_by_real(z, d)
     assert np.array_equal(got.real, z.real / d)
     assert np.array_equal(got.imag, z.imag / d)
-
-
-if __name__ == "__main__":
-    test_frexp_is_numpys_bit_for_bit()
-    for each in ["frexp", "log", "exp", "sin", "cos", "tanh", "expm1"]:
-        test_a_scalar_stays_a_scalar(each)
-    test_a_function_is_within_a_few_ulp_of_numpy("log", np.log)
-    test_a_function_is_within_a_few_ulp_of_numpy("exp", np.exp)
-    test_a_function_is_within_a_few_ulp_of_numpy("sin", np.sin)
-    test_a_function_is_within_a_few_ulp_of_numpy("cos", np.cos)
-    test_tanh_is_within_a_few_ulp_of_numpy_near_zero_and_never_overflows()
-    test_interp_is_numpys()
-    test_divide_by_real_divides_each_part()

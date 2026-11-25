@@ -25,16 +25,19 @@ def fold_(src: str) -> str:
     return ast.unparse(fn)
 
 
-def test_slice_none_becomes_a_bare_colon() -> None:
-    """``slice(None)`` is the helper's default window: every level, i.e. a plain ``:``."""
-    out = fold_("def f(A, i, b):\n    lvl = slice(None)\n    return A[i, lvl, b]\n")
-    assert "A[i, :, b]" in out, out
-
-
-def test_single_argument_slice_is_a_stop_bound() -> None:
-    """``slice(n)`` is ``:n`` -- the one argument is the STOP, not the start."""
-    out = fold_("def f(x, n):\n    w = slice(n)\n    return x[w]\n")
-    assert "x[:n]" in out, out
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        # slice(None) is the helper's default window: every level, i.e. a plain ``:``.
+        ("def f(A, i, b):\n    lvl = slice(None)\n    return A[i, lvl, b]\n", "A[i, :, b]"),
+        # slice(n) is ``:n`` -- the one argument is the STOP, not the start.
+        ("def f(x, n):\n    w = slice(n)\n    return x[w]\n", "x[:n]"),
+    ],
+    ids=["slice_none_is_a_bare_colon", "single_argument_is_a_stop_bound"],
+)
+def test_short_slice_spellings_fold_to_their_subscript(src: str, expected: str) -> None:
+    out = fold_(src)
+    assert expected in out, out
 
 
 def test_two_different_windows_on_one_name_are_left_alone() -> None:

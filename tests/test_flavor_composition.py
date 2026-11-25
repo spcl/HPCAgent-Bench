@@ -49,12 +49,3 @@ def test_dace_optimizers_are_the_flavors_of_their_stage() -> None:
 
 def test_tvm_names_the_gpu_column() -> None:
     assert FRAMEWORKS.canonical("tvm") == "tvm_gpu"
-
-
-if __name__ == "__main__":
-    for case in DACE_FLAVORS:
-        test_every_dace_stage_is_a_flavor_on_both_devices(*case)
-    test_every_dace_entry_has_a_slot()
-    test_dace_columns_name_no_stage()
-    test_dace_optimizers_are_the_flavors_of_their_stage()
-    test_tvm_names_the_gpu_column()

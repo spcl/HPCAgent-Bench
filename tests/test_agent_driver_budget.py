@@ -155,14 +155,6 @@ def test_an_exceeded_output_budget_is_the_token_budget_end(
     assert "AGENT_MAX_OUTPUT_TOKENS=100" in (tmp_path / "log").read_text()
 
 
-def test_a_turn_costs_input_plus_cache_plus_output(driver: types.ModuleType) -> None:
-    """The metric is everything consumed. Output alone would report 400 of this turn's 70400."""
-    seen: dict[str, int] = {}
-    block = usage(input_tokens=4000, cache_creation=6000, cache_read=60000, output_tokens=400)
-    assert driver.token_cost.accumulate_total_tokens([assistant_line("msg_1", block)], seen) == 70400
-    assert seen == {"msg_1": 70400}
-
-
 def test_repeated_usage_per_block_is_counted_once(driver: types.ModuleType) -> None:
     """Three events of ONE turn, each repeating usage: the turn costs 70400, not 211200."""
     seen: dict[str, int] = {}

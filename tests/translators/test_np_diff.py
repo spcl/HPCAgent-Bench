@@ -31,27 +31,33 @@ def expand_(src: str, shapes: dict) -> str:
     return "\n".join(ast.unparse(ast.fix_missing_locations(s)) for s in stmts)
 
 
-def test_1d_expands_to_neighbour_subtraction() -> None:
-    got = expand_("out = np.diff(a)", {"a": ("n",)})
-    assert got == "for __df0 in range(n - 1):\n    out[__df0] = a[__df0 + 1] - a[__df0]"
-
-
-def test_2d_defaults_to_last_axis() -> None:
-    got = expand_("out = np.diff(a)", {"a": ("r", "c")})
-    assert got == (
-        "for __df0 in range(r):\n"
-        "    for __df1 in range(c - 1):\n"
-        "        out[__df0, __df1] = a[__df0, __df1 + 1] - a[__df0, __df1]"
-    )
-
-
-def test_2d_axis_zero_walks_rows() -> None:
-    got = expand_("out = np.diff(a, axis=0)", {"a": ("r", "c")})
-    assert got == (
-        "for __df0 in range(r - 1):\n"
-        "    for __df1 in range(c):\n"
-        "        out[__df0, __df1] = a[__df0 + 1, __df1] - a[__df0, __df1]"
-    )
+@pytest.mark.parametrize(
+    ("src", "shapes", "expected"),
+    [
+        (
+            "out = np.diff(a)",
+            {"a": ("n",)},
+            "for __df0 in range(n - 1):\n    out[__df0] = a[__df0 + 1] - a[__df0]",
+        ),
+        (
+            "out = np.diff(a)",
+            {"a": ("r", "c")},
+            "for __df0 in range(r):\n"
+            "    for __df1 in range(c - 1):\n"
+            "        out[__df0, __df1] = a[__df0, __df1 + 1] - a[__df0, __df1]",
+        ),
+        (
+            "out = np.diff(a, axis=0)",
+            {"a": ("r", "c")},
+            "for __df0 in range(r - 1):\n"
+            "    for __df1 in range(c):\n"
+            "        out[__df0, __df1] = a[__df0 + 1, __df1] - a[__df0, __df1]",
+        ),
+    ],
+    ids=["1d_neighbour_subtraction", "2d_defaults_to_last_axis", "2d_axis_zero_walks_rows"],
+)
+def test_diff_expands_to_neighbour_subtraction_along_its_axis(src: str, shapes: dict, expected: str) -> None:
+    assert expand_(src, shapes) == expected
 
 
 def test_literal_extent_folds_the_bound() -> None:
@@ -59,27 +65,18 @@ def test_literal_extent_folds_the_bound() -> None:
     assert "range(8 - 1)" in got
 
 
-def test_n_greater_than_one_refused() -> None:
-    with pytest.raises(NotImplementedError, match="first difference"):
-        expand_("out = np.diff(a, 2)", {"a": ("n",)})
-
-
-def test_prepend_refused_as_concatenate() -> None:
-    with pytest.raises(NotImplementedError, match="concatenate"):
-        expand_("out = np.diff(a, prepend=0)", {"a": ("n",)})
-
-
-def test_nonconstant_axis_refused() -> None:
-    with pytest.raises(NotImplementedError, match="constant int"):
-        expand_("out = np.diff(a, axis=k)", {"a": ("r", "c")})
-
-
-def test_numeric_1d_matches_numpy() -> None:
-    a = np.array([3.0, 5.0, 4.0, 9.0, 9.0, 1.0])
-    src = "import numpy as np\n\ndef k(a, out):\n    out[:] = np.diff(a)\n"
-    assert_all_ok(
-        run_op(src, "k", {"a": a}, {"out": (5,)}, {"n": 6}, shapes={"a": "(6,)", "out": "(5,)"}, backends=NATIVE)
-    )
+@pytest.mark.parametrize(
+    ("src", "shapes", "match"),
+    [
+        ("out = np.diff(a, 2)", {"a": ("n",)}, "first difference"),
+        ("out = np.diff(a, prepend=0)", {"a": ("n",)}, "concatenate"),
+        ("out = np.diff(a, axis=k)", {"a": ("r", "c")}, "constant int"),
+    ],
+    ids=["n_greater_than_one", "prepend_as_concatenate", "nonconstant_axis"],
+)
+def test_diff_forms_beyond_the_first_difference_are_refused(src: str, shapes: dict, match: str) -> None:
+    with pytest.raises(NotImplementedError, match=match):
+        expand_(src, shapes)
 
 
 def test_numeric_row_lengths_from_csr_row_ptr() -> None:

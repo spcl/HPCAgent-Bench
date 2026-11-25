@@ -201,33 +201,3 @@ def test_show_names_the_overlay_behind_every_changed_block() -> None:
     assert lines["file_tools"] == "harness-cli"
     assert lines["build"] == "gpu"
     assert lines["task"] == "base"
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    test_the_base_prompt_renders_as_written_without_its_section_lines()
-    for _name in AGENT_OVERLAYS:
-        test_every_built_in_overlay_resolves_on_the_repositorys_prompt(_name)
-    for _track in TRACKS:
-        test_a_track_prompt_is_the_base_prompt_plus_its_contract_at_the_addendum_slot(_track)
-    test_the_harness_cli_overlay_swaps_tools_and_fills_the_http_api()
-    test_a_section_id_may_hold_digits_as_a_block_id_may()
-    test_a_later_overlay_wins_over_an_earlier_one_and_vars_merge()
-    test_an_overlay_naming_an_unknown_block_or_an_existing_id_is_refused()
-    test_an_insert_names_exactly_one_anchor()
-    test_a_filled_value_is_never_filled_again()
-    test_a_var_for_a_slot_the_block_lacks_and_an_empty_edit_are_refused()
-    test_inserts_after_one_anchor_render_in_their_listed_order()
-    test_a_disabled_block_does_not_render_and_a_removed_one_is_gone()
-    test_show_names_the_overlay_behind_every_changed_block()
-    test_every_built_in_overlay_changes_one_of_the_two_prompts()
-    test_an_include_line_takes_the_partial_in_its_place_and_keeps_the_list_layout(pathlib.Path(tempfile.mkdtemp()))
-    test_an_include_of_a_missing_partial_is_refused(pathlib.Path(tempfile.mkdtemp()))
-    test_a_dropped_in_overlay_file_is_a_new_prompt_variant(pathlib.Path(tempfile.mkdtemp()))
-    test_a_malformed_or_untyped_overlay_file_is_a_value_error(pathlib.Path(tempfile.mkdtemp()))
-    test_an_include_names_a_partial_in_its_folder_only(pathlib.Path(tempfile.mkdtemp()))
-    test_a_staged_prompt_md_renders_as_the_resolved_prompt_it_was_written_from()
-    test_a_staged_prompt_md_leaves_out_a_block_an_overlay_turned_off()
-    for task_overlay in TASK_OVERLAYS:
-        test_every_built_in_task_overlay_resolves_on_the_task_prompts_sections(task_overlay)

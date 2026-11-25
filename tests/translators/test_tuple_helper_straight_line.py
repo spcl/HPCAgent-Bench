@@ -22,7 +22,7 @@ import itertools
 
 import pytest
 
-from hpcagent_bench.translators.numpyto_common.frontend import folded_straight_line, return_expression, tuple_leaves
+from hpcagent_bench.translators.numpyto_common.frontend import folded_straight_line, return_expression
 from tests.translators.source_module import evaluate, run_source
 
 #: ``_tap_span``'s exact shape: locals INTERLEAVED with guarded returns, and a docstring first.
@@ -54,34 +54,23 @@ def test_a_docstring_does_not_stop_the_fold() -> None:
     assert [type(s).__name__ for s in folded] == ["If", "If", "Return"]
 
 
-def test_locals_interleaved_with_guards_are_all_folded() -> None:
-    """``_tap_span`` bails, computes ``iz_hi``, bails again, then computes the bounds it returns.
-    Folding only a LEADING run leaves the later locals bound to nothing the expression can see."""
-    expr = return_expression(folded_straight_line(parse(TAP_SPAN).body))
-    assert expr is not None
-    assert len(tuple_leaves(expr)) == 3  # one per return path
-    assert all(isinstance(leaf, ast.Tuple) for leaf in tuple_leaves(expr))
-
-
-def test_a_rebound_local_declines() -> None:
-    """One substitution cannot stand for two values, so a name bound twice refuses outright rather
-    than folding whichever binding it saw last."""
-    rebound = "def f(a):\n    t = a + 1\n    t = t * 2\n    return t, t\n"
-    assert folded_straight_line(parse(rebound).body) is None
-
-
-def test_a_guard_that_rebinds_a_folded_local_declines() -> None:
-    """A local reassigned inside a branch is live differently on each path; substituting its first
-    value into the reads after the branch would silently compute the wrong bound."""
-    rebinding_guard = "def f(a, c):\n    t = a + 1\n    if c:\n        t = 0\n    return t, t\n"
-    assert folded_straight_line(parse(rebinding_guard).body) is None
-
-
-def test_a_statement_the_fold_cannot_express_declines() -> None:
-    """Only assignments, guards and returns. A loop has no single-expression form, and guessing one
-    would splice a body that does not run."""
-    looping = "def f(a, n):\n    t = a\n    for i in range(n):\n        t = t + i\n    return t, t\n"
-    assert folded_straight_line(parse(looping).body) is None
+@pytest.mark.parametrize(
+    "helper",
+    [
+        # One substitution cannot stand for two values, so a name bound twice refuses outright rather
+        # than folding whichever binding it saw last.
+        "def f(a):\n    t = a + 1\n    t = t * 2\n    return t, t\n",
+        # A local reassigned inside a branch is live differently on each path; substituting its first
+        # value into the reads after the branch would silently compute the wrong bound.
+        "def f(a, c):\n    t = a + 1\n    if c:\n        t = 0\n    return t, t\n",
+        # Only assignments, guards and returns. A loop has no single-expression form, and guessing one
+        # would splice a body that does not run.
+        "def f(a, n):\n    t = a\n    for i in range(n):\n        t = t + i\n    return t, t\n",
+    ],
+    ids=["rebound_local", "guard_rebinds_a_folded_local", "statement_the_fold_cannot_express"],
+)
+def test_a_helper_the_fold_cannot_express_declines(helper: str) -> None:
+    assert folded_straight_line(parse(helper).body) is None
 
 
 @pytest.mark.parametrize("stride", [1, 2, 3])

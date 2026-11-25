@@ -46,53 +46,39 @@ def node_fixture(monkeypatch: pytest.MonkeyPatch) -> Callable[[int], None]:
     return mask
 
 
-def test_the_whole_node_is_dealt_out_and_no_two_agents_share_a_cpu(
+def test_the_node_is_dealt_disjointly_completely_evenly_and_across_sockets(
     driver: types.ModuleType, node: Callable[[int], None]
 ) -> None:
     """Disjoint and complete: an agent that shares a CPU is contending with a peer, and a CPU no
-    agent holds is a quarter of a socket the setup paid for and did not use."""
+    agent holds is a quarter of a socket the setup paid for and did not use.
+
+    Even: 40 into 192 leaves a remainder; the shares may differ by one CPU and no more, or the agents
+    that sort last are systematically slower than the ones that sort first.
+
+    Spread: consecutive CPU ids are siblings and same-socket neighbours. A contiguous block would put
+    the early workers on socket 0 and hand whole sockets to whoever sorted last; dealing spreads
+    every worker instead."""
     node(192)
     shares = [driver.agent_cpus(i, 40) for i in range(40)]
     flat = [cpu for share in shares for cpu in share]
     assert len(flat) == len(set(flat)), "two agents were dealt the same CPU"
     assert sorted(flat) == list(range(192)), "some CPUs went to no agent"
-
-
-def test_the_shares_stay_even_when_the_count_does_not_divide(
-    driver: types.ModuleType, node: Callable[[int], None]
-) -> None:
-    """40 into 192 leaves a remainder; the shares may differ by one CPU and no more, or the agents
-    that sort last are systematically slower than the ones that sort first."""
-    node(192)
-    sizes = {len(driver.agent_cpus(i, 40)) for i in range(40)}
+    sizes = {len(share) for share in shares}
     assert max(sizes) - min(sizes) <= 1, f"uneven shares: {sorted(sizes)}"
+    assert len(shares[0]) > 1
+    assert shares[0] != list(range(shares[0][0], shares[0][0] + len(shares[0]))), "share is a contiguous block"
+    assert len({cpu // 48 for cpu in shares[0]}) > 1, "share never leaves one socket"
 
 
-def test_a_share_is_spread_across_sockets_not_packed_into_one(
-    driver: types.ModuleType, node: Callable[[int], None]
+@pytest.mark.parametrize(("cpus", "agents"), [(8, 40), (192, 0)], ids=["fewer_cpus_than_agents", "no_agents"])
+def test_there_is_no_share_to_give_when_the_node_cannot_be_divided(
+    driver: types.ModuleType, node: Callable[[int], None], cpus: int, agents: int
 ) -> None:
-    """Consecutive CPU ids are siblings and same-socket neighbours. A contiguous block would put
-    the early workers on socket 0 and hand whole sockets to whoever sorted last; dealing spreads
-    every worker instead."""
-    node(192)
-    share = driver.agent_cpus(0, 40)
-    assert len(share) > 1
-    assert share != list(range(share[0], share[0] + len(share))), "share is a contiguous block"
-    assert len({cpu // 48 for cpu in share}) > 1, "share never leaves one socket"
-
-
-def test_fewer_cpus_than_agents_leaves_them_unpinned(driver: types.ModuleType, node: Callable[[int], None]) -> None:
-    """There is no share to give. Dealing anyway would put several agents on one CPU, which is
-    worse than the mask they already inherit -- so the caller is told to leave the process alone."""
-    node(8)
-    assert driver.agent_cpus(0, 40) == []
-
-
-def test_a_nonsense_worker_count_is_refused_rather_than_dividing_by_it(
-    driver: types.ModuleType, node: Callable[[int], None]
-) -> None:
-    node(192)
-    assert driver.agent_cpus(0, 0) == []
+    """With fewer CPUs than agents, dealing anyway would put several agents on one CPU, which is
+    worse than the mask they already inherit -- so the caller is told to leave the process alone.
+    A nonsense worker count is refused rather than divided by."""
+    node(cpus)
+    assert driver.agent_cpus(0, agents) == []
 
 
 def test_an_unreadable_mask_is_not_fatal(driver: types.ModuleType) -> None:
@@ -224,15 +210,6 @@ def test_the_memory_share_divides_the_node_over_its_agents_unless_named(
     assert driver.agent_memory_cap(4) == int(ram * driver.AGENT_MEMORY_SHARE) // 4
     monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "2")
     assert driver.agent_memory_cap(4) == 2 * 2**30
-    monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "0")
-    assert driver.agent_memory_cap(4) == 0
-
-
-def test_agent_memory_flag_sets_cap(driver: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--agent-memory-gb exports ``AGENT_MEMORY_CAP_GB``, the variable the cap already reads: the named GiB wins
-    over the node's RAM share for any agent count, and 0 switches the cap off."""
-    monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "24")
-    assert driver.agent_memory_cap(4) == 24 * 2**30
     monkeypatch.setenv(driver.AGENT_MEMORY_CAP_ENV, "0")
     assert driver.agent_memory_cap(4) == 0
 

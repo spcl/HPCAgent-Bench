@@ -73,10 +73,3 @@ def test_the_tools_send_the_token_as_a_header() -> None:
         os.environ.pop(http_json.EPISODE_TOKEN_ENV)
         if saved is not None:
             os.environ[http_json.EPISODE_TOKEN_ENV] = saved
-
-
-if __name__ == "__main__":
-    test_identity_env_carries_the_token_of_its_own_episode()
-    test_every_driver_of_a_job_reads_one_secret()
-    test_no_run_dir_issues_no_token()
-    test_the_tools_send_the_token_as_a_header()

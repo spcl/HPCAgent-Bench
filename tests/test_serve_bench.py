@@ -7,7 +7,6 @@ import argparse
 import http.server
 import json
 import pathlib
-import tempfile
 import threading
 
 import pytest
@@ -83,10 +82,3 @@ def test_submit_takes_one_to_three_configs(monkeypatch: pytest.MonkeyPatch) -> N
         "BENCH_CONCURRENCY": "20 40",
         "BENCH_SECONDS": "300",
     }
-
-
-if __name__ == "__main__":
-    test_summarize_reports_throughput_decode_ttft_and_cache_hit()
-    test_run_writes_a_report_with_the_phases_the_pool_and_the_guards_verdict(pathlib.Path(tempfile.mkdtemp()))
-    with pytest.MonkeyPatch.context() as patch:
-        test_submit_takes_one_to_three_configs(patch)

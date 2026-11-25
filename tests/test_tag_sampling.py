@@ -41,32 +41,25 @@ def run_cli(monkeypatch: pytest.MonkeyPatch, *argv: str) -> int:
     return tags.main()
 
 
-def test_the_same_seed_draws_the_same_list() -> None:
+def test_the_seed_fixes_the_draw() -> None:
     assert tags.sample(ML_RULES, 0) == tags.sample(ML_RULES, 0)
-
-
-def test_a_different_seed_draws_a_different_list() -> None:
     assert tags.sample(ML_RULES, 0) != tags.sample(ML_RULES, 1)
 
 
-def test_each_rule_contributes_exactly_its_count_in_rule_order() -> None:
+def test_each_rule_contributes_exactly_its_count_sorted_in_rule_order() -> None:
     picked = tags.sample(ML_RULES, 0)
     lvl1 = set(KERNELS.select_keys("machine_learning@lvl1"))
     lvl2 = set(KERNELS.select_keys("machine_learning@lvl2"))
     assert len(picked) == 10
     assert set(picked[:5]) <= lvl1
     assert set(picked[5:]) <= lvl2
+    assert picked[:5] == sorted(picked[:5])
+    assert picked[5:] == sorted(picked[5:])
 
 
 def test_overlapping_rules_never_pick_the_same_kernel_twice() -> None:
     picked = tags.sample((("machine_learning@lvl1", 5), ("machine_learning", 20)), 0)
     assert len(picked) == len(set(picked)) == 25
-
-
-def test_each_rule_is_sorted_within_itself() -> None:
-    picked = tags.sample(ML_RULES, 0)
-    assert picked[:5] == sorted(picked[:5])
-    assert picked[5:] == sorted(picked[5:])
 
 
 def test_appending_a_rule_leaves_the_earlier_picks_unchanged() -> None:

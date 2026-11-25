@@ -59,20 +59,13 @@ def helper_of(text: str) -> str:
     return text[start : text.index("\n}\n", start)]
 
 
-def test_the_c_helper_frees_its_workspace_on_every_return() -> None:
-    text = emitted(cpp=False)
-    helper = helper_of(text)
+@pytest.mark.parametrize("cpp", [False, True], ids=["c", "cpp"])
+def test_the_helper_frees_its_workspace_on_every_return(cpp: bool) -> None:
+    helper = helper_of(emitted(cpp=cpp))
     assert "malloc(" in helper, f"the helper stopped allocating, so this proves nothing:\n{helper}"
     # The allocation is hoisted to function top, so ALL THREE exits owe a free -- including the
     # guard that reads as "before" it in the numpy source. No fourth: the body ends in a return, so
     # a closing free would be unreachable.
-    assert helper.count("return ") == 3, helper
-    assert helper.count("free(") == 3, helper
-
-
-def test_the_cpp_helper_frees_its_workspace_on_every_return() -> None:
-    helper = helper_of(emitted(cpp=True))
-    assert "malloc(" in helper, f"the helper stopped allocating, so this proves nothing:\n{helper}"
     assert helper.count("return ") == 3, helper
     assert helper.count("free(") == 3, helper
 
@@ -136,22 +129,15 @@ IN_LOOP_DRIVER = (
 )
 
 
-@have_gcc
-def test_a_deferred_loop_allocation_runs_leak_free_under_address_sanitizer() -> None:
-    run = build_run_c(emitted(cpp=False, source=IN_LOOP_ALLOC), IN_LOOP_DRIVER, sanitize=True)
-    assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
-    assert "detected memory leaks" not in run.stderr, run.stderr
-
-
-@have_gcc
-def test_generated_c_runs_leak_free_under_address_sanitizer() -> None:
-    run = build_run_c(emitted(cpp=False), DRIVER, sanitize=True)
-    assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
-    assert "detected memory leaks" not in run.stderr, run.stderr
-
-
-@have_gpp
-def test_generated_cpp_runs_leak_free_under_address_sanitizer() -> None:
-    run = build_run_c(emitted(cpp=True), DRIVER, cpp=True, sanitize=True)
+@pytest.mark.parametrize(
+    ("source", "driver", "cpp"),
+    [
+        pytest.param(IN_LOOP_ALLOC, IN_LOOP_DRIVER, False, marks=have_gcc, id="c_deferred_loop_allocation"),
+        pytest.param(SOURCE, DRIVER, False, marks=have_gcc, id="c_generated_helper"),
+        pytest.param(SOURCE, DRIVER, True, marks=have_gpp, id="cpp_generated_helper"),
+    ],
+)
+def test_generated_code_runs_leak_free_under_address_sanitizer(source: str, driver: str, cpp: bool) -> None:
+    run = build_run_c(emitted(cpp=cpp, source=source), driver, cpp=cpp, sanitize=True)
     assert run.returncode == 0, f"{run.stdout}\n{run.stderr}"
     assert "detected memory leaks" not in run.stderr, run.stderr

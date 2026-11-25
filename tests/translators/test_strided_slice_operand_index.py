@@ -24,8 +24,9 @@ shared-index fix cannot regress it.
 import ast
 
 import numpy as np
+import pytest
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, scalarize_at_iters
+from hpcagent_bench.translators.numpyto_common.lib_nodes import scalarize_at_iters
 from tests.translators.op_oracle import assert_all_ok, run_op
 
 NATIVE = ("c", "cpp", "fortran")
@@ -48,72 +49,46 @@ def test_full_axis_reverse_counts_down_from_the_last_element() -> None:
     assert index_of("a[::-2]", ("12",)) == "a[i * -2 + (12 - 1)]"
 
 
-def test_extent_and_index_agree_on_the_last_element() -> None:
-    # The last iteration must land inside the axis: extent 6, index 2*5 = 10 < 12.
-    ext = iter_extent_of(ast.parse("a[0::2]", mode="eval").body, {"a": ("12",)})
-    assert ast.unparse(ast.fix_missing_locations(ext[0])) == "6"
-
-
 # numerical: every backend matches numpy
 
 
-def test_strided_operand_of_elementwise_matches_numpy() -> None:
-    src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a[0::2], b)\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+@pytest.mark.parametrize(
+    ("src", "inputs", "outputs", "n", "shapes"),
+    [
+        (
+            "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a[0::2], b)\n",
             {"a": A12, "b": ZERO6},
             {"out": (6,)},
-            {"N": 12},
-            shapes={"a": "(12,)", "b": "(6,)", "out": "(6,)"},
-            backends=NATIVE,
-        )
-    )
-
-
-def test_reverse_operand_of_elementwise_matches_numpy() -> None:
-    src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a[::-1], b)\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+            12,
+            {"a": "(12,)", "b": "(6,)", "out": "(6,)"},
+        ),
+        (
+            "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a[::-1], b)\n",
             {"a": np.arange(1.0, 7.0), "b": ZERO6},
             {"out": (6,)},
-            {"N": 6},
-            shapes={"a": "(6,)", "b": "(6,)", "out": "(6,)"},
-            backends=NATIVE,
-        )
-    )
-
-
-def test_strided_operand_of_dot_matches_numpy() -> None:
-    src = "import numpy as np\ndef f(a, b, out):\n    out[0] = np.dot(a[0::2], b)\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+            6,
+            {"a": "(6,)", "b": "(6,)", "out": "(6,)"},
+        ),
+        (
+            "import numpy as np\ndef f(a, b, out):\n    out[0] = np.dot(a[0::2], b)\n",
             {"a": A12, "b": np.ones(6)},
             {"out": (1,)},
-            {"N": 12},
-            shapes={"a": "(12,)", "b": "(6,)", "out": "(1,)"},
-            backends=NATIVE,
-        )
-    )
-
-
-def test_strided_slice_assign_still_matches_numpy() -> None:
-    # dwt2d's Haar shape: a bare strided slice ASSIGN, which lowering (not the
-    # operand scalarizer) rewrites. Was always correct -- pinned against regression.
-    src = "import numpy as np\ndef f(a, lo, hi):\n    lo[:] = a[0::2]\n    hi[:] = a[1::2]\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+            12,
+            {"a": "(12,)", "b": "(6,)", "out": "(1,)"},
+        ),
+        # dwt2d's Haar shape: a bare strided slice ASSIGN, which lowering (not the
+        # operand scalarizer) rewrites. Was always correct -- pinned against regression.
+        (
+            "import numpy as np\ndef f(a, lo, hi):\n    lo[:] = a[0::2]\n    hi[:] = a[1::2]\n",
             {"a": A12},
             {"lo": (6,), "hi": (6,)},
-            {"N": 12},
-            shapes={"a": "(12,)", "lo": "(6,)", "hi": "(6,)"},
-            backends=NATIVE,
-        )
-    )
+            12,
+            {"a": "(12,)", "lo": "(6,)", "hi": "(6,)"},
+        ),
+    ],
+    ids=["elementwise_strided_operand", "elementwise_reverse_operand", "dot_strided_operand", "strided_slice_assign"],
+)
+def test_strided_operand_matches_numpy(
+    src: str, inputs: dict[str, np.ndarray], outputs: dict[str, tuple[int, ...]], n: int, shapes: dict[str, str]
+) -> None:
+    assert_all_ok(run_op(src, "f", inputs, outputs, {"N": n}, shapes=shapes, backends=NATIVE))

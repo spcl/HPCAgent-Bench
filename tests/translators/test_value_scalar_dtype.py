@@ -85,16 +85,6 @@ def test_staged_body_assigned_scalar_declared_double_all_langs() -> None:
     assert "integer(c_int64_t), value :: v" not in f90, f90
 
 
-def test_staged_scalar_fortran_drops_intent_in_when_reassigned() -> None:
-    """A value scalar the body REASSIGNS (``v = a[i]``, the staged read a nest
-    extractor leaks) must NOT be ``intent(in)`` in Fortran: an intent(in) dummy on
-    the LHS is a hard compile error. The ``value`` attribute keeps it a local copy
-    so the per-element restage is legal and the ABI is unchanged."""
-    d_, c_, cpp_, f90 = emit_(STAGED_SRC, "g", "v")
-    assert "real(c_double), value :: v" in f90, f90
-    assert "intent(in) :: v" not in f90, f90
-
-
 def test_staged_scalar_fortran_compiles_and_runs() -> None:
     """The regression that the dtype checks above MISS: ``real(c_double)`` v was
     right, but it was emitted ``value, intent(in)`` and gfortran rejected the

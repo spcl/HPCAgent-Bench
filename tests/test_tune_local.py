@@ -30,16 +30,19 @@ class SpyClient(JudgeClient):
         return SubmitVerdict(correct=Correct.DEFERRED, request_id="queued").model_dump_json().encode()
 
 
-def test_episodes_get_even_runs_of_consecutive_cores() -> None:
-    sut = tune_local.core_slices([0, 2, 4, 6, 8, 10, 12, 14], 3)
+@pytest.mark.parametrize(
+    ("cores", "jobs", "expected"),
+    [
+        pytest.param(
+            [0, 2, 4, 6, 8, 10, 12, 14], 3, [(0, 2), (4, 6, 8), (10, 12, 14)], id="even_runs_of_consecutive_cores"
+        ),
+        pytest.param([0, 1], 4, [(0,), (1,)], id="more_jobs_than_cores_gives_one_core_each"),
+    ],
+)
+def test_episodes_get_consecutive_runs_of_cores(cores: list[int], jobs: int, expected: list[tuple[int, ...]]) -> None:
+    sut = tune_local.core_slices(cores, jobs)
 
-    assert sut == [(0, 2), (4, 6, 8), (10, 12, 14)]
-
-
-def test_more_jobs_than_cores_gives_one_core_each() -> None:
-    sut = tune_local.core_slices([0, 1], 4)
-
-    assert sut == [(0,), (1,)]
+    assert sut == expected
 
 
 def test_a_deferred_submit_carries_the_defer_header_and_a_plain_one_does_not() -> None:

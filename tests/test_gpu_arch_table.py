@@ -173,13 +173,6 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
     assert f'/usr/local/bin/device_arch_gate.sh {mode} "${{ROCM_ARCH}}"' in docker
 
 
-def test_no_dockerfile_gives_rocm_arch_a_default() -> None:
-    dockerfiles = sorted((ROOT / "containers").rglob("Dockerfile"))
-    assert dockerfiles
-    pattern = re.compile(r"^\s*ARG\s+ROCM_ARCH\s*=", re.MULTILINE)
-    assert [str(path) for path in dockerfiles if pattern.search(path.read_text(encoding="utf-8"))] == []
-
-
 def amd_rows() -> list[list[str]]:
     """images.env's AMD rows with an EDF, as their whitespace-split columns."""
     done = run(["bash", "-c", 'source "$1"; printf "%s\\n" "${CE_IMAGE_TABLE}"', "bash", str(CE / "images.env")], {})

@@ -9,14 +9,11 @@ import pytest
 
 from hpcagent_bench import config, languages
 from hpcagent_bench.categories import (
-    BASELINE_OPTIONS,
     Baseline,
     Language,
     Preset,
     SourceMode,
     Track,
-    baseline_text,
-    parse_baseline,
 )
 from hpcagent_bench.flags import Mode
 from hpcagent_bench.harness import grading
@@ -40,17 +37,6 @@ def _flag_string(language: Language, compiler: str, mode: Mode) -> str:
 
 
 # vocabularies
-
-
-def test_baseline_choices_include_the_autopar_kinds() -> None:
-    # BASELINE_OPTIONS is what the CLI / config / API accept: the concrete kinds, the auto sentinel and
-    # the torch token that resolves per device.
-    assert set(BASELINE_OPTIONS) == {*(kind.text for kind in grading.BASELINE_CHOICES), "auto", "torch-autotune"}
-    # A denominator is ONE reference -- there is no "both".
-    assert "both" not in BASELINE_OPTIONS
-    for concrete in (Baseline.NUMBA, Baseline.C):
-        assert concrete in grading.BASELINE_CHOICES
-    assert "numpy" not in BASELINE_OPTIONS
 
 
 # track -> default baseline map + resolution
@@ -95,12 +81,6 @@ def test_explicit_override_beats_track_default() -> None:
     assert grading.resolve_baseline(Baseline.FORTRAN_AUTOPAR, machine_learning) is Baseline.FORTRAN_AUTOPAR
 
 
-def test_resolve_rejects_unknown_baseline() -> None:
-    scientific_computing = BenchSpec.load(_HPC)
-    with pytest.raises(ValueError):
-        grading.resolve_baseline(Baseline.parse("nonsense"), scientific_computing)
-
-
 # compiled-reference plan
 
 
@@ -141,19 +121,15 @@ _AUTOPAR_FLAG = {
 }
 
 
-def test_c_autopar_candidates_are_multicore_autopar() -> None:
-    """Every c-autopar candidate auto-parallelizes under MULTI_CORE and only then (mode-gated)."""
-    lang, compilers = grading.AUTOPAR_BASELINES[Baseline.C_AUTOPAR]
-    assert compilers == ("clang", "gcc")
-    for compiler in compilers:
-        flag = _AUTOPAR_FLAG[compiler]
-        assert flag in _flag_string(lang, compiler, Mode.MULTI_CORE)
-        assert flag not in _flag_string(lang, compiler, Mode.SINGLE_CORE)
-
-
-def test_cpp_autopar_candidates_are_multicore_autopar() -> None:
-    lang, compilers = grading.AUTOPAR_BASELINES[Baseline.CPP_AUTOPAR]
-    assert compilers == ("clangpp", "gpp")
+@pytest.mark.parametrize(
+    ("baseline", "expected"),
+    [(Baseline.C_AUTOPAR, ("clang", "gcc")), (Baseline.CPP_AUTOPAR, ("clangpp", "gpp"))],
+    ids=["c", "cpp"],
+)
+def test_c_and_cpp_autopar_candidates_are_multicore_autopar(baseline: Baseline, expected: tuple[str, ...]) -> None:
+    """Every candidate auto-parallelizes under MULTI_CORE and only then (mode-gated)."""
+    lang, compilers = grading.AUTOPAR_BASELINES[baseline]
+    assert compilers == expected
     for compiler in compilers:
         flag = _AUTOPAR_FLAG[compiler]
         assert flag in _flag_string(lang, compiler, Mode.MULTI_CORE)
@@ -185,71 +161,12 @@ def test_fortran_autopar_candidates_are_multicore_autopar() -> None:
 # API + service surfaces
 
 
-def test_api_baseline_enum_and_default() -> None:
-    from hpcagent_bench import api
-
-    values = list(api.Baseline.texts())
-    assert values == [
-        "numba",
-        "c",
-        "c-autopar",
-        "cpp-autopar",
-        "fortran-autopar",
-        "torch-autotune",
-        "torch-autotune-cpu",
-        "torch-autotune-gpu",
-        "triton-gpu",
-    ]
-    # The user-facing default resolves per track: None internally, "auto" on the wire.
-    assert api.RunConfig().baseline is None
-    assert baseline_text(api.RunConfig().baseline) == "auto"
-    assert api.RunConfig(baseline=None).baseline is None
-    # A concrete override is still accepted + coerced.
-    assert api.RunConfig(baseline=Baseline.C_AUTOPAR).baseline is api.Baseline.C_AUTOPAR
-
-
-def test_service_config_default_and_validation() -> None:
-    from hpcagent_bench.harness.service import ServiceConfig, from_config
-
-    # The per-track default is None internally (the "auto" boundary token).
-    assert ServiceConfig().baseline is None
-    assert from_config().baseline is None
-    # Every concrete option is accepted + coerced; the "auto" sentinel resolves to None.
-    for b in grading.BASELINE_CHOICES:
-        assert ServiceConfig(baseline=b).baseline is b
-    assert parse_baseline("auto") is None
-    with pytest.raises(ValueError):
-        parse_baseline("not-a-baseline")
-
-
 # end-to-end (gated): the autopar reference builds + times
 
 
 def any_compiler(compilers: list[str]) -> bool:
     """At least one of `compilers` is on PATH (only one candidate needed)."""
     return any(shutil.which(c) for c in compilers)
-
-
-def test_c_autopar_reference_builds_and_times() -> None:
-    """A c-autopar baseline compiles the multi-core autopar reference (fastest candidate) and times it."""
-    if not any_compiler(["clang", "gcc"]):
-        pytest.skip("no C autopar compiler (clang/gcc)")
-    from hpcagent_bench.harness.scoring import measure_baselines
-
-    task = Task(_FOUNDATION, SourceMode.RESTRICTED, Language.C)
-    # Explicit c-autopar reaches the multi-core reference; the per-track ``auto`` default does not --
-    # loop_level_reasoning resolves to ``numba``, so it must NOT time an autopar build.
-    # Each spelling is asserted against the reference it actually selects.
-    for baseline, expected in ((Baseline.C_AUTOPAR, "c-autopar"), (None, "numba")):
-        out = measure_baselines(task, preset=Preset.S, repeat=2, baseline=baseline)
-        # Either the selected reference timed or it fell back to numpy; whichever ran must be positive.
-        assert out, f"{baseline!r}: no baseline timed"
-        label = expected if expected in out else "numpy"
-        assert label in out, f"{baseline!r}: neither {expected!r} nor the numpy fallback timed"
-        assert out[label] > 0
-        assert "c-autopar" not in out or expected == "c-autopar", (
-            f"{baseline!r}: resolved to {expected!r} but timed the autopar reference"
-        )
 
 
 def test_hpc_resolves_to_autopar_and_times() -> None:

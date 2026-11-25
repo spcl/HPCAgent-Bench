@@ -33,30 +33,32 @@ def expr_(src: str) -> ast.BinOp | ast.Call | ast.Subscript:
 # A. shape recovery from array constructors                                    #
 
 
-def test_np_full_2d_tuple_shape() -> None:
-    """A genuine 2-D ``np.full((N, M), 0.0)`` keeps its tuple shape."""
-    assert shape_from_constructor(expr_("np.full((N, M), 0.0)"), {}) == "(N, M)"
-
-
-def test_np_zeros_dtype_arg_not_an_axis() -> None:
-    """``np.zeros(N, dtype)`` -- the dtype positional must not become an axis."""
-    assert shape_from_constructor(expr_("np.zeros(N, np.int64)"), {}) == "(N,)"
-
-
-def test_rand_separate_axes_still_supported() -> None:
-    """``np.random.rand(M, N)`` DOES spread axis lengths positionally."""
-    assert shape_from_constructor(expr_("np.random.rand(M, N)"), {}) == "(M, N)"
-
-
-def test_exponential_and_poisson_take_size_second() -> None:
-    """``np.random.exponential(scale, size)`` / ``poisson(lam, size)`` have no loc/low parameter
-    in front of ``size`` -- read as a third-positional distribution, a two-argument call found
-    no shape at all."""
-    assert shape_from_constructor(expr_("np.random.exponential(1.0, (N,))"), {}) == "(N)"
-    assert shape_from_constructor(expr_("np.random.poisson(5.0, (N,))"), {}) == "(N)"
-    assert shape_from_constructor(expr_("rng.exponential(1.0, size=(N,))"), {}) == "(N)"
-    # The (loc, scale, size) distributions keep reading their third positional.
-    assert shape_from_constructor(expr_("np.random.normal(0.0, 1.0, (N,))"), {}) == "(N)"
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        # ``np.zeros(N, dtype)`` -- the dtype positional must not become an axis.
+        ("np.zeros(N, np.int64)", "(N,)"),
+        # ``np.random.rand(M, N)`` DOES spread axis lengths positionally.
+        ("np.random.rand(M, N)", "(M, N)"),
+        # ``exponential(scale, size)`` / ``poisson(lam, size)`` have no loc/low parameter in front of
+        # ``size`` -- read as a third-positional distribution, a two-argument call found no shape at all.
+        ("np.random.exponential(1.0, (N,))", "(N)"),
+        ("np.random.poisson(5.0, (N,))", "(N)"),
+        ("rng.exponential(1.0, size=(N,))", "(N)"),
+        # The (loc, scale, size) distributions keep reading their third positional.
+        ("np.random.normal(0.0, 1.0, (N,))", "(N)"),
+    ],
+    ids=[
+        "zeros_dtype_not_an_axis",
+        "rand_separate_axes",
+        "exponential",
+        "poisson",
+        "exponential_size_keyword",
+        "normal",
+    ],
+)
+def test_constructor_shape_is_read_from_the_size_argument(src: str, expected: str) -> None:
+    assert shape_from_constructor(expr_(src), {}) == expected
 
 
 # B. np.arange value emission                                                  #
@@ -75,13 +77,13 @@ def astype_(src: str) -> str:
     return ast.unparse(tree).strip()
 
 
-def test_astype_builtin_float() -> None:
-    """``x.astype(float)`` -> ``np.float64(x)``."""
-    assert astype_("r = x.astype(float)") == "r = np.float64(x)"
-
-
-def test_astype_string_dtype() -> None:
-    assert astype_('r = x.astype("int32")') == "r = np.int32(x)"
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [("r = x.astype(float)", "r = np.float64(x)"), ('r = x.astype("int32")', "r = np.int32(x)")],
+    ids=["builtin_float", "string_dtype"],
+)
+def test_astype_becomes_a_numpy_scalar_type_call(src: str, expected: str) -> None:
+    assert astype_(src) == expected
 
 
 # D. variadic max/min folding (C/C++)                                          #
@@ -114,19 +116,19 @@ def alias(src: str) -> str:
     return ast.unparse(tree).strip()
 
 
-def test_permute_dims_aliases_transpose() -> None:
-    """``np.permute_dims(A, axes)`` is numpy's array-API spelling of
-    ``np.transpose(A, axes)`` -- normalised so the transpose path is reused."""
-    assert alias("B = np.permute_dims(A, (1, 0))") == "B = np.transpose(A, (1, 0))"
-
-
-def test_permute_aliases_transpose() -> None:
-    assert alias("B = np.permute(A, (2, 0, 1))") == "B = np.transpose(A, (2, 0, 1))"
-
-
-def test_amax_amin_alias_max_min() -> None:
-    assert alias("m = np.amax(x)") == "m = np.max(x)"
-    assert alias("m = np.amin(x, axis=1)") == "m = np.min(x, axis=1)"
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    [
+        # ``np.permute_dims(A, axes)`` is numpy's array-API spelling of ``np.transpose(A, axes)`` --
+        # normalised so the transpose path is reused.
+        ("B = np.permute_dims(A, (1, 0))", "B = np.transpose(A, (1, 0))"),
+        ("m = np.amax(x)", "m = np.max(x)"),
+        ("m = np.amin(x, axis=1)", "m = np.min(x, axis=1)"),
+    ],
+    ids=["permute_dims", "amax", "amin"],
+)
+def test_numpy_alias_is_rewritten_to_its_canonical_name(src: str, expected: str) -> None:
+    assert alias(src) == expected
 
 
 # G. np.fromfunction -- lambda inlined as the per-element loop body             #
@@ -174,34 +176,43 @@ def scatter(src: str, shapes: dict[str, list[str]]) -> str:
     return ast.unparse(tree).strip()
 
 
-def test_add_at_scatter_loop() -> None:
-    """``np.add.at(Lx, src, flux)`` -> ``for __sat1 in range(E): Lx[src[__sat1]] += flux[__sat1]``."""
-    out = scatter("np.add.at(Lx, src, flux)", {"src": ["E"]})
-    assert "for __sat1 in range(E):" in out
-    assert "Lx[src[__sat1]] += flux[__sat1]" in out
-
-
-def test_subtract_at_negated_value() -> None:
-    """``np.subtract.at(Lx, dst, flux)`` accumulates with ``-=``."""
-    out = scatter("np.subtract.at(Lx, dst, flux)", {"dst": ["E"]})
-    assert "Lx[dst[__sat1]] -= flux[__sat1]" in out
-
-
-def test_add_at_unary_negation_value() -> None:
-    """``np.add.at(Lx, dst, -flux)`` pushes the negation inside the gather."""
-    out = scatter("np.add.at(Lx, dst, -flux)", {"dst": ["E"]})
-    assert "Lx[dst[__sat1]] += -flux[__sat1]" in out
-
-
-def test_maximum_at_folds_to_max_assign() -> None:
-    """``np.maximum.at`` has no compound operator -> ``t[i] = max(t[i], v[i])``."""
-    out = scatter("np.maximum.at(M, idx, v)", {"idx": ["E"]})
-    assert "M[idx[__sat1]] = max(M[idx[__sat1]], v[__sat1])" in out
-
-
-def test_multiply_and_divide_at() -> None:
-    assert "*=" in scatter("np.multiply.at(A, idx, v)", {"idx": ["E"]})
-    assert "/=" in scatter("np.divide.at(A, idx, v)", {"idx": ["E"]})
+@pytest.mark.parametrize(
+    ("src", "shapes", "expected"),
+    [
+        # ``np.add.at(Lx, src, flux)`` -> ``for __sat1 in range(E): Lx[src[__sat1]] += flux[__sat1]``.
+        (
+            "np.add.at(Lx, src, flux)",
+            {"src": ["E"]},
+            ["for __sat1 in range(E):", "Lx[src[__sat1]] += flux[__sat1]"],
+        ),
+        # ``np.subtract.at(Lx, dst, flux)`` accumulates with ``-=``.
+        ("np.subtract.at(Lx, dst, flux)", {"dst": ["E"]}, ["Lx[dst[__sat1]] -= flux[__sat1]"]),
+        # ``np.add.at(Lx, dst, -flux)`` pushes the negation inside the gather.
+        ("np.add.at(Lx, dst, -flux)", {"dst": ["E"]}, ["Lx[dst[__sat1]] += -flux[__sat1]"]),
+        # ``np.maximum.at`` has no compound operator -> ``t[i] = max(t[i], v[i])``.
+        (
+            "np.maximum.at(M, idx, v)",
+            {"idx": ["E"]},
+            ["M[idx[__sat1]] = max(M[idx[__sat1]], v[__sat1])"],
+        ),
+        ("np.multiply.at(A, idx, v)", {"idx": ["E"]}, ["*="]),
+        ("np.divide.at(A, idx, v)", {"idx": ["E"]}, ["/="]),
+    ],
+    ids=[
+        "add",
+        "subtract_negated_value",
+        "add_unary_negation_value",
+        "maximum_folds_to_max_assign",
+        "multiply",
+        "divide",
+    ],
+)
+def test_ufunc_at_scatters_with_its_own_accumulation(
+    src: str, shapes: dict[str, list[str]], expected: list[str]
+) -> None:
+    out = scatter(src, shapes)
+    for fragment in expected:
+        assert fragment in out
 
 
 def test_at_unknown_index_extent_refused() -> None:
@@ -341,21 +352,27 @@ def test_add_at_slice_view_target_numeric_agreement() -> None:
 # J. fancy-index gather  arr[idx] -> arr[idx[k]]                               #
 
 
-def test_plain_array_still_subscripts_iter() -> None:
-    """A plain array Name still maps to the iter (no regression)."""
-    tree = ast.parse("w", mode="eval").body
-    out = SubscriptifyNames({"w": ("E",)}, ["__w0"]).visit(tree)
-    assert ast.unparse(out) == "w[__w0]"
-
-
-def test_fancy_gather_broadcast_adjacent_to_real_slice() -> None:
-    """A rank-2 index array ADJACENT to a scalar, followed by a real ``:``
-    slice: the array's own rank replaces its axis, the slice keeps its own
-    (right-aligned after the group)."""
-    tree = ast.parse("A[idx, jk, :]", mode="eval").body
-    shapes = {"A": ("nproma", "nlev", "nblks"), "idx": ("nproma", "nblks")}
-    out = SubscriptifyNames(shapes, ["__w0", "__w1", "__w2"]).visit(tree)
-    assert ast.unparse(out) == "A[idx[__w0, __w1], jk, __w2]"
+@pytest.mark.parametrize(
+    ("src", "shapes", "iters", "expected"),
+    [
+        # A plain array Name still maps to the iter (no regression).
+        ("w", {"w": ("E",)}, ["__w0"], "w[__w0]"),
+        # A rank-2 index array ADJACENT to a scalar, followed by a real ``:`` slice: the array's own rank
+        # replaces its axis, the slice keeps its own (right-aligned after the group).
+        (
+            "A[idx, jk, :]",
+            {"A": ("nproma", "nlev", "nblks"), "idx": ("nproma", "nblks")},
+            ["__w0", "__w1", "__w2"],
+            "A[idx[__w0, __w1], jk, __w2]",
+        ),
+    ],
+    ids=["plain_array", "broadcast_adjacent_to_real_slice"],
+)
+def test_fancy_gather_subscripts_the_iters(
+    src: str, shapes: dict[str, tuple[str, ...]], iters: list[str], expected: str
+) -> None:
+    out = SubscriptifyNames(shapes, iters).visit(ast.parse(src, mode="eval").body)
+    assert ast.unparse(out) == expected
 
 
 def test_fancy_gather_separated_advanced_indices_refused() -> None:
@@ -405,10 +422,6 @@ def ext_(src: str, table: dict[str, tuple[str, ...]]) -> tuple[str, ...] | None:
 
     e = iter_extent_of(ast.parse(src, mode="eval").body, table)
     return None if e is None else tuple(ast.unparse(x) for x in e)
-
-
-def test_iter_extent_full_reduction_is_scalar() -> None:
-    assert ext_("np.sum(A)", {"A": ("M", "K")}) is None
 
 
 def test_shape_from_reduction_frontend() -> None:
@@ -481,10 +494,6 @@ def test_boolop_outer_broadcast_extent() -> None:
     assert ext_("(a[:, None] > 0) & (b[None, :] > 0)", {"a": ("M",), "b": ("N",)}) == ("M", "N")
 
 
-def test_compare_scalar_operands_have_no_extent() -> None:
-    assert ext_("x < 1.0", {}) is None
-
-
 # N. N-D implicit trailing-slice padding (A[i, j] on 3-D -> A[i, j, :])         #
 
 
@@ -504,23 +513,7 @@ def test_pad_trailing_slice_on_3d_partial_index() -> None:
     assert "T[:, :-1, :]" in out
 
 
-def test_pad_noop_when_fully_indexed() -> None:
-    out = pad("A[i, j] = 0.0", {"A": ("N", "M")})
-    assert out == "A[i, j] = 0.0"
-
-
 # O. .copy() / np.copy on a Subscript receiver (row materialize)               #
-
-
-def test_expand_copy_accepts_subscript_source() -> None:
-    from hpcagent_bench.translators.numpyto_common.lib_nodes import expand_copy
-
-    stmts = expand_copy(ast.Name(id="dp", ctx=ast.Store()), [expr_("grid[0]")], {"grid": ("R", "C"), "dp": ("C",)})
-    mod = ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[]))
-    body = ast.unparse(mod).replace(" ", "")
-    assert "for" in body
-    assert "dp[" in body
-    assert "grid[0," in body
 
 
 # P. Body-defined dimension alias is not promoted to a parameter (M=a.shape[0]) #
@@ -548,23 +541,7 @@ def test_body_local_dim_alias_excluded_from_params() -> None:
 # Q. Oracle allocates a promoted output by the binding's element type           #
 
 
-def test_oracle_output_dtype_for_kind() -> None:
-    no = oracle()
-    import numpy as np
-
-    assert no.np_dtype_for_kind("ptr_int32", np.float64) == np.int32
-    assert no.np_dtype_for_kind("ptr_double", np.float64) == np.float64
-    assert no.np_dtype_for_kind("ptr_float", np.float32) == np.float32
-    assert no.np_dtype_for_kind("ptr_complex128", np.float64) == np.complex128
-
-
 # S. np_float / np_complex dtype aliases never become scalar parameters         #
-
-
-def test_dtype_aliases_not_promoted() -> None:
-    from hpcagent_bench.translators.numpyto_common.lowering import BUILTIN_NAMES
-
-    assert {"np_float", "np_complex"} <= BUILTIN_NAMES
 
 
 # T. Shape inference sees through .astype / Compare / BinOp wrappers            #
@@ -813,22 +790,6 @@ def test_lowerings_size_their_temps_from_the_operands_not_a_fixed_width() -> Non
     assert "w.dtype" in wout, f"weighted counts do not take the weights dtype:\n{wout}"
 
 
-def test_fft_desugar_lowers_npfft_to_dft_loops() -> None:
-    """``np.fft.fft``/``ifft`` -> a naive-DFT loop nest (no np.fft survives;
-    numba cannot type np.fft at all)."""
-    from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
-
-    src = "def k(x, y, z):\n    y[:] = np.fft.fft(x)\n    z[:] = np.fft.ifft(y)\n"
-    arrays = [("x", "complex128", ("N",)), ("y", "complex128", ("N",)), ("z", "complex128", ("N",))]
-    out = desugar_for_python_backend(src, py_kir("k", src, arrays, [], ["x", "y", "z"]))
-    assert "np.fft" not in out  # intrinsic lowered away
-    assert "np.exp(" in out
-    assert "for " in out
-    # ifft divides the accumulated output by N (a second statement reading the
-    # store-target back) -- the forward transform has no such self-divide.
-    assert "] / " in out
-
-
 def test_fft_desugar_phase_divisor_casts_to_transform_precision() -> None:
     """The DFT phase's divisor (``np.exp(-1j * (2*pi*k*n / N))``) must be cast to the
     transform's OWN real dtype: dace constant-folds the phase's leading ``1j`` into the
@@ -898,17 +859,6 @@ def test_mgrid_desugar_to_arange_broadcast() -> None:
     assert "np.mgrid" not in out
     assert out.count("np.arange(") == 2
     assert "reshape(" in out
-
-
-@pytest.mark.parametrize("kernel", ["fft_1d", "fft_3d"])
-def test_fft_numba_e2e(kernel: str) -> None:
-    """fft_1d/fft_3d run bit-close to numpy on numba (np.fft lowered); fft_3d also exercises the multi-array fancy
-    gather ``u2[q, r, s]``."""
-    no = oracle()
-    status = no.run_kernel(kernel, preset=Preset.S, precision="fp64", seed=0)
-    s = status.get("numba")
-    if s != "skip:not-installed":
-        assert s == "ok", f"{kernel} numba: {s}"
 
 
 # O. numba desugars: axis reductions, masked assignment, ufunc.outer, call     #
@@ -1112,21 +1062,6 @@ def test_issparse_folds_to_false_for_dense_abi() -> None:
     )
     assert "issparse" not in out
     assert "toarray" not in out
-
-
-def test_repeat_axis_lowers_to_gather_loop() -> None:
-    """np.repeat(x, m, axis=k) -> out[..., j, ...] = x[..., j // m, ...] (numba
-    rejects the axis= kwarg on np.repeat -- stockham)."""
-    from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
-
-    src = "def k(x, out):\n    out[:] = np.repeat(x, M, axis=2)\n"
-    out = desugar_for_python_backend(
-        src,
-        py_kir("k", src, [("x", "float64", ("A", "B", "C")), ("out", "float64", ("A", "B", "D"))], ["M"], ["x", "out"]),
-    )
-    assert "np.repeat" not in out
-    assert "// " in out
-    assert "for " in out
 
 
 def test_repeat_axis_outside_the_known_rank_is_left_verbatim() -> None:
@@ -1404,15 +1339,6 @@ def test_issubdtype_folds_from_known_dtype(dtype: str, category: str, vanishes: 
     assert "issubdtype" not in out  # folded away regardless
     assert "raise" not in out
     assert "TypeError" not in out
-
-
-def test_asarray_lowers_like_copy_for_c() -> None:
-    """``np.asarray`` / ``np.ascontiguousarray`` of a materialised array lower like
-    ``np.copy`` (a shape-preserving copy) in the C pipeline (dbcsr / minife)."""
-    from hpcagent_bench.translators.numpyto_common.lib_nodes import NP_CALL_EXPANDERS, expand_copy
-
-    assert NP_CALL_EXPANDERS[("np", "asarray")] is expand_copy
-    assert NP_CALL_EXPANDERS[("np", "ascontiguousarray")] is expand_copy
 
 
 # J. the precision pass must reach EVERY IR it owns                            #

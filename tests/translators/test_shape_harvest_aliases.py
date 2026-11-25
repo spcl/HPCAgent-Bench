@@ -75,11 +75,3 @@ def test_a_body_without_aliases_harvests_as_before() -> None:
             out[:] = act
         """
     assert harvested(body, x=("M",)) == {"x": ("M",), "buf": ("N", "M"), "act": ("N", "M")}
-
-
-if __name__ == "__main__":
-    for case in ["np.maximum(held + bias, 0.0)", "held + bias", "bias + held", "np.exp(held) * bias"]:
-        test_a_broadcast_over_an_alias_keeps_the_alias_rank(case)
-    test_an_alias_of_an_alias_resolves_before_the_broadcast_reads_it()
-    test_an_alias_whose_source_never_resolves_still_sizes_the_broadcast()
-    test_a_body_without_aliases_harvests_as_before()

@@ -19,6 +19,8 @@ import subprocess
 import tomllib
 from typing import Any
 
+import pytest
+
 from hpcagent_bench import paths
 from tests.bash_stub import bash_stub
 
@@ -118,27 +120,31 @@ def assert_hooks_kept(edf: dict[str, Any]) -> None:
     assert edf["env"]["NCCL_NET_PLUGIN"] == "ofi"
 
 
-def test_the_agent_gets_no_comm_hooks(tmp_path: pathlib.Path) -> None:
-    """The agent runs no collective, so its EDF has the hooks and the forced NCCL_NET removed."""
-    assert_hooks_off(run_role_srun(tmp_path, "--agent-node"))
+@pytest.mark.parametrize(
+    ("role_flag", "inference_nodes", "inference_mode"),
+    [
+        pytest.param("--agent-node", 1, "pp", id="agent"),  # the agent runs no collective
+        pytest.param("--vllm-node", 1, "pp", id="single_node_inference"),  # a forced NCCL_NET would fail TP init
+        pytest.param("--vllm-node", 2, "replicas", id="replica_inference_on_several_nodes"),  # no cross-node collective
+    ],
+)
+def test_a_role_with_no_cross_node_collective_gets_no_comm_hooks(
+    tmp_path: pathlib.Path, role_flag: str, inference_nodes: int, inference_mode: str
+) -> None:
+    """The EDF has the hooks and the forced NCCL_NET removed. Replicas are a standalone server per node, so no
+    collective crosses nodes however many there are, and a forced NCCL_NET would fail every replica's TP init."""
+    assert_hooks_off(run_role_srun(tmp_path, role_flag, inference_nodes=inference_nodes, inference_mode=inference_mode))
 
 
-def test_single_node_inference_gets_no_comm_hooks(tmp_path: pathlib.Path) -> None:
-    """INFERENCE_NODES=1: no cross-node collective, and a forced NCCL_NET would fail TP init."""
-    assert_hooks_off(run_role_srun(tmp_path, "--vllm-node", inference_nodes=1))
-
-
-def test_multi_node_inference_keeps_the_comm_hooks(tmp_path: pathlib.Path) -> None:
-    """INFERENCE_NODES=4: the collective crosses nodes and needs the fabric plugin."""
-    assert_hooks_kept(run_role_srun(tmp_path, "--vllm-node", inference_nodes=4))
-
-
-def test_replica_inference_on_several_nodes_gets_no_comm_hooks(tmp_path: pathlib.Path) -> None:
-    """INFERENCE_MODE=replicas: a standalone server per node, so no collective crosses nodes however
-    many there are, and the forced NCCL_NET would fail every replica's TP init."""
-    assert_hooks_off(run_role_srun(tmp_path, "--vllm-node", inference_nodes=2, inference_mode="replicas"))
-
-
-def test_the_judge_keeps_the_comm_hooks(tmp_path: pathlib.Path) -> None:
-    """MPI gang ranks reuse the judge's EDF, so it keeps the hooks whatever INFERENCE_NODES is."""
-    assert_hooks_kept(run_role_srun(tmp_path, "--judge-node", inference_nodes=1))
+@pytest.mark.parametrize(
+    ("role_flag", "inference_nodes"),
+    [
+        pytest.param("--vllm-node", 4, id="multi_node_inference"),  # the collective crosses nodes
+        pytest.param("--judge-node", 1, id="judge"),  # MPI gang ranks reuse the judge's EDF
+    ],
+)
+def test_a_role_with_a_cross_node_collective_keeps_the_comm_hooks(
+    tmp_path: pathlib.Path, role_flag: str, inference_nodes: int
+) -> None:
+    """Multi-node inference needs the fabric plugin; the judge keeps the hooks whatever INFERENCE_NODES is."""
+    assert_hooks_kept(run_role_srun(tmp_path, role_flag, inference_nodes=inference_nodes))

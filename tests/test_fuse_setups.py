@@ -5,7 +5,6 @@ on it) gives every setup back the env and problems a single-setup job of it woul
 
 import json
 import pathlib
-import tempfile
 
 import pytest
 
@@ -91,14 +90,3 @@ def test_the_fused_job_takes_its_own_setup_name_and_each_overlay_keeps_its_setup
     }
     with pytest.raises(SystemExit, match="distinct from its setups"):
         fuse_setups.fuse(tmp_path / "again", [a, b], experiments, name="s-a")
-
-
-if __name__ == "__main__":
-    for case in (
-        test_two_setups_fuse_into_one_job_that_splits_back_into_each_setups_own_env,
-        test_setups_that_differ_in_a_job_level_key_are_refused,
-        test_a_shared_line_naming_a_key_that_differs_goes_into_each_overlay,
-        test_the_fused_job_takes_its_own_setup_name_and_each_overlay_keeps_its_setups,
-    ):
-        with tempfile.TemporaryDirectory() as scratch:
-            case(pathlib.Path(scratch))

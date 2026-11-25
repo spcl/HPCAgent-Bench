@@ -32,20 +32,25 @@ def apply_flavor(tmp_path: pathlib.Path, flavor: str) -> tuple[subprocess.Comple
     return done, env_file.read_text(encoding="utf-8")
 
 
-def test_native_moves_agent_and_judge_edfs_but_not_serving(tmp_path: pathlib.Path) -> None:
-    done, env = apply_flavor(tmp_path, "native")
+@pytest.mark.parametrize(
+    ("flavor", "expected"),
+    [
+        pytest.param(
+            "native",
+            "AMD_CE_ENV=hpcagent-bench-agent-mi300-native\n"
+            "JUDGE_CE_ENV=hpcagent-bench-judge-mi300-mlscale-native\n"
+            "INFERENCE_CE_ENV=hpcagent-bench-vllm-mi300-latest\n",
+            id="native_moves_agent_and_judge_but_not_serving",
+        ),
+        pytest.param("latest", SETUP_ENV, id="latest_changes_nothing"),
+    ],
+)
+def test_a_flavor_rewrites_the_agent_and_judge_edfs_and_leaves_serving_alone(
+    tmp_path: pathlib.Path, flavor: str, expected: str
+) -> None:
+    done, env = apply_flavor(tmp_path, flavor)
     assert done.returncode == 0, done.stderr
-    assert env == (
-        "AMD_CE_ENV=hpcagent-bench-agent-mi300-native\n"
-        "JUDGE_CE_ENV=hpcagent-bench-judge-mi300-mlscale-native\n"
-        "INFERENCE_CE_ENV=hpcagent-bench-vllm-mi300-latest\n"
-    )
-
-
-def test_latest_changes_nothing(tmp_path: pathlib.Path) -> None:
-    done, env = apply_flavor(tmp_path, "latest")
-    assert done.returncode == 0, done.stderr
-    assert env == SETUP_ENV
+    assert env == expected
 
 
 @pytest.mark.parametrize("flavor", ["zen4", "Native"])

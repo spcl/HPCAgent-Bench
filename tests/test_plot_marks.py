@@ -92,13 +92,6 @@ def test_the_bar_form_draws_one_bar_per_estimate_and_its_ci_as_the_error_bar() -
     assert all(patch.get_y() == 0.0 for patch in ax.patches if isinstance(patch, Rectangle) and patch.get_width() < 1.0)
 
 
-def test_a_mark_is_spelled_only_at_the_cli_edge() -> None:
-    assert marks.Mark.texts() == ("scatter", "bar")
-    assert marks.Mark.parse("bar") is marks.Mark.BAR
-    with pytest.raises(ValueError, match="scatter"):
-        marks.Mark.parse("line")
-
-
 def test_a_framework_column_registered_at_runtime_gets_its_own_look_and_plots() -> None:
     key = "plugin_column_under_test"
     shipped = vocabulary.FRAMEWORKS.keys()
@@ -134,11 +127,3 @@ def test_a_slot_past_the_palette_changes_marker_not_to_grey() -> None:
     assert first.colour == wrapped.colour
     assert first.marker != wrapped.marker
     assert palette.slot_look(10**6).colour in palette.hues()
-
-
-if __name__ == "__main__":
-    test_the_scatter_form_draws_a_marker_at_each_estimate_and_its_ci_as_the_error_bar()
-    test_the_bar_form_draws_one_bar_per_estimate_and_its_ci_as_the_error_bar()
-    test_a_mark_is_spelled_only_at_the_cli_edge()
-    test_a_framework_column_registered_at_runtime_gets_its_own_look_and_plots()
-    test_a_slot_past_the_palette_changes_marker_not_to_grey()

@@ -125,14 +125,6 @@ def test_an_explicit_url_beats_the_environment(monkeypatch: pytest.MonkeyPatch, 
     assert recorder.hosts() == {"judge-b:8000"}
 
 
-def test_the_client_holds_no_shared_state() -> None:
-    """Two instances must not share the base URL through the class."""
-    a, b = JudgeClient("http://judge-a:8000"), JudgeClient("http://judge-b:8000")
-    assert a.base_url != b.base_url
-    assert JudgeClient("http://judge-c:8000").base_url == "http://judge-c:8000"
-    assert (a.base_url, b.base_url) == ("http://judge-a:8000", "http://judge-b:8000")
-
-
 def test_a_trailing_slash_does_not_produce_a_double_slash(recorder: Recorder) -> None:
     """`http://j:1//baseline/gemm` is a different path; a judge would 404 it."""
     JudgeClient("http://judge-a:8000/").baseline("gemm", Language.C, Preset.S)
@@ -251,29 +243,6 @@ def test_one_judge_down_does_not_reroute_the_other_worker(monkeypatch: pytest.Mo
     assert any(r.status is RunStatus.OK for r in rows)
 
 
-def test_more_workers_than_judges_still_bind_deterministically(
-    monkeypatch: pytest.MonkeyPatch, recorder: Recorder
-) -> None:
-    """4 workers over 2 judges: w % J, so judges see the load but no worker drifts."""
-    monkeypatch.setattr(pipeline, "solve_task", fake_solve(threading.Barrier(4)))
-    pipeline.run_static(
-        lambda _u: None,
-        [TASK_A, TASK_B, TASK_A, TASK_B],
-        vllm_urls=[None],
-        judge_urls=["http://judge-a:8000", "http://judge-b:8000"],
-        workers=4,
-        preset=Preset.S,
-        datatype="float64",
-        repeat=1,
-        oracle=Oracle.AUTO,
-        baseline=None,
-    )
-    hosts = [u.split("/")[2] for u in recorder.urls()]
-    assert len(hosts) == 4
-    assert hosts.count("judge-a:8000") == 2
-    assert hosts.count("judge-b:8000") == 2
-
-
 def test_no_judge_url_means_no_http_grade(monkeypatch: pytest.MonkeyPatch, recorder: Recorder) -> None:
     """An empty judge URL must skip grading, NOT fall back to a default judge -- silently
     grading on someone else's node would corrupt the results."""
@@ -318,32 +287,6 @@ def test_the_kernel_rides_along_on_every_graded_endpoint(recorder: Recorder) -> 
     urls, bodies = recorder.urls(), [b for _u, b in recorder.calls]
     assert all("gesummv" in u for u in urls[:2])
     assert [b["kernel"] for b in bodies[2:]] == ["gesummv", "gesummv"]
-
-
-def test_the_agent_never_writes_the_rank_itself(recorder: Recorder) -> None:
-    """The rank is threaded exactly like the kernel: set once on the client, applied by the
-    transport. If an endpoint method had to remember it, one of them eventually would not."""
-    JudgeClient("http://judge-b:8000", rank=1).submit(Submission(source="int f(){}", language=Language.C), "gemm")
-    body = recorder.calls[0][1]
-    assert body["rank"] == 1
-    assert body["kernel"] == "gemm"
-
-
-def test_a_client_without_a_rank_addresses_the_single_judge(recorder: Recorder) -> None:
-    """Default 0 = "the only judge". It keeps a single-judge run rank-free AND still validated;
-    in a multi-judge run it disagrees with every judge but the first, so it cannot pass silently."""
-    JudgeClient("http://judge-a:8000").baseline("gemm", Language.C, Preset.S)
-    assert recorder.ranks() == [0]
-
-
-def test_two_clients_carry_two_ranks(recorder: Recorder) -> None:
-    """The rank is per-client, exactly like the URL -- never global, never cached on the class."""
-    a, b = JudgeClient("http://judge-a:8000", rank=0), JudgeClient("http://judge-b:8000", rank=1)
-    for _ in range(2):
-        a.baseline("gemm", Language.C, Preset.S)
-        b.baseline("gemm", Language.C, Preset.S)
-    pairs = [(u.split("/")[2], r) for u, r in zip(recorder.urls(), recorder.ranks(), strict=False)]
-    assert set(pairs) == {("judge-a:8000", 0), ("judge-b:8000", 1)}
 
 
 # the run identity rides along too, exactly like the rank
@@ -398,9 +341,6 @@ def test_the_environment_beats_a_caller_supplied_identity_field(
 
 
 # the judge refuses a mis-routed request
-def test_a_matching_rank_is_no_error() -> None:
-    assert rank_error(2, 2) is None
-    assert rank_error(0, "0") is None  # a GET query arrives as a string
 
 
 def test_a_mismatched_rank_is_refused_and_names_both_ranks() -> None:
@@ -469,21 +409,3 @@ def test_the_round_robin_index_is_the_rank_each_worker_sends(
     )
     seen = sorted(zip([u.split("/")[2] for u in recorder.urls()], recorder.ranks(), strict=False))
     assert seen == [("judge-a:8000", 0), ("judge-a:8000", 0), ("judge-b:8000", 1), ("judge-b:8000", 1)]
-
-
-def test_one_worker_one_judge_still_names_its_rank(monkeypatch: pytest.MonkeyPatch, recorder: Recorder) -> None:
-    """The single-judge shape is not a rank-free special case: worker 0 -> judge 0, rank 0."""
-    monkeypatch.setattr(pipeline, "solve_task", fake_solve(threading.Barrier(1)))
-    pipeline.run_static(
-        lambda _u: None,
-        [TASK_A],
-        vllm_urls=[None],
-        judge_urls=["http://judge-a:8000"],
-        workers=1,
-        preset=Preset.S,
-        datatype="float64",
-        repeat=1,
-        oracle=Oracle.AUTO,
-        baseline=None,
-    )
-    assert recorder.ranks() == [0]

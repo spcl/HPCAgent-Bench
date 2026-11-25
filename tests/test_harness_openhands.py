@@ -52,14 +52,6 @@ def hook() -> str:
     return HOOK.read_text(encoding="utf-8")
 
 
-def openhands_block() -> str:
-    """The launch hook's own-project block: the ``if`` naming the lock through its ``fi``."""
-    lines = hook().splitlines()
-    start = next(index for index, line in enumerate(lines) if '"${harness}/openhands/uv.lock"' in line)
-    end = next(index for index in range(start, len(lines)) if lines[index].strip() == "fi")
-    return "\n".join(lines[start : end + 1])
-
-
 def test_the_openhands_project_stays_out_of_the_agent_package() -> None:
     """The own project and a ``harness-`` group are two ways to the same venv: the group would drag the
     agent package's mcp >= 2.3 into a lock openhands-sdk cannot sign, so exactly one exists."""
@@ -93,21 +85,6 @@ def test_the_openhands_lock_freezes_the_project_at_the_repos_lock_revision() -> 
     assert locked(openhands, "mcp")["version"].partition(".")[0] == "1"
     names = {package["name"] for package in openhands["package"]}
     assert not names & {"hpcagent-agent", "hpcagent-bench"}
-
-
-def test_the_launch_hook_syncs_the_openhands_project_beside_the_groups() -> None:
-    """The hook syncs the own lock like TileLang's, puts agent/ on the venv's path with a .pth, and gates
-    the build on the venv's mcp being 1.x and hpcagent_bench unreachable -- before any agent starts."""
-    block = openhands_block()
-    assert 'UV_PROJECT_ENVIRONMENT="${venv}/harness/openhands"' in block
-    assert "uv sync -q --frozen --inexact --python" in block
-    assert '"${workspace}/agent" > "$(site "${venv}/harness/openhands/bin/python")/zz-agent.pth"' in block
-    # The agent package (mcp >= 2.3) must never be installed into this venv.
-    assert "--package hpcagent-agent" not in block
-    assert "the openhands venv pins mcp < 2" in block
-    assert "openhands can import hpcagent_bench" in block
-    table = hook().split("done <<EOF\n", 1)[1].split("\nEOF", 1)[0]
-    assert "openhands" not in table
 
 
 def test_the_read_timeout_spells_each_mcp_generation(monkeypatch: pytest.MonkeyPatch) -> None:

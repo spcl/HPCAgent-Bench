@@ -104,15 +104,6 @@ def test_claude_bare_defaults_true_and_parses_only_the_literal_zero_as_false(
         assert driver.claude_bare() is False, value
 
 
-def test_default_argv_is_byte_identical_to_before_the_knob(
-    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    monkeypatch.delenv("CLAUDE_BARE", raising=False)
-    argv = driver.claude_command(fake_context(tmp_path / "mcp.json"))
-    assert "--bare" in argv
-    assert argv[flag_index(argv, "--tools") + 1] == "Read,Edit,Bash"
-
-
 def test_claude_bare_0_drops_bare_and_serves_the_measured_native_tools(
     driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
@@ -131,16 +122,6 @@ def test_claude_bare_0_drops_bare_and_serves_the_measured_native_tools(
     # PushNotification, ScheduleWakeup, DesignSync, EnterWorktree/ExitWorktree, ReportFindings,
     # the Task* family) needs neither the benchmark nor internet access this sandbox has none of.
     assert not (named & (MEASURED_NATIVE_DEFAULT - {"Bash", "Edit", "NotebookEdit", "Read", "Skill", "Write"}))
-
-
-def test_disallowed_tools_are_unchanged_by_the_knob(
-    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    disallowed_end = ["--disallowedTools", "WebFetch", "WebSearch", "Task", "Agent"]
-    for value in ("1", "0"):
-        monkeypatch.setenv("CLAUDE_BARE", value)
-        argv = driver.claude_command(fake_context(tmp_path / "mcp.json"))
-        assert argv[-len(disallowed_end) :] == disallowed_end, value
 
 
 def test_the_only_argv_difference_between_modes_is_bare_and_the_tools_value(

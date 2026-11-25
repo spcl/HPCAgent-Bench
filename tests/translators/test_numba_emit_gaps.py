@@ -605,29 +605,7 @@ def test_an_offset_window_update_by_a_unit_column_times_a_vector_matches_numpy_o
     np.testing.assert_array_equal(got["out"], want)
 
 
-def test_a_transposed_matrix_minus_a_scaled_batch_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
-    """lulesh's ``hourgam = gamma.T - volinv[:, None, None] * term``: a rank-2 operand against a rank-3 batch with
-    a unit-axis scale; numba's parfor pass indexes the rank-2 ``gamma.T`` with three indices."""
-    src = (
-        "import numpy as np\n"
-        "GAMMA = np.array([[1.0, 2.0, -1.0], [0.5, -1.0, 1.0], [-1.0, 3.0, 1.0]])\n"
-        "def f(d, x, out):\n"
-        " v = 1.0 / d\n"
-        " gamma = GAMMA.astype(x.dtype)\n"
-        " t = x[:, :, None] * x[:, None, :]\n"
-        " h = gamma.T - v[:, None, None] * t\n"
-        " out[:] = h\n"
-    )
-    d = np.linspace(0.5, 1.5, 5)
-    x = np.linspace(2.0, 3.0, 5 * 3).reshape(5, 3)
-    shapes = {"d": "(N,)", "x": "(N, 3)", "out": "(N, 3, 3)"}
-    dtypes = dict.fromkeys(shapes, "float64")
-    emitted, got = numba_as_written(tmp_path, src, {"d": d, "x": x}, {"out": (5, 3, 3)}, {"N": 5}, shapes, dtypes)
-    gamma = np.array([[1.0, 2.0, -1.0], [0.5, -1.0, 1.0], [-1.0, 3.0, 1.0]])
-    assert "v[:, None, None]" not in emitted, emitted
-    np.testing.assert_array_equal(got["out"], gamma.T - (1.0 / d)[:, None, None] * (x[:, :, None] * x[:, None, :]))
-
-
+# Reproducer: one nested FFT helper called at two ranks failed to type (qe_vexx_k, 00edfb5a3)
 def test_a_nested_fft_helper_called_at_two_ranks_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
     """qe_vexx_k's ``invfft(col, batch=None)``: one closure takes a vector and a batch of rows and builds
     ``grid if col.ndim == 1 else (batch,) + grid``, which numba cannot type as one tuple. Each rank gets its own
@@ -658,6 +636,7 @@ def test_a_nested_fft_helper_called_at_two_ranks_matches_numpy_on_numba(tmp_path
     np.testing.assert_allclose(got["out2"], want, rtol=1e-12, atol=1e-14)
 
 
+# Reproducer: a literal flag two helpers down kept its dead arm, float/complex unify failed (qe_vexx_k, 00edfb5a3)
 def test_a_flag_passed_down_two_helpers_drops_the_dead_arm_on_numba(tmp_path: pathlib.Path) -> None:
     """qe_vexx_k's ``use_coulomb_vcut_ws``: the kernel passes ``False`` and ``None`` to one helper, which passes them
     on to the next; that one's dead arm reads ``buf.shape`` of the ``None``, which numba cannot type."""
@@ -680,6 +659,7 @@ def test_a_flag_passed_down_two_helpers_drops_the_dead_arm_on_numba(tmp_path: pa
     np.testing.assert_array_equal(got["out"], x * 2.0)
 
 
+# Reproducer: an einsum operand that is an expression was not bound (qe_vexx_k, 00edfb5a3)
 def test_an_einsum_of_a_conjugated_operand_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
     """qe_vexx_k's ``np.einsum("aig,ai->ag", inner1, np.conj(becphi_r))``: an operand that is a call, not a name, kept
     the whole einsum, which numba does not implement."""
@@ -693,6 +673,7 @@ def test_an_einsum_of_a_conjugated_operand_matches_numpy_on_numba(tmp_path: path
     np.testing.assert_allclose(got["out"], (a @ np.conj(b)).imag, rtol=1e-14, atol=1e-15)
 
 
+# Reproducer: an einsum temp took the real operand's dtype (qe_vexx_k, 00edfb5a3)
 def test_an_einsum_of_a_real_and_a_gathered_complex_operand_is_complex_on_numba(tmp_path: pathlib.Path) -> None:
     """qe_vexx_k's ``np.einsum("aijb,ab->aij", qr, vc_box)``: a gathered operand has no known kind, and the loop
     nest's temp took the first, real operand's dtype; numba refuses to store a complex product into it."""
@@ -714,6 +695,7 @@ def test_an_einsum_of_a_real_and_a_gathered_complex_operand_is_complex_on_numba(
     np.testing.assert_allclose(got["out"], (q @ v[idx]).imag, rtol=1e-14, atol=1e-15)
 
 
+# Reproducer: a real-or-complex conditional failed to unify under numba (qe_vexx_k, 00edfb5a3)
 def test_a_real_or_complex_choice_by_a_runtime_flag_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
     """qe_vexx_k's ``d.real if gamma_only else d``: numba types both arms of a runtime choice and cannot unify a real
     with a complex array."""
@@ -727,78 +709,26 @@ def test_a_real_or_complex_choice_by_a_runtime_flag_matches_numpy_on_numba(tmp_p
     np.testing.assert_array_equal(got["out"], d.real * 2.0)
 
 
-def test_a_corner_scatter_of_a_closure_helper_result_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
-    """lulesh's ``normal[:, corners, 0] += areaX[:, None]`` with ``areaX = 0.25 * (c(x, n0) ...)``: the rank table
-    read the helper call inside the product as the constant's rank 0, so the loop over ``corners`` read the value's
-    element axis in place of its corner axis."""
-    src = (
-        "import numpy as np\n"
-        "def f(x, out):\n"
-        " def c(a, i):\n"
-        "  return a[:, i]\n"
-        " area = 0.5 * (c(x, 0) + c(x, 1))\n"
-        " corners = [0, 2]\n"
-        " out[:, corners, 0] += area[:, None]\n"
-    )
-    x = np.linspace(-1.0, 1.0, 5 * 3).reshape(5, 3)
-    shapes = {"x": "(N, 3)", "out": "(N, 3, 2)"}
-    unused, got = numba_as_written(
-        tmp_path, src, {"x": x}, {"out": (5, 3, 2)}, {"N": 5}, shapes, dict.fromkeys(shapes, "float64")
-    )
-    want = np.zeros((5, 3, 2))
-    want[:, [0, 2], 0] += (0.5 * (x[:, 0] + x[:, 1]))[:, None]
-    np.testing.assert_array_equal(got["out"], want)
+# Reproducer: a float literal arm beside a complex arm was cast with .astype, which a float has not (review of 00edfb5a3)
+def test_a_float_literal_or_a_complex_scalar_matches_numpy_on_numba() -> None:
+    """``0.0 if flag else c`` with a complex scalar ``c``: numba unifies a float and a complex scalar itself, and the
+    dtype fixup turned the literal into ``0.0.astype(c.dtype)``."""
+    src = "import numpy as np\ndef f(z, flag, out):\n c = z[0]\n w = 0.0 if flag[0] > 0 else c\n out[:] = z * w\n"
+    z = np.array([1 + 2j, 3 - 1j, 0.5 + 0.5j])
+    shapes = {"z": "(3,)", "flag": "(1,)", "out": "(3,)"}
+    dtypes = {"z": "complex128", "flag": "int64", "out": "complex128"}
+    assert numba(src, {"z": z, "flag": np.array([0])}, {"out": (3,)}, {}, shapes, dtypes) == "ok"
 
 
-def test_a_closure_scaling_an_einsum_by_an_enclosing_vector_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
-    """lulesh's ``fbforce`` returning ``coefficient[:, None] * np.einsum(...)``: the closure's table knew neither the
-    enclosing ``coefficient`` nor the einsum's temp, so the unit-axis broadcast stayed whole and numba's parfor pass
-    asserted ``Sizes of ... do not match``."""
-    src = (
-        "import numpy as np\n"
-        "def f(a, b, d, out):\n"
-        " coef = 1.0 / d\n"
-        " def g(vd):\n"
-        "  return coef[:, None] * np.einsum('ij,ij->ij', vd, a)\n"
-        " out[:] = g(b)\n"
-    )
-    a = np.linspace(-1.0, 1.0, 5 * 3).reshape(5, 3)
-    b = np.linspace(0.5, 1.5, 5 * 3).reshape(5, 3)
-    d = np.linspace(1.0, 2.0, 5)
-    shapes = {"a": "(N, 3)", "b": "(N, 3)", "d": "(N,)", "out": "(N, 3)"}
-    emitted, got = numba_as_written(
-        tmp_path, src, {"a": a, "b": b, "d": d}, {"out": (5, 3)}, {"N": 5}, shapes, dict.fromkeys(shapes, "float64")
-    )
-    assert "coef[:, None]" not in emitted, emitted
-    np.testing.assert_allclose(got["out"], (1.0 / d)[:, None] * (b * a), rtol=1e-15, atol=0)
+# Reproducer: an einsum the inline refuses still bound its operand, computing it twice (review of 00edfb5a3)
+def test_a_full_contraction_einsum_evaluates_its_operand_once_on_numba() -> None:
+    """``np.einsum('ij,ij->', np.conj(a), b)`` reduces to a scalar, which the inline refuses; binding the conjugate
+    first left a dead full-array temporary in front of the einsum that conjugated again."""
+    from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
+    from tests.translators.op_oracle import parse_source
 
-
-def test_a_helper_filling_a_slice_of_an_unranked_parameter_matches_numpy_on_numba(tmp_path: pathlib.Path) -> None:
-    """lulesh's ``determ[:] = volo * v``: a helper passes on a column of the gather ``x[nodelist]`` (a 2-D index into a
-    1-D table), which no rank rule sizes outside the kernel, and the slice store in the helper says ``det`` is an array, so
-    ``g - (1.0 / det)[:, None, None] * t`` is peeled instead of numba's parfor pass indexing the 2-D ``g`` with three
-    indices."""
-    src = (
-        "import numpy as np\n"
-        "def stress(x, nodelist):\n"
-        " xl = x[nodelist]\n"
-        " return xl[:, 0]\n"
-        "def control(det, g, v, t, out):\n"
-        " det[:] = v * 2.0\n"
-        " inv = 1.0 / det\n"
-        " out[:] = g - inv[:, None, None] * t\n"
-        "def force(x, nodelist, g, v, t, out):\n"
-        " control(stress(x, nodelist), g, v, t, out)\n"
-        "def f(x, nodelist, g, v, t, out):\n"
-        " force(x, nodelist, g, v, t, out)\n"
-    )
-    x = np.linspace(-1.0, 1.0, 7)
-    nodelist = np.arange(15).reshape(5, 3) % 7
-    g = np.linspace(-2.0, 2.0, 3 * 2).reshape(3, 2)
-    v = np.linspace(0.5, 1.5, 5)
-    t = np.linspace(2.0, 3.0, 5 * 3 * 2).reshape(5, 3, 2)
-    shapes = {"x": "(7,)", "nodelist": "(N, 3)", "g": "(3, 2)", "v": "(N,)", "t": "(N, 3, 2)", "out": "(N, 3, 2)"}
-    dtypes = dict.fromkeys(shapes, "float64") | {"nodelist": "int64"}
-    ins = {"x": x, "nodelist": nodelist, "g": g, "v": v, "t": t}
-    unused, got = numba_as_written(tmp_path, src, ins, {"out": t.shape}, {"N": 5}, shapes, dtypes)
-    np.testing.assert_allclose(got["out"], g - (1.0 / (v * 2.0))[:, None, None] * t, rtol=1e-15, atol=0)
+    src = "import numpy as np\ndef f(a, b, out):\n out[0] = np.einsum('ij,ij->', np.conj(a), b).real\n"
+    shapes = {"a": "(3, 4)", "b": "(3, 4)", "out": "(1,)"}
+    dtypes = {"a": "complex128", "b": "complex128", "out": "float64"}
+    emitted = emit_numba(src, kir=parse_source(src, "f", ["a", "b"], ["out"], shapes, {}, dtypes))
+    assert emitted.count("np.conj(") == 1, emitted

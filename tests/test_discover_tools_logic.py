@@ -99,30 +99,3 @@ def test_a_toolset_entry_with_an_unknown_key_detector_or_target_is_refused() -> 
     ):
         with pytest.raises(pydantic.ValidationError):
             discover_tools.TOOLSET_ADAPTER.validate_python({"libs": {"x": entry}})
-
-
-if __name__ == "__main__":
-    test_an_absent_tool_is_not_found_by_every_detector()
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_present_binary_reports_its_first_name_and_the_first_version_any_flag_prints(patch)
-    test_the_shipped_toolset_parses_and_a_single_name_reads_as_a_list()
-    test_a_toolset_entry_with_an_unknown_key_detector_or_target_is_refused()
-    for categories, target, missing in [
-        ({"compilers": {"nvcc": {"found": False, "required_on": ["nvidia"]}}}, Hardware.NVIDIA, ["nvcc"]),
-        ({"compilers": {"nvcc": {"found": False, "required_on": ["nvidia"]}}}, Hardware.CPU, []),
-        ({"compilers": {"nvcc": {"found": False, "required_on": ["nvidia"]}}}, Hardware.NVIDIA_X86_64, ["nvcc"]),
-        ({"compilers": {"nvcc": {"found": False, "required_on": ["nvidia"]}}}, Hardware.CPU_AARCH64, []),
-        ({"compilers": {"gcc": {"found": True, "required_on": ["cpu"]}}}, Hardware.CPU, []),
-        ({"compilers": {"clang": {"found": False, "required_on": []}}}, Hardware.CPU, []),
-        ({"libs": {"cudnn": {"found": False, "required_on": ["nvidia", "amd"]}}}, Hardware.AMD, ["cudnn"]),
-        (
-            {
-                "compilers": {"gcc": {"found": True, "required_on": ["cpu"]}},
-                "libs": {"blas": {"found": False, "required_on": ["cpu"]}},
-            },
-            Hardware.CPU,
-            ["blas"],
-        ),
-        ({}, Hardware.CPU, []),
-    ]:
-        test_missing_for_target_lists_exactly_the_absent_tools_required_on_that_target(categories, target, missing)

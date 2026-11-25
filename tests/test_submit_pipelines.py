@@ -6,7 +6,6 @@ experiment's ``--time`` never shortened."""
 
 import datetime
 import pathlib
-import tempfile
 
 from hpcagent_bench.cluster import env_spec
 from tests.bash_stub import bash_stub
@@ -62,9 +61,3 @@ def test_an_experiment_that_would_run_into_a_reservation_begins_after_it(tmp_pat
     assert f"--begin={end:{stamp}}" in first and "--time=" in first
     times = {word.split("=")[1] for line in calls(root) for word in line.split() if word.startswith("--time=")}
     assert times == {"19:00:00"}, "16 h of agent wall clock and 3 h of staging, as the limits need: never shortened"
-
-
-if __name__ == "__main__":
-    test_forty_problems_of_a_pp_model_submit_two_jobs_of_one_pipeline_each(pathlib.Path(tempfile.mkdtemp()))
-    test_split_pipelines_zero_keeps_one_job(pathlib.Path(tempfile.mkdtemp()))
-    test_an_experiment_that_would_run_into_a_reservation_begins_after_it(pathlib.Path(tempfile.mkdtemp()))

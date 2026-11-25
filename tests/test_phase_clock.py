@@ -6,7 +6,6 @@ files are upgraded when opened for writing."""
 import contextlib
 import pathlib
 import sqlite3
-import tempfile
 import threading
 import time
 
@@ -130,17 +129,3 @@ def test_a_version_13_file_is_read_and_merged_as_it_is(tmp_path: pathlib.Path) -
     merged = tmp_path / "merged.db"
     assert results_db.merge(merged, [old])["canon"] == 1
     assert all(canon_db.read(merged)[0][column] is None for column in PHASE_COLUMNS)
-
-
-if __name__ == "__main__":
-    test_a_phase_is_spelled_as_its_canon_column_prefix()
-    test_unmarked_time_is_transform_and_marked_time_is_its_phase()
-    test_a_nested_phase_takes_its_own_seconds_from_the_outer_one()
-    test_a_credit_reaches_its_phase_in_every_running_measurement_and_none_after()
-    test_a_negative_credit_counts_as_nothing()
-    test_a_shift_moves_reported_seconds_between_phases_and_never_below_zero()
-    test_concurrent_measurements_in_two_threads_see_only_their_own_time_and_credit()
-    with tempfile.TemporaryDirectory() as scratch:
-        test_a_version_13_file_is_upgraded_in_place_when_opened_for_writing(pathlib.Path(scratch))
-    with tempfile.TemporaryDirectory() as scratch:
-        test_a_version_13_file_is_read_and_merged_as_it_is(pathlib.Path(scratch))

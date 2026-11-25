@@ -9,7 +9,6 @@ import os
 import pathlib
 import subprocess
 import sys
-import tempfile
 
 import annotated_types
 import pydantic
@@ -316,30 +315,3 @@ def test_a_plugin_harness_venv_is_built_from_its_install_with_the_agent_on_its_p
     manifest.write_text(declared, encoding="utf-8")
     with pytest.raises(RuntimeError, match="no_such_module"):
         plugins.install_harnesses(plugins.find((folder,)), venv, sys.executable, paths.ROOT / "agent")
-
-
-if __name__ == "__main__":
-    for case in (
-        ("openhands", {harnesses.PACKET_HARNESS_ENV: "openhands"}, ""),
-        ("miniswe", {harnesses.PACKET_HARNESS_ENV: "openhands"}, "runs on harness 'openhands'"),
-        ("miniswe", {runner_common.NATIVE_TOOLS_ENV: "Read"}, "narrows the built-in tools"),
-        ("openhands", {subagents.PACKET_AGENTS_ENV: "reviewer"}, "offers subagents"),
-    ):
-        test_one_check_decides_whether_a_packet_runs_on_a_harness(*case)
-    test_optimas_is_the_optimas_plugins_harness_with_the_identity_layer_and_wire_format_it_had()
-    test_a_setup_records_only_the_plugins_it_uses()
-    for test in (
-        test_a_plugin_harness_joins_the_one_registry_and_launches_its_runner_with_the_contract_argv,
-        test_a_plugin_harness_runner_writes_the_records_the_driver_reads,
-        test_a_plugin_harness_may_not_take_a_built_in_name,
-        test_the_layer_command_answers_a_plugin_harness_and_refuses_an_unknown_name,
-        test_a_packet_that_names_a_harness_runs_on_it_and_is_refused_on_another,
-        test_a_packet_with_subagents_is_refused_at_submission_on_a_harness_that_cannot_run_them,
-        test_the_check_names_a_packet_on_an_unknown_harness_or_one_it_cannot_run_on,
-        test_the_check_names_a_harness_whose_runner_the_plugin_does_not_ship,
-        test_a_plugin_harness_is_named_on_figures_after_every_shipped_one,
-        test_a_plugin_harness_venv_is_built_from_its_install_with_the_agent_on_its_path,
-    ):
-        with tempfile.TemporaryDirectory() as scratch:
-            test(pathlib.Path(scratch))
-    print("ok")

@@ -99,7 +99,8 @@ def hoist_einsum(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
         in_subs, out_sub = parse_einsum_subscripts(subs.value)
     except Exception:  # noqa: BLE001 -- ellipsis / malformed: einsum_inline_stmts refuses it too
         return None
-    if len(in_subs) != len(operands):
+    # einsum_inline_stmts' own refusals, checked before any operand is bound: a refused einsum keeps its operands.
+    if not out_sub or len(in_subs) != len(operands) or any(c not in "".join(in_subs) for c in out_sub):
         return None
     names = bound_operands(operands, hoist, f"__es{hoist.ctr}_o")
     dtype = product_dtype(names, [dtype_kind(operand, hoist.tables.dtypes) for operand in operands])

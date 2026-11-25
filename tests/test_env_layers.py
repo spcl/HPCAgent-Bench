@@ -94,21 +94,12 @@ def test_the_shell_and_the_module_render_a_base_identically() -> None:
 
 
 @pytest.mark.parametrize("name", BASES)
-def test_every_base_renders_to_a_complete_flat_env(name: str) -> None:
-    """Each base carries every launcher placeholder and assigns no key twice."""
+def test_every_base_renders_to_a_complete_flat_env_naming_a_known_language(name: str) -> None:
+    """Each base carries every launcher placeholder, assigns no key twice and names a known language."""
     values = flat(rendered(name))
     for key in ("SETUP", "RUN_ROOT", "PROBLEMS_FILE", "AMD_CE_ENV", "LANGUAGE", "AGENT_MAX_TOKENS"):
         assert key in values, f"{name} renders no {key}"
-
-
-@pytest.mark.parametrize("name", BASES)
-def test_every_base_names_a_known_language(name: str) -> None:
-    assert Language.parse(flat(rendered(name))["LANGUAGE"])
-
-
-def test_rendering_is_deterministic() -> None:
-    """Two renders of every base are byte-identical: a snapshot's content hash names its content."""
-    assert [rendered(name) for name in BASES] == [rendered(name) for name in BASES]
+    assert Language.parse(values["LANGUAGE"])
 
 
 def test_every_model_layer_is_listed_in_every_experiment() -> None:

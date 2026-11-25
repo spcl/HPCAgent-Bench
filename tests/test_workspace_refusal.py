@@ -34,9 +34,3 @@ def test_the_kernels_scalars_and_array_bytes_pass() -> None:
     assert refusal("ARRAY_BYTES") is None
     assert refusal("max(NI, NJ) * 8") is None
     assert refusal(None) is None
-
-
-if __name__ == "__main__":
-    test_a_foreign_size_symbol_is_refused_with_the_allowed_names()
-    test_a_malformed_expression_is_refused()
-    test_the_kernels_scalars_and_array_bytes_pass()

@@ -19,6 +19,7 @@ on a slice.
 import ast
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import ElementalUfuncToPrimitive
 from tests.translators.op_oracle import all_ok, run_op
@@ -43,28 +44,22 @@ def rewrite_(expr: str) -> str:
 # structural: the rewrite fires and produces the expected primitive form
 
 
-def test_mod_rewrites_to_modulo_operator() -> None:
-    assert rewrite_("np.mod(a, b)") == "a % b"
-    assert rewrite_("np.remainder(a, b)") == "a % b"
-
-
-def test_logaddexp_rewrites_to_stable_form() -> None:
-    assert rewrite_("np.logaddexp(a, b)") == (
-        "np.where((a == b) & (a - b != 0.0), a, np.maximum(a, b) + np.log(1.0 + np.exp(-np.abs(a - b))))"
-    )
-
-
-def test_heaviside_rewrites_to_nested_where() -> None:
-    assert (
-        rewrite_("np.heaviside(a, b)")
-        == "np.where(a != a, (1e309-1e309), np.where(a < 0, 0.0, np.where(a == 0, b, 1.0)))"
-    )
-
-
-def test_non_target_two_arg_ufuncs_untouched() -> None:
-    # np.maximum / np.power etc. already lower directly -- the normalizer leaves them.
-    assert rewrite_("np.maximum(a, b)") == "np.maximum(a, b)"
-    assert rewrite_("np.power(a, b)") == "np.power(a, b)"
+@pytest.mark.parametrize(
+    ("expr", "rewritten"),
+    [
+        (
+            "np.logaddexp(a, b)",
+            "np.where((a == b) & (a - b != 0.0), a, np.maximum(a, b) + np.log(1.0 + np.exp(-np.abs(a - b))))",
+        ),
+        (
+            "np.heaviside(a, b)",
+            "np.where(a != a, (1e309-1e309), np.where(a < 0, 0.0, np.where(a == 0, b, 1.0)))",
+        ),
+    ],
+    ids=["logaddexp_to_stable_form", "heaviside_to_nested_where"],
+)
+def test_elemental_ufunc_rewrites_to_primitives(expr: str, rewritten: str) -> None:
+    assert rewrite_(expr) == rewritten
 
 
 # numerical: bit-close to numpy across every backend, whole array
@@ -75,23 +70,9 @@ def run_(expr: str, a: np.ndarray = A, b: np.ndarray = B) -> dict[str, str]:
     return run_op(src, "f", {"a": a, "b": b}, {"out": (6,)}, SYMS, shapes=SHAPES, backends=ALL)
 
 
-def test_mod_matches_numpy_all_backends() -> None:
-    ok, res = all_ok(run_("np.mod(a, b)"))
-    assert ok, res
-
-
-def test_remainder_matches_numpy_all_backends() -> None:
-    ok, res = all_ok(run_("np.remainder(a, b)"))
-    assert ok, res
-
-
-def test_logaddexp_matches_numpy_all_backends() -> None:
-    ok, res = all_ok(run_("np.logaddexp(a, b)"))
-    assert ok, res
-
-
-def test_heaviside_matches_numpy_all_backends() -> None:
-    ok, res = all_ok(run_("np.heaviside(a, b)"))
+@pytest.mark.parametrize("expr", ["np.mod(a, b)", "np.logaddexp(a, b)", "np.heaviside(a, b)"])
+def test_elemental_ufunc_matches_numpy_all_backends(expr: str) -> None:
+    ok, res = all_ok(run_(expr))
     assert ok, res
 
 

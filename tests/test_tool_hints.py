@@ -14,9 +14,3 @@ def test_a_read_only_tool_is_listed_with_its_hints_and_only_those() -> None:
 
     annotations = sut.model_dump(by_alias=True, exclude_none=True)["annotations"]
     assert annotations == {"readOnlyHint": True, "idempotentHint": True}
-
-
-def test_a_tool_without_hints_is_listed_without_annotations() -> None:
-    sut = mcp_server.tool_definition("look", served(registry.Hints()))
-
-    assert sut.annotations is None

@@ -45,14 +45,6 @@ def test_the_count_over_a_box_is_solved_over_graded_with_owed_apart(states: tupl
     assert pk.run_count_label(cell_of(*states).runs) == label
 
 
-@pytest.mark.parametrize(
-    ("n_series", "want"),
-    [pytest.param(1, pk.BOX_WIDTH, id="alone"), pytest.param(3, pk.BOX_STEP_SHARE * pk.DODGE_SPAN / 2, id="three")],
-)
-def test_a_box_never_reaches_its_neighbours(n_series: int, want: float) -> None:
-    assert pk.box_width(n_series) == pytest.approx(want)
-
-
 def test_every_run_is_one_dot_spread_across_its_box_in_run_order() -> None:
     cell = cell_of(*([RunState.SOLVED] * 4 + [RunState.UNSOLVED] * 3))
     fig, ax = plt.subplots()
@@ -97,19 +89,3 @@ def test_several_series_box_side_by_side_rather_than_falling_back_to_points() ->
     centres = sorted(patch.get_path().get_extents().x0 for patch in fig.axes[0].patches)
     assert len(centres) == 2
     assert centres[0] < centres[1]
-
-
-if __name__ == "__main__":
-    test_the_count_over_a_box_is_solved_over_graded_with_owed_apart(
-        (RunState.SOLVED, RunState.UNSOLVED, RunState.UNSOLVED), "1/3"
-    )
-    test_the_count_over_a_box_is_solved_over_graded_with_owed_apart(
-        (RunState.SOLVED, RunState.OWED, RunState.OWED), "1/1 +2?"
-    )
-    test_a_box_never_reaches_its_neighbours(1, pk.BOX_WIDTH)
-    test_a_box_never_reaches_its_neighbours(3, pk.BOX_STEP_SHARE * pk.DODGE_SPAN / 2)
-    test_every_run_is_one_dot_spread_across_its_box_in_run_order()
-    test_an_unsolved_run_is_hollow_at_one_x()
-    test_an_owed_run_is_a_question_mark_not_a_dot()
-    test_the_count_is_printed_over_its_cell()
-    test_several_series_box_side_by_side_rather_than_falling_back_to_points()

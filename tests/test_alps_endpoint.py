@@ -136,18 +136,16 @@ def closed_port_url() -> str:
     return f"http://127.0.0.1:{port}/v1"
 
 
-def test_a_live_endpoint_exports_its_url_model_and_key(tmp_path: pathlib.Path, server: FakeSglang) -> None:
+def test_a_live_endpoint_exports_its_url_model_and_key_and_the_key_reaches_neither_curls_argv_nor_any_output(
+    tmp_path: pathlib.Path, server: FakeSglang
+) -> None:
+    """The key travels in the request header only: ps shows every process's argv to every user on the node."""
     done = source(tmp_path, server.url)
     assert done.stdout.splitlines()[-2:] == ["key=exported", f"url={server.url} model={MODEL} rc=0"], done.stderr
     assert server.requests == [
         ("GET", "/v1/models", f"Bearer {KEY}"),
         ("POST", "/v1/chat/completions", f"Bearer {KEY}"),
     ]
-
-
-def test_the_key_reaches_neither_curls_argv_nor_any_output(tmp_path: pathlib.Path, server: FakeSglang) -> None:
-    """ps shows every process's argv to every user on the node."""
-    done = source(tmp_path, server.url)
     argv = (tmp_path / "curl-argv").read_text(encoding="utf-8").splitlines()
     assert len(argv) == 2, argv
     assert [line for line in argv if KEY in line] == []

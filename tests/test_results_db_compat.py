@@ -155,18 +155,3 @@ def test_an_older_file_reads_as_its_upgrade_stores_it(tmp_path: pathlib.Path, ve
             assert [tuple(row) for row in old.execute(f"SELECT * FROM {table}")] == [
                 tuple(row) for row in new.execute(f"SELECT * FROM {table}")
             ]
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    test_the_schema_is_the_one_0_2_1_froze_plus_the_lazy_tables_and_added_columns()
-    test_every_column_a_0_2_1_file_names_has_a_look()
-    with tempfile.TemporaryDirectory() as scratch:
-        test_a_0_2_1_file_opens_merges_and_extracts(pathlib.Path(scratch))
-    with tempfile.TemporaryDirectory() as scratch:
-        test_a_file_written_here_takes_the_rows_of_a_0_2_1_file(pathlib.Path(scratch))
-    test_a_file_older_than_the_library_column_reads_as_no_library(pathlib.Path(tempfile.mkdtemp()))
-    test_threads_opening_a_new_file_together_all_find_the_whole_schema(pathlib.Path(tempfile.mkdtemp()))
-    for version in sorted(results_db.ADDITIVE_UPGRADES):
-        test_every_upgradable_version_upgrades_to_the_columns_of_a_new_file(pathlib.Path(tempfile.mkdtemp()), version)

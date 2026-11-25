@@ -75,15 +75,17 @@ def test_a_malformed_job_init_target_is_refused_by_the_manifest(tmp_path: pathli
         agent_plugins.read(plugin_folder(tmp_path, "probeplugin", manifest_with("probeplugin", target)))
 
 
-def test_an_unknown_key_inside_hooks_is_refused(tmp_path: pathlib.Path) -> None:
-    manifest = manifest_with("probeplugin", "pkg.mod:fn") + 'when = "later"\n'
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        manifest_with("probeplugin", "pkg.mod:fn") + 'when = "later"\n',
+        'name = "probeplugin"\n\n[wat]\nkey = "x"\n',
+    ],
+    ids=["unknown_key_inside_hooks", "unknown_top_level_table"],
+)
+def test_an_unknown_key_or_table_in_the_manifest_is_refused(tmp_path: pathlib.Path, manifest: str) -> None:
     with pytest.raises(ValueError, match=r"plugin\.toml"):
         agent_plugins.read(plugin_folder(tmp_path, "probeplugin", manifest))
-
-
-def test_an_unknown_top_level_table_is_still_refused(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(ValueError, match=r"plugin\.toml"):
-        agent_plugins.read(plugin_folder(tmp_path, "probeplugin", 'name = "probeplugin"\n\n[wat]\nkey = "x"\n'))
 
 
 #: The stub a plugin folder ships as ``preload.py``: it records every call (a marker + the context it got)
@@ -130,7 +132,7 @@ def run_hook_cli(
     return code, home
 
 
-def test_the_hook_runs_once_with_the_paths_and_env_of_the_launch(
+def test_the_hook_runs_once_with_the_paths_and_env_of_the_launch_and_the_stamp_records_it(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     calls = tmp_path / "calls.jsonl"
@@ -159,18 +161,6 @@ def test_the_hook_runs_once_with_the_paths_and_env_of_the_launch(
     assert "job-init[probeplugin]: preload:run: start" in err
     assert re.search(r"preload:run: ok in \d+\.\d{3} s", err), "start, end and duration are logged"
     assert f"1 ok, 0 failed of 1; env file {home / agent_plugins.JOB_INIT_ENV}" in err
-
-
-def test_the_stamp_and_the_exported_names_record_what_ran(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    folder = plugin_folder(
-        tmp_path, "probeplugin", manifest_with("probeplugin", "preload:run"), stub_module(tmp_path / "c", "x")
-    )
-
-    code, home = run_hook_cli(tmp_path, monkeypatch, [folder])
-
-    assert code == 0
     stamp = json.loads((home / agent_plugins.JOB_INIT_STAMP).read_text(encoding="utf-8"))
     assert stamp["role"] == "agent"
     assert len(stamp["hooks"]) == 1

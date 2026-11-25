@@ -121,6 +121,20 @@ docker run --rm --privileged -v "$PWD:/repo" -w /repo ubuntu:24.04 bash -c '
 A guard test must be able to fail: pair a scan or `assert not x` with a premise assert that the scan saw
 something, or a control that feeds it a violation.
 
+Every fixed bug gets one test that fails without the fix. Tag it with a comment line directly above it, so a test
+cleanup can find and keep it (`grep -n "# Reproducer:"`):
+
+```python
+# Reproducer: <what broke, where> (<kernel, job or commit>)
+def test_...():
+```
+
+A test without the tag is kept only on its value: one that cannot fail, repeats another test's fact, pins wording
+that is not the product, recomputes the expected value with the code under test, or covers trivial code is deleted.
+A long test must be worth its length and runtime. A snippet test of a pattern inside a larger program is dropped when
+the program's own test runs in the same CI tier, fails once the fix is reverted, and covers every edge the snippet
+does; the `# Reproducer:` tag then moves to the program's test.
+
 ## Documentation
 
 `docs/` is Markdown built with Sphinx, MyST and Furo; `docs/index.md` holds the toctree, so a new

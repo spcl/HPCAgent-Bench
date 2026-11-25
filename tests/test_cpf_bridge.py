@@ -803,22 +803,3 @@ def test_the_entry_is_respelled_as_the_stub_and_a_renamed_argument_takes_its_man
     assert "out[0] = field[0] + N;" in code
     with pytest.raises(ValueError, match="the ABI"):
         cpf_bridge.exact_abi_signature(rendered, "k_fp64", parameters[1:], {"__field": "field"})
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    test_the_entry_is_respelled_as_the_stub_and_a_renamed_argument_takes_its_manifest_name()
-    test_an_abi_symbol_is_forced_through_a_nested_sdfg_when_no_top_level_tasklet_can_carry_it()
-    test_a_dropin_of_a_renamed_argument_declares_the_manifest_name_in_abi_order()
-    test_an_ungraded_return_mirrored_to_the_host_is_dropped_with_its_mirror()
-    test_an_ungraded_return_that_a_tasklet_reads_is_kept("__return_0")
-    test_an_ungraded_return_that_a_tasklet_reads_is_kept("count_host")
-    test_a_graded_return_with_a_host_mirror_is_kept()
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_device_unit_is_named_for_its_dialect_not_the_hosts(patch)
-    with pytest.MonkeyPatch.context() as patch:
-        test_the_target_reaches_the_child_and_the_device_is_not_hidden(patch, pathlib.Path(tempfile.mkdtemp()))
-    test_the_entry_program_resolves_when_the_module_holds_several()
-    test_an_impl_that_does_not_exist_names_no_return_slot(pathlib.Path(tempfile.mkdtemp()))
-    print("ok (the integration tests run under pytest -m integration)")

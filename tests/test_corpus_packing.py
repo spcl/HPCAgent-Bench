@@ -4,7 +4,6 @@
 deterministic, better than the stride on the real corpus, refusing over-budget packings, with unresolved kernels
 packed last."""
 
-import json
 from collections.abc import Mapping, Sequence
 
 import pytest
@@ -84,17 +83,6 @@ def test_the_real_corpus_partitions_at_every_rank_count(corpus: dict[str, BenchS
     """The gate on the real thing: every corpus kernel on exactly one rank, whatever the count."""
     names = sorted(corpus)
     assert_is_partition(pack_lpt(names, cost_vector(corpus, Preset.M), ranks), names, ranks)
-
-
-def test_two_independent_computations_agree_byte_for_byte(corpus: dict[str, BenchSpec]) -> None:
-    """The determinism the results DB needs: rebuild the cost vector from scratch and pack again.
-
-    Serialised and compared as JSON, not as objects -- what has to match is the bytes a second
-    run of the same job would write, not an in-memory structure that happens to compare equal.
-    """
-    first = json.dumps([pack_lpt(sorted(corpus), cost_vector(corpus, Preset.M), ranks) for ranks in MEASURED_RANKS])
-    second = json.dumps([pack_lpt(sorted(corpus), cost_vector(corpus, Preset.M), ranks) for ranks in MEASURED_RANKS])
-    assert first == second
 
 
 def test_every_rank_computes_the_same_partition_alone(corpus: dict[str, BenchSpec]) -> None:

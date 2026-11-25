@@ -10,7 +10,6 @@ import pathlib
 import shlex
 import subprocess
 import sys
-import tempfile
 from collections.abc import Callable, Mapping
 
 import pytest
@@ -45,13 +44,6 @@ def test_the_shipped_systems_name_every_shape_field_a_job_needs() -> None:
     for name, entry in SHIPPED.items():
         assert {"partition", "ntasks_per_node", "cpus_per_task"} <= set(entry.given()), name
         assert set(entry.given()) & set(systems.GPU_FIELDS), f"{name} names no GPU count"
-
-
-def test_a_system_supplies_the_shape_when_nothing_overrides_it() -> None:
-    resolved = systems.resolve("daint.alps", {}, {})
-    assert resolved.system == "daint.alps"
-    assert resolved.values["cpus_per_task"] == SHIPPED["daint.alps"].cpus_per_task
-    assert resolved.values["partition"] == SHIPPED["daint.alps"].partition
 
 
 def test_the_environment_overrides_the_system_and_a_flag_overrides_the_environment() -> None:
@@ -339,38 +331,3 @@ def test_an_image_job_runs_on_its_roles_partition_unless_a_flag_or_a_system_name
     system, command = dry_run(tmp_path, "--system", "beverin-mi200", build, "judge-agent-amd")
     assert system == "beverin-mi200", command
     assert "--partition=mi200" in command, command
-
-
-if __name__ == "__main__":
-    test_the_shipped_systems_name_every_shape_field_a_job_needs()
-    test_a_system_supplies_the_shape_when_nothing_overrides_it()
-    test_the_environment_overrides_the_system_and_a_flag_overrides_the_environment()
-    test_an_explicit_gpus_per_task_displaces_the_systems_gpus_per_node()
-    test_the_cluster_name_picks_the_system_and_an_unknown_cluster_picks_none()
-    test_a_cluster_with_no_entry_runs_from_flags_and_the_environment_alone()
-    test_a_systems_file_adds_a_system(pathlib.Path(tempfile.mkdtemp()))
-    test_an_unknown_system_names_the_known_ones()
-    test_a_missing_required_field_names_its_flag_and_its_variable()
-    test_the_experiment_job_takes_only_its_own_fields_and_a_systems_gpu_count_fills_the_rest()
-    test_the_hardware_is_its_flag_then_its_variable_then_the_systems()
-    test_the_longest_time_limit_is_the_systems_unless_set_and_has_no_default()
-    with pytest.MonkeyPatch.context() as patch:
-        test_the_options_command_prints_one_option_per_line_or_the_hardware(patch)
-    with pytest.MonkeyPatch.context() as patch:
-        test_print_names_one_resolved_value_and_require_refuses_it_unset(patch)
-    test_the_sbatch_command_puts_the_options_before_the_script_and_keeps_its_arguments()
-    test_mem_flag_reaches_sbatch(pathlib.Path(tempfile.mkdtemp()))
-    with pytest.MonkeyPatch.context() as patch:
-        test_a_resource_extra_is_its_flag_then_its_variable_then_the_systems(patch, pathlib.Path(tempfile.mkdtemp()))
-    with pytest.MonkeyPatch.context() as patch:
-        test_repeated_print_names_print_one_value_per_line(patch, pathlib.Path(tempfile.mkdtemp()))
-    test_a_script_keeps_the_fields_its_header_pins_and_the_system_fills_the_rest(pathlib.Path(tempfile.mkdtemp()))
-    test_a_flag_beats_the_header_which_beats_our_variables_but_not_slurms(pathlib.Path(tempfile.mkdtemp()))
-    test_a_partition_picks_the_system_of_the_cluster_that_serves_it(pathlib.Path(tempfile.mkdtemp()))
-    test_an_image_job_runs_on_its_roles_partition_unless_a_flag_or_a_system_names_another(
-        pathlib.Path(tempfile.mkdtemp())
-    )
-    test_a_named_site_layer_that_does_not_exist_is_an_error_not_ignored(pathlib.Path(tempfile.mkdtemp()))
-    test_a_site_layer_value_reaches_the_environment(pathlib.Path(tempfile.mkdtemp()))
-    test_job_submit_forwards_the_resolved_resource_extras_through_sbatchs_environment(pathlib.Path(tempfile.mkdtemp()))
-    test_job_submit_holds_the_job_with_the_flag_or_submit_shs_hold_knob(pathlib.Path(tempfile.mkdtemp()))

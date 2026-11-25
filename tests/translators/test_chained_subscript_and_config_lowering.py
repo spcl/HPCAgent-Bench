@@ -53,32 +53,26 @@ def collapse(expr: str, shapes: dict[str, tuple[str, ...]]) -> str:
     return ast.unparse(ast.fix_missing_locations(new))
 
 
-def test_collapse_slice_then_trailing_scalar() -> None:
-    # ``becxx[:, j, k][m]`` -- the trailing index selects the surviving full-slice
-    # axis 0 -> ``becxx[m, j, k]``.
-    assert collapse("A[:, j, k][m]", {"A": ("nkb", "nb", "nks")}) == "A[m, j, k]"
-
-
-def test_collapse_rebases_an_index_through_a_partial_inner_slice() -> None:
-    # ``A[1:3][j]`` is ``A[1 + j]``: the bounded slice shifts the origin of the axis ``j`` indexes.
-    assert collapse("A[1:3][j]", {"A": ("n", "m")}) == "A[1 + j, :]"
-
-
-def test_collapse_indexes_into_a_fancy_inner_index() -> None:
-    # ``A[idx][j]`` with ``idx`` an ARRAY is a fancy GATHER (== ``A[idx[j]]``), not
-    # a scalar associate -- ``A[idx, j]`` would read a column instead of row ``idx[j]``.
-    assert collapse("A[idx][j]", {"A": ("n", "m"), "idx": ("k",)}) == "A[idx[j], :]"
-
-
-def test_collapse_keeps_scalar_inner_when_a_sibling_name_is_an_array() -> None:
-    # ``A[i][j]`` -- ``i`` is a plain scalar (absent from the shape table) even
-    # though some OTHER name ``idx`` is an array: the scalar associate still fires.
-    assert collapse("A[i][j]", {"A": ("n", "m"), "idx": ("k",)}) == "A[i, j]"
-
-
-def test_collapse_expands_an_inner_ellipsis_against_the_base_rank() -> None:
-    # ``A[..., j]`` on a rank-3 base is ``A[:, :, j]``, so ``[k]`` lands on axis 0.
-    assert collapse("A[..., j][k]", {"A": ("n", "m", "p")}) == "A[k, :, j]"
+@pytest.mark.parametrize(
+    ("expr", "shapes", "want"),
+    [
+        # The trailing index selects the surviving full-slice axis 0.
+        ("A[:, j, k][m]", {"A": ("nkb", "nb", "nks")}, "A[m, j, k]"),
+        # ``A[1:3][j]`` is ``A[1 + j]``: the bounded slice shifts the origin of the axis ``j`` indexes.
+        ("A[1:3][j]", {"A": ("n", "m")}, "A[1 + j, :]"),
+        # ``idx`` an ARRAY makes ``A[idx][j]`` a fancy GATHER (== ``A[idx[j]]``); ``A[idx, j]`` would read a column.
+        ("A[idx][j]", {"A": ("n", "m"), "idx": ("k",)}, "A[idx[j], :]"),
+        # ``i`` is a plain scalar (absent from the shape table) though ``idx`` is an array: the scalar associate fires.
+        ("A[i][j]", {"A": ("n", "m"), "idx": ("k",)}, "A[i, j]"),
+        # ``A[..., j]`` on a rank-3 base is ``A[:, :, j]``, so ``[k]`` lands on axis 0.
+        ("A[..., j][k]", {"A": ("n", "m", "p")}, "A[k, :, j]"),
+    ],
+    ids=["slice_then_trailing_scalar", "partial_inner_slice", "fancy_inner_index", "scalar_beside_array", "ellipsis"],
+)
+def test_a_chained_subscript_collapses_to_one_subscript(
+    expr: str, shapes: dict[str, tuple[str, ...]], want: str
+) -> None:
+    assert collapse(expr, shapes) == want
 
 
 # chained index arrays: composed into one subscript, two-step where numpy transposes
@@ -429,25 +423,25 @@ def rewrite_shape(expr: str, shapes: dict[str, tuple[str, ...]]) -> str:
     return unparse_(new)
 
 
-def test_shape_index_in_range_bound_maps_to_symbol() -> None:
-    # The common ``for i in range(A.shape[0])`` -> ``range(nat)``.
-    assert rewrite_shape("range(A.shape[0])", {"A": ("nat", "K")}) == "range(nat)"
-
-
-def test_shape_index_numeric_dim_is_a_literal() -> None:
-    # A concrete (pinned) dimension resolves to an integer literal, not a symbol.
-    assert rewrite_shape("A.shape[1]", {"A": ("N", "3")}) == "3"
-
-
-def test_bare_shape_maps_to_symbol_tuple() -> None:
-    # ``A.shape`` (e.g. ``np.zeros(A.shape)``) -> the full symbol tuple.
-    assert rewrite_shape("A.shape", {"A": ("N", "M")}) == "(N, M)"
-
-
-def test_len_and_size_map_to_symbols() -> None:
-    # ``len(A)`` == ``A.shape[0]``; ``A.size`` == product of the shape symbols.
-    assert rewrite_shape("len(A)", {"A": ("N", "M")}) == "N"
-    assert rewrite_shape("A.size", {"A": ("N", "M")}) == "N * M"
+@pytest.mark.parametrize(
+    ("expr", "shapes", "want"),
+    [
+        # The common ``for i in range(A.shape[0])`` -> ``range(nat)``.
+        ("range(A.shape[0])", {"A": ("nat", "K")}, "range(nat)"),
+        # A concrete (pinned) dimension resolves to an integer literal, not a symbol.
+        ("A.shape[1]", {"A": ("N", "3")}, "3"),
+        # ``A.shape`` (e.g. ``np.zeros(A.shape)``) -> the full symbol tuple.
+        ("A.shape", {"A": ("N", "M")}, "(N, M)"),
+        # ``len(A)`` == ``A.shape[0]``; ``A.size`` == product of the shape symbols.
+        ("len(A)", {"A": ("N", "M")}, "N"),
+        ("A.size", {"A": ("N", "M")}, "N * M"),
+    ],
+    ids=["shape_index_in_range_bound", "numeric_dim", "bare_shape", "len", "size"],
+)
+def test_a_shape_read_maps_to_the_symbolic_dims_provided(
+    expr: str, shapes: dict[str, tuple[str, ...]], want: str
+) -> None:
+    assert rewrite_shape(expr, shapes) == want
 
 
 # .shape read is INTEGER even off a complex array (skips the complex walk)
@@ -505,11 +499,3 @@ def test_iter_minus_start_copies_shared_start_node() -> None:
     embedded = [b for b in ast.walk(out) if isinstance(b, ast.BinOp) and isinstance(b.op, ast.Mult)]
     assert embedded
     assert embedded[0] is not start
-
-
-def test_iter_minus_start_zero_start_is_bare_fresh_iter() -> None:
-    # start == 0 -> bare iter (no offset), and a FRESH Name (not the passed object).
-    iv = ast.Name(id="si", ctx=ast.Load())
-    out = lowering.SliceToScalarRewriter.iter_minus_start(iv, ast.Constant(value=0))
-    assert unparse_(out) == "si"
-    assert out is not iv

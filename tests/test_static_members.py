@@ -64,8 +64,3 @@ def test_every_audited_access_still_exists() -> None:
     """A listed access that was removed leaves a hole a new one could hide in."""
     for rel, owner in AUDITED:
         assert any(found == owner for found, _line, _builtin in name_accesses(REPO / rel)), (rel, owner)
-
-
-if __name__ == "__main__":
-    test_production_code_reads_members_statically()
-    test_every_audited_access_still_exists()

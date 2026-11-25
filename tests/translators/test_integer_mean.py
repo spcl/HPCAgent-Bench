@@ -9,6 +9,7 @@ lowers an integer mean to a loop with a float accumulator; this checks the resul
 """
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import assert_all_ok, run_op
 
@@ -29,34 +30,25 @@ SYMS = {"M": 3, "N": 2}
 DTYPES = {"a": "int64"}
 
 
-def test_the_mean_of_an_integer_array_is_not_truncated() -> None:
+@pytest.mark.parametrize(
+    ("src", "name", "out_shape", "out_spec", "label"),
+    [
+        (WHOLE, "whole", (1,), "(1,)", "np.mean(int array)"),
+        (PER_ROW, "per_row", (3,), "(M,)", "np.mean(int array, axis=1)"),
+    ],
+    ids=["whole_array", "per_axis"],
+)
+def test_the_mean_of_an_integer_array_is_not_truncated(
+    src: str, name: str, out_shape: tuple[int, ...], out_spec: str, label: str
+) -> None:
     status = run_op(
-        WHOLE,
-        "whole",
+        src,
+        name,
         {"a": VALUES},
-        {"out": (1,)},
+        {"out": out_shape},
         SYMS,
-        shapes={**SHAPES, "out": "(1,)"},
+        shapes={**SHAPES, "out": out_spec},
         backends=("c", "cpp", "fortran"),
         dtypes=DTYPES,
     )
-    assert_all_ok(status, "np.mean(int array)")
-
-
-def test_the_per_axis_mean_of_an_integer_array_is_not_truncated() -> None:
-    status = run_op(
-        PER_ROW,
-        "per_row",
-        {"a": VALUES},
-        {"out": (3,)},
-        SYMS,
-        shapes={**SHAPES, "out": "(M,)"},
-        backends=("c", "cpp", "fortran"),
-        dtypes=DTYPES,
-    )
-    assert_all_ok(status, "np.mean(int array, axis=1)")
-
-
-if __name__ == "__main__":
-    test_the_mean_of_an_integer_array_is_not_truncated()
-    test_the_per_axis_mean_of_an_integer_array_is_not_truncated()
+    assert_all_ok(status, label)

@@ -7,7 +7,6 @@ import contextlib
 import json
 import pathlib
 import sqlite3
-import tempfile
 
 import pytest
 from relayout.ops import (
@@ -103,11 +102,6 @@ def assert_round_trips(path: pathlib.Path, grade_id: int, sent: Requests) -> Non
 def test_the_fixture_holds_every_relayout_action() -> None:
     """A new relayout operation must join :data:`OPERATIONS` (and the schema's CHECK) before it is recorded."""
     assert {op.action for op in OPERATIONS} == set(Action)
-
-
-def test_every_operation_kind_round_trips_through_a_grade(tmp_path: pathlib.Path) -> None:
-    db = tmp_path / "r.db"
-    assert_round_trips(db, recorded_grade(db, EVERY_KIND), EVERY_KIND)
 
 
 def test_each_operation_alone_round_trips(tmp_path: pathlib.Path) -> None:
@@ -222,21 +216,3 @@ def test_the_recorded_request_carries_its_version_and_an_unversioned_row_still_r
     newer = {"requests": json.dumps({requests_api.RECORDED_VERSION_KEY: requests_api.RECORDED_VERSION + 1})}
     with pytest.raises(ValueError, match="recorded at version"):
         results_db.requests_of_row(newer)
-
-
-if __name__ == "__main__":
-    test_the_fixture_holds_every_relayout_action()
-    test_a_refused_call_records_only_a_valid_request()
-    for test in (
-        test_every_operation_kind_round_trips_through_a_grade,
-        test_each_operation_alone_round_trips,
-        test_startup_alone_round_trips,
-        test_the_empty_request_records_nothing,
-        test_the_rows_name_each_entry_in_request_order,
-        test_the_schema_admits_exactly_the_request_kinds,
-        test_a_merge_and_a_grade_copy_carry_the_rows,
-        test_a_malformed_request_is_refused_before_anything_is_written,
-    ):
-        with tempfile.TemporaryDirectory() as scratch:
-            test(pathlib.Path(scratch))
-    test_the_recorded_request_carries_its_version_and_an_unversioned_row_still_reads()

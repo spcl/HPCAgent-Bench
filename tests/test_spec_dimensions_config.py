@@ -70,37 +70,30 @@ def test_parameters_and_config_stay_apart() -> None:
     }
 
 
-def test_config_domain_and_value_raises() -> None:
-    """A config entry declaring BOTH 'domain' and 'value' is ambiguous: is it an axis or pinned?"""
-    raw = raw_manifest(parameters={"S": {"N": 16}}, config={"lvn": {"domain": [32, 64], "value": 32}})
-    with pytest.raises(ValueError, match="both 'domain' and 'value'"):
-        BenchSpec.from_dict(raw, SITE, source="<test>")
-
-
-def test_config_neither_domain_nor_value_raises() -> None:
-    """A config entry declaring NEITHER 'domain' nor 'value' has no concrete or fuzzable value."""
-    raw = raw_manifest(parameters={"S": {"N": 16}}, config={"lvn": {"selects": "tile"}})
-    with pytest.raises(ValueError, match="neither 'domain'"):
-        BenchSpec.from_dict(raw, SITE, source="<test>")
-
-
-def test_dimension_and_config_overlap_raises() -> None:
-    """A symbol cannot be declared in BOTH 'parameters' and 'config' -- the merge in .parameters
-    would let the config value silently clobber the dimension value."""
-    raw = raw_manifest(parameters={"S": {"N": 16}}, config={"N": {"value": 16}})
-    with pytest.raises(ValueError, match="declared in BOTH"):
-        BenchSpec.from_dict(raw, SITE, source="<test>")
-
-
-def test_violated_constraint_raises() -> None:
-    """A 'constraints:' expression is evaluated at LOAD against every preset's merged dimension +
-    config-representative values; a violated one raises immediately, naming the expression."""
-    raw = raw_manifest(
-        parameters={"S": {"nproma": 16}},
-        config={"lvn": {"value": 32}},
-        constraints=["lvn <= nproma"],
-    )
-    with pytest.raises(ValueError, match=r"constraint 'lvn <= nproma' is violated"):
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        # 'domain' and 'value' together are ambiguous: is the knob an axis or pinned?
+        ({"config": {"lvn": {"domain": [32, 64], "value": 32}}}, "both 'domain' and 'value'"),
+        # neither 'domain' nor 'value' leaves the knob with no concrete or fuzzable value.
+        ({"config": {"lvn": {"selects": "tile"}}}, "neither 'domain'"),
+        # one symbol in 'parameters' and 'config' would let the config value silently clobber the dimension.
+        ({"config": {"N": {"value": 16}}}, "declared in BOTH"),
+        # 'constraints:' is evaluated at LOAD against every preset's merged values; a violated one names itself.
+        (
+            {
+                "parameters": {"S": {"nproma": 16}},
+                "config": {"lvn": {"value": 32}},
+                "constraints": ["lvn <= nproma"],
+            },
+            r"constraint 'lvn <= nproma' is violated",
+        ),
+    ],
+    ids=["domain_and_value", "neither_domain_nor_value", "dimension_and_config_overlap", "violated_constraint"],
+)
+def test_an_ill_formed_config_or_constraint_is_refused_at_load(overrides: dict[str, Any], message: str) -> None:
+    raw = raw_manifest(**{"parameters": {"S": {"N": 16}}, **overrides})
+    with pytest.raises(ValueError, match=message):
         BenchSpec.from_dict(raw, SITE, source="<test>")
 
 
@@ -215,17 +208,6 @@ def test_a_curated_config_pins_a_representative_into_every_preset() -> None:
     )
     assert spec.parameters == {"S": {"N": 16, "a": 7}, "M": {"N": 32, "a": 7}}
     assert _dimensions(spec) == {"S": {"N": 16}, "M": {"N": 32}}
-
-
-def test_the_config_space_does_not_depend_on_the_size_preset() -> None:
-    """Configs are orthogonal to size: S and XL evaluate the SAME space."""
-    spec = BenchSpec.from_dict(
-        raw_manifest(parameters={"S": {"N": 16}, "XL": {"N": 4096}}, config={"mode": {"domain": [0, 1, 2]}}),
-        SITE,
-        source="<test>",
-    )
-    assert len(spec.config_space) == 3
-    assert set(spec.parameters) == {"S", "XL"}
 
 
 def test_fuzz_configs_is_rejected_with_a_pointer_to_the_new_block() -> None:

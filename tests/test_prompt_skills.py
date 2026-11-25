@@ -80,11 +80,6 @@ def test_a_page_is_identified_by_its_DIRECTORY_not_its_frontmatter(
     assert "SENTINEL-BODY" not in prompt, "a page body was inlined"
 
 
-def test_a_plugin_adds_a_new_skill(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    plugin_skill(tmp_path, monkeypatch, "unrolling", "unroll things", "UNROLL BODY")
-    assert "unrolling" in [s.name for s in load_skills()]
-
-
 def test_other_skills_are_indexed_by_trigger_and_never_inlined(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -110,12 +105,6 @@ def test_no_skill_body_is_ever_inlined() -> None:
     ):
         prompt = build_prompt(TASK, prompt_config=cfg)
         assert _inlined_pages(prompt) == frozenset(), f"a skill body was inlined: {_inlined_pages(prompt)}"
-
-
-def test_the_legality_contract_is_a_skill_page_never_inlined() -> None:
-    """The general optimization rules ship with lang-skills as the `optimization` page: named, never pasted."""
-    prompt = build_prompt(TASK, prompt_config=PromptConfig.from_config())
-    assert "## Allowed" not in prompt, "the legality contract was inlined"
 
 
 # kernel path
@@ -172,15 +161,6 @@ def test_tolerance_follows_the_task_precision() -> None:
 
     fp32 = Task("gemm", SourceMode.RESTRICTED, Language.C, precision=Precision.FP32)
     assert build_context(fp32)["rtol"] != build_context(TASK)["rtol"]
-
-
-def test_no_tolerance_knob_on_prompt_config() -> None:
-    """A display override could only make the prompt lie about the grade."""
-    import dataclasses as dc
-
-    names = {f.name for f in dc.fields(PromptConfig)}
-    assert "rtol" not in names
-    assert "atol" not in names
 
 
 # debug
