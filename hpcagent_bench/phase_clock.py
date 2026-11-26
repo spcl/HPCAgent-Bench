@@ -17,7 +17,19 @@ from collections.abc import Iterator
 
 from hpcagent_agent.coded import Coded
 
-__all__ = ["MARKS", "PHASES", "RUNNING", "Clock", "Mark", "Phase", "credit", "measuring", "phase", "shift", "unmeasured"]
+__all__ = [
+    "MARKS",
+    "PHASES",
+    "RUNNING",
+    "Clock",
+    "Mark",
+    "Phase",
+    "credit",
+    "measuring",
+    "phase",
+    "shift",
+    "unmeasured",
+]
 
 
 class Phase(Coded):

@@ -188,12 +188,12 @@ def test_device_resident_host_leaves_a_braceless_if_a_statement_to_guard() -> No
         (lambda: "void kernel(int n) {\n  double *t = 0;\n  double *dev_t;\n  hipFree(dev_t);\n}\n", "dev_"),
         # Re-running the rewrite on already-rewritten code must decline (there is nothing left to strip) rather
         # than aliasing an alias.
-        (lambda: device_resident_host(PPCG_HIPIFIED_HOST, "kernel"), ""),
+        (lambda: device_resident_host(PPCG_HIPIFIED_HOST, "kernel"), None),
     ],
     ids=["no_mirror_to_strip", "only_a_local_is_mirrored", "idempotent_on_its_own_output"],
 )
 def test_device_resident_host_declines_a_source_with_no_mirror_to_strip(
-    make_source: Callable[[], str], match: str
+    make_source: Callable[[], str], match: str | None
 ) -> None:
     with pytest.raises(ValueError, match=match):
         device_resident_host(make_source(), "kernel")
