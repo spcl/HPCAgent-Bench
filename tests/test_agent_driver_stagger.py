@@ -23,5 +23,3 @@ def test_the_stagger_is_on_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AGENT_START_STAGGER_SECONDS", raising=False)
     driver = load_driver(monkeypatch)
     assert driver.AGENT_START_STAGGER_SECONDS > 0, "agents would all start their MCP servers at once"
-
-

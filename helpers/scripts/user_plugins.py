@@ -147,7 +147,9 @@ def bump(pins_file: pathlib.Path, names: list[str]) -> None:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--pins", type=pathlib.Path, default=os.environ.get(PINS_ENV) or None, help=f"default: ${PINS_ENV}")
+    parser.add_argument(
+        "--pins", type=pathlib.Path, default=os.environ.get(PINS_ENV) or None, help=f"default: ${PINS_ENV}"
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     checking_out = commands.add_parser("checkout")
     checking_out.add_argument("dest", type=pathlib.Path)
