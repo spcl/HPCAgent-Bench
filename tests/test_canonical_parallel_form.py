@@ -35,7 +35,11 @@ def test_a_miss_is_not_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["query"] == {"language": "c"}, "get_judge appends the rank itself"
     assert captured["path"] == "/canonical_parallel_form/example_kernel"
     assert answer["reminder"] == tool.reminder()
-    # a successful answer carries the reminder too: it is the one most likely to be over-trusted
+
+
+def test_every_answer_carries_the_reminder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Including a successful one -- that is the answer most likely to be over-trusted."""
+    tool = fresh("canonical_parallel_form")
     monkeypatch.setattr(
         tool.http_json,
         "get_judge",
@@ -44,7 +48,11 @@ def test_a_miss_is_not_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
     answer = tool.run({"kernel": "example_kernel"})
     assert answer["verdict"] == "ok"
     assert answer["reminder"] == tool.reminder()
-    # a missing kernel is content, not an exception: every refusal is text the agent must read
+
+
+def test_a_missing_kernel_is_content_not_an_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every refusal is text the agent must read, the same rule syntax_check follows."""
+    tool = fresh("canonical_parallel_form")
     answer = tool.run({})
     assert answer["verdict"] == "unavailable"
     assert "kernel" in answer["error"]
@@ -122,10 +130,22 @@ def test_the_route_serves_the_cached_form(
     assert (answer["verdict"], answer["dialect"], answer["entry"]) == ("ok", "c", "gemm_fp64")
     assert answer["source"] == "// pre-rendered\n"
     assert answer["binding"] == "{}\n"
-    # an agent names the kernel by its path-style key; read as its first segment it would miss
-    keyed = get_form(url, "scientific_computing/dense_linear_algebra/gemm/gemm")
-    assert keyed["verdict"] == "ok"
-    assert keyed["source"] == "// pre-rendered\n"
+
+
+def test_the_route_serves_the_form_for_the_registry_key_an_agent_sends(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
+) -> None:
+    """An agent names the kernel by its task's path-style key. Read as its first segment, every
+    request looked up the track's name and answered unavailable for a kernel the cache serves."""
+    from hpcagent_bench import config
+    from hpcagent_bench.api import RunConfig
+
+    cache = publish_cache(tmp_path, "gemm", "// pre-rendered\n")
+    config.set_override("service.canonical_parallel_form_dir", str(cache))
+    url = make_judge(RunConfig())[1]
+    answer = get_form(url, "scientific_computing/dense_linear_algebra/gemm/gemm")
+    assert answer["verdict"] == "ok"
+    assert answer["source"] == "// pre-rendered\n"
 
 
 def test_a_route_miss_no_render_can_fill_is_unavailable_and_says_why(
@@ -193,3 +213,11 @@ def test_the_tool_receives_its_setups_form_from_a_live_judge_configured_by_env(
     assert (answer["verdict"], answer.get("dialect"), answer.get("source")) == ("ok", served, f"// {served} form\n"), (
         answer
     )
+
+
+def test_no_directory_means_no_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset is a normal state: the ablation setup that withholds the form changes nothing else."""
+    from hpcagent_bench import config
+
+    config.set_override("service.canonical_parallel_form_dir", "")
+    assert cpf_route.canonical_parallel_form_root() is None

@@ -67,29 +67,34 @@ def test_forty_problems_become_two_jobs_of_one_pipeline_each(tmp_path: pathlib.P
     assert sorted(seen) == sorted(f"k{index}" for index in range(40)), "every problem in exactly one job"
 
 
-@pytest.mark.parametrize(
-    ("sized", "count"), [pytest.param(True, 5, id="small-rerun"), pytest.param(False, 100, id="no-pipeline-size")]
-)
-def test_a_small_rerun_keeps_its_env_and_runs_one_pipeline(tmp_path: pathlib.Path, sized: bool, count: int) -> None:
-    """A small rerun, or a model with no pipeline size, keeps its env file whole and runs one pipeline."""
-    text = ENV if sized else ENV.replace("AGENTS_PER_PIPELINE=20\n", "")
+def test_a_small_rerun_keeps_its_env_and_runs_one_pipeline(tmp_path: pathlib.Path) -> None:
     env = tmp_path / ".env.exp-kimi-c"
-    env.write_text(text)
-    problems = problems_file(tmp_path, count)
-    (part,) = pipelines.split(env, problems)
+    env.write_text(ENV)
+    (part,) = pipelines.split(env, problems_file(tmp_path, 5))
     assert part.env == env
-    if not sized:
-        assert part == pipelines.Part(env, problems, 1, 1)
-        assert env.read_text() == text
-        return
     values = env_spec.assignments(env)
     assert (
         values["INFERENCE_REPLICAS"],
         values["INFERENCE_NODES"],
         values["AGENT_NODES"],
         values["AGENTS_PER_NODE"],
-    ) == ("1", "4", "1", "5")
+    ) == (
+        "1",
+        "4",
+        "1",
+        "5",
+    )
     assert "PIPELINE_PART" not in values
+
+
+def test_a_model_with_no_pipeline_size_is_not_split(tmp_path: pathlib.Path) -> None:
+    env = tmp_path / ".env.exp-qwen-c"
+    env.write_text(ENV.replace("AGENTS_PER_PIPELINE=20\n", ""))
+    problems = problems_file(tmp_path, 100)
+    (part,) = pipelines.split(env, problems)
+    assert part == pipelines.Part(env, problems, 1, 1) and env.read_text() == ENV.replace(
+        "AGENTS_PER_PIPELINE=20\n", ""
+    )
 
 
 def test_the_cli_prints_the_env_files_in_order(tmp_path: pathlib.Path) -> None:
