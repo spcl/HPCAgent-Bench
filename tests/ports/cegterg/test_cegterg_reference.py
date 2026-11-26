@@ -33,6 +33,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from tests import per_push
 from tests.fresh_module import module_at
 from tests.ports.cegterg import cegterg_reference_ctypes as REF
 
@@ -93,8 +94,13 @@ def shard(configs: list[dict[str, int | bool]]) -> list[dict[str, int | bool]]:
     return configs[i::n]
 
 
+#: The configurations a push runs (:func:`tests.per_push.kept`): no cegterg case failed in any CI run from 2026-10-14
+#: to 11-26, and these two cover what the six do: the hardest (npol=2 with the ultrasoft S) and the one npol=1 case
+#: with both uspp and lrot. They cost 230 s of the file's 670 s per push.
+PUSH_CONFIGS = ("npol2-uspp1-lrot0-nks4-k3", "npol1-uspp1-lrot1-nks3-k3")
+
 ALL_CONFIGS = CONFIGS
-CONFIGS = shard(CONFIGS)
+CONFIGS = shard(per_push.kept(CONFIGS, PUSH_CONFIGS, config_id))
 
 
 def load(name: str) -> types.ModuleType:
@@ -298,3 +304,7 @@ def test_ci_runs_every_shard_it_splits_the_configurations_into() -> None:
     assert sorted(indices) == list(range(count)), (
         f"CI runs cegterg shards {sorted(indices)} of {count}; the missing ones grade nothing"
     )
+
+
+def test_the_push_set_names_configurations() -> None:
+    assert set(PUSH_CONFIGS) <= {config_id(cfg) for cfg in ALL_CONFIGS}

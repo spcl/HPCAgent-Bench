@@ -9,6 +9,7 @@ import pytest
 
 from hpcagent_bench import numerical_oracle as no
 from hpcagent_bench.categories import Preset
+from tests import per_push
 
 
 def test_native_emit_failure_marks_native_but_still_runs_python_backends(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,7 +39,13 @@ def vexx_cfg_id(cfg: dict[str, int]) -> str:
     return tag + (f"+negrp{cfg['negrp']}" if cfg.get("negrp", 1) != 1 else "")
 
 
-@pytest.mark.parametrize("cfg", vexx_configs(), ids=vexx_cfg_id)
+#: The configurations a push validates (:func:`tests.per_push.kept`): the eleven failed together on the one day any
+#: failed (CI 2026-10-14 to 11-26), and these four set every flag at least once (okvan, okpaw and tqr; noncolin;
+#: gamma_only; negrp) beside the plain case.
+PUSH_VEXX = ("okvan+okpaw+tqr", "okvan+noncolin", "okvan+gamma_only", "nc+negrp2")
+
+
+@pytest.mark.parametrize("cfg", per_push.kept(vexx_configs(), PUSH_VEXX, vexx_cfg_id), ids=vexx_cfg_id)
 def test_vexx_k_config_parameter_validates_under_c(cfg: dict[str, int]) -> None:
     """Every config-parameter combination validates under the C emit at the S size, crossing size with config to
     drive okvan True/False code paths that S alone leaves dead."""
@@ -60,3 +67,7 @@ def test_vexx_k_config_set_covers_every_branch() -> None:
     assert any(c["okvan"] and c["gamma_only"] for c in configs), "no US+gamma (deexx.real)"
     assert any(c["noncolin"] for c in configs), "no noncolin"
     assert any(c["negrp"] > 1 for c in configs), "no band-group (negrp>1)"
+
+
+def test_the_push_set_names_vexx_configurations() -> None:
+    assert set(PUSH_VEXX) <= {vexx_cfg_id(cfg) for cfg in vexx_configs()}

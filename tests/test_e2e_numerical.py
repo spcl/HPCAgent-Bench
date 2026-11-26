@@ -201,6 +201,14 @@ def agents_start_from_translation(stem: str) -> bool:
 #: most of an hour (cloudsc 2578 s), past a CI leg's budget. Faster-compiling generated numba is v0.3 work.
 NUMBA_SLOW_COMPILE = frozenset({"bout_elm_pb", "cloudsc", "cloudsc_monolith", "fv3_dycore"})
 
+#: Kernels the per-push numba leg leaves out: each took two minutes or more of it (CI 45873980991: ls3df_scf 193 s,
+#: warpx_esirkepov_deposition 174 s, lulesh 155 s, warpx_field_gather 130 s, icon_velocity_tendencies 120 s) and none
+#: failed on numba in any CI run from 2026-10-14 to 11-26. The native backends sweep them on every push, cloudsc covers
+#: the stencil physics icon_velocity_tendencies shares, and a dispatched run sweeps them on numba.
+NUMBA_PUSH_DROPPED = frozenset(
+    {"icon_velocity_tendencies", "ls3df_scf", "lulesh", "warpx_esirkepov_deposition", "warpx_field_gather"}
+)
+
 #: Kernels the per-push numba leg leaves to the kernel that repeats their code, and that kernel. A dispatched run
 #: sweeps them on numba too; the native backends sweep them on every push.
 NUMBA_REPEATS = {
@@ -337,6 +345,8 @@ def _params() -> Iterator[ParameterSet]:
                 continue  # the ML track has no numba reference
             if backend == "numba" and per_push and stem in NUMBA_REPEATS:
                 continue  # its code runs in NUMBA_REPEATS[stem]
+            if backend == "numba" and per_push and stem in NUMBA_PUSH_DROPPED:
+                continue  # see NUMBA_PUSH_DROPPED
             if backend == "numba" and per_push and stem in NUMBA_EMIT_GAPS:
                 continue  # a known numba gap: the dispatched run holds it to its status
             # Grouped by STEM so ``--dist loadgroup`` keeps one stem's backends on one worker.
@@ -430,6 +440,10 @@ def test_the_override_swaps_the_level_and_nothing_else() -> None:
         assert "-O2" not in overridden
         assert [p for p in overridden if p != NATIVE_LOW_OPT[listed]] == [p for p in base if p != "-O2"]
         assert compile_command(backend, "no_such_kernel_declares_an_override") == base
+
+
+def test_the_numba_push_drops_name_gated_kernels() -> None:
+    assert set(NUMBA_PUSH_DROPPED) <= set(_gated_stems())
 
 
 def test_a_numba_repeat_names_a_kernel_the_per_push_slice_sweeps_on_numba() -> None:
