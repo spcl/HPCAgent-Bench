@@ -79,11 +79,3 @@ def test_chebyshev_never_stores_its_input() -> None:
     )
     assert "X" not in stored_names(ast.unparse(program)), src
     assert "X__v1 = np.copy(X)" in src, src
-
-
-if __name__ == "__main__":
-    test_a_loop_rebind_reads_a_copy_bound_at_entry()
-    test_a_top_level_rebind_renames_from_the_binding_without_a_copy()
-    test_a_parameter_that_is_not_rebound_is_left_alone()
-    test_an_input_also_written_through_keeps_its_name()
-    test_chebyshev_never_stores_its_input()
