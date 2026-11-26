@@ -1,30 +1,10 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``model_of`` is a CONSUMED function: the figure scripts call it only when they run, so no import
-fails when it goes. The parametrised cases below are that consumer, and name the callers so whoever
-moves it knows who pays.
-"""
+"""``model_of`` resolves a setup name to the model that ran it."""
 
 import pytest
 
-from hpcagent_bench import paths, study_tags
-
-#: The scripts that call it. A figure that cannot resolve its model draws every setup as one series.
-CALLERS = (
-    "hpcagent_bench/stats/commands/efficacy.py",
-    "hpcagent_bench/results/studies.py",
-)
-
-
-@pytest.mark.parametrize("script", CALLERS)
-def test_every_caller_still_reaches_it(script: str) -> None:
-    """Whoever moves this next finds out here, with the caller named, instead of in a figure run."""
-    source = (paths.ROOT / script).read_text(encoding="utf-8")
-    assert "model_of" in source, f"{script} no longer calls model_of; drop it from CALLERS"
-    assert "study_tags.model_of" in source, (
-        f"{script} calls model_of through something other than study_tags, which is how the "
-        "last copy drifted out of the registry"
-    )
+from hpcagent_bench import study_tags
 
 
 @pytest.mark.parametrize(

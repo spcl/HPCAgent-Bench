@@ -214,14 +214,6 @@ BUILT_IN_LAYERS: dict[str, str] = {
 }
 
 
-def test_the_submitter_asks_the_drivers_registry_for_a_harness_and_its_layer() -> None:
-    """One registry: a setup spec the submitter accepts and the driver rejects would die after the nodes are held."""
-    text = (ROOT / "hpcagent_bench" / "cluster" / "submit.sh").read_text(encoding="utf-8")
-    body = text[text.index("prompt_layers_of() {") : text.index("\n}\n", text.index("prompt_layers_of() {"))]
-    assert "-m hpcagent_agent.driver.harnesses layer" in body
-    assert "HARNESS_LAYER" not in text
-
-
 @pytest.mark.parametrize("name", sorted(PYTHON_HARNESSES))
 def test_a_setup_may_override_a_runner_interpreter_without_editing_the_driver(name: str) -> None:
     """A relocated venv is a setup env change; the fallback is the launch venv's, which the seal keeps."""

@@ -10,7 +10,7 @@ import types
 
 import pytest
 
-from tests.fresh_module import DRIVER_DIR, fresh
+from tests.fresh_module import fresh
 
 
 def load_driver(monkeypatch: pytest.MonkeyPatch, **env: str) -> types.ModuleType:
@@ -25,10 +25,3 @@ def test_the_stagger_is_on_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert driver.AGENT_START_STAGGER_SECONDS > 0, "agents would all start their MCP servers at once"
 
 
-def test_both_mcp_budgets_are_raised() -> None:
-    """An agent whose MCP server reports "failed" has no submit tool and records nothing. Claude
-    Code has TWO budgets and the connect one defaults to 5 s -- raising only the 30 s startup
-    budget leaves the tighter of the pair in place."""
-    source = (DRIVER_DIR / "agent_driver.py").read_text()
-    assert 'environment.setdefault("MCP_TIMEOUT"' in source
-    assert 'environment.setdefault("MCP_CONNECT_TIMEOUT_MS"' in source

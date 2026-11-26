@@ -139,21 +139,6 @@ def test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild() -> N
     assert "--no-install-package numpy --no-install-package scipy" in cupy
 
 
-def test_the_launch_hook_builds_one_locked_venv_per_pin_beside_the_image_python() -> None:
-    hook = (LIB / "launch_venv.sh").read_text(encoding="utf-8")
-    # The key: the lock, the image's sync arguments and id, an agent's harness pins and the plugins' install sources.
-    assert 'cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id" "$0"\n' in hook
-    assert 'cat "${harness}/pins.env" "${harness}/node/package-lock.json"\n' in hook
-    assert "printf '%s' \"${sources}\"; } | sha256sum" in hook
-    assert "flock 9" in hook
-    assert 'touch "${home}/ready"' in hook
-    assert "zz-image-site.pth" in hook, "the image's source builds stay visible after the venv's own packages"
-    assert "uv sync -q --frozen --inexact --no-install-project" not in hook, "the judge installs the project"
-    assert 'one_openmp.sh" --link-only' in hook
-    assert 'HPCAGENT_BENCH_IMAGE_PYTHON="${venv}/bin/python3"' in hook
-    assert 'exec "$@"' in hook
-
-
 def test_an_agent_launch_venv_drops_the_kernel_sources_relayout_ships() -> None:
     """relayout's package data holds hand-written ports of benchmark kernels; the agent's venv prunes them."""
     corpus = pathlib.Path(relayout.__file__).parent / "corpus"

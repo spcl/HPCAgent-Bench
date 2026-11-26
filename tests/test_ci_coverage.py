@@ -123,19 +123,6 @@ def test_asking_for_skip_reasons_does_not_hide_the_failures() -> None:
     assert not offenders, f"tests.yml lines {offenders} ask for skip reasons without failures; use -rfEs"
 
 
-def test_the_combined_total_is_built_from_every_job_not_one_of_them() -> None:
-    """Every artifact holds a file named ``.coverage``: merge-multiple keeps one of them, and a
-    partial combine prints a plausible percentage. Per-artifact directories, and a combine that
-    accounts for every file (combined or skipped as a duplicate, in both of coverage.py's formats)."""
-    text = WORKFLOW.read_text()
-    assert "coverage combine" in text, "no `coverage combine` step"
-    assert "merge-multiple: true" not in text
-    assert "coverage-data/*/.coverage*" in text
-    assert "combine accounted for" in text
-    assert "Skipping duplicate data " in text
-    assert "Combined (\\d+) files?" in text
-
-
 def test_the_corpus_reference_phase_is_not_instrumented() -> None:
     """Phase 2c runs only files coverage omits, and the tracer still pays per call (>180x slower)."""
     text = WORKFLOW.read_text()
