@@ -30,6 +30,13 @@ PPCG, numba and Triton columns do not compare with 1.0.3.
   processes got the nodes drained. `run_tests.sh` now keeps the test TMPDIR and DaCe build folders on the node, stops
   pytest 10 min before the job's end, and sets `faulthandler_timeout`; job steps run Python unbuffered
   (`cluster/job_guard.sh`).
+- A baseline column's begin and finish steps ask for no GPU (`--gres=none`): in a fused allocation, a GPU the run
+  step's teardown still held refused them with "Insufficient GRES available in allocation" (job 763921), and the column
+  failed.
+
+### Dependencies
+
+- dace-extended 1.0.3 (`>=1.0.3`): the SplitStatements fix for same-iteration conflicts (TSVC s1251).
 
 ### Releases
 

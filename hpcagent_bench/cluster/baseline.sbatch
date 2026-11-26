@@ -56,8 +56,10 @@ for column in ${columns}; do
     common=(job baseline --column "${column}" --out-root "${out_root}")
     # A failed column, in any of its three steps, does not stop the next one; the job still ends nonzero. A column
     # whose begin failed is not run: its earlier rows were not dropped.
-    job_step --ntasks=1 -- "${common[@]}" --phase begin "${JOB_STEP_ARGS[@]}" || { status=1; continue; }
+    # begin and finish only touch the results files: they ask for no GPU, so a GPU the run step's teardown still
+    # holds cannot refuse them ("Insufficient GRES available in allocation", job 763921).
+    job_step --ntasks=1 --gres=none -- "${common[@]}" --phase begin "${JOB_STEP_ARGS[@]}" || { status=1; continue; }
     job_step --hint=nomultithread --mem=0 -- "${common[@]}" --phase run "${JOB_STEP_ARGS[@]}" || status=1
-    job_step --ntasks=1 -- "${common[@]}" --phase finish "${JOB_STEP_ARGS[@]}" || status=1
+    job_step --ntasks=1 --gres=none -- "${common[@]}" --phase finish "${JOB_STEP_ARGS[@]}" || status=1
 done
 exit "${status}"
