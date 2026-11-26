@@ -44,6 +44,7 @@ def registered_plugin(root: pathlib.Path, name: str, overlay: str) -> pathlib.Pa
         f'name = "{name}"\n\n[packets.{name}]\nname = "{name}"\noverlays = ["{name}:prompt/overlay.yaml"]\n',
         encoding="utf-8",
     )
+    agent_plugins.roots_of.cache_clear()  # the plugin folder listing, keyed by the unchanged env
     plugins.register_packets(agent_plugins.find([folder]))
     tags.registry.cache_clear()
     # Each test registers its own table under the same reference, which keys the task prompt's cache.

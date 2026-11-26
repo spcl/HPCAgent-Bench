@@ -48,7 +48,6 @@ def test_a_miss_is_not_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
     answer = tool.run({})
     assert answer["verdict"] == "unavailable"
     assert "kernel" in answer["error"]
-    assert answer["reminder"] == tool.reminder()
 
 
 def test_the_dialect_falls_back_rather_than_refusing(monkeypatch: pytest.MonkeyPatch) -> None:

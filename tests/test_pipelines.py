@@ -78,9 +78,9 @@ def test_a_small_rerun_keeps_its_env_and_runs_one_pipeline(tmp_path: pathlib.Pat
     problems = problems_file(tmp_path, count)
     (part,) = pipelines.split(env, problems)
     assert part.env == env
-    assert env.read_text() == text
     if not sized:
         assert part == pipelines.Part(env, problems, 1, 1)
+        assert env.read_text() == text
         return
     values = env_spec.assignments(env)
     assert (

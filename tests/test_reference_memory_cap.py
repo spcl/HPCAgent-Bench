@@ -52,6 +52,7 @@ def test_a_rank_bound_to_a_quarter_of_the_cores_owns_a_quarter_of_the_ram(monkey
     assert sizing.rank_memory_share_bytes() == NODE_RAM // 4
     # An unpinned process owns the whole node.
     monkeypatch.setattr(sizing.os, "sched_getaffinity", lambda _pid: set(range(NODE_CORES)))
+    SHARE.cache_clear()
     assert sizing.rank_memory_share_bytes() == NODE_RAM
 
 
