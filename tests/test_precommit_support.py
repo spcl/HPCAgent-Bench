@@ -7,6 +7,8 @@ git_tracked (a `git ls-files` subprocess call) and is_generated_source live here
 
 import pathlib
 
+import pytest
+
 from hpcagent_bench.precommit_support import git_tracked, is_generated_source
 
 
@@ -23,15 +25,19 @@ def test_git_tracked_is_empty_outside_any_repo(tmp_path: pathlib.Path) -> None:
     assert git_tracked(cwd=tmp_path) == []
 
 
-def test_is_generated_source_reads_the_autogen_marker_on_the_first_line(tmp_path: pathlib.Path) -> None:
-    generated = tmp_path / "gen.py"
-    generated.write_text("# hpcagent_bench-autogen -- do not edit\nx = 1\n", encoding="utf-8")
-    handwritten = tmp_path / "hand.py"
-    handwritten.write_text("x = 1\n", encoding="utf-8")
-
-    assert is_generated_source(generated) is True
-    assert is_generated_source(handwritten) is False
-
-
-def test_is_generated_source_is_false_for_a_missing_file(tmp_path: pathlib.Path) -> None:
-    assert is_generated_source(tmp_path / "does-not-exist.py") is False
+@pytest.mark.parametrize(
+    ("content", "generated"),
+    [
+        ("# hpcagent_bench-autogen -- do not edit\nx = 1\n", True),
+        ("x = 1\n", False),
+        (None, False),  # a missing file
+    ],
+    ids=["marker", "handwritten", "missing"],
+)
+def test_is_generated_source_reads_the_autogen_marker_on_the_first_line(
+    tmp_path: pathlib.Path, content: str | None, generated: bool
+) -> None:
+    path = tmp_path / "file.py"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    assert is_generated_source(path) is generated

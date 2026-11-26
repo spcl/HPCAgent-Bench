@@ -176,29 +176,24 @@ def test_an_oci_step_runs_with_what_the_seal_needs(tmp_path: pathlib.Path, runti
         assert done.wrap.index("--security-opt") < done.wrap.index("example/bench:latest")
 
 
-@pytest.mark.parametrize("runtime", ["docker", "podman"])
+@pytest.mark.parametrize("runtime", [*RUNTIMES, "ce"])
 def test_docker_wrap_carries_limits(tmp_path: pathlib.Path, runtime: str) -> None:
     """The --container-memory and --container-cpus limits ride the OCI run verbs (--memory, --cpus), after the
-    verb's own words; a runtime offered none runs with its own default."""
+    verb's own words; a runtime offered none runs with its own default. A SIF has no --memory/--cpus and the
+    Container Engine sizes its containers with the EDF, so neither is handed the values; the OCI runtimes are."""
     done = wrap(tmp_path, runtime, HPCAGENT_BENCH_CONTAINER_MEMORY="400G", HPCAGENT_BENCH_CONTAINER_CPUS="8")
     assert done.returncode == 0, done.stderr
+    oci = runtime in ("docker", "podman")
+    assert ("--memory" in done.wrap) is oci
+    assert ("--cpus" in done.wrap) is oci
+    if not oci:
+        return
     assert done.wrap[done.wrap.index("--memory") + 1] == "400G"
     assert done.wrap[done.wrap.index("--cpus") + 1] == "8"
     assert done.wrap.index("--memory") > done.wrap.index("host"), "the limits ride the run verb"
     bare = wrap(tmp_path, runtime)
     assert bare.returncode == 0, bare.stderr
     assert not [word for word in bare.wrap if word in ("--memory", "--cpus")], "unset limits add nothing"
-
-
-@pytest.mark.parametrize("runtime", [*RUNTIMES, "ce"])
-def test_only_an_oci_runtime_is_offered_the_container_limits(tmp_path: pathlib.Path, runtime: str) -> None:
-    """A SIF has no --memory/--cpus and the Container Engine sizes its containers with the EDF, so neither is
-    handed the values; the OCI runtimes are."""
-    done = wrap(tmp_path, runtime, HPCAGENT_BENCH_CONTAINER_MEMORY="400G", HPCAGENT_BENCH_CONTAINER_CPUS="8")
-    assert done.returncode == 0, done.stderr
-    oci = runtime in ("docker", "podman")
-    assert ("--memory" in done.wrap) is oci
-    assert ("--cpus" in done.wrap) is oci
 
 
 @pytest.mark.parametrize("runtime", RUNTIMES)

@@ -444,48 +444,42 @@ def test_a_kernels_file_narrows_the_tag_and_is_read_sorted(tmp_path: pathlib.Pat
     assert baseline.resolve_kernels("llr40", "", names) == ("dfa", "kmp")
 
 
-def test_an_unknown_kernel_name_is_refused_not_silently_dropped(tmp_path: pathlib.Path) -> None:
-    names = tmp_path / "owed.txt"
-    names.write_text("kmp\nnosuchkernel123\n")
-    with pytest.raises(SystemExit, match="nosuchkernel123"):
-        baseline.resolve_kernels("", "", names)
+@pytest.mark.parametrize(
+    ("names_text", "comma", "match"),
+    [
+        ("kmp\nnosuchkernel123\n", "", "nosuchkernel123"),
+        (None, "", "missing or names no kernels"),
+        ("# nothing\n", "", "missing or names no kernels"),
+        (None, " , ", "names no kernel"),
+    ],
+    ids=["unknown_name", "missing_file", "blank_file", "empty_comma_list"],
+)
+def test_an_unknown_kernel_name_is_refused_not_silently_dropped(
+    tmp_path: pathlib.Path, names_text: str | None, comma: str, match: str
+) -> None:
+    names = None if comma else tmp_path / "owed.txt"
+    if names is not None and names_text is not None:
+        names.write_text(names_text)
+    with pytest.raises(SystemExit, match=match):
+        baseline.resolve_kernels("", comma, names)
 
 
-def test_a_missing_or_empty_kernels_file_is_refused(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(SystemExit, match="missing or names no kernels"):
-        baseline.resolve_kernels("", "", tmp_path / "does-not-exist.txt")
-    blank = tmp_path / "blank.txt"
-    blank.write_text("# nothing\n")
-    with pytest.raises(SystemExit, match="missing or names no kernels"):
-        baseline.resolve_kernels("", "", blank)
+def test_a_comma_list_strips_its_names() -> None:
+    assert baseline.resolve_kernels("", " dfa , kmp ", None) == ("dfa", "kmp")
 
 
 def test_the_whole_tag_is_the_tag_when_nothing_narrows_it() -> None:
     assert len(baseline.resolve_kernels("llr40", "", None)) == 40
 
 
-def test_a_comma_list_strips_its_names_and_refuses_naming_none() -> None:
-    assert baseline.resolve_kernels("", " dfa , kmp ", None) == ("dfa", "kmp")
-    with pytest.raises(SystemExit, match="names no kernel"):
-        baseline.resolve_kernels("", " , ", None)
-
-
-def test_a_column_alias_is_the_column_its_rows_record_under() -> None:
-    """``run-framework`` runs ``-f c`` as ``cc`` and records its rows under ``cc``; the sweep must speak that
-    spelling too, so ``begin`` drops and ``finish`` reads the rows an aliased column actually wrote (a ``begin``
-    that deleted ``c`` rows would have left every stale ``cc`` row of an earlier run standing)."""
-    from hpcagent_bench.columns import FRAMEWORKS
-
-    assert FRAMEWORKS.canonical("c") == "cc"
-    baseline.check_column("c")  # an alias is a known column: the sweep can run it
-    with pytest.raises(SystemExit, match="unknown column"):
-        baseline.check_column("nosuchcolumn")
-
-
 def test_a_column_alias_sweeps_under_the_spelling_its_rows_record(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``--column c`` builds the sweep with the alias's column, so every phase of the job sees one key."""
+    """``--column c`` builds the sweep with the alias's column, so every phase of the job sees one key.
+
+    ``run-framework`` runs ``-f c`` as ``cc`` and records its rows under ``cc``; the sweep must speak that
+    spelling too, so ``begin`` drops and ``finish`` reads the rows an aliased column actually wrote (a ``begin``
+    that deleted ``c`` rows would have left every stale ``cc`` row of an earlier run standing)."""
     import argparse
 
     seen: list[baseline.Sweep] = []
@@ -504,6 +498,12 @@ def test_a_column_alias_sweeps_under_the_spelling_its_rows_record(
     )
     assert baseline.run_action(args, jobs.Rank(0, 1)) == 0
     assert seen[0].column == "cc"
+    from hpcagent_bench.columns import FRAMEWORKS
+
+    assert FRAMEWORKS.canonical("c") == "cc"
+    baseline.check_column("c")  # an alias is a known column: the sweep can run it
+    with pytest.raises(SystemExit, match="unknown column"):
+        baseline.check_column("nosuchcolumn")
 
 
 def test_one_phase_of_a_multi_task_step_must_be_named(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -34,6 +34,10 @@ def test_a_shape_unpack_becomes_one_indexed_read_per_name() -> None:
         "h = x.shape[2]",
         "w = x.shape[3]",
     ]
+    # The inliner emits shape unpacks inside loop bodies as readily as at the top level.
+    nested = split("for i in range(4):\n    n, c = x.shape\n")
+    assert "n = x.shape[0]" in nested
+    assert "c = x.shape[1]" in nested
 
 
 @pytest.mark.parametrize(
@@ -51,10 +55,3 @@ def test_a_tuple_assignment_reading_a_bound_name_latches_it(source: str, stateme
     out = split(source).splitlines()
     assert len(out) == statements, out
     assert all(" = " in line for line in out)
-
-
-def test_a_nested_tuple_assignment_is_split_too() -> None:
-    """The inliner emits shape unpacks inside loop bodies as readily as at the top level."""
-    out = split("for i in range(4):\n    n, c = x.shape\n")
-    assert "n = x.shape[0]" in out
-    assert "c = x.shape[1]" in out

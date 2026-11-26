@@ -150,55 +150,71 @@ def run_both(src: str, name: str, args: Callable[[np.random.Generator], tuple]) 
                 np.testing.assert_array_equal(x, y)
 
 
-def test_the_flagged_form_computes_what_the_argmax_computes() -> None:
-    src = textwrap.dedent("""
-        def argmax(a, out, n):
-            x = a[0]
-            idx = 0
-            for i in range(1, n):
-                if a[i] > x:
-                    x = a[i]
-                    idx = i
-            out[0] = x
-            out[1] = idx
-    """)
-    run_both(src, "argmax", lambda rng: (rng.integers(0, 5, 32).astype(float), np.zeros(2), 32))
-
-
-def test_the_flagged_form_computes_what_s2710_computes() -> None:
-    """Both branches write an input of the outer test and nest a further test: the case where
-    re-evaluating any test after a branch assignment would change the result."""
-    src = textwrap.dedent("""
-        def s2710(a, b, c, d, e, x, n):
-            for i in range(n):
-                if a[i] > b[i]:
-                    a[i] = a[i] + b[i] * d[i]
-                    if n > 10:
-                        c[i] = c[i] + d[i] * d[i]
-                    else:
-                        c[i] = d[i] * e[i] + 1.0
+ARGMAX_SRC = textwrap.dedent("""
+    def argmax(a, out, n):
+        x = a[0]
+        idx = 0
+        for i in range(1, n):
+            if a[i] > x:
+                x = a[i]
+                idx = i
+        out[0] = x
+        out[1] = idx
+""")
+#: Both branches write an input of the outer test and nest a further test: the case where re-evaluating any test
+#: after a branch assignment would change the result.
+S2710_SRC = textwrap.dedent("""
+    def s2710(a, b, c, d, e, x, n):
+        for i in range(n):
+            if a[i] > b[i]:
+                a[i] = a[i] + b[i] * d[i]
+                if n > 10:
+                    c[i] = c[i] + d[i] * d[i]
                 else:
-                    b[i] = a[i] + e[i] * e[i]
-                    if x[0] > 0.0:
-                        c[i] = a[i] + d[i] * d[i]
-                    else:
-                        c[i] = c[i] + e[i] * e[i]
-    """)
-    run_both(src, "s2710", lambda rng: (*(rng.standard_normal(16) for unused in range(6)), 16))
-
-
-def test_the_inline_form_computes_what_a_conditional_sum_computes() -> None:
-    src = textwrap.dedent("""
-        def csum(a, out, n):
-            s = 0.0
-            for i in range(n):
-                if a[i] > 0.0:
-                    s += a[i]
+                    c[i] = d[i] * e[i] + 1.0
+            else:
+                b[i] = a[i] + e[i] * e[i]
+                if x[0] > 0.0:
+                    c[i] = a[i] + d[i] * d[i]
                 else:
-                    s -= 0.5 * a[i]
-            out[0] = s
-    """)
-    run_both(src, "csum", lambda rng: (rng.standard_normal(32), np.zeros(1), 32))
+                    c[i] = c[i] + e[i] * e[i]
+""")
+CSUM_SRC = textwrap.dedent("""
+    def csum(a, out, n):
+        s = 0.0
+        for i in range(n):
+            if a[i] > 0.0:
+                s += a[i]
+            else:
+                s -= 0.5 * a[i]
+        out[0] = s
+""")
+
+
+@pytest.mark.parametrize(
+    ("src", "name", "args"),
+    [
+        pytest.param(
+            ARGMAX_SRC,
+            "argmax",
+            lambda rng: (rng.integers(0, 5, 32).astype(float), np.zeros(2), 32),
+            id="flagged-argmax",
+        ),
+        pytest.param(
+            S2710_SRC,
+            "s2710",
+            lambda rng: (*(rng.standard_normal(16) for unused in range(6)), 16),
+            id="flagged-s2710",
+        ),
+        pytest.param(
+            CSUM_SRC, "csum", lambda rng: (rng.standard_normal(32), np.zeros(1), 32), id="inline-conditional-sum"
+        ),
+    ],
+)
+def test_the_flagged_form_computes_what_the_argmax_computes(
+    src: str, name: str, args: Callable[[np.random.Generator], tuple]
+) -> None:
+    run_both(src, name, args)
 
 
 @pytest.mark.parametrize("statement", ["break", "print(i)"])

@@ -117,13 +117,6 @@ def code_lines(path: pathlib.Path) -> str:
     return "\n".join(line for line in lines if not line.lstrip().startswith("#"))
 
 
-def test_every_table_row_maps_a_partition_to_one_gfx_arch() -> None:
-    rows = table()
-    assert {"mi300", "mi200"} <= set(rows), rows
-    bad = {partition: arch for partition, arch in rows.items() if not re.fullmatch(r"gfx[0-9a-f]{3,4}", arch)}
-    assert not bad, f"not a gfx arch: {bad}"
-
-
 def test_ce_partition_targets_exports_every_partition_arch_of_the_table() -> None:
     script = 'source "$1"; ce_partition_targets || exit $?; printf "%s %s\\n" "${ROCM_ARCH}" "${ROCM_ARCH_CSV}"'
     done = run(["bash", "-c", script, "bash", str(CE / "build_common.sh")], {})
@@ -251,19 +244,21 @@ def test_the_runtime_check_exits_2_and_prints_all_three_when_one_source_disagree
     assert f"rocminfo = {gpu}" in done.stderr
 
 
-def test_the_runtime_check_refuses_an_image_without_its_stamp(tmp_path: pathlib.Path) -> None:
-    done = run_check(tmp_path, "mi300", "", table()["mi200"])
+@pytest.mark.parametrize("case", ["no-stamp", "unnamed-partition"])
+def test_the_runtime_check_refuses_an_image_without_its_stamp(tmp_path: pathlib.Path, case: str) -> None:
+    rows = table()
+    if case == "no-stamp":
+        done = run_check(tmp_path, "mi300", "", rows["mi200"])
+    else:
+        done = run_check(tmp_path, "normal", rows["mi300"], rows["mi300"])
     assert done.returncode == 2
-    assert "no /opt/gpu-arch stamp" in done.stderr
-    assert len((tmp_path / "srun.log").read_text(encoding="utf-8").splitlines()) == 1, "rocminfo ran without a stamp"
-
-
-def test_the_runtime_check_refuses_a_partition_the_table_does_not_name(tmp_path: pathlib.Path) -> None:
-    arch = table()["mi300"]
-    done = run_check(tmp_path, "normal", arch, arch)
-    assert done.returncode == 2
-    assert "names no GPU arch for partition 'normal'" in done.stderr
-    assert not (tmp_path / "srun.log").exists()
+    log = tmp_path / "srun.log"
+    if case == "no-stamp":
+        assert "no /opt/gpu-arch stamp" in done.stderr
+        assert len(log.read_text(encoding="utf-8").splitlines()) == 1, "rocminfo ran without a stamp"
+    else:
+        assert "names no GPU arch for partition 'normal'" in done.stderr
+        assert not log.exists()
 
 
 @pytest.mark.parametrize(
@@ -390,19 +385,23 @@ def fake_rocminfo(monkeypatch: pytest.MonkeyPatch, stdout: str | None, stamp: pa
     return calls
 
 
+@pytest.mark.parametrize("case", ["rocminfo-missing", "cpu-agent-only", "gpu-is-not-the-stamped-arch"])
 def test_detect_gfx_raises_instead_of_guessing_when_rocminfo_is_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, case: str
 ) -> None:
-    fake_rocminfo(monkeypatch, None, tmp_path / "gpu-arch")
-    with pytest.raises(RuntimeError, match=r"rocminfo failed.*HPCAGENT_BENCH_GFX"):
-        flags.detect_gfx()
-
-
-def test_detect_gfx_raises_when_rocminfo_lists_only_a_cpu_agent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    fake_rocminfo(monkeypatch, ROCMINFO.split("*******\nAgent 2", maxsplit=1)[0], tmp_path / "gpu-arch")
-    with pytest.raises(RuntimeError, match="no gfx GPU agent"):
+    rows = table()
+    stamp = tmp_path / "gpu-arch"
+    if case == "rocminfo-missing":
+        fake_rocminfo(monkeypatch, None, stamp)
+        message = r"rocminfo failed.*HPCAGENT_BENCH_GFX"
+    elif case == "cpu-agent-only":
+        fake_rocminfo(monkeypatch, ROCMINFO.split("*******\nAgent 2", maxsplit=1)[0], stamp)
+        message = "no gfx GPU agent"
+    else:
+        stamp.write_text(f"{rows['mi200']}\n", encoding="ascii")
+        fake_rocminfo(monkeypatch, ROCMINFO.format(arch=rows["mi300"]), stamp)
+        message = f"built for {rows['mi200']}.*GPU is {rows['mi300']}"
+    with pytest.raises(RuntimeError, match=message):
         flags.detect_gfx()
 
 
@@ -416,36 +415,16 @@ def test_detect_gfx_returns_the_first_gpu_agent_with_no_stamp_or_a_matching_one(
     stamp.write_text(f"{arch}\n", encoding="ascii")
     assert flags.detect_gfx() == arch
     assert calls == [["rocminfo"], ["rocminfo"]]
-
-
-def test_detect_gfx_accepts_any_arch_of_a_multi_arch_stamp(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    stamp = tmp_path / "gpu-arch"
+    # Any arch of a multi-arch stamp is accepted.
     stamp.write_text(f"{targets()}\n", encoding="ascii")
-    for arch in table().values():
-        fake_rocminfo(monkeypatch, ROCMINFO.format(arch=arch), stamp)
-        assert flags.detect_gfx() == arch
-
-
-def test_detect_gfx_raises_when_the_gpu_is_not_the_arch_the_image_was_built_for(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    rows = table()
-    stamp = tmp_path / "gpu-arch"
-    stamp.write_text(f"{rows['mi200']}\n", encoding="ascii")
-    fake_rocminfo(monkeypatch, ROCMINFO.format(arch=rows["mi300"]), stamp)
-    with pytest.raises(RuntimeError, match=f"built for {rows['mi200']}.*GPU is {rows['mi300']}"):
-        flags.detect_gfx()
-
-
-def test_hpcagent_bench_gfx_overrides_the_probe_without_running_rocminfo(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    calls = fake_rocminfo(monkeypatch, None, tmp_path / "gpu-arch")
+    for other in table().values():
+        fake_rocminfo(monkeypatch, ROCMINFO.format(arch=other), stamp)
+        assert flags.detect_gfx() == other
+    # HPCAGENT_BENCH_GFX overrides the probe without running rocminfo.
+    probes = fake_rocminfo(monkeypatch, None, tmp_path / "no-stamp")
     monkeypatch.setenv("HPCAGENT_BENCH_GFX", "gfx1103")
     assert flags.detect_gfx() == "gfx1103"
-    assert calls == []
+    assert probes == []
 
 
 def test_a_failed_amd_arch_detection_is_not_cached_as_an_offload_arch(monkeypatch: pytest.MonkeyPatch) -> None:

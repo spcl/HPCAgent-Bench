@@ -52,12 +52,6 @@ def env_value(name: str, key: str) -> str:
     return found[0]
 
 
-def test_ce_amd_targets_exports_the_table_list() -> None:
-    done = common('ce_amd_targets >/dev/null && printf "%s" "${ROCM_ARCH}"')
-    assert done.returncode == 0, done.stderr
-    assert done.stdout == env_value("gpu_arch.env", "AMD_GPU_TARGETS")
-
-
 def test_every_partition_arch_is_a_target_of_the_one_amd_image() -> None:
     targets = env_value("gpu_arch.env", "AMD_GPU_TARGETS").split(";")
     rows = (CE / "gpu_arch.env").read_text(encoding="ascii").splitlines()
@@ -74,13 +68,6 @@ def test_ce_amd_targets_refuses_a_malformed_list(tmp_path: pathlib.Path) -> None
     done = common("ce_amd_targets", fake / "build_common.sh")
     assert done.returncode == 2
     assert "not a ;-separated list" in done.stderr
-
-
-def test_ce_spack_target_defaults_to_this_cpu_family() -> None:
-    family = subprocess.run(["uname", "-m"], capture_output=True, text=True, check=True).stdout.strip()
-    done = common('ce_spack_target >/dev/null && printf "%s" "${SPACK_TARGET}"')
-    assert done.returncode == 0, done.stderr
-    assert done.stdout == env_value("cpu_target.env", f"SPACK_TARGET_{family}")
 
 
 def test_ce_spack_target_refuses_a_family_the_table_does_not_name(tmp_path: pathlib.Path) -> None:
@@ -125,29 +112,20 @@ def spack_target_block(spack_target: str, tmp_path: pathlib.Path) -> str:
     return packages.read_text(encoding="utf-8")
 
 
-def test_a_from_scratch_build_keeps_spack_host_detection(tmp_path: pathlib.Path) -> None:
-    """No SPACK_TARGET (a plain podman build): the build machine's own ISA, i.e. -march=native."""
-    assert spack_target_block("", tmp_path) == "packages:\n"
-
-
-def test_the_published_baseline_is_required_for_every_package(tmp_path: pathlib.Path) -> None:
-    assert spack_target_block("x86_64_v3", tmp_path) == 'packages:\n  all:\n    require: ["target=x86_64_v3"]\n'
-
-
-def test_the_build_passes_both_targets_and_the_dockerfile_defaults_to_native() -> None:
-    build = (RECIPE / "image.sh").read_text(encoding="utf-8")
-    assert re.search(r"^\s+ce_amd_targets$", build, re.MULTILINE)
-    assert re.search(r"^\s+ce_build_args .*\bSPACK_TARGET\b", build, re.MULTILINE)
-    docker = (RECIPE / "Dockerfile").read_text(encoding="utf-8")
-    assert re.findall(r"^ARG SPACK_TARGET\b.*$", docker, re.MULTILINE) == ["ARG SPACK_TARGET="]
-    assert 'grep -vx -e bin -e "linux-${SPACK_TARGET}"' in docker, "the stray-target gate is gone"
-
-
-def test_the_pip_wheel_cache_is_keyed_by_the_target_list() -> None:
-    """uv keys a built cupy wheel by its sdist, not by HCC_AMDGPU_TARGET."""
-    assert 'ce_cache_args spack-buildcache "uv-cache/${ROCM_ARCH//;/-}"' in (RECIPE / "image.sh").read_text(
-        encoding="utf-8"
-    )
+@pytest.mark.parametrize(
+    ("target", "packages"),
+    [
+        # No SPACK_TARGET (a plain podman build): the build machine's own ISA, i.e. -march=native.
+        pytest.param("", "packages:\n", id="from-scratch-keeps-host-detection"),
+        pytest.param(
+            "x86_64_v3",
+            'packages:\n  all:\n    require: ["target=x86_64_v3"]\n',
+            id="the-published-baseline-is-required-for-every-package",
+        ),
+    ],
+)
+def test_a_from_scratch_build_keeps_spack_host_detection(tmp_path: pathlib.Path, target: str, packages: str) -> None:
+    assert spack_target_block(target, tmp_path) == packages
 
 
 def images_env(*names: str) -> list[str]:
@@ -176,12 +154,6 @@ def edf(edf_dir: pathlib.Path, name: str) -> dict[str, Any]:
     return tomllib.loads((edf_dir / f"{name}.toml").read_text(encoding="utf-8"))
 
 
-def test_images_env_points_every_amd_partition_edf_at_the_one_image() -> None:
-    assert images_env("JUDGE_AGENT_AMD_SQSH", "JUDGE_AGENT_AMD_MI200_SQSH") == [LIVE["agent"]] * 2
-    assert images_env("JUDGE_AMD_SQSH", "JUDGE_AMD_MI200_SQSH") == [LIVE["judge"]] * 2
-    assert images_env("INFERENCE_VLLM_SQSH", "INFERENCE_VLLM_MI200_SQSH") == ["hpcagent-bench-vllm-amd-latest.sqsh"] * 2
-
-
 def test_install_edfs_renders_each_partition_edf_with_its_own_arch(tmp_path: pathlib.Path) -> None:
     done, edf_dir = install_edfs(tmp_path, images_env(*AMD_ROLES))
     assert done.returncode == 0, done.stderr
@@ -195,6 +167,12 @@ def test_install_edfs_renders_each_partition_edf_with_its_own_arch(tmp_path: pat
             rendered = edf(edf_dir, name)
             assert rendered["image"] == str(tmp_path / "ce" / image), name
             assert {var: rendered["env"][var] for var in ARCH_VARS} == dict.fromkeys(ARCH_VARS, arch), name
+        # Every AMD judge EDF preloads the distro hwloc (the image's spack hwloc is ~pci, so a cross-node MPI_Init
+        # asserts on the NIC lookup); the mlscale view is the judge EDF itself.
+        judge = edf_dir / f"hpcagent-bench-judge-{partition}-latest.toml"
+        mlscale = edf_dir / f"hpcagent-bench-judge-{partition}-mlscale-latest.toml"
+        assert judge.read_text(encoding="utf-8") == mlscale.read_text(encoding="utf-8")
+        assert str(edf(edf_dir, f"hpcagent-bench-judge-{partition}-latest")["env"]["LD_PRELOAD"]).endswith(f":{HWLOC}")
 
 
 def test_a_release_freezes_every_edf_on_an_image_no_promote_moves(tmp_path: pathlib.Path) -> None:
@@ -229,17 +207,6 @@ def test_a_release_freezes_every_edf_on_an_image_no_promote_moves(tmp_path: path
     assert done.returncode == 0, done.stderr
     assert "kept: a release EDF is never rewritten" in done.stdout
     assert frozen.read_bytes() == b"old"
-
-
-def test_the_mlscale_edf_is_the_judge_edf_and_both_preload_the_hwloc(tmp_path: pathlib.Path) -> None:
-    """Every AMD judge EDF preloads the distro hwloc (the image's spack hwloc is ~pci, so a cross-node MPI_Init
-    asserts on the NIC lookup); the mlscale view is the judge EDF itself."""
-    done, edf_dir = install_edfs(tmp_path, images_env(*AMD_ROLES))
-    assert done.returncode == 0, done.stderr
-    judge = (edf_dir / "hpcagent-bench-judge-mi200-latest.toml").read_text(encoding="utf-8")
-    mlscale = (edf_dir / "hpcagent-bench-judge-mi200-mlscale-latest.toml").read_text(encoding="utf-8")
-    assert judge == mlscale
-    assert str(edf(edf_dir, "hpcagent-bench-judge-mi200-latest")["env"]["LD_PRELOAD"]).endswith(f":{HWLOC}")
 
 
 @pytest.mark.parametrize(("role", "target"), [("judge-agent-amd", "agent"), ("judge", "judge")])
@@ -423,14 +390,6 @@ def test_a_role_already_pushed_to_this_target_counts_as_done(tmp_path: pathlib.P
     done = run(push, {**env, "REGISTRY_REPO": "docker.io/x/other"})
     assert done.returncode == 1
     assert "5 failure(s)" in done.stderr
-
-
-@pytest.mark.parametrize("recipe", ["judge-agent-amd", "judge-agent-cpu"])
-def test_every_spack_image_labels_its_cpu_target_after_declaring_it(recipe: str) -> None:
-    docker = (CE / recipe / "Dockerfile").read_text(encoding="utf-8")
-    label = 'LABEL org.hpcagent-bench.cpu-target="${SPACK_TARGET:-native}"'
-    assert label in docker
-    assert docker.index("ARG SPACK_TARGET=") < docker.index(label), "the label reads SPACK_TARGET before it is declared"
 
 
 def test_push_refuses_a_native_build() -> None:

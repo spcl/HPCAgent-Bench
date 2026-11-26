@@ -77,18 +77,8 @@ def test_the_console_script_refuses_every_verb_while_upstream_dace_is_installed(
     assert "pip install dace-extended" in capsys.readouterr().err
 
 
-def test_a_release_reports_the_spcl_dace_commit_it_records(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    """A PyPI install has no direct_url.json: the commit is the one the release writes as dace.__commit__."""
-    (tmp_path / "dace").mkdir()
-    (tmp_path / "dace" / "version.py").write_text(f'__version__ = "1.0.0"\n__commit__ = "{SHA}"\n')
-    installs(monkeypatch, {"dace-extended": FakeDist("1.0.0", None, tmp_path)})
-    assert canonical.dace_commit() == SHA
-
-
 def test_a_git_install_reports_its_commit_and_an_index_install_without_one_is_refused(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """Without a recorded commit the CPF cache has no key, so a DaCe naming none is refused, not keyed on ""."""
     installs(monkeypatch, {"dace": FakeDist("2.0.0b2", GIT)})
@@ -96,6 +86,11 @@ def test_a_git_install_reports_its_commit_and_an_index_install_without_one_is_re
     installs(monkeypatch, {"dace-extended": FakeDist("1.0.0", None)})
     with pytest.raises(RuntimeError, match="no spcl/dace commit"):
         canonical.dace_commit()
+    # A PyPI release has no direct_url.json: its commit is the one it writes as dace.__commit__.
+    (tmp_path / "dace").mkdir()
+    (tmp_path / "dace" / "version.py").write_text(f'__version__ = "1.0.0"\n__commit__ = "{SHA}"\n')
+    installs(monkeypatch, {"dace-extended": FakeDist("1.0.0", None, tmp_path)})
+    assert canonical.dace_commit() == SHA
 
 
 def test_pyproject_depends_on_dace_extended_from_pypi_and_never_on_upstream_dace() -> None:

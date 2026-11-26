@@ -46,27 +46,30 @@ def test_diag_finds_the_error_line_in_either_compiler_layout() -> None:
     assert "No such file" in no.process_diag(_proc(stderr=missing))
 
 
-def test_diag_falls_back_to_the_last_line_when_nothing_announces_an_error() -> None:
-    # A python traceback ends on its exception, and that is the line worth reporting.
-    tb = "Traceback (most recent call last):\n  File \"x.py\", line 3\n    foo()\nKeyError: 'nope'"
-    assert no.process_diag(_proc(stderr=tb)) == ": KeyError: 'nope'"
-
-
-def test_diag_falls_back_to_stdout_then_exit_code() -> None:
-    assert no.process_diag(_proc(stdout="only on stdout\n")) == ": only on stdout"
-    # A compiler killed by a signal can leave both streams empty; the suffix must still not vanish,
-    # or the status regresses to the bare phase name this whole change exists to fix.
-    assert no.process_diag(_proc(returncode=-9)) == ": exit -9"
+@pytest.mark.parametrize(
+    ("proc", "expected"),
+    [
+        # A python traceback ends on its exception, and that is the line worth reporting.
+        pytest.param(
+            _proc(stderr="Traceback (most recent call last):\n  File \"x.py\", line 3\n    foo()\nKeyError: 'nope'"),
+            ": KeyError: 'nope'",
+            id="last-line-when-nothing-announces-an-error",
+        ),
+        pytest.param(_proc(stdout="only on stdout\n"), ": only on stdout", id="stdout"),
+        # A compiler killed by a signal can leave both streams empty; the suffix must still not vanish,
+        # or the status regresses to the bare phase name this whole change exists to fix.
+        pytest.param(_proc(returncode=-9), ": exit -9", id="exit-code"),
+        pytest.param(_proc(stderr="real error\n\n   \n"), ": real error", id="trailing-blank-lines-ignored"),
+    ],
+)
+def test_diag_falls_back_to_stdout_then_exit_code(proc: subprocess.CompletedProcess, expected: str) -> None:
+    assert no.process_diag(proc) == expected
 
 
 def test_diag_is_bounded() -> None:
     # A status string ends up in test output and survey tables; one runaway template error from g++
     # must not flood them.
     assert len(no.process_diag(_proc(stderr="x" * 10_000))) <= 242
-
-
-def test_diag_ignores_trailing_blank_lines() -> None:
-    assert no.process_diag(_proc(stderr="real error\n\n   \n")) == ": real error"
 
 
 def test_emit_returns_the_translator_message(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:

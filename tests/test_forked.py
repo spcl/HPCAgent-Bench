@@ -140,21 +140,10 @@ def test_timeout_reports_signal_and_detail() -> None:
     assert forked_failure_reason(r) == "TIMEOUT"
 
 
-def test_a_childs_own_signal_beats_the_timeout_it_raced() -> None:
-    # The caller attributes a failure by its cause, and "TIMEOUT" for a child that segfaulted is
-    # the wrong cause: a profiler turns this string into the reason a measurement has no number, so
-    # a crash that lost a scheduling race would be filed as a slow kernel.
-    # The child arms the deadline itself (run_forked waits for its "started" message), so the
-    # SIGTERM lands 2s into the CHILD'S life rather than 2s after p.start() -- the handler is
-    # installed by then no matter how slow the box was to schedule the fork. Widening the headroom
-    # was the earlier answer to this and it does not converge: the same race took CI down again
-    # after the deadline had already gone 0.5s -> 2s.
-    r = run_forked(_ignore_sigterm_then_segfault, timeout=2.0, label="race")
-    assert not r.ok
-    assert r.signal == "SIGSEGV", f"child's own signal must win over the timeout, got {r.signal}"
-
-
-def test_a_core_dumping_child_is_waited_out_rather_than_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("term_grace", [None, 2.5], ids=["default-grace", "grace-expires-mid-dump"])
+def test_a_core_dumping_child_is_waited_out_rather_than_killed(
+    monkeypatch: pytest.MonkeyPatch, term_grace: float | None
+) -> None:
     """The grace expiring MID-DUMP must not turn the crash into a timeout.
 
     This is what took CI down twice while the deadline was being widened: the child dies on time,
@@ -166,11 +155,22 @@ def test_a_core_dumping_child_is_waited_out_rather_than_killed(monkeypatch: pyte
     2.5s puts the escalation squarely inside the dump: the SIGTERM lands at 2.0s, the child
     segfaults at 4.0s, and the grace runs out at 4.5s with the image still being written. Without
     the ``CoreDumping`` check this returns TIMEOUT (verified by stubbing the predicate to False).
+
+    With the default grace the same child shows the plain race: its own signal beats the timeout it raced.
     """
-    monkeypatch.setattr(forked, "TERM_GRACE_S", 2.5)
+    if term_grace is not None:
+        monkeypatch.setattr(forked, "TERM_GRACE_S", term_grace)
+    # The caller attributes a failure by its cause, and "TIMEOUT" for a child that segfaulted is
+    # the wrong cause: a profiler turns this string into the reason a measurement has no number, so
+    # a crash that lost a scheduling race would be filed as a slow kernel.
+    # The child arms the deadline itself (run_forked waits for its "started" message), so the
+    # SIGTERM lands 2s into the CHILD'S life rather than 2s after p.start() -- the handler is
+    # installed by then no matter how slow the box was to schedule the fork. Widening the headroom
+    # was the earlier answer to this and it does not converge: the same race took CI down again
+    # after the deadline had already gone 0.5s -> 2s.
     r = run_forked(_ignore_sigterm_then_segfault, timeout=2.0, label="dumping")
     assert not r.ok
-    assert r.signal == "SIGSEGV", f"a child mid-core-dump was killed and relabelled, got {r.signal}"
+    assert r.signal == "SIGSEGV", f"child's own signal must win over the timeout, got {r.signal}"
 
 
 def test_is_core_dumping_denies_every_pid_that_is_not_dumping() -> None:
@@ -353,14 +353,6 @@ def test_an_abandoned_command_kills_every_process_it_started() -> None:
     assert process_gone(grandchild, within=10), f"grandchild {grandchild} outlived the abandoned command"
 
 
-def test_a_command_past_its_timeout_raises_with_what_it_printed() -> None:
-    """The profilers report a wedged run from the output on its TimeoutExpired, as subprocess.run hands it,
-    including inside a served request that nobody has abandoned."""
-    with forked.abandoned_by(threading.Event()), pytest.raises(subprocess.TimeoutExpired) as wedged:
-        forked.run_command(["sh", "-c", "echo early; sleep 60"], timeout=0.5)
-    assert wedged.value.stdout == "early\n"
-
-
 def test_a_command_past_its_timeout_kills_every_process_it_started(tmp_path: pathlib.Path) -> None:
     """Outside an :func:`forked.abandoned_by` block the timeout still kills the whole group: a profiler
     killed alone at its timeout leaves its measurement on the cores the next grade is timed on."""
@@ -369,6 +361,11 @@ def test_a_command_past_its_timeout_kills_every_process_it_started(tmp_path: pat
         forked.run_command(["sh", "-c", f"sleep 60 & echo $! > {pid_file}; wait"], timeout=0.5)
     grandchild = int(pid_file.read_text())
     assert process_gone(grandchild, within=10), f"grandchild {grandchild} outlived the timed-out command"
+    # The profilers report a wedged run from the output on its TimeoutExpired, as subprocess.run hands it,
+    # including inside a served request that nobody has abandoned.
+    with forked.abandoned_by(threading.Event()), pytest.raises(subprocess.TimeoutExpired) as wedged:
+        forked.run_command(["sh", "-c", "echo early; sleep 60"], timeout=0.5)
+    assert wedged.value.stdout == "early\n"
 
 
 def refuse_the_seal(plan: SealPlan) -> None:

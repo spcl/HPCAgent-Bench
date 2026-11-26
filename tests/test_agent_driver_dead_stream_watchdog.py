@@ -51,22 +51,26 @@ def age_log(tmp_path: pathlib.Path, text: str, age_s: float) -> pathlib.Path:
     return log
 
 
-def test_a_missing_log_has_nothing_to_report_stale(driver: ModuleType, tmp_path: pathlib.Path) -> None:
-    assert driver.open_tool_use_stall_seconds(tmp_path / "absent.log") is None
-
-
-def test_an_idle_log_with_every_block_closed_is_not_a_stall(driver: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Silence between turns is ordinary; only silence INSIDE an open tool_use block is the bug."""
-    log = age_log(tmp_path, CLOSED_TOOL_USE_TAIL, age_s=9999)
-    assert driver.open_tool_use_stall_seconds(log) is None
-
-
-def test_an_open_tool_use_block_reports_its_own_age(driver: ModuleType, tmp_path: pathlib.Path) -> None:
-    log = age_log(tmp_path, OPEN_TOOL_USE_TAIL, age_s=120)
+@pytest.mark.parametrize(
+    ("tail", "age_s", "expected_age"),
+    [
+        pytest.param(None, 0, None, id="missing-log"),
+        # Silence between turns is ordinary; only silence INSIDE an open tool_use block is the bug.
+        pytest.param(CLOSED_TOOL_USE_TAIL, 9999, None, id="idle-log-with-every-block-closed"),
+        # Wall-clock slop from the test's own runtime, not the file: never more than a few seconds off.
+        pytest.param(OPEN_TOOL_USE_TAIL, 120, (115, 135), id="open-tool-use-reports-its-own-age"),
+    ],
+)
+def test_a_missing_log_has_nothing_to_report_stale(
+    driver: ModuleType, tmp_path: pathlib.Path, tail: str | None, age_s: int, expected_age: tuple[int, int] | None
+) -> None:
+    log = tmp_path / "absent.log" if tail is None else age_log(tmp_path, tail, age_s=age_s)
     stalled_for = driver.open_tool_use_stall_seconds(log)
+    if expected_age is None:
+        assert stalled_for is None
+        return
     assert stalled_for is not None
-    # Wall-clock slop from the test's own runtime, not the file: never more than a few seconds off.
-    assert 115 <= stalled_for <= 135, stalled_for
+    assert expected_age[0] <= stalled_for <= expected_age[1], stalled_for
 
 
 def test_threshold_reads_the_setups_own_derived_idle_timeout(driver: ModuleType) -> None:

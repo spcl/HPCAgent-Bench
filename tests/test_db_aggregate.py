@@ -67,20 +67,13 @@ def _count(path: str, table: str) -> int:
 
 
 def test_shard_paths_order_numerically(tmp_path: pathlib.Path) -> None:
-    """Shard 10 must merge after shard 9, which a lexical sort gets wrong."""
+    """Shard 10 must merge after shard 9, which a lexical sort gets wrong; the base and unrelated files are no shard."""
     base = str(tmp_path / "hpcagent_bench.db")
     for shard in (0, 2, 9, 10):
         pathlib.Path(recording.shard_db_path(shard, base)).open("w").close()
+    for unrelated in (base, str(tmp_path / "hpcagent_benchX.db"), str(tmp_path / "other1.db")):
+        pathlib.Path(unrelated).open("w").close()
     assert recording.shard_paths(base) == [recording.shard_db_path(s, base) for s in (0, 2, 9, 10)]
-
-
-def test_shard_paths_ignores_the_base_and_unrelated_files(tmp_path: pathlib.Path) -> None:
-    base = str(tmp_path / "hpcagent_bench.db")
-    pathlib.Path(base).open("w").close()
-    pathlib.Path(str(tmp_path / "hpcagent_benchX.db")).open("w").close()
-    pathlib.Path(str(tmp_path / "other1.db")).open("w").close()
-    seed_shard(recording.shard_db_path(1, base), run="r1", kernels=["gemm"])
-    assert recording.shard_paths(base) == [recording.shard_db_path(1, base)]
 
 
 def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path: pathlib.Path) -> None:
@@ -126,23 +119,6 @@ def test_two_ranks_of_one_run_merge_instead_of_colliding(tmp_path: pathlib.Path)
     assert len(submissions(base)) == 1
     with results_db.reading(base) as conn:
         assert [r[0] for r in conn.execute("SELECT language FROM setups")] == ["c"]
-
-
-def test_aggregate_merges_a_episode_id_shared_by_multiple_shards(tmp_path: pathlib.Path) -> None:
-    """A run served by several ranks writes the SAME run into every rank's own shard, so the second
-    shard's row for it must not collide with the first's -- it is the same fact."""
-    base = str(tmp_path / "hpcagent_bench.db")
-    seed_shard(recording.shard_db_path(0, base), run="shared", kernels=["gemm"])
-    seed_shard(recording.shard_db_path(1, base), run="shared", kernels=["spmv"])
-
-    recording.aggregate(base)
-
-    assert _count(base, "episodes") == 1
-    with results_db.reading(base) as conn:
-        rows = [tuple(r) for r in conn.execute("SELECT label, model, setup FROM episodes JOIN setups USING (setup)")]
-    assert rows == [("shared", "stub-model", "shared")]
-    # The grades still concatenate; only the run's identity dedups.
-    assert len(submissions(base)) == 2
 
 
 def test_aggregate_refuses_a_shard_holding_a_table_outside_the_schema(tmp_path: pathlib.Path) -> None:

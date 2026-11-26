@@ -61,29 +61,20 @@ def test_setups_that_differ_in_a_job_level_key_are_refused(tmp_path: pathlib.Pat
     assert not (tmp_path / "fused").exists()
 
 
-def test_a_shared_line_naming_a_key_that_differs_goes_into_each_overlay(tmp_path: pathlib.Path) -> None:
-    """``prepare_job.sh`` sources the job lines before the overlay: a shared ``X=${LANGUAGE}`` there would read the
-    language before the setup sets it."""
+def test_the_fused_job_takes_its_own_setup_name_and_each_overlay_keeps_its_setups(tmp_path: pathlib.Path) -> None:
+    """prepare_job.sh reads the job's SETUP before any overlay: the job carries its own name, and the name of one
+    of its setups is refused (a worker's episode ids would read as the job's). ``prepare_job.sh`` sources the job lines
+    before the overlay: a shared ``X=${LANGUAGE}`` there would read the language before the setup sets it, so it goes
+    into each overlay."""
     experiments = tmp_path / "experiments"
     a = rendered(experiments, "s-a", ["LANGUAGE=c", "TAG=${LANGUAGE}-run"], ["k1"])
     b = rendered(experiments, "s-b", ["LANGUAGE=hip", "TAG=${LANGUAGE}-run"], ["k2"])
     out = tmp_path / "fused"
-    fuse_setups.fuse(out, [a, b], experiments)
+    fuse_setups.fuse(out, [a, b], experiments, name="joint-ab")
+    assert (out / "job.env").read_text().splitlines()[0] == "SETUP=joint-ab"
     assert "TAG=${LANGUAGE}-run" not in (out / "job.env").read_text().splitlines()
     overlays = json.loads((out / "setups.json").read_text())["setups"]
     assert all("TAG=${LANGUAGE}-run" in spec["env"] for spec in overlays.values())
-
-
-def test_the_fused_job_takes_its_own_setup_name_and_each_overlay_keeps_its_setups(tmp_path: pathlib.Path) -> None:
-    """prepare_job.sh reads the job's SETUP before any overlay: the job carries its own name, and the name of one
-    of its setups is refused (a worker's episode ids would read as the job's)."""
-    experiments = tmp_path / "experiments"
-    a = rendered(experiments, "s-a", ["LANGUAGE=c"], ["k1"])
-    b = rendered(experiments, "s-b", ["LANGUAGE=hip"], ["k2"])
-    out = tmp_path / "fused"
-    fuse_setups.fuse(out, [a, b], experiments, name="joint-ab")
-    assert (out / "job.env").read_text().splitlines()[0] == "SETUP=joint-ab"
-    overlays = json.loads((out / "setups.json").read_text())["setups"]
     assert {name: [line for line in spec["env"] if line.startswith("SETUP=")] for name, spec in overlays.items()} == {
         "s-a": ["SETUP=s-a"],
         "s-b": ["SETUP=s-b"],

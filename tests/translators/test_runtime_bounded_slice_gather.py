@@ -17,7 +17,11 @@ Checked numerically on the ABI backends, where an index that is off by an offset
 permutation applied to the wrong axes -- is a wrong answer rather than a compile error.
 """
 
+from collections.abc import Callable
+from typing import NamedTuple
+
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import all_ok, run_op
 
@@ -25,7 +29,18 @@ BACKENDS = ("c", "fortran")
 TOL = 1e-9
 
 
-def test_a_gather_index_bounded_by_a_runtime_scalar_shorter_than_the_buffer() -> None:
+class Case(NamedTuple):
+    """One compile-and-run input set for ``run_op``."""
+
+    src: str
+    inputs: dict[str, np.ndarray]
+    outputs: dict[str, tuple[int, ...]]
+    symbols: dict[str, int]
+    shapes: dict[str, str]
+    dtypes: dict[str, str]
+
+
+def bounded_gather() -> Case:
     # minife's ``contrib = values[:nnz] * x[cols[:nnz]]``. NNZMAX is the allocated extent and
     # ``nnz`` (read out of a buffer at runtime) is strictly smaller, so a bound taken from the
     # declared extent instead of the slice would read the padding past ``nnz``.
@@ -43,23 +58,17 @@ def test_a_gather_index_bounded_by_a_runtime_scalar_shorter_than_the_buffer() ->
     cols = rng.integers(0, NCOL, size=NNZMAX).astype(np.int64)
     values = rng.standard_normal(NNZMAX)
     x = rng.standard_normal(NCOL)
-    res = run_op(
+    return Case(
         src,
-        "f",
         {"nnz_box": nnz_box, "cols": cols, "values": values, "x": x},
         {"out": (NNZMAX,)},
         {"NNZMAX": NNZMAX, "NCOL": NCOL},
-        shapes={"nnz_box": "(1,)", "cols": "(NNZMAX,)", "values": "(NNZMAX,)", "x": "(NCOL,)", "out": "(NNZMAX,)"},
-        dtypes={"nnz_box": "int64", "cols": "int64"},
-        backends=BACKENDS,
-        rtol=TOL,
-        atol=TOL,
+        {"nnz_box": "(1,)", "cols": "(NNZMAX,)", "values": "(NNZMAX,)", "x": "(NCOL,)", "out": "(NNZMAX,)"},
+        {"nnz_box": "int64", "cols": "int64"},
     )
-    passed, r = all_ok(res)
-    assert passed, r
 
 
-def test_b_a_gathered_slice_with_a_non_zero_lower_bound_keeps_its_offset() -> None:
+def offset_gather() -> Case:
     # ``x[cols[1:1+m]]`` reads ``cols[1 + k]`` at result position k. Dropping the offset compiles
     # clean and returns the values gathered through cols[0..m-1] -- caught only numerically.
     src = (
@@ -74,23 +83,17 @@ def test_b_a_gathered_slice_with_a_non_zero_lower_bound_keeps_its_offset() -> No
     cols = rng.integers(0, NCOL, size=NNZ).astype(np.int64)
     values = rng.standard_normal(NNZ)
     x = rng.standard_normal(NCOL)
-    res = run_op(
+    return Case(
         src,
-        "f",
         {"cols": cols, "values": values, "x": x},
         {"out": (M,)},
         {"NNZ": NNZ, "NCOL": NCOL, "M": M},
-        shapes={"cols": "(NNZ,)", "values": "(NNZ,)", "x": "(NCOL,)", "out": "(M,)"},
-        dtypes={"cols": "int64"},
-        backends=BACKENDS,
-        rtol=TOL,
-        atol=TOL,
+        {"cols": "(NNZ,)", "values": "(NNZ,)", "x": "(NCOL,)", "out": "(M,)"},
+        {"cols": "int64"},
     )
-    passed, r = all_ok(res)
-    assert passed, r
 
 
-def test_c_moveaxis_over_a_contraction_permutes_the_contraction_result_rank() -> None:
+def moveaxis_over_contraction() -> Case:
     # ``tensordot(a, b, axes=([2], [0]))`` on rank-3 operands is rank 4, not the ``max(3, 3)`` the
     # broadcast fallback reported -- and a rank read wrong gives ``moveaxis`` a permutation of the
     # wrong length for the array it permutes.
@@ -103,13 +106,29 @@ def test_c_moveaxis_over_a_contraction_permutes_the_contraction_result_rank() ->
     rng = np.random.default_rng(4)
     a = rng.standard_normal((P, Q, R))
     b = rng.standard_normal((R, S, T))
-    res = run_op(
+    return Case(
         src,
-        "f",
         {"a": a, "b": b},
         {"out": (Q, P, S, T)},
         {"P": P, "Q": Q, "R": R, "S": S, "T": T},
-        shapes={"a": "(P,Q,R)", "b": "(R,S,T)", "out": "(Q,P,S,T)"},
+        {"a": "(P,Q,R)", "b": "(R,S,T)", "out": "(Q,P,S,T)"},
+        {},
+    )
+
+
+@pytest.mark.parametrize("case", [bounded_gather, offset_gather, moveaxis_over_contraction])
+def test_a_gather_index_bounded_by_a_runtime_scalar_shorter_than_the_buffer(
+    case: Callable[[], Case],
+) -> None:
+    one = case()
+    res = run_op(
+        one.src,
+        "f",
+        one.inputs,
+        one.outputs,
+        one.symbols,
+        shapes=one.shapes,
+        dtypes=one.dtypes or None,
         backends=BACKENDS,
         rtol=TOL,
         atol=TOL,

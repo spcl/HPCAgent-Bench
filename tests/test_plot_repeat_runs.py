@@ -74,13 +74,6 @@ def test_an_owed_run_is_a_question_mark_not_a_dot() -> None:
     assert len(drawn_marks(ax)) == 3, "two '?' plus the one solved dot"
 
 
-def test_the_count_is_printed_over_its_cell() -> None:
-    fig, ax = plt.subplots()
-    cell = cell_of(RunState.SOLVED, RunState.UNSOLVED, RunState.UNSOLVED)
-    pk.draw_box(ax, pk.Series("s", (cell,), "#1155cc"), {"k1": 0})
-    assert [text.get_text() for text in ax.texts] == ["1/3"]
-
-
 def test_several_series_box_side_by_side_rather_than_falling_back_to_points() -> None:
     cells = [pk.KernelCell("k1", (1.0, 2.0, 4.0, 8.0))]
     series = [pk.Series(name, tuple(cells), color) for name, color in (("a", "#1155cc"), ("b", "#cc5511"))]

@@ -24,22 +24,22 @@ def test_a_tuner_solves_the_kind_of_submission_its_judge_takes() -> None:
     assert run_tuner.task_of("gemm", "c", InputMode.ANY).source_mode is SourceMode.ANY
 
 
-@pytest.mark.parametrize("tuner", ["dace_cpu_canon", "autokernel"])
+@pytest.mark.parametrize(
+    ("tuner", "vendor", "image"),
+    [("dace_cpu_canon", "amd", "cpu"), ("autokernel", "amd", "cpu"), ("dace_gpu_canon", "nvidia", "nvidia")],
+    ids=["cpu-column", "tuner-with-no-column", "gpu-column"],
+)
 def test_a_cpu_column_or_a_tuner_with_no_column_runs_on_the_cpu_even_on_a_gpu_node(
-    tuner: str, monkeypatch: pytest.MonkeyPatch
+    tuner: str, vendor: str, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(run_tuner, "gpu_vendor", lambda: "amd")
+    """A GPU column runs on the node's GPU and its task carries that image; anything else stays on the CPU."""
+    monkeypatch.setattr(run_tuner, "gpu_vendor", lambda: vendor)
 
-    assert run_tuner.tuner_image(tuner) == "cpu"
-
-
-def test_a_gpu_column_runs_on_the_nodes_gpu_and_its_task_carries_that_image(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(run_tuner, "gpu_vendor", lambda: "nvidia")
-
-    sut = run_tuner.task_of("gemm", "hip", InputMode.ANY, run_tuner.tuner_image("dace_gpu_canon"))
-
-    assert sut.image == "nvidia"
-    assert sut.on_gpu
+    assert run_tuner.tuner_image(tuner) == image
+    if image != "cpu":
+        sut = run_tuner.task_of("gemm", "hip", InputMode.ANY, run_tuner.tuner_image(tuner))
+        assert sut.image == image
+        assert sut.on_gpu
 
 
 def test_a_tuner_episode_submits_to_its_judge_and_records_its_end(

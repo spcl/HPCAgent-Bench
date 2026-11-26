@@ -29,32 +29,37 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     return monkeypatch
 
 
-def test_a_serial_run_is_left_alone(clean_env: pytest.MonkeyPatch) -> None:
-    """No worker, no race, and no directory the next serial run cannot reuse."""
-    pin_per_worker_dace_build_folder()
-    assert BUILD_FOLDER_ENV not in os.environ
-
-
-def test_each_worker_gets_its_own_folder(clean_env: pytest.MonkeyPatch) -> None:
-    clean_env.setenv("PYTEST_XDIST_WORKER", "gw3")
-    pin_per_worker_dace_build_folder()
-    assert os.environ[BUILD_FOLDER_ENV] == str(pathlib.Path(".dacecache/gw3"))
-
-
-def test_a_callers_own_pin_is_extended_not_replaced(clean_env: pytest.MonkeyPatch) -> None:
-    """Pointing the build at a fast disk has to keep working; it just splits underneath."""
-    clean_env.setenv("PYTEST_XDIST_WORKER", "gw1")
-    clean_env.setenv(BUILD_FOLDER_ENV, "/scratch/build")
-    pin_per_worker_dace_build_folder()
-    assert os.environ[BUILD_FOLDER_ENV] == str(pathlib.Path("/scratch/build/gw1"))
-
-
-def test_the_split_does_not_nest_on_a_second_call(clean_env: pytest.MonkeyPatch) -> None:
-    """A second conftest load in the same worker would otherwise hand it a fresh empty cache."""
-    clean_env.setenv("PYTEST_XDIST_WORKER", "gw2")
-    pin_per_worker_dace_build_folder()
-    pin_per_worker_dace_build_folder()
-    assert os.environ[BUILD_FOLDER_ENV] == str(pathlib.Path(".dacecache/gw2"))
+@pytest.mark.parametrize(
+    ("worker", "pin", "calls", "folder"),
+    [
+        (None, None, 1, None),
+        ("gw3", None, 1, ".dacecache/gw3"),
+        ("gw1", "/scratch/build", 1, "/scratch/build/gw1"),
+        ("gw2", None, 2, ".dacecache/gw2"),
+    ],
+    ids=[
+        "serial_run_left_alone",
+        "own_folder_per_worker",
+        "callers_pin_extended_not_replaced",
+        "no_nesting_on_a_second_call",
+    ],
+)
+def test_each_worker_gets_its_own_folder(
+    clean_env: pytest.MonkeyPatch, worker: str | None, pin: str | None, calls: int, folder: str | None
+) -> None:
+    """No worker, no race, and no directory the next serial run cannot reuse. Pointing the build at a fast disk
+    has to keep working; it just splits underneath. A second conftest load in the same worker would otherwise
+    hand it a fresh empty cache."""
+    if worker is not None:
+        clean_env.setenv("PYTEST_XDIST_WORKER", worker)
+    if pin is not None:
+        clean_env.setenv(BUILD_FOLDER_ENV, pin)
+    for unused in range(calls):
+        pin_per_worker_dace_build_folder()
+    if folder is None:
+        assert BUILD_FOLDER_ENV not in os.environ
+    else:
+        assert os.environ[BUILD_FOLDER_ENV] == str(pathlib.Path(folder))
 
 
 def test_an_already_imported_dace_gets_the_pin_too(clean_env: pytest.MonkeyPatch) -> None:

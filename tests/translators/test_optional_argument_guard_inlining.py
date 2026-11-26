@@ -83,47 +83,47 @@ def test_an_undecidable_identity_test_is_declined(expr: str, reason: str) -> Non
     assert not is_static_flag_test(ast.parse(expr, mode="eval").body, flags("weight")), reason
 
 
-def test_a_binding_between_the_guard_and_the_return_is_lifted_over_it() -> None:
-    """``shape`` is bound on the affine path only, which left the guard two statements from the
-    trailing return -- and the fuse only ever looked at the last two."""
-    tree = parse(NORM_SRC)
-    fuse_guarded_returns(tree)
-    body = helper_of(tree, "_norm").body
-    assert [type(s).__name__ for s in body] == ["Assign", "Assign", "Assign", "Return"]
-    assert isinstance(body[-1].value, ast.IfExp)
-    assert body[2].targets[0].id == "shape", "the lifted binding runs ahead of the guard now"
+READ_BY_GUARD = (
+    "import numpy as np\n"
+    "def _norm(x, weight):\n"
+    " shape = 0\n"
+    " y = x - 1.0\n"
+    " if weight is None:\n"
+    "  return y + shape\n"
+    " shape = x.shape[0]\n"
+    " return y * shape\n"
+    "def f(x, out):\n"
+    " out[:] = _norm(x, None)\n"
+)
 
 
-def test_a_binding_that_calls_is_not_lifted() -> None:
-    """Lifting runs the statement on a path that never ran it. A call may write an argument array
-    in place, so hoisting one over an early return is a side effect the source never had."""
-    impure = NORM_SRC.replace(" shape = (x.shape[0],)\n", " shape = np.zeros(x.shape[0])\n")
-    tree = parse(impure)
+@pytest.mark.parametrize(
+    ("source", "lifted", "impure"),
+    [
+        # ``shape`` is bound on the affine path only, which left the guard two statements from the trailing return
+        # -- and the fuse only ever looked at the last two.
+        (NORM_SRC, True, False),
+        # Lifting runs the statement on a path that never ran it. A call may write an argument array in place, so
+        # hoisting one over an early return is a side effect the source never had.
+        (NORM_SRC.replace(" shape = (x.shape[0],)\n", " shape = np.zeros(x.shape[0])\n"), False, True),
+        # Moving it above the guard would change which value the guard tests -- the one case where the lift is not
+        # merely early but wrong.
+        (READ_BY_GUARD, False, False),
+    ],
+    ids=["a_pure_binding_is_lifted", "a_binding_that_calls_is_not_lifted", "a_binding_the_guard_reads_is_not_lifted"],
+)
+def test_a_binding_between_the_guard_and_the_return_is_lifted_over_it(source: str, lifted: bool, impure: bool) -> None:
+    tree = parse(source)
     fuse_guarded_returns(tree)
     body = helper_of(tree, "_norm").body
+    if lifted:
+        assert [type(s).__name__ for s in body] == ["Assign", "Assign", "Assign", "Return"]
+        assert isinstance(body[-1].value, ast.IfExp)
+        assert body[2].targets[0].id == "shape", "the lifted binding runs ahead of the guard now"
+        return
     assert [type(s).__name__ for s in body] == ["Assign", "Assign", "If", "Assign", "Return"]
-    assert "_norm" not in collect_inlinable_helpers(tree, helper_of(tree, "f"))
-
-
-def test_a_binding_the_guard_reads_is_not_lifted() -> None:
-    """Moving it above the guard would change which value the guard tests -- the one case where
-    the lift is not merely early but wrong."""
-    read_by_guard = (
-        "import numpy as np\n"
-        "def _norm(x, weight):\n"
-        " shape = 0\n"
-        " y = x - 1.0\n"
-        " if weight is None:\n"
-        "  return y + shape\n"
-        " shape = x.shape[0]\n"
-        " return y * shape\n"
-        "def f(x, out):\n"
-        " out[:] = _norm(x, None)\n"
-    )
-    tree = parse(read_by_guard)
-    fuse_guarded_returns(tree)
-    body = helper_of(tree, "_norm").body
-    assert [type(s).__name__ for s in body] == ["Assign", "Assign", "If", "Assign", "Return"]
+    if impure:
+        assert "_norm" not in collect_inlinable_helpers(tree, helper_of(tree, "f"))
 
 
 def test_the_selected_setup_is_the_one_the_reference_takes() -> None:

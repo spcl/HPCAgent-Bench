@@ -23,6 +23,10 @@ a Fortran integer truncation on data where trunc and floor disagree (a negative 
 index), and (2) compile at all, which segments-that-truncate never do.
 """
 
+import json
+import pathlib
+import tempfile
+
 import numpy as np
 
 from tests.translators import op_oracle as oo
@@ -61,15 +65,9 @@ def test_floor_of_forward_substituted_scalar_stays_real_division() -> None:
     )
     assert status == {"fortran": "ok"}, status
 
-
-def test_emitted_fortran_never_calls_aint_on_an_integer_operand() -> None:
-    """Direct text pin: whatever ``expr_is_integer`` decides about the substituted divide's
-    operands, the SAME decision must gate the division's own promotion -- so an ``aint(``
-    call's argument is never built from a bare (unwrapped) integer-kind subexpression divide."""
-    import json
-    import pathlib
-    import tempfile
-
+    # Direct text pin: whatever ``expr_is_integer`` decides about the substituted divide's operands, the SAME
+    # decision must gate the division's own promotion -- so an ``aint(`` call's argument is never built from a bare
+    # (unwrapped) integer-kind subexpression divide.
     d = pathlib.Path(tempfile.mkdtemp())
     npy = d / "f.py"
     npy.write_text(SRC)
@@ -88,6 +86,4 @@ def test_emitted_fortran_never_calls_aint_on_an_integer_operand() -> None:
     )
     oo.emit_native(npy, bi, d, "f")
     text = (d / "f.f90").read_text()
-    # A division feeding aint() must be wrapped in REAL(..., c_double) on any operand
-    # expr_is_integer would call integer -- the same guard the Div BinOp path applies.
     assert "aint((INT(" not in text, f"aint() reached an unpromoted integer divide:\n{text}"

@@ -17,21 +17,19 @@ from hpcagent_bench.frameworks.native_runtime import FRAMEWORK_LANG
 DEVICE_LANGUAGES = (Language.HIP, Language.CUDA)
 
 
-@pytest.mark.parametrize("column", sorted(c for c, lang in FRAMEWORK_LANG.items() if lang in DEVICE_LANGUAGES))
-def test_every_device_column_the_framework_builds_is_known_to_the_sweep(column: str) -> None:
-    assert baseline.is_device_column(column), (
-        f"{column} builds {FRAMEWORK_LANG[column]} but the sweep takes it for a CPU one"
-    )
-
-
-@pytest.mark.parametrize("column", ["dace_gpu_parallel", "dace_gpu_canon", "dace_gpu_autoopt", "tvm_gpu"])
-def test_the_gpu_flavors_are_known_to_the_sweep(column: str) -> None:
-    """dace and tvm are not cpp columns, so they are absent from FRAMEWORK_LANG and need their own check."""
-    assert baseline.is_device_column(column)
+DEVICE_COLUMNS = sorted(c for c, lang in FRAMEWORK_LANG.items() if lang in DEVICE_LANGUAGES)
+# dace and tvm are not cpp columns, so they are absent from FRAMEWORK_LANG and need their own entries.
+GPU_FLAVORS = ["dace_gpu_parallel", "dace_gpu_canon", "dace_gpu_autoopt", "tvm_gpu"]
+CPU_COLUMNS = ["numba", "cc", "cpp", "fortran", "pluto", "dace_cpu_parallel", "dace_cpu_canon", "tvm_cpu"]
 
 
 @pytest.mark.parametrize(
-    "column", ["numba", "cc", "cpp", "fortran", "pluto", "dace_cpu_parallel", "dace_cpu_canon", "tvm_cpu"]
+    ("column", "is_device"),
+    [(c, True) for c in DEVICE_COLUMNS] + [(c, True) for c in GPU_FLAVORS] + [(c, False) for c in CPU_COLUMNS],
 )
-def test_a_cpu_column_is_not_a_device_column(column: str) -> None:
-    assert not baseline.is_device_column(column), f"{column} would be reported as missing GPUs it never uses"
+def test_every_device_column_the_framework_builds_is_known_to_the_sweep(column: str, is_device: bool) -> None:
+    """A device column is one the framework builds for a GPU language or a dace/tvm GPU flavor; a CPU column
+    would be reported as missing GPUs it never uses."""
+    assert baseline.is_device_column(column) is is_device, (
+        f"{column} builds {FRAMEWORK_LANG.get(column)} and is {'a device' if is_device else 'a CPU'} column"
+    )

@@ -73,24 +73,31 @@ def test_an_ir_language_is_graded_on_the_host_but_never_by_default() -> None:
         assert language not in DEFAULT_LANGUAGES, language
 
 
-def test_an_llvm_ir_answer_is_compiled_as_ir_by_the_c_toolchain_at_the_c_baseline() -> None:
-    commands = languages.build_shared_lib_commands(Language.LLVM_IR, pathlib.Path("k.ll"), pathlib.Path("libk.so"))
-    compile_argv = commands[0]
-    assert compile_argv[compile_argv.index("-x") + 1] == "ir"
-    assert compile_argv[compile_argv.index("-x") + 2] == "k.ll"
-    assert languages.baseline_flags(Language.LLVM_IR) == languages.baseline_flags_for_block("clang")
+@pytest.mark.parametrize(
+    ("language", "source", "ir_name"),
+    [
+        pytest.param(Language.LLVM_IR, "k.ll", "k.ll", id="llvm-ir"),
+        pytest.param(Language.MLIR, "k.mlir", "k.mlir.ll", id="mlir"),
+    ],
+)
+def test_an_llvm_ir_answer_is_compiled_as_ir_by_the_c_toolchain_at_the_c_baseline(
+    language: Language, source: str, ir_name: str
+) -> None:
+    """An LLVM IR answer is compiled as IR by the C toolchain at the C baseline; an MLIR one is lowered, then
+    translated, then compiled as IR the same way."""
+    commands = languages.build_shared_lib_commands(language, pathlib.Path(source), pathlib.Path("libk.so"))
+    compile_argv = commands[-2]
+    assert compile_argv[compile_argv.index("-x") + 1 :][:2] == ["ir", ir_name]
     assert "-shared" in commands[-1]
-
-
-def test_an_mlir_answer_is_lowered_then_translated_then_compiled_as_ir() -> None:
-    commands = languages.build_shared_lib_commands(Language.MLIR, pathlib.Path("k.mlir"), pathlib.Path("libk.so"))
+    if language is Language.LLVM_IR:
+        assert languages.baseline_flags(Language.LLVM_IR) == languages.baseline_flags_for_block("clang")
+        return
     lower, translate, compile_argv, link = commands
     assert pathlib.Path(lower[0]).name.startswith("mlir-opt")
     assert lower[1] == "k.mlir"
     assert lower[-2:] == ["-o", "k.mlir.lowered.mlir"]
     assert pathlib.Path(translate[0]).name.startswith("mlir-translate")
     assert translate[1:] == ["--mlir-to-llvmir", "k.mlir.lowered.mlir", "-o", "k.mlir.ll"]
-    assert compile_argv[compile_argv.index("-x") + 1 :][:2] == ["ir", "k.mlir.ll"]
     assert compile_argv[compile_argv.index("-o") + 1] == "k.mlir.o"
     assert "-shared" in link
 

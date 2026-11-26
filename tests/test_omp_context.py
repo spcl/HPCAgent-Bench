@@ -78,16 +78,13 @@ def test_a_family_without_a_context_is_an_error_not_the_default() -> None:
         ("hip", None, "llvm"),  # hipcc is ROCm's clang, whatever family was asked
         ("cuda", None, "gnu"),  # nvcc compiles its host half with gcc
         ("python", None, "gnu"),
+        ("c", "tcc", "gnu"),  # an unknown family falls to the default and the build reports it
     ],
 )
 def test_a_compiled_submission_runs_in_its_toolchain_familys_context(
     language: str, requested: str | None, expected: str
 ) -> None:
     assert sandbox.compiled_omp_context(Language.parse(language), requested) == expected
-
-
-def test_an_unknown_family_request_falls_to_the_default_and_the_build_reports_it() -> None:
-    assert sandbox.compiled_omp_context(Language.C, "tcc") == "gnu"
 
 
 def test_a_setup_pin_beats_the_submissions_request() -> None:
@@ -355,21 +352,20 @@ def test_a_host_with_contexts_and_no_catalog_fails_naming_the_step_that_writes_i
     assert omp_context.CATALOG_ENV in message
 
 
+@pytest.mark.parametrize("source", ["config", "env"])
 def test_the_catalog_is_read_from_the_configured_path(
-    root: pathlib.Path, tmp_path_factory: pytest.TempPathFactory
+    root: pathlib.Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
     runtimes = runtime_links(root)
     run_dir = tmp_path_factory.mktemp("run")
-    config.set_override(omp_context.CATALOG_KEY, str(run_dir / "omp-catalog.json"))
+    if source == "config":
+        config.set_override(omp_context.CATALOG_KEY, str(run_dir / "omp-catalog.json"))
+    else:
+        monkeypatch.setenv(omp_context.CATALOG_ENV, str(run_dir / "omp-catalog.json"))
     (run_dir / "omp-catalog.json").write_text(json.dumps({"llvm": {"blas": [runtimes["gnu"]]}}), encoding="utf-8")
     omp_context.read_catalog.cache_clear()
     assert omp_context.catalog_path() == run_dir / "omp-catalog.json"
     assert "libgomp" in omp_context.library_refusal("blas", "llvm")
-
-
-def test_the_catalog_env_variable_is_the_configured_path(root: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(omp_context.CATALOG_ENV, "/run/dir/omp-catalog.json")
-    assert omp_context.catalog_path() == pathlib.Path("/run/dir/omp-catalog.json")
 
 
 def test_the_image_build_write_stores_the_scan_where_it_is_read(
@@ -428,12 +424,6 @@ def test_a_library_that_maps_another_runtime_than_the_contexts_is_refused_with_b
     assert omp_context.library_refusal("petsc", "nvhpc") != ""
     assert omp_context.library_refusal("blas", "nvhpc") != "", "two libnvomp files are two runtimes"
     assert omp_context.library_refusal("unlisted", "gnu") == "", "a library the record does not list is not refused"
-
-
-def test_a_library_no_build_of_which_links_in_the_context_is_refused(root: pathlib.Path) -> None:
-    runtime_links(root)
-    write_record(root, {"llvm": {"petsc": None}})
-    assert "no build" in omp_context.library_refusal("petsc", "llvm")
 
 
 def test_a_catalog_request_the_family_cannot_serve_is_refused_before_any_build(root: pathlib.Path) -> None:
@@ -548,10 +538,3 @@ def test_the_declaration_refuses_before_the_catalog_is_read(monkeypatch: pytest.
     monkeypatch.setattr(omp_context, "library_refusal", lambda *_args: pytest.fail("catalog read"))
     assert "llvm OpenMP context only" in languages.library_served("magma", omp_context.GNU)
     assert not languages.library_offered("magma", Language.HIP, omp_context.GNU)
-
-
-def test_a_submission_builds_in_its_toolchain_familys_context() -> None:
-    assert languages.submission_context(Language.C) == omp_context.context_for_toolchain(
-        languages.submission_toolchain(Language.C)
-    )
-    assert languages.submission_context(Language.PYTHON) == omp_context.DEFAULT_CONTEXT

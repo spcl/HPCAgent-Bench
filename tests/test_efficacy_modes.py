@@ -90,19 +90,26 @@ def test_a_packet_column_finds_its_language_verdict() -> None:
     assert efficacy.verdicts_of({("qwen38", "C +lang-skills"): (False, True)}, row) == (False, True)
 
 
-def test_the_key_lays_out_one_meaning_per_column() -> None:
-    groups = [[fixtures.plt.Line2D([], [], label=f"g{g}-{i}") for i in range(size)] for g, size in enumerate((3, 2, 2))]
-    flat, ncol = efficacy.key_columns(groups, 4)
-    assert ncol == 3
-    assert [handle.get_label() for handle in flat] == ["g0-0", "g0-1", "g0-2", "g1-0", "g1-1", " ", "g2-0", "g2-1", " "]
-
-
-def test_a_key_that_fits_one_row_is_one_row() -> None:
-    groups = [[fixtures.plt.Line2D([], [], label=name)] for name in ("a", "b")] + [
-        [fixtures.plt.Line2D([], [], label="c")]
-    ]
-    flat, ncol = efficacy.key_columns(groups, 5)
-    assert (ncol, [handle.get_label() for handle in flat]) == (3, ["a", "b", "c"])
+@pytest.mark.parametrize(
+    ("sizes", "width", "ncol", "labels"),
+    [
+        pytest.param(
+            (3, 2, 2),
+            4,
+            3,
+            ["g0-0", "g0-1", "g0-2", "g1-0", "g1-1", " ", "g2-0", "g2-1", " "],
+            id="three_groups_wrap",
+        ),
+        pytest.param((1, 1, 1), 5, 3, ["g0-0", "g1-0", "g2-0"], id="fits_one_row"),
+    ],
+)
+def test_the_key_columns_pad_and_count_per_group(
+    sizes: tuple[int, ...], width: int, ncol: int, labels: list[str]
+) -> None:
+    groups = [[fixtures.plt.Line2D([], [], label=f"g{g}-{i}") for i in range(size)] for g, size in enumerate(sizes)]
+    flat, got_ncol = efficacy.key_columns(groups, width)
+    assert got_ncol == ncol
+    assert [handle.get_label() for handle in flat] == labels
 
 
 def test_two_line_fold_shortens_the_longest_line() -> None:

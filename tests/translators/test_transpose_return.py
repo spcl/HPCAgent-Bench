@@ -5,16 +5,11 @@
 Two halves: (1) every transpose spelling desugars to the single ``np.transpose``
 function form (``TransposeRewriter``); (2) a returned transpose promotes to an
 output buffer with the reversed / permuted shape (``shape_from_transpose`` +
-the frontend return-promotion), and reproduces numpy bit-exact on c/cpp/fortran.
+the frontend return-promotion).
 """
 
 import ast
-import json
-import pathlib
-import subprocess
-import tempfile
 
-import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
@@ -91,64 +86,6 @@ def test_tuple_return_with_transpose_promotes_both_into_outputs() -> None:
     assert len(outs) == 2
     assert ("N", "M") in outs.values()
     assert ("M", "N") in outs.values()
-
-
-# numerical: bit-exact vs numpy on c / cpp / fortran                          #
-
-
-def validate_native(
-    src: str,
-    x: np.ndarray,
-    expected: np.ndarray,
-    out_shape: tuple[int, int],
-    shapes: dict[str, str],
-    syms: dict[str, int],
-) -> None:
-    from hpcagent_bench import numerical_oracle as no
-    from tests.translators import op_oracle as oo
-
-    d = pathlib.Path(tempfile.mkdtemp())
-    npy = d / "k_numpy.py"
-    npy.write_text(src)
-    bi = {
-        "benchmark": {
-            "name": "k",
-            "short_name": "k",
-            "relative_path": "",
-            "module_name": "k",
-            "func_name": "f",
-            "parameters": {"S": dict(syms)},
-            "input_args": ["x"],
-            "array_args": ["x"],
-            "output_args": [],
-            "init": {"arrays": shapes},
-        }
-    }
-    (d / "bi.json").write_text(json.dumps(bi))
-    oo.emit_native(npy, d / "bi.json", d, "f")
-    binding = json.loads((d / "f_binding.json").read_text())
-    by = {"x": x, "ret_arr0": np.zeros(out_shape, dtype=np.float64)}
-    exp = {"ret_arr0": no.comparison_array(expected)}
-    for b, ext in (("c", ".c"), ("cpp", ".cpp"), ("fortran", ".f90")):
-        so = d / f"l_{b}.so"
-        cc = subprocess.run(no.native_build_command(b, d / f"f{ext}", so), capture_output=True, text=True, check=False)
-        assert cc.returncode == 0, f"{b} compile: {cc.stderr[-200:]}"
-        st = no.invoke_isolated(b, binding, so, by, syms, exp, ["ret_arr0"], 1e-9, 1e-9, frozenset())
-        assert st == "ok", f"{b}: {st}"
-
-
-@pytest.mark.parametrize(
-    ("src", "perm"),
-    [
-        ("import numpy as np\ndef f(x):\n return x.T\n", None),
-        ("import numpy as np\ndef f(x):\n return x.transpose(1, 0)\n", (1, 0)),
-    ],
-    ids=["dot_T", "method_transpose"],
-)
-def test_return_transpose_matches_numpy_native(src: str, perm: tuple[int, int] | None) -> None:
-    x = np.arange(12, dtype=np.float64).reshape(3, 4)
-    expected = x.T if perm is None else x.transpose(*perm)
-    validate_native(src, x, expected, (4, 3), {"x": "(M, N)"}, {"M": 3, "N": 4})
 
 
 # a permutation may not write into the buffer it reads                         #

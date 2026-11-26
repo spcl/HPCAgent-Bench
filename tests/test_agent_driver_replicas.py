@@ -115,23 +115,13 @@ def start_fake_engine(health_status: int) -> tuple[http.server.ThreadingHTTPServ
 
 def test_a_replica_stuck_before_health_is_not_returned_as_ready(driver: ModuleType) -> None:
     """A replica that answers /v1/models but whose /health still 503s (mid warmup) must not be
-    handed agents, even though /v1/models alone looks ready."""
+    handed agents, even though /v1/models alone looks ready. Each 503 of a warming /health is an HTTPError that is
+    also the open reply: kept unclosed for the timeout message, it held its socket until collection, and the
+    ResourceWarning it then raised failed whichever test the collector ran in (test_agent_driver_sealed, under -n 2)."""
     ready_server, ready_url = start_fake_engine(200)
     stuck_server, stuck_url = start_fake_engine(503)
     try:
         assert driver.wait_for_ready_replicas([ready_url, stuck_url], 1.0, {}) == [ready_url]
-    finally:
-        for server in (ready_server, stuck_server):
-            server.shutdown()
-            server.server_close()
-
-
-def test_a_warming_replica_leaves_no_response_open(driver: ModuleType) -> None:
-    """Each 503 of a warming /health is an HTTPError that is also the open reply. Kept unclosed for the
-    timeout message, it held its socket until collection, and the ResourceWarning it then raised
-    failed whichever test the collector ran in (test_agent_driver_sealed, under -n 2)."""
-    stuck_server, stuck_url = start_fake_engine(503)
-    try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             with pytest.raises(TimeoutError, match="never warmed up") as raised:
@@ -142,8 +132,9 @@ def test_a_warming_replica_leaves_no_response_open(driver: ModuleType) -> None:
             del raised
             gc.collect()
     finally:
-        stuck_server.shutdown()
-        stuck_server.server_close()
+        for server in (ready_server, stuck_server):
+            server.shutdown()
+            server.server_close()
     assert [str(warning.message) for warning in caught if issubclass(warning.category, ResourceWarning)] == []
 
 

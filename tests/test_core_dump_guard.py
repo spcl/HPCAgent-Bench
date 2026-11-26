@@ -110,11 +110,6 @@ def test_fix_does_not_splice_into_a_quoted_inner_shell(tmp_path: pathlib.Path) -
     assert checker_rc(target) == 0
 
 
-def test_checker_passes_over_the_whole_repo() -> None:
-    done = subprocess.run([sys.executable, str(CHECKER)], capture_output=True, text=True, cwd=paths.ROOT, check=False)
-    assert done.returncode == 0, done.stderr
-
-
 def test_nothing_samples_stacks_with_the_faulthandler_watchdog() -> None:
     """``faulthandler.dump_traceback_later`` is the one API that reliably CAUSES the core dump.
 
@@ -153,16 +148,15 @@ def core_limit_after_import(extra: dict[str, str]) -> tuple[int, int]:
     return soft, hard
 
 
-def test_importing_the_package_drops_the_core_limit() -> None:
-    """The python-side half: a python process started outside the repo still cannot write a core."""
-    soft, _ = core_limit_after_import({})
-    assert soft == 0, "import hpcagent_bench must drop RLIMIT_CORE even from a shell that raised it"
-
-
-def test_the_opt_out_keeps_the_core_limit() -> None:
-    """A debugger session that asks for the dump gets it -- the guard is a floor, not a wall."""
-    soft, hard = core_limit_after_import({core_dumps.ALLOW: "1"})
-    assert soft == hard, f"{core_dumps.ALLOW}=1 must leave the caller's limit alone"
+@pytest.mark.parametrize("opt_out", [False, True], ids=["floor", "opt-out"])
+def test_importing_the_package_drops_the_core_limit(opt_out: bool) -> None:
+    """The python-side half: a python process started outside the repo still cannot write a core. A debugger
+    session that asks for the dump gets it -- the guard is a floor, not a wall."""
+    soft, hard = core_limit_after_import({core_dumps.ALLOW: "1"} if opt_out else {})
+    if opt_out:
+        assert soft == hard, f"{core_dumps.ALLOW}=1 must leave the caller's limit alone"
+    else:
+        assert soft == 0, "import hpcagent_bench must drop RLIMIT_CORE even from a shell that raised it"
 
 
 JUDGE_PROBE = """

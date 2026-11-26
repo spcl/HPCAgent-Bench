@@ -13,6 +13,7 @@ Fortran + numba, skip-tolerant):
 """
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import all_ok, run_op
 
@@ -45,55 +46,46 @@ def test_neg_inf_masking() -> None:
 # np.flip (N-D, axis-aware)
 
 
-def test_flip_axis0_and_axis1() -> None:
-    for axis in (0, 1, -1):
-        ok, res = run_(
-            f"import numpy as np\ndef f(a, out):\n out[:] = np.flip(a, axis={axis})\n",
-            {"a": A},
-            {"out": (4, 6)},
-            {"M": 4, "N": 6},
-            {"a": "(M, N)", "out": "(M, N)"},
-        )
-        assert ok, (axis, res)
-
-
-def test_flip_all_axes() -> None:
+@pytest.mark.parametrize("axis", ["axis=0", "axis=1", "axis=-1", ""])
+def test_flip_matches_numpy_for_every_axis_spelling(axis: str) -> None:
     ok, res = run_(
-        "import numpy as np\ndef f(a, out):\n out[:] = np.flip(a)\n",
+        f"import numpy as np\ndef f(a, out):\n out[:] = np.flip(a{', ' if axis else ''}{axis})\n",
         {"a": A},
         {"out": (4, 6)},
         {"M": 4, "N": 6},
         {"a": "(M, N)", "out": "(M, N)"},
     )
-    assert ok, res
+    assert ok, (axis, res)
 
 
 # np.reshape(-1)
 
 
-def test_reshape_row_neg1() -> None:
-    src = (
-        "import numpy as np\n"
-        "def f(a, out):\n"
-        "    b = a.reshape(2, -1)\n"
-        "    for i in range(2):\n"
-        "        for j in range(12):\n"
-        "            out[i, j] = b[i, j]\n"
-    )
-    ok, res = run_(src, {"a": A}, {"out": (2, 12)}, {"M": 4, "N": 6}, {"a": "(M, N)", "out": "(2, 12)"})
-    assert ok, res
-
-
-def test_reshape_neg1_on_intermediate_local() -> None:
-    """``t.reshape(-1)`` where t is a computed local -- the shape is resolved from t's
-    inferred extent, not just a parameter's."""
-    ok, res = run_(
-        "import numpy as np\ndef f(a, out):\n t = a * 2.0\n b = t.reshape(-1)\n out[:] = b\n",
-        {"a": A},
-        {"out": (24,)},
-        {"M": 4, "N": 6},
-        {"a": "(M, N)", "out": "(M*N,)"},
-    )
+@pytest.mark.parametrize(
+    ("src", "out_shape", "shapes"),
+    [
+        (
+            "import numpy as np\n"
+            "def f(a, out):\n"
+            "    b = a.reshape(2, -1)\n"
+            "    for i in range(2):\n"
+            "        for j in range(12):\n"
+            "            out[i, j] = b[i, j]\n",
+            (2, 12),
+            {"a": "(M, N)", "out": "(2, 12)"},
+        ),
+        # ``t.reshape(-1)`` where t is a computed local: the shape is resolved from t's inferred extent, not just a
+        # parameter's.
+        (
+            "import numpy as np\ndef f(a, out):\n t = a * 2.0\n b = t.reshape(-1)\n out[:] = b\n",
+            (24,),
+            {"a": "(M, N)", "out": "(M*N,)"},
+        ),
+    ],
+    ids=["row", "intermediate-local"],
+)
+def test_reshape_row_neg1(src: str, out_shape: tuple[int, ...], shapes: dict[str, str]) -> None:
+    ok, res = run_(src, {"a": A}, {"out": out_shape}, {"M": 4, "N": 6}, shapes)
     assert ok, res
 
 

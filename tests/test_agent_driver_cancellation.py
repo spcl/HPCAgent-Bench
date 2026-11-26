@@ -30,23 +30,32 @@ def driver_fixture() -> Iterator[ModuleType]:
     module.JOB_CANCELLED.clear()
 
 
+@pytest.mark.parametrize(
+    ("signalled", "seconds_left", "returncode", "cancelled"),
+    [(15, None, -15, True), (None, 60, 1, True), (None, 4 * 3600, 1, False)],
+    ids=["signalled_step", "wall_is_here", "job_not_ending"],
+)
 def test_a_step_signalled_by_slurm_cancels_the_attempt_that_was_running(
-    driver: ModuleType, monkeypatch: pytest.MonkeyPatch
+    driver: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    signalled: int | None,
+    seconds_left: int | None,
+    returncode: int,
+    cancelled: bool,
 ) -> None:
     """scancel signals every process of the step, so the agent dies without a closing event and the
     handler has already recorded why. Without the handler the driver died with it, and the task read
-    as an agent that crashed."""
-    monkeypatch.delenv("SLURM_JOB_END_TIME", raising=False)
-    driver.note_job_cancellation(15, None)
-    assert driver.cancelled_by_the_job(returncode=-15, recorded=False) is True
+    as an agent that crashed.
 
-
-def test_the_allocation_running_out_under_a_working_agent_cancels_it(
-    driver: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The other way a job ends: no signal reached this process yet, but the wall is here."""
-    monkeypatch.setenv("SLURM_JOB_END_TIME", str(int(time.time()) + 60))
-    assert driver.cancelled_by_the_job(returncode=1, recorded=False) is True
+    The other way a job ends: no signal reached this process yet, but the wall is here. A job with hours left
+    cancels nothing."""
+    if seconds_left is None:
+        monkeypatch.delenv("SLURM_JOB_END_TIME", raising=False)
+    else:
+        monkeypatch.setenv("SLURM_JOB_END_TIME", str(int(time.time()) + seconds_left))
+    if signalled is not None:
+        driver.note_job_cancellation(signalled, None)
+    assert driver.cancelled_by_the_job(returncode=returncode, recorded=False) is cancelled
 
 
 def test_an_agent_that_wrote_its_own_ending_is_not_cancelled(
@@ -70,20 +79,13 @@ def test_the_drivers_own_caps_are_not_cancellations(
     assert driver.cancelled_by_the_job(returncode, recorded=False) is False
 
 
-def test_a_job_that_is_not_ending_cancels_nothing(driver: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SLURM_JOB_END_TIME", str(int(time.time()) + 4 * 3600))
-    assert driver.cancelled_by_the_job(returncode=1, recorded=False) is False
-
-
 def test_the_marker_names_the_worker_directory_the_task_was_run_in(driver: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Extraction reads the flag off this file, so it has to land beside the transcript."""
+    """Extraction reads the flag off this file, so it has to land beside the transcript.
+
+    The workdir is the agent's own folder: a ``cancelled`` file it wrote would drop its episode from the analysis
+    and owe it a rerun, so an attempt the job did not end clears it. The failure class is the driver's alone."""
     driver.mark_cancelled(tmp_path, 137)
     assert (tmp_path / driver.CANCELLED_MARKER).read_text(encoding="utf-8").startswith("rc=137 ")
-
-
-def test_a_marker_the_agent_wrote_into_its_folder_is_removed(driver: ModuleType, tmp_path: pathlib.Path) -> None:
-    """The workdir is the agent's own folder: a ``cancelled`` file it wrote would drop its episode from the analysis
-    and owe it a rerun, so an attempt the job did not end clears it. The failure class is the driver's alone."""
     (tmp_path / driver.CANCELLED_MARKER).write_text("written by the agent\n", encoding="utf-8")
     driver.clear_cancelled(tmp_path)
     assert not (tmp_path / driver.CANCELLED_MARKER).exists()

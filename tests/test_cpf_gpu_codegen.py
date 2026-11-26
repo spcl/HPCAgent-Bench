@@ -12,15 +12,16 @@ from hpcagent_bench.cpf import bridge as cpf_bridge
 from hpcagent_bench.cpf.cache import Target
 
 
-def test_a_gpu_render_uses_the_experimental_generator_even_after_a_pipeline_selected_legacy() -> None:
+@pytest.mark.parametrize(
+    ("target", "pinned"), [(Target.GPU, cpf_bridge.GPU_CODEGEN), (Target.CPU, "legacy")], ids=["gpu", "cpu"]
+)
+def test_a_gpu_render_uses_the_experimental_generator_even_after_a_pipeline_selected_legacy(
+    target: Target, pinned: str
+) -> None:
+    """A gpu render pins the experimental generator; a cpu render leaves the gpu generator alone."""
     with set_temporary("compiler", "cuda", "implementation", value="legacy"):
-        with cpf_bridge.gpu_codegen_pinned(Target.GPU):
-            assert Config.get("compiler", "cuda", "implementation") == cpf_bridge.GPU_CODEGEN
-        assert Config.get("compiler", "cuda", "implementation") == "legacy"
-
-
-def test_a_cpu_render_leaves_the_gpu_generator_alone() -> None:
-    with set_temporary("compiler", "cuda", "implementation", value="legacy"), cpf_bridge.gpu_codegen_pinned(Target.CPU):
+        with cpf_bridge.gpu_codegen_pinned(target):
+            assert Config.get("compiler", "cuda", "implementation") == pinned
         assert Config.get("compiler", "cuda", "implementation") == "legacy"
 
 

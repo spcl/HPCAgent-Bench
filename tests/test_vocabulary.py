@@ -4,12 +4,13 @@
 are appended, and each entry holds what it must."""
 
 import dataclasses
+from typing import Any
 
 import pytest
 
 from hpcagent_bench import vocabulary
 from hpcagent_bench.precision import Precision
-from hpcagent_bench.registry import RegistryError
+from hpcagent_bench.registry import Kind, RegistryError
 from hpcagent_bench.study_tags import registry
 
 PINNED_MODELS = (
@@ -179,16 +180,6 @@ def test_a_framework_column_refuses_an_invalid_descriptor() -> None:
             vocabulary.Column(**{**good, **changes})
 
 
-def test_a_base_with_two_adapters_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    other = dataclasses.replace(
-        vocabulary.FRAMEWORKS.entries["numba"], adapter="hpcagent_bench.frameworks.cupy_framework:CupyFramework"
-    )
-    monkeypatch.setitem(vocabulary.FRAMEWORKS.entries, "probe_split", other)
-    monkeypatch.setitem(vocabulary.FRAMEWORKS.orders, "probe_split", 99)
-    with pytest.raises(RegistryError, match="needs exactly one"):
-        vocabulary.check_vocabulary()
-
-
 def test_the_no_packet_control_is_the_only_entity_without_a_slot() -> None:
     assert vocabulary.PACKETS.orders[""] is None
     for kind in vocabulary.KINDS.values():
@@ -209,16 +200,43 @@ def test_an_alias_resolves_to_the_entity_it_names_and_takes_no_slot() -> None:
         assert not set(kind.aliases) & set(kind.orders)
 
 
-def test_a_composed_packet_that_is_not_registered_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    broken = vocabulary.PacketDef(name="Broken", packets=("nobody",))
-    monkeypatch.setitem(vocabulary.PACKETS.entries, "broken", broken)
-    monkeypatch.setitem(vocabulary.PACKETS.orders, "broken", 99)
-    with pytest.raises(RegistryError, match="composes 'nobody'"):
-        vocabulary.check_vocabulary()
-
-
-def test_an_entity_registered_without_a_slot_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(vocabulary.MODELS.entries, "slotless", vocabulary.ModelEntry("Slotless", "x/y"))
-    monkeypatch.setitem(vocabulary.MODELS.orders, "slotless", None)
-    with pytest.raises(RegistryError, match="no slot"):
+@pytest.mark.parametrize(
+    ("kind", "key", "entry", "order", "match"),
+    [
+        pytest.param(
+            vocabulary.FRAMEWORKS,
+            "probe_split",
+            dataclasses.replace(
+                vocabulary.FRAMEWORKS.entries["numba"], adapter="hpcagent_bench.frameworks.cupy_framework:CupyFramework"
+            ),
+            99,
+            "needs exactly one",
+            id="a-base-with-two-adapters",
+        ),
+        pytest.param(
+            vocabulary.PACKETS,
+            "broken",
+            vocabulary.PacketDef(name="Broken", packets=("nobody",)),
+            99,
+            "composes 'nobody'",
+            id="a-composed-packet-that-is-not-registered",
+        ),
+        pytest.param(
+            vocabulary.MODELS,
+            "slotless",
+            vocabulary.ModelEntry("Slotless", "x/y"),
+            None,
+            "no slot",
+            id="an-entity-without-a-slot",
+        ),
+    ],
+)
+def test_an_entity_registered_without_a_slot_is_refused(
+    monkeypatch: pytest.MonkeyPatch, kind: Kind[Any], key: str, entry: object, order: int | None, match: str
+) -> None:
+    """A synthetic registry entry the vocabulary cross-checks refuse: a base with two adapters, a composed packet
+    nobody registered, an entity with no slot."""
+    monkeypatch.setitem(kind.entries, key, entry)
+    monkeypatch.setitem(kind.orders, key, order)
+    with pytest.raises(RegistryError, match=match):
         vocabulary.check_vocabulary()

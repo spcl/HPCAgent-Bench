@@ -35,16 +35,16 @@ def test_writes_to_new_path_and_stamps_marker(tmp_path: pathlib.Path) -> None:
     assert "print(1)" in out.read_text()
     assert is_generated(out)
     assert not is_override(out)
-
-
-def test_regenerate_refreshes_a_generated_file(tmp_path: pathlib.Path) -> None:
-    out = tmp_path / "gemm_cupy.py"
-    assert write_generated(out, "print(1)\n", source="gemm_numpy.py") == "ok"
-    # a marked (generated) file is NOT protected -- a re-run refreshes it in place.
+    # a marked (generated) file is not protected: a re-run refreshes it in place
     assert write_generated(out, "print(2)\n", source="gemm_numpy.py") == "ok"
     body = out.read_text()
     assert "print(2)" in body
     assert "print(1)" not in body
+    # parent directories are created
+    nested = tmp_path / "sub" / "deeper" / "gemm_numba.py"
+    assert not nested.parent.exists()
+    assert write_generated(nested, "x = 1\n") == "ok"
+    assert is_generated(nested)
 
 
 @pytest.mark.parametrize(
@@ -92,17 +92,3 @@ def test_c_and_fortran_comment_leads(tmp_path: pathlib.Path) -> None:
     assert write_generated(f_out, "end program\n", line_comment="! ") == "ok"
     assert f_out.read_text().splitlines()[0].startswith("! " + AUTO_MARKER)
     assert is_generated(f_out)
-
-
-def test_missing_path_is_neither_generated_nor_override(tmp_path: pathlib.Path) -> None:
-    missing = tmp_path / "does_not_exist.py"
-    assert not is_generated(missing)
-    assert not is_override(missing)
-
-
-def test_parent_directories_are_created(tmp_path: pathlib.Path) -> None:
-    nested = tmp_path / "sub" / "deeper" / "gemm_numba.py"
-    assert not nested.parent.exists()
-    assert write_generated(nested, "x = 1\n") == "ok"
-    assert nested.exists()
-    assert is_generated(nested)

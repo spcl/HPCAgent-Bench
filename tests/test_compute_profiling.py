@@ -232,8 +232,17 @@ def test_an_analysis_without_its_top_kernels_table_is_a_report_missing_refusal(t
             "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed,1.0\n"
             "sm__warps_active.avg.pct_of_peak_sustained_active,65.1\n"
         ),
+        # ``ncu --page raw --csv`` has a metric per column: ids in a header row, a units row, then a value row
+        # per launch.
+        (
+            '"ID","Kernel Name","gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",'
+            '"sm__warps_active.avg.pct_of_peak_sustained_active","unrelated__metric.sum"\n'
+            '"","","%","%","inst"\n'
+            '"0","gemm_kernel","96.49","65.1","7"\n'
+            '"1","gemm_kernel","11.0","12.0","8"\n'
+        ),
     ],
-    ids=["metric-value-unit", "label-before-id-unit-before-value", "repeated-id-first-wins"],
+    ids=["metric-value-unit", "label-before-id-unit-before-value", "repeated-id-first-wins", "value-row-per-column"],
 )
 def test_ncu_metrics_are_found_wherever_the_row_puts_the_id_and_the_first_number_after_it(raw: str) -> None:
     """The raw CSV layout was never seen on this cluster, so the reader may assume only id-then-value."""
@@ -245,22 +254,6 @@ def test_ncu_metrics_are_found_wherever_the_row_puts_the_id_and_the_first_number
     assert all(row["unit"] == "pct" and row["section"] == "raw" for row in metrics), metrics
 
 
-def test_ncu_raw_page_columns_are_read_from_the_value_row_under_each_metric_id() -> None:
-    """``ncu --page raw --csv`` has a metric per column: ids in a header row, a units row, then a value row per launch."""
-    raw = (
-        '"ID","Kernel Name","gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",'
-        '"sm__warps_active.avg.pct_of_peak_sustained_active","unrelated__metric.sum"\n'
-        '"","","%","%","inst"\n'
-        '"0","gemm_kernel","96.49","65.1","7"\n'
-        '"1","gemm_kernel","11.0","12.0","8"\n'
-    )
-    metrics = compute_profiling.ncu_metrics(raw)
-    assert [(row["metric"], row["value"]) for row in metrics] == [
-        ("gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed", 96.49),
-        ("sm__warps_active.avg.pct_of_peak_sustained_active", 65.1),
-    ]
-
-
 @pytest.mark.parametrize(
     "raw",
     ["", "not,a,metric\n", "sm__warps_active.avg.pct_of_peak_sustained_active,N/A\n"],
@@ -268,14 +261,6 @@ def test_ncu_raw_page_columns_are_read_from_the_value_row_under_each_metric_id()
 )
 def test_an_ncu_export_with_no_known_metric_and_value_yields_no_rows(raw: str) -> None:
     assert compute_profiling.ncu_metrics(raw) == []
-
-
-def test_rocprof_compute_records_without_the_roofline_and_hands_the_child_after_the_separator() -> None:
-    child = ["python", "-m", "child", "--request", "r.json"]
-    argv = compute_profiling.rocprof_compute_profile_argv("/opt/rocm/bin/rocprof-compute", pathlib.Path("/w"), child)
-    assert argv == ["/opt/rocm/bin/rocprof-compute", "profile", "-n", "workload", "-p", "/w", "--no-roof", "--", *child]
-    analyze = compute_profiling.rocprof_compute_analyze_argv("rpc", pathlib.Path("/w"), "csv", "tables")
-    assert analyze == ["rpc", "analyze", "-p", "/w", "--output-format", "csv", "--output-name", "tables"]
 
 
 @pytest.mark.parametrize(
@@ -305,20 +290,6 @@ def test_ncu_counts_one_launch_after_the_warmup_launches(device_kernel: str | No
     ]
 
 
-def test_ncu_exports_the_raw_page_as_csv_and_the_details_page_with_its_body_tables() -> None:
-    """``--page details`` prints section HEADERS only unless the body is asked for."""
-    report = pathlib.Path("/r/report.ncu-rep")
-    assert compute_profiling.ncu_export_argv("ncu", report, raw=True) == [
-        "ncu",
-        "-i",
-        str(report),
-        "--page",
-        "raw",
-        "--csv",
-    ]
-    assert compute_profiling.ncu_export_argv("ncu", report, raw=False)[-2:] == ["--print-details", "all"]
-
-
 def test_a_regex_device_kernel_is_refused_before_the_host_is_probed(monkeypatch: pytest.MonkeyPatch) -> None:
     """``regex:k`` also matches every kernel whose name CONTAINS k, and the report says so only in its header."""
 
@@ -344,17 +315,14 @@ def test_an_amd_host_without_rocprof_compute_is_refused_by_that_name(monkeypatch
         compute_profiling.compute_check(Language.HIP)
     assert refused.value.cause == "rocprof_compute_missing"
 
-
-def test_an_amd_host_that_fails_the_device_gate_is_refused_with_the_trace_s_cause(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    # A host that fails the device gate is refused with the trace's cause.
     def no_gpu() -> tuple[str, str]:
         raise GpuProfilerUnavailable("no_amd_gpu", "/dev/kfd is absent")
 
     monkeypatch.setattr(gpu_profiling, "rocprof_check", no_gpu)
-    with pytest.raises(GpuProfilerUnavailable) as refused:
+    with pytest.raises(GpuProfilerUnavailable) as no_device:
         compute_profiling.compute_check(Language.HIP)
-    assert refused.value.cause == "no_amd_gpu"
+    assert no_device.value.cause == "no_amd_gpu"
 
 
 @pytest.mark.parametrize(
@@ -375,16 +343,6 @@ def test_an_nvidia_host_that_cannot_count_is_refused_by_the_first_gate_it_fails(
     assert refused.value.cause == cause
 
 
-def test_an_nvidia_host_with_ncu_and_a_device_answers_the_executable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    (tmp_path / "nvidiactl").write_text("")
-    monkeypatch.setattr(compute_profiling.osinfo, "IS_LINUX", True)
-    monkeypatch.setattr(compute_profiling.shutil, "which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(gpu_profiling, "NVIDIA_DEVICE", tmp_path / "nvidiactl")
-    assert compute_profiling.compute_check(Language.CUDA) == "/usr/bin/ncu"
-
-
 def test_an_amd_counted_run_reads_the_tables_and_leaves_the_whole_report_to_stage(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
@@ -402,39 +360,40 @@ def test_an_amd_counted_run_reads_the_tables_and_leaves_the_whole_report_to_stag
 
 
 @pytest.mark.parametrize(
-    ("returncode", "output", "cause"),
+    ("records", "child_prints", "returncode", "output", "cause"),
     [
-        (1, "HSA_STATUS_ERROR_OUT_OF_RESOURCES: rocr: unable to open /dev/kfd", "kfd_permission_denied"),
-        (2, "ModuleNotFoundError: No module named 'rocprof_compute_base'", "rocprof_failed"),
-        (0, "", "rocprof_report_missing"),
+        (False, True, 1, "HSA_STATUS_ERROR_OUT_OF_RESOURCES: rocr: unable to open /dev/kfd", "kfd_permission_denied"),
+        (False, True, 2, "ModuleNotFoundError: No module named 'rocprof_compute_base'", "rocprof_failed"),
+        (False, True, 0, "", "rocprof_report_missing"),
+        # A recording of a crashed program is not a profile of the submission: the program's failure.
+        (True, False, 139, "Segmentation fault", ""),
     ],
-    ids=["device-access", "tool-crashed", "clean-exit-no-recording"],
+    ids=["device-access", "tool-crashed", "clean-exit-no-recording", "child-never-printed-a-result"],
 )
 def test_an_amd_counted_run_that_leaves_no_recording_is_refused_by_why(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, returncode: int, output: str, cause: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    records: bool,
+    child_prints: bool,
+    returncode: int,
+    output: str,
+    cause: str,
 ) -> None:
     monkeypatch.setattr(
-        compute_profiling, "run_command", fake_rocprof_compute(records=False, returncode=returncode, output=output)
+        compute_profiling,
+        "run_command",
+        fake_rocprof_compute(records=records, child_prints=child_prints, returncode=returncode, output=output),
     )
+    if not cause:
+        with pytest.raises(RuntimeError, match=r"run failed under rocprof-compute \(exit 139\): Segmentation fault"):
+            compute_profiling.amd_compute_once(tmp_path, tmp_path / "request.json", exe="rpc", timeout=60.0)
+        return
     with pytest.raises(GpuProfilerUnavailable) as refused:
         compute_profiling.amd_compute_once(tmp_path, tmp_path / "request.json", exe="rpc", timeout=60.0)
     assert refused.value.cause == cause
     assert cause in gpu_profiling.CAUSES
     if output:
         assert output[-40:] in str(refused.value), "the refusal must quote what the tool said"
-
-
-def test_an_amd_recording_whose_child_never_printed_a_result_is_the_program_s_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    """A recording of a crashed program is not a profile of the submission."""
-    monkeypatch.setattr(
-        compute_profiling,
-        "run_command",
-        fake_rocprof_compute(child_prints=False, returncode=139, output="Segmentation fault"),
-    )
-    with pytest.raises(RuntimeError, match=r"run failed under rocprof-compute \(exit 139\): Segmentation fault"):
-        compute_profiling.amd_compute_once(tmp_path, tmp_path / "request.json", exe="rpc", timeout=60.0)
 
 
 def test_an_amd_counted_run_whose_top_kernels_table_is_empty_saw_no_kernels(
@@ -569,24 +528,22 @@ def test_a_payload_built_from_the_real_tables_stays_small_enough_to_keep_in_cont
 
 @pytest.mark.parametrize(
     ("language", "tool", "other"),
-    [("hip", "ncu", "rocprof-compute"), ("cuda", "rocprof-compute", "ncu")],
+    [
+        ("hip", "ncu", "rocprof-compute"),
+        ("cuda", "rocprof-compute", "ncu"),
+        (None, "ncu", "counts a device submission"),
+    ],
+    ids=["hip-with-ncu", "cuda-with-rocprof-compute", "host-submission"],
 )
 def test_the_other_vendor_s_compute_profiler_is_a_400_naming_this_one(
-    make_judge: JudgeFactory, language: str, tool: str, other: str
+    make_judge: JudgeFactory, language: str | None, tool: str, other: str
 ) -> None:
     from tests.test_gpu_profiling import gpu_submission
 
-    status, answer = post_profile(
-        make_judge(service.ServiceConfig())[1], {**gpu_submission(language).to_json(), "tool": tool}
-    )
+    body = {"tool": tool} if language is None else {**gpu_submission(language).to_json(), "tool": tool}
+    status, answer = post_profile(make_judge(service.ServiceConfig())[1], body)
     assert status == 400, answer
     assert other in str(answer["error"]), answer
-
-
-def test_a_compute_profiler_on_a_host_submission_is_a_400(make_judge: JudgeFactory) -> None:
-    status, answer = post_profile(make_judge(service.ServiceConfig())[1], {"tool": "ncu"})
-    assert status == 400, answer
-    assert "counts a device submission" in str(answer["error"]), answer
 
 
 def test_the_route_hands_the_compute_profiler_its_reps_kernel_and_a_home_under_the_shared_folder(

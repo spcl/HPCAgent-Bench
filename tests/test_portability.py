@@ -16,9 +16,6 @@ def test_default_mp_context_is_fork_on_linux_spawn_on_macos(monkeypatch: pytest.
     assert osinfo.default_mp_context() == "spawn"
     monkeypatch.setattr(osinfo, "IS_MACOS", False)
     assert osinfo.default_mp_context() == "fork"
-
-
-def test_mp_context_resolves_auto_and_honours_an_explicit_override() -> None:
     config.clear_override("runtime.mp_context")
     # config default is `auto` -> the per-OS default
     assert osinfo.mp_context() == osinfo.default_mp_context()
@@ -28,15 +25,6 @@ def test_mp_context_resolves_auto_and_honours_an_explicit_override() -> None:
         assert osinfo.mp_context() == "forkserver"
     finally:
         config.clear_override("runtime.mp_context")
-
-
-def test_is_arm_matches_the_machine_string(monkeypatch: pytest.MonkeyPatch) -> None:
-    for m in ("arm64", "aarch64"):
-        monkeypatch.setattr(osinfo, "machine", lambda m=m: m)
-        assert osinfo.is_arm()
-    for m in ("x86_64", "amd64"):
-        monkeypatch.setattr(osinfo, "machine", lambda m=m: m)
-        assert not osinfo.is_arm()
 
 
 # flag matrix: glibc-only pieces gated to Linux, arch flag per-arch

@@ -34,20 +34,24 @@ def variant_root(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 # the sweep
-def test_unset_is_one_run_with_no_variant() -> None:
-    """The default is the configured prompt, NOT a variant."""
-    assert resolve_prompt_variants(None) == [None]
-    assert resolve_prompt_variants("") == [None]
-
-
-def test_explicit_list_is_one_run_each(variant_root: pathlib.Path) -> None:
-    one, two = str(variant_root / "var1.yaml"), str(variant_root / "var2.yaml")
-    assert resolve_prompt_variants(f"{one},{two}") == [one, two]
-
-
-def test_a_variant_may_join_several_overlays(variant_root: pathlib.Path) -> None:
-    joined = f"strategy-loopnest+{variant_root / 'var1.yaml'}"
-    assert resolve_prompt_variants(joined) == [joined]
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        # The default is the configured prompt, NOT a variant.
+        (None, [None]),
+        ("", [None]),
+        ("{one},{two}", ["{one}", "{two}"]),
+        ("strategy-loopnest+{one}", ["strategy-loopnest+{one}"]),
+    ],
+    ids=["unset", "empty", "list", "joined"],
+)
+def test_unset_is_one_run_with_no_variant(
+    variant_root: pathlib.Path, spec: str | None, expected: list[str | None]
+) -> None:
+    """Unset or empty is one run with no variant, a comma list is one run each, a ``+`` joins overlays into one run."""
+    names = {"one": str(variant_root / "var1.yaml"), "two": str(variant_root / "var2.yaml")}
+    given = spec if spec is None else spec.format(**names)
+    assert resolve_prompt_variants(given) == [item if item is None else item.format(**names) for item in expected]
 
 
 def test_all_covers_every_built_in_overlay_that_changes_the_task_prompt() -> None:

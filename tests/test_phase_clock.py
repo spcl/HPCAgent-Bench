@@ -56,18 +56,14 @@ def test_a_credit_reaches_its_phase_in_every_running_measurement_and_none_after(
     with phase_clock.measuring() as outer:
         with phase_clock.measuring() as inner:
             phase_clock.credit(1.0, Phase.CODEGEN)
+            phase_clock.credit(-1.0, Phase.COMPILE)  # a negative credit counts as nothing
         phase_clock.credit(2.0, Phase.TRANSFORM)
     phase_clock.credit(5.0, Phase.COMPILE)
     assert inner.seconds[Phase.CODEGEN] == 1.0
     assert outer.seconds[Phase.CODEGEN] == 1.0
     assert 2.0 <= outer.seconds[Phase.TRANSFORM] < 2.5
+    assert inner.seconds[Phase.COMPILE] == 0.0
     assert outer.seconds[Phase.COMPILE] == 0.0
-
-
-def test_a_negative_credit_counts_as_nothing() -> None:
-    with phase_clock.measuring() as clock:
-        phase_clock.credit(-1.0, Phase.COMPILE)
-    assert clock.seconds[Phase.COMPILE] == 0.0
 
 
 def test_a_shift_moves_reported_seconds_between_phases_and_never_below_zero() -> None:

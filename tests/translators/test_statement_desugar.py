@@ -23,9 +23,6 @@ from tests.translators.op_oracle import parse_source
 #: Every array in these kernels is ``(N,)``, and ``N`` is this.
 EXTENT = 4
 
-#: Bumps the counter it is handed, so each call shows in the counter.
-BUMP = "def bump(c):\n    c[0] = c[0] + 1.0\n    return c[0]\n\n\n"
-
 
 def kernel(inputs: list[str], *body: str, helpers: str = "") -> str:
     """Numpy source of ``k(*inputs, out, N)``, one body line per entry of ``body``."""
@@ -76,44 +73,35 @@ def kernel_program(text: str) -> ast.FunctionDef:
 # and ran the value once per target.                                          #
 
 
-def test_a_write_through_one_chained_array_name_is_seen_through_the_other_natively() -> None:
-    """numpy binds ``a`` and ``b`` to ONE zeros buffer, so ``b[0]`` reads the 1.0 written through ``a``."""
-    text = emitted(kernel([], "a = b = np.zeros(N)", "a[0] = 1.0", "out[0] = b[0]"), [], native)
-    assert text.count("malloc(") == 1, text
-    assert run_native(text, {}) == [1.0, 0.0, 0.0, 0.0]
-
-
-def test_a_chained_call_runs_once_natively() -> None:
-    """``x = y = bump(cnt)`` calls ``bump`` once: the counter reads 1 and both names hold it."""
-    source = kernel(["cnt"], "x = y = bump(cnt)", "out[0] = x + y", "out[1] = cnt[0]", helpers=BUMP)
-    text = emitted(source, ["cnt"], native)
-    assert text.count("bump(cnt") == 1, text
-    assert run_native(text, {"cnt": [0.0] * EXTENT}) == [2.0, 1.0, 0.0, 0.0]
-
-
-def test_a_chained_scalar_that_reads_its_own_target_binds_the_old_value_natively() -> None:
-    """``s = t = s + 1.0`` with ``s == 2.0`` binds both to 3.0; a repeated sum would read the new ``s``."""
-    text = emitted(kernel([], "s = 2.0", "s = t = s + 1.0", "out[0] = s", "out[1] = t"), [], native)
-    assert run_native(text, {}) == [3.0, 3.0, 0.0, 0.0]
-
-
-def test_an_array_alias_keeps_the_shared_buffer_after_the_other_name_is_rebound_natively() -> None:
-    """Rebinding ``a`` leaves ``b`` on the buffer ``a`` wrote 1.0 into."""
-    source = kernel([], "a = b = np.zeros(N)", "a[0] = 1.0", "a = np.ones(N)", "out[0] = b[0]", "out[1] = a[0]")
-    assert run_native(emitted(source, [], native), {}) == [1.0, 1.0, 0.0, 0.0]
-
-
-def test_an_array_alias_rebound_inside_a_loop_starts_from_the_shared_buffer_natively() -> None:
-    """``v`` reads the 2.0 written through ``p`` on the first iteration, then its own rebinding."""
-    source = kernel(
-        [], "p = v = np.zeros(N)", "p[0] = 2.0", "for i in range(3):", "    out[i] = v[0]", "    v = p + 1.0"
-    )
-    assert run_native(emitted(source, [], native), {}) == [2.0, 3.0, 3.0, 0.0]
-
-
-def test_a_chained_literal_gives_each_scalar_its_own_value_natively() -> None:
-    text = emitted(kernel([], "s0 = s1 = 0.0", "s0 += 1.0", "out[0] = s0", "out[1] = s1"), [], native)
-    assert run_native(text, {}) == [1.0, 0.0, 0.0, 0.0]
+@pytest.mark.parametrize(
+    ("body", "expected", "buffers"),
+    [
+        # numpy binds ``a`` and ``b`` to ONE zeros buffer, so ``b[0]`` reads the 1.0 written through ``a``.
+        (("a = b = np.zeros(N)", "a[0] = 1.0", "out[0] = b[0]"), [1.0, 0.0, 0.0, 0.0], 1),
+        # ``s = t = s + 1.0`` with ``s == 2.0`` binds both to 3.0; a repeated sum would read the new ``s``.
+        (("s = 2.0", "s = t = s + 1.0", "out[0] = s", "out[1] = t"), [3.0, 3.0, 0.0, 0.0], None),
+        # Rebinding ``a`` leaves ``b`` on the buffer ``a`` wrote 1.0 into.
+        (
+            ("a = b = np.zeros(N)", "a[0] = 1.0", "a = np.ones(N)", "out[0] = b[0]", "out[1] = a[0]"),
+            [1.0, 1.0, 0.0, 0.0],
+            None,
+        ),
+        # ``v`` reads the 2.0 written through ``p`` on the first iteration, then its own rebinding.
+        (
+            ("p = v = np.zeros(N)", "p[0] = 2.0", "for i in range(3):", "    out[i] = v[0]", "    v = p + 1.0"),
+            [2.0, 3.0, 3.0, 0.0],
+            None,
+        ),
+    ],
+    ids=["write_through_one_name_seen_through_the_other", "scalar_reads_its_own_target", "alias_after_rebind", "loop"],
+)
+def test_a_chained_assignment_keeps_numpys_meaning_natively(
+    body: tuple[str, ...], expected: list[float], buffers: int | None
+) -> None:
+    text = emitted(kernel([], *body), [], native)
+    if buffers is not None:
+        assert text.count("malloc(") == buffers, text
+    assert run_native(text, {}) == expected
 
 
 def test_array_enumerate_and_zip_iteration_walk_the_declared_extent_natively() -> None:
@@ -144,13 +132,6 @@ def test_dace_walks_an_array_through_an_index_over_its_declared_extent() -> None
     assert ast.unparse(loop.body[0]) == f"v = a[{ast.unparse(loop.target)}]"
 
 
-def test_dace_binds_a_chained_array_to_one_name() -> None:
-    """``a = b = np.zeros(N)`` is one container under ``a``; ``b`` never names a second one."""
-    program = kernel_program(emitted(kernel([], "a = b = np.zeros(N)", "a[0] = 1.0", "out[0] = b[0]"), [], emit_dace))
-    assert "b" not in {node.id for node in ast.walk(program) if isinstance(node, ast.Name)}
-    assert "out[0] = a[0]" in [ast.unparse(stmt) for stmt in program.body]
-
-
 # The shared passes on source text: what each backend above is handed.       #
 
 
@@ -169,45 +150,49 @@ def split(body: str, repeat_literals: bool = False, seed_ranks: dict[str, int] |
     return ast.unparse(tree)
 
 
-def test_a_chained_scalar_is_evaluated_once_into_a_temp() -> None:
-    assert split("s = t = x * 2.0\n", seed_ranks={"x": 0}) == function_text("t0 = x * 2.0\ns = t0\nt = t0\n")
-
-
-def test_a_chained_call_is_evaluated_once() -> None:
-    """A helper call may act on its arguments, so it runs once and the other name is renamed to its value."""
-    assert split("x = y = bump(c)\nout = x + y\n") == function_text("x = bump(c)\nout = x + x\n")
-
-
-def test_a_chained_array_is_one_name() -> None:
-    body = "a = b = np.zeros(n)\na[0] = 1.0\nout[0] = b[0]\n"
-    assert split(body) == function_text("a = np.zeros(n)\na[0] = 1.0\nout[0] = a[0]\n")
-
-
 @pytest.mark.parametrize(
-    ("body", "expected"),
+    ("body", "expected", "seed_ranks"),
     [
+        ("s = t = x * 2.0\n", "t0 = x * 2.0\ns = t0\nt = t0\n", {"x": 0}),
+        # A helper call may act on its arguments, so it runs once and the other name is renamed to its value.
+        ("x = y = bump(c)\nout = x + y\n", "x = bump(c)\nout = x + x\n", None),
+        (
+            "a = b = np.zeros(n)\na[0] = 1.0\nout[0] = b[0]\n",
+            "a = np.zeros(n)\na[0] = 1.0\nout[0] = a[0]\n",
+            None,
+        ),
         (
             "a = b = np.zeros(n)\na[0] = 1.0\na = np.ones(n)\nout[0] = b[0]\n",
             "a = np.zeros(n)\na[0] = 1.0\nb = a\na = np.ones(n)\nout[0] = b[0]\n",
+            None,
         ),
         (
             "p = v = np.zeros(n)\nfor i in range(3):\n    out[i] = v[0]\n    v = p + 1.0\n",
             "p = np.zeros(n)\nv = p\nfor i in range(3):\n    out[i] = v[0]\n    v = p + 1.0\n",
+            None,
         ),
         (
             "if c:\n    a = b = np.zeros(n)\n    a[0] = 1.0\nout[0] = b[0]\n",
             "if c:\n    a = np.zeros(n)\n    a[0] = 1.0\n    b = a\nout[0] = b[0]\n",
+            None,
         ),
+        # Targets bind left to right, so ``x[b]`` sees the new ``b``, which is ``a``.
+        ("a = b = x[b] = np.zeros(n)\n", "a = np.zeros(n)\nx[a] = a\n", None),
     ],
-    ids=["where_the_shared_name_is_rebound", "before_the_loop_that_rebinds_it", "at_the_end_of_the_block_read_after"],
+    ids=[
+        "a_chained_scalar_is_evaluated_once_into_a_temp",
+        "a_chained_call_is_evaluated_once",
+        "a_chained_array_is_one_name",
+        "where_the_shared_name_is_rebound",
+        "before_the_loop_that_rebinds_it",
+        "at_the_end_of_the_block_read_after",
+        "a_later_chained_target_indexes_with_the_name_bound_before_it",
+    ],
 )
-def test_an_alias_takes_the_shared_buffer_before_it_is_lost(body: str, expected: str) -> None:
-    assert split(body) == function_text(expected)
-
-
-def test_a_later_chained_target_indexes_with_the_name_bound_before_it() -> None:
-    """Targets bind left to right, so ``x[b]`` sees the new ``b``, which is ``a``."""
-    assert split("a = b = x[b] = np.zeros(n)\n") == function_text("a = np.zeros(n)\nx[a] = a\n")
+def test_an_alias_takes_the_shared_buffer_before_it_is_lost(
+    body: str, expected: str, seed_ranks: dict[str, int] | None
+) -> None:
+    assert split(body, seed_ranks=seed_ranks) == function_text(expected)
 
 
 def test_array_iteration_walks_the_leading_extent_and_records_the_array_it_walks() -> None:

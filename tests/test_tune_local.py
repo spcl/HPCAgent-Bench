@@ -43,6 +43,10 @@ def test_episodes_get_consecutive_runs_of_cores(cores: list[int], jobs: int, exp
     sut = tune_local.core_slices(cores, jobs)
 
     assert sut == expected
+    # an episode runs one OpenMP thread per core of its slice
+    for core_slice in sut:
+        env = tune_local.episode_env("http://judge.invalid", "canon-atax", "canon", core_slice)
+        assert env["OMP_NUM_THREADS"] == str(len(core_slice))
 
 
 def test_a_deferred_submit_carries_the_defer_header_and_a_plain_one_does_not() -> None:
@@ -53,12 +57,6 @@ def test_a_deferred_submit_carries_the_defer_header_and_a_plain_one_does_not() -
     sut.submit(submission, "atax")
 
     assert [req.get_header(fused.DEFER_HEADER.capitalize()) for req in sut.sent] == ["1", None]
-
-
-def test_an_episode_runs_one_openmp_thread_per_core_of_its_slice() -> None:
-    sut = tune_local.episode_env("http://judge.invalid", "canon-atax", "canon", (4, 6, 8))
-
-    assert sut["OMP_NUM_THREADS"] == "3"
 
 
 def test_an_episode_overrunning_its_timeout_is_cut_off_not_fatal(

@@ -89,9 +89,24 @@ def fingerprint(repo: pathlib.Path, target: str, *args: str, base: str = "docker
     return done.stdout.strip()
 
 
-def test_a_build_arg_moves_the_fingerprint(repo: pathlib.Path) -> None:
-    assert fingerprint(repo, "agent", "--build-arg", "ROCM_ARCH=gfx90a") != fingerprint(
-        repo, "agent", "--build-arg", "ROCM_ARCH=gfx942"
+@pytest.mark.parametrize(
+    ("left_args", "left_base", "right_args", "right_base"),
+    [
+        pytest.param(
+            ("--build-arg", "ROCM_ARCH=gfx90a"),
+            "docker.io/x/base@sha256:1",
+            ("--build-arg", "ROCM_ARCH=gfx942"),
+            "docker.io/x/base@sha256:1",
+            id="build-arg",
+        ),
+        pytest.param((), "docker.io/x/base@sha256:1", (), "docker.io/x/base@sha256:2", id="base-image-reference"),
+    ],
+)
+def test_a_build_arg_moves_the_fingerprint(
+    repo: pathlib.Path, left_args: tuple[str, ...], left_base: str, right_args: tuple[str, ...], right_base: str
+) -> None:
+    assert fingerprint(repo, "agent", *left_args, base=left_base) != fingerprint(
+        repo, "agent", *right_args, base=right_base
     )
 
 
@@ -124,12 +139,6 @@ def test_where_the_bytes_come_from_and_how_fast_they_build_do_not_move_the_finge
     assert fingerprint(repo, "agent", *left) == fingerprint(repo, "agent", *right)
 
 
-def test_the_base_image_reference_moves_the_fingerprint(repo: pathlib.Path) -> None:
-    assert fingerprint(repo, "agent", base="docker.io/x/base@sha256:1") != fingerprint(
-        repo, "agent", base="docker.io/x/base@sha256:2"
-    )
-
-
 def test_a_committed_edit_to_a_copied_file_moves_only_the_stages_that_copy_it(repo: pathlib.Path) -> None:
     """The judge stage copies pkg/; the agent stage does not, so its pull must survive a pkg/ edit."""
     before = {t: fingerprint(repo, t) for t in ("agent", "judge")}
@@ -140,12 +149,26 @@ def test_a_committed_edit_to_a_copied_file_moves_only_the_stages_that_copy_it(re
     assert after["judge"] != before["judge"]
 
 
-def test_an_uncommitted_edit_to_a_copied_file_makes_the_inputs_unknown(repo: pathlib.Path) -> None:
-    """The fingerprint reads git blobs; a dirty file would be built but not fingerprinted."""
-    (repo / "containers" / "images" / "lib" / "agent.sh").write_text("echo edited\n", encoding="utf-8")
-    done = bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" agent', repo)
+@pytest.mark.parametrize(
+    ("path", "content", "stage", "untouched_stage"),
+    [
+        pytest.param(
+            ("containers", "images", "lib", "agent.sh"), "echo edited\n", "agent", None, id="uncommitted-edit"
+        ),
+        pytest.param(("pkg", "new.py"), "Y = 1\n", "judge", "agent", id="untracked-file"),
+    ],
+)
+def test_an_uncommitted_edit_to_a_copied_file_makes_the_inputs_unknown(
+    repo: pathlib.Path, path: tuple[str, ...], content: str, stage: str, untouched_stage: str | None
+) -> None:
+    """The fingerprint reads git blobs; a dirty file, or a new one under a copied path (the judge stage copies pkg/),
+    would be built but not fingerprinted."""
+    (repo.joinpath(*path)).write_text(content, encoding="utf-8")
+    done = bash(f'ce_build_fingerprint "$(dirname "$1")/Dockerfile" {stage}', repo)
     assert done.returncode == 1, done.stdout
     assert "no pull" in done.stderr
+    if untouched_stage is not None:
+        assert bash(f'ce_build_fingerprint "$(dirname "$1")/Dockerfile" {untouched_stage}', repo).returncode == 0
 
 
 @pytest.mark.parametrize(
@@ -177,15 +200,6 @@ def test_a_source_a_stage_reads_beyond_a_one_line_copy_is_a_build_input(
     assert named in done.stderr
     git(repo, "commit", "-qam", "edit")
     assert fingerprint(repo, "agent") != before
-
-
-def test_an_untracked_file_under_a_copied_path_makes_the_inputs_unknown(repo: pathlib.Path) -> None:
-    """The judge stage copies pkg/: a new file there is built in but sits in no git blob."""
-    (repo / "pkg" / "new.py").write_text("Y = 1\n", encoding="utf-8")
-    done = bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" judge', repo)
-    assert done.returncode == 1, done.stdout
-    assert "no pull" in done.stderr
-    assert bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" agent', repo).returncode == 0
 
 
 def move_locked(lock: pathlib.Path, package: str) -> None:
@@ -319,24 +333,25 @@ def test_a_layer_registry_that_cannot_start_costs_the_resume_not_the_build(
     assert "only on this node" in done.stdout
 
 
-def test_the_cache_knob_off_mounts_no_build_cache(repo: pathlib.Path) -> None:
-    done = bash('ce_cache_args spack uv >/dev/null; printf "%s" "${#CACHE_ARGS[@]}"', repo, {"CE_BUILD_CACHE": "0"})
-    assert (done.returncode, done.stdout) == (0, "0"), done.stderr
-
-
-def test_the_cache_knob_on_mounts_the_spack_and_pip_caches(repo: pathlib.Path, tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("knob", ["0", "1"], ids=["off", "on"])
+def test_the_cache_knob_on_mounts_the_spack_and_pip_caches(
+    repo: pathlib.Path, tmp_path: pathlib.Path, knob: str
+) -> None:
     done = bash(
-        'ce_cache_args spack-buildcache uv-cache/gfx90a >/dev/null; printf "%s\\n" "${CACHE_ARGS[@]}"',
+        "ce_cache_args spack-buildcache uv-cache/gfx90a >/dev/null; "
+        'printf "%s\\n" "${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"}"',
         repo,
-        {"SCRATCH": str(tmp_path)},
+        {"SCRATCH": str(tmp_path), "CE_BUILD_CACHE": knob},
     )
     assert done.returncode == 0, done.stderr
-    assert done.stdout.splitlines() == [
+    mounts = [
         "-v",
         f"{tmp_path}/spack-buildcache:/spack-buildcache:rw",
         "-v",
         f"{tmp_path}/uv-cache/gfx90a:/uv-cache:rw",
     ]
+    # off mounts no build cache
+    assert [line for line in done.stdout.splitlines() if line] == (mounts if knob == "1" else [])
 
 
 @pytest.mark.parametrize(

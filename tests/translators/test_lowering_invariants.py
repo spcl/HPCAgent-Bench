@@ -46,35 +46,30 @@ def test_lower_with_flag_on_does_not_false_trip(monkeypatch: pytest.MonkeyPatch)
     assert kir.zeros_locals  # np.zeros((6,)) harvested -> proves the pipeline ran
 
 
-def test_tree_drift_is_caught() -> None:
+@pytest.mark.parametrize(
+    ("corruption", "phase", "regex"),
+    [
+        ("tree_drift", "drift-phase", r"drift-phase.*no longer aliases"),
+        ("non_functiondef_tree", "bad-tree-phase", r"bad-tree-phase.*expected ast.FunctionDef"),
+        ("wrong_side_table_container", "container-phase", r"container-phase.*kir.local_dtypes.*expected dict"),
+        ("malformed_ast", "unparse-phase", r"unparse-phase.*ast.unparse"),
+    ],
+)
+def test_tree_drift_is_caught(corruption: str, phase: str, regex: str) -> None:
     ctx = fresh_ctx()
-    ctx.tree = ast.parse("x = 1")  # no longer aliases ctx.kir.tree
-    with pytest.raises(AssertionError, match=r"drift-phase.*no longer aliases"):
-        assert_lowering_invariants("drift-phase", ctx)
-
-
-def test_non_functiondef_tree_is_caught() -> None:
-    ctx = fresh_ctx()
-    ctx.kir.tree = ast.parse("x = 1")  # a Module, not a FunctionDef
-    ctx.tree = ctx.kir.tree  # keep aliasing so the FunctionDef check is what fires
-    with pytest.raises(AssertionError, match=r"bad-tree-phase.*expected ast.FunctionDef"):
-        assert_lowering_invariants("bad-tree-phase", ctx)
-
-
-def test_wrong_side_table_container_is_caught() -> None:
-    ctx = fresh_ctx()
-    ctx.kir.local_dtypes = []  # declared a dict; a list is a corruption
-    with pytest.raises(AssertionError, match=r"container-phase.*kir.local_dtypes.*expected dict"):
-        assert_lowering_invariants("container-phase", ctx)
-
-
-def test_malformed_ast_is_caught() -> None:
-    ctx = fresh_ctx()
-    # A fresh FunctionDef whose one statement is an Assign with no value -- valid
-    # container types, aliasing holds, but it cannot unparse.
-    bad = copy.deepcopy(ctx.kir.tree)
-    bad.body = [ast.Assign(targets=[ast.Name(id="x", ctx=ast.Store())], value=None)]
-    ctx.kir.tree = bad
-    ctx.tree = bad
-    with pytest.raises(AssertionError, match=r"unparse-phase.*ast.unparse"):
-        assert_lowering_invariants("unparse-phase", ctx)
+    if corruption == "tree_drift":
+        ctx.tree = ast.parse("x = 1")  # no longer aliases ctx.kir.tree
+    elif corruption == "non_functiondef_tree":
+        ctx.kir.tree = ast.parse("x = 1")  # a Module, not a FunctionDef
+        ctx.tree = ctx.kir.tree  # keep aliasing so the FunctionDef check is what fires
+    elif corruption == "wrong_side_table_container":
+        ctx.kir.local_dtypes = []  # declared a dict; a list is a corruption
+    else:
+        # A fresh FunctionDef whose one statement is an Assign with no value -- valid
+        # container types, aliasing holds, but it cannot unparse.
+        bad = copy.deepcopy(ctx.kir.tree)
+        bad.body = [ast.Assign(targets=[ast.Name(id="x", ctx=ast.Store())], value=None)]
+        ctx.kir.tree = bad
+        ctx.tree = bad
+    with pytest.raises(AssertionError, match=regex):
+        assert_lowering_invariants(phase, ctx)

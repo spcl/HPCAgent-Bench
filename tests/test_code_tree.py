@@ -64,7 +64,9 @@ def run(tmp_path: pathlib.Path, script: str, **env: str) -> subprocess.Completed
         f'printf \'#!/bin/sh\\nexec {sys.executable} "$@"\\n\' > "${{UV_PROJECT_ENVIRONMENT}}/bin/python"\n'
         'chmod +x "${UV_PROJECT_ENVIRONMENT}/bin/python"',
     )
-    bash_stub(stubs, "squeue", 'printf "%s\\n" "${QUEUED_COMMANDS:-}"')
+    bash_stub(
+        stubs, "squeue", '[ "${QUEUED_COMMANDS:-}" = UNREADABLE ] && exit 1\nprintf "%s\\n" "${QUEUED_COMMANDS:-}"'
+    )
     return subprocess.run(
         ["bash", "-c", f"set -euo pipefail\n. {CLUSTER / 'code_tree.sh'}\n{script}"],
         env={
@@ -122,15 +124,21 @@ def test_a_tree_whose_freeze_died_is_rebuilt(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("named", "grace", "kept"),
-    [(True, "0", True), (False, "0", False), (False, "60", True)],
+    ("named", "grace", "kept", "readable"),
+    [(True, "0", True, True), (False, "0", False, True), (False, "60", True, True), (False, "0", True, False)],
+    ids=["named_by_a_queued_job", "unnamed_past_grace", "unnamed_within_grace", "queue_cannot_be_read"],
 )
-def test_gc_removes_only_trees_no_queued_job_runs(tmp_path: pathlib.Path, named: bool, grace: str, kept: bool) -> None:
+def test_gc_removes_only_trees_no_queued_job_runs(
+    tmp_path: pathlib.Path, named: bool, grace: str, kept: bool, readable: bool
+) -> None:
     """The scratch inode quota holds a few trees: one no PENDING or RUNNING job runs (squeue's command) goes, once
-    past its grace period (a submission that just froze it has not reached the queue yet)."""
+    past its grace period (a submission that just froze it has not reached the queue yet). Without a readable
+    squeue nothing says which trees are in use, so none is removed."""
     live = checkout(tmp_path)
     tree = pathlib.Path(run(tmp_path, f"freeze_code_tree {live} HEAD").stdout.strip())
     command = f"{tree}/hpcagent_bench/cluster/services.sbatch /x/.rendered/a.env" if named else "/other/job.sh"
+    if not readable:
+        command = "UNREADABLE"
     done = run(tmp_path, f"gc_code_trees {live}", QUEUED_COMMANDS=command, CODE_TREE_GRACE_MINUTES=grace)
     assert done.returncode == 0, done.stderr
     assert tree.exists() is kept
@@ -149,27 +157,6 @@ def test_gc_keeps_a_tree_a_submission_reused_while_gc_waited_for_its_lock(tmp_pa
     assert flock is not None
     bash_stub(tmp_path / "bin", "flock", f'touch {marker}\nexec {flock} "$@"')
     done = run(tmp_path, f"gc_code_trees {live}", QUEUED_COMMANDS="/other/job.sh")
-    assert done.returncode == 0, done.stderr
-    assert tree.exists()
-
-
-def test_gc_removes_nothing_when_the_queue_cannot_be_read(tmp_path: pathlib.Path) -> None:
-    """Without squeue nothing says which trees are in use, so none is removed."""
-    live = checkout(tmp_path)
-    tree = pathlib.Path(run(tmp_path, f"freeze_code_tree {live} HEAD").stdout.strip())
-    bash_stub(tmp_path / "bin", "squeue", "exit 1")
-    done = subprocess.run(
-        ["bash", "-c", f"set -euo pipefail\n. {CLUSTER / 'code_tree.sh'}\ngc_code_trees {live}"],
-        env={
-            **os.environ,
-            "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
-            "HPCAGENT_BENCH_SCRATCH": str(tmp_path / "scratch"),
-            "CODE_TREE_GRACE_MINUTES": "0",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
     assert done.returncode == 0, done.stderr
     assert tree.exists()
 

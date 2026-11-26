@@ -43,25 +43,14 @@ def test_a_registered_tag_gets_a_frozen_version_stamp(tmp_path: pathlib.Path) ->
     assert "EXISTING=1" in result.stdout
     lines = [ln for ln in result.stdout.splitlines() if ln.startswith("HPCAGENT_BENCH_RECORD_TAG_VERSION=")]
     assert len(lines) == 1, result.stdout
-    assert len(lines[0].split("=", 1)[1]) == 12
-
-
-def test_the_stamp_matches_the_python_resolver_directly(tmp_path: pathlib.Path) -> None:
-    """record_tag_version shells out to the same hpcagent_bench.tags.version every python consumer
-    would call -- the stamp must be byte-identical to calling it directly."""
-    result = run_record_tag_version("mytag", "kmp\ndfa\n", tmp_path)
-    assert result.returncode == 0, result.stderr
-    stamped = next(
-        ln.split("=", 1)[1] for ln in result.stdout.splitlines() if ln.startswith("HPCAGENT_BENCH_RECORD_TAG_VERSION=")
-    )
+    stamped = lines[0].split("=", 1)[1]
+    assert len(stamped) == 12
+    # The stamp is byte-identical to calling the python resolver every other consumer uses directly.
     direct = subprocess.run(
         [sys.executable, "-m", "hpcagent_bench.tags", "version", "mytag"],
         capture_output=True,
         text=True,
-        env={
-            **os.environ,
-            "HPCAGENT_BENCH_TAGS_DIR": str(tmp_path),
-        },
+        env={**os.environ, "HPCAGENT_BENCH_TAGS_DIR": str(tmp_path)},
         timeout=60,
         check=True,
     )

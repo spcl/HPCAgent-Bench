@@ -43,30 +43,24 @@ def test_prompt_config_fields_are_the_prompt_keys() -> None:
     assert fields | NON_FIELD_PROMPT_KEYS == set(config.Prompt.model_fields)
 
 
-def test_docs_name_no_prompt_key_that_does_not_exist() -> None:
+@pytest.mark.parametrize(
+    ("section", "files", "fields"),
+    [
+        ("prompt", "md|txt|json", {f.name for f in dataclasses.fields(PromptConfig)} | NON_FIELD_PROMPT_KEYS),
+        ("attempts", "jsonl", set(config.Attempts.model_fields)),
+    ],
+)
+def test_docs_name_no_prompt_key_that_does_not_exist(section: str, files: str, fields: set[str]) -> None:
     """Catches a knob that was removed or renamed but is still documented."""
-    fields = {f.name for f in dataclasses.fields(PromptConfig)} | NON_FIELD_PROMPT_KEYS
     stale = []
     for path, text in doc_text():
-        # `prompt.md`, `prompt.txt`, `prompt.json` are files, not keys.
+        # `prompt.md`, `prompt.txt`, `attempts.jsonl` are files, not keys.
         stale.extend(
-            f"{path}: prompt.{m.group(1)}"
-            for m in re.finditer(r"`prompt\.(?!(?:md|txt|json)`)([a-z_]+)`", text)
+            f"{path}: {section}.{m.group(1)}"
+            for m in re.finditer(rf"`{section}\.(?!(?:{files})`)([a-z_]+)`", text)
             if m.group(1) not in fields
         )
-    assert not stale, f"documented prompt.* keys that no longer exist: {stale}"
-
-
-def test_docs_name_no_attempts_key_that_does_not_exist() -> None:
-    fields = set(config.Attempts.model_fields)
-    stale = []
-    for path, text in doc_text():
-        stale.extend(
-            f"{path}: attempts.{m.group(1)}"
-            for m in re.finditer(r"`attempts\.(?!jsonl`)([a-z_]+)`", text)
-            if m.group(1) not in fields
-        )
-    assert not stale, f"documented attempts.* keys that no longer exist: {stale}"
+    assert not stale, f"documented {section}.* keys that no longer exist: {stale}"
 
 
 def test_docs_name_no_overlay_that_is_not_built_in() -> None:

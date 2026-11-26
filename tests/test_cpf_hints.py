@@ -53,21 +53,17 @@ def test_a_bare_form_is_never_served_from_a_proofs_entry_or_the_reverse(tmp_path
     assert lookup(cache, KERNEL, "c", "", HintDetail.NONE, Target.CPU).source.read_text() == "void f(void) {}\n"
 
 
-def test_the_render_options_and_so_the_cache_key_name_the_detail() -> None:
-    """Everything else equal, the two details render under two keys: neither is ever a hit for the other."""
-    spec = BenchSpec.load(KERNEL)
-    proofs = cpf_bridge.render_options(spec, "c", "", Target.CPU, HintDetail.PROOFS)
-    bare = cpf_bridge.render_options(spec, "c", "", Target.CPU, HintDetail.NONE)
-    assert {key for key in proofs if proofs[key] != bare[key]} == {"hints"}
-    assert cpf_cache.cache_key("form", "sdfg", "dace", proofs) != cpf_cache.cache_key("form", "sdfg", "dace", bare)
-
-
 def test_a_cpu_form_is_keyed_as_the_llm_friendly_spelling_and_a_gpu_form_is_not() -> None:
     """The CPU form is served in DaCe's LLM-friendly spelling; DaCe respells host units only, so a GPU form keeps its
     names. The option is part of the key, so a cached form of the other spelling is never a hit."""
     spec = BenchSpec.load(KERNEL)
     assert cpf_bridge.render_options(spec, "c", "", Target.CPU, HintDetail.PROOFS)["llm_friendly"] is True
     assert cpf_bridge.render_options(spec, "c", "", Target.GPU, HintDetail.PROOFS)["llm_friendly"] is False
+    # Everything else equal, the two details render under two keys: neither is ever a hit for the other.
+    proofs = cpf_bridge.render_options(spec, "c", "", Target.CPU, HintDetail.PROOFS)
+    bare = cpf_bridge.render_options(spec, "c", "", Target.CPU, HintDetail.NONE)
+    assert {key for key in proofs if proofs[key] != bare[key]} == {"hints"}
+    assert cpf_cache.cache_key("form", "sdfg", "dace", proofs) != cpf_cache.cache_key("form", "sdfg", "dace", bare)
 
 
 def test_the_stage_and_check_commands_read_the_detail_they_are_given(tmp_path: pathlib.Path) -> None:
@@ -189,15 +185,13 @@ def test_the_tool_sends_the_setups_detail_and_never_its_own(monkeypatch: pytest.
     assert captured["query"] == {"language": "c"}
     assert served_tool("canonical_parallel_form").description == tool.PROOFS_DESCRIPTION
 
-
-@pytest.mark.parametrize("language", ["hip", "cuda"])
-def test_a_gpu_setup_is_described_its_two_units_and_no_openmp(monkeypatch: pytest.MonkeyPatch, language: str) -> None:
-    """A GPU form is a host unit and a device unit; the CPU description's one C/C++ unit and OpenMP would mislead."""
-    monkeypatch.setenv("LANGUAGE", language)
-    tool = fresh("canonical_parallel_form")
-    assert served_tool("canonical_parallel_form").description == tool.GPU_DESCRIPTION
-    assert "device_source" in tool.GPU_DESCRIPTION, tool.GPU_DESCRIPTION
-    assert "C/C++ translation unit" not in tool.GPU_DESCRIPTION and "OpenMP" not in tool.GPU_DESCRIPTION
+    # A GPU form is a host unit and a device unit; the CPU description's one C/C++ unit and OpenMP would mislead.
+    for language in ("hip", "cuda"):
+        monkeypatch.setenv("LANGUAGE", language)
+        tool = fresh("canonical_parallel_form")
+        assert served_tool("canonical_parallel_form").description == tool.GPU_DESCRIPTION
+        assert "device_source" in tool.GPU_DESCRIPTION, tool.GPU_DESCRIPTION
+        assert "C/C++ translation unit" not in tool.GPU_DESCRIPTION and "OpenMP" not in tool.GPU_DESCRIPTION
 
 
 class FakeRenderer:
@@ -328,14 +322,34 @@ PROVEN_PARTIAL_SOURCE = "// cpf: proven: partial; open: i, i2\nvoid f(void) {}\n
 
 
 @pytest.mark.parametrize(
-    ("source", "proof"),
+    ("source", "proof", "absent", "vectorization_once"),
     [
-        (PROVEN_ALL_SOURCE, "Every loop in it is proven parallel or a proven recurrence"),
-        (PROVEN_PARTIAL_SOURCE, "Loops i, i2 are unproven and run in order"),
+        pytest.param(
+            PROVEN_ALL_SOURCE,
+            "Every loop in it is proven parallel or a proven recurrence",
+            # Owner ruling 11-24: no pass list (the paper describes the pipeline), no second tuning list, no
+            # 'not yet graded'.
+            ("loop-invariant code motion", "ALREADY PARALLELIZED", "Start optimizing immediately", "not yet graded"),
+            True,
+            id="proven-all",
+        ),
+        pytest.param(
+            PROVEN_PARTIAL_SOURCE,
+            "Loops i, i2 are unproven and run in order",
+            # a partial note never invites an unproven loop into parallel
+            ("Every loop in it is proven", "maximally", "may be parallel"),
+            False,
+            id="proven-partial",
+        ),
     ],
 )
 def test_the_cpf_src_note_states_the_graded_form_its_proof_line_and_the_file_and_ends_with_unchanged_is_valid(
-    source: str, proof: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    source: str,
+    proof: str,
+    absent: tuple[str, ...],
+    vectorization_once: bool,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     publish_form(tmp_path, KERNEL, "c", source=source, verified=True)
     monkeypatch.setenv(cpf_cache.CACHE_ENV, str(tmp_path))
@@ -347,34 +361,10 @@ def test_the_cpf_src_note_states_the_graded_form_its_proof_line_and_the_file_and
     assert 'to the file "Sending code" names and optimize your copy' in note, note
     assert "it is the only compiled source of this kernel (no hand-written port is staged)" in note, note
     assert note.endswith("Submitting this form unchanged is a valid result."), note
-
-
-def test_the_cpf_src_note_drops_what_the_agent_does_not_act_on(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Owner ruling 11-24: no pass list (the paper describes the pipeline), no second tuning list, no 'not yet graded'."""
-    publish_form(tmp_path, KERNEL, "c", source=PROVEN_ALL_SOURCE, verified=True)
-    monkeypatch.setenv(cpf_cache.CACHE_ENV, str(tmp_path))
-    note = make_problems.packet_note("cpf-src", "c", KERNEL, KERNEL)
-    for dropped in (
-        "loop-invariant code motion",
-        "ALREADY PARALLELIZED",
-        "Start optimizing immediately",
-        "not yet graded",
-    ):
-        assert dropped not in note, dropped
-    assert note.count("vectorization") == 1, note
-
-
-def test_the_partial_cpf_src_note_never_invites_an_unproven_loop_into_parallel(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    publish_form(tmp_path, KERNEL, "c", source=PROVEN_PARTIAL_SOURCE, verified=True)
-    monkeypatch.setenv(cpf_cache.CACHE_ENV, str(tmp_path))
-    note = make_problems.packet_note("cpf-src", "c", KERNEL, KERNEL)
-    assert "Every loop in it is proven" not in note
-    assert "maximally" not in note
-    assert "may be parallel" not in note, "CPF hint review #3"
+    for phrase in absent:
+        assert phrase not in note, (phrase, note)
+    if vectorization_once:
+        assert note.count("vectorization") == 1, note
 
 
 def test_a_cpf_src_setup_refuses_a_form_without_the_proof_line(

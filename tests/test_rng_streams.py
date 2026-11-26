@@ -45,14 +45,12 @@ def test_generators_are_reproducible_and_distinct() -> None:
 
 
 def test_generator_k_does_not_depend_on_how_many_were_made() -> None:
-    """The whole point: asking for more arrays must not move the ones already there."""
+    """The whole point: asking for more arrays must not move the ones already there.
+
+    Drawing array 5 first must give array 5 the same values -- a shared stream cannot do this."""
     short = [g.random(8) for g in streams.array_generators(7, 3)]
     long = [g.random(8) for g in streams.array_generators(7, 9)]
     assert all(np.array_equal(x, y) for x, y in zip(short, long[:3], strict=True))
-
-
-def test_generator_k_does_not_depend_on_draw_order() -> None:
-    """Drawing array 5 first must give array 5 the same values -- a shared stream cannot do this."""
     forward = [g.random(8) for g in streams.array_generators(7, 6)]
     generators = streams.array_generators(7, 6)
     backward = [np.empty(0)] * 6

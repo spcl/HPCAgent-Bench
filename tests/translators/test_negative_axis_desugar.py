@@ -16,6 +16,8 @@ expand_dims).
 import ast
 from types import SimpleNamespace
 
+import pytest
+
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import NormalizeNegativeAxis, desugar_for_python_backend
 
 
@@ -41,17 +43,21 @@ def norm_axis(expr: str, ranks: dict[str, int]) -> int | ast.expr:
 # the rewrite, in isolation: axis-preserving vs axis-adding, rank sourcing     #
 
 
-def test_axis_preserving_uses_operand_rank() -> None:
-    # rank-2 ``a`` -> flip axis -1 addresses axis 1, -2 addresses axis 0.
-    assert norm_axis("np.flip(a, axis=-1)", {"a": 2}) == 1
-    assert norm_axis("np.flip(a, axis=-2)", {"a": 2}) == 0
-    assert norm_axis("np.concatenate((a, b), axis=-1)", {"a": 2, "b": 2}) == 1
-
-
-def test_axis_adding_op_adds_one_to_rank() -> None:
-    # stack / expand_dims produce one MORE axis than the operand.
-    assert norm_axis("np.stack((a, b), axis=-1)", {"a": 2, "b": 2}) == 2  # axis-space 3
-    assert norm_axis("np.expand_dims(a, axis=-1)", {"a": 2}) == 2
+@pytest.mark.parametrize(
+    ("expr", "ranks", "expected"),
+    [
+        # axis-preserving: rank-2 ``a`` -> flip axis -1 addresses axis 1, -2 addresses axis 0.
+        ("np.flip(a, axis=-1)", {"a": 2}, 1),
+        ("np.flip(a, axis=-2)", {"a": 2}, 0),
+        ("np.concatenate((a, b), axis=-1)", {"a": 2, "b": 2}, 1),
+        # axis-adding: stack / expand_dims produce one MORE axis than the operand.
+        ("np.stack((a, b), axis=-1)", {"a": 2, "b": 2}, 2),  # axis-space 3
+        ("np.expand_dims(a, axis=-1)", {"a": 2}, 2),
+    ],
+    ids=["flip-1", "flip-2", "concatenate", "stack", "expand_dims"],
+)
+def test_axis_preserving_uses_operand_rank(expr: str, ranks: dict[str, int], expected: int) -> None:
+    assert norm_axis(expr, ranks) == expected
 
 
 def test_out_of_range_negative_left_verbatim() -> None:
@@ -64,20 +70,23 @@ def test_out_of_range_negative_left_verbatim() -> None:
 # end to end through the desugar (flip further lowers to a reverse-step slice) #
 
 
-def test_flip_negative_axis_lowers_to_reverse_slice() -> None:
-    # normalized to axis 1, the existing flip pass turns it into ``a[:, ::-1]``
-    # (``axis=-1`` is a UnaryOp, not a Constant; left as ``np.flip(a, axis=-1)`` pythran
-    # mishandles it).
-    out = desugar(" out[:] = np.flip(a, axis=-1)\n", a=("M", "N"), b=("M", "N"), out=("M", "N"))
-    assert "[:, ::-1]" in out
-    assert "flip" not in out
-
-
-def test_stack_negative_axis_normalized_in_place() -> None:
-    # stack has no lowering pass -> it stays ``np.stack`` but with the axis fixed.
-    out = desugar(" out[:] = np.stack((a, b), axis=-1)\n", a=("M", "N"), b=("M", "N"), out=("M", "N", "2"))
-    assert "axis=2)" in out
-    assert "axis=-1" not in out
+@pytest.mark.parametrize(
+    ("body", "arrays", "present", "absent"),
+    [
+        # normalized to axis 1, the existing flip pass turns it into ``a[:, ::-1]`` (``axis=-1`` is a UnaryOp, not a
+        # Constant; left as ``np.flip(a, axis=-1)`` pythran mishandles it).
+        (" out[:] = np.flip(a, axis=-1)\n", {"out": ("M", "N")}, "[:, ::-1]", "flip"),
+        # stack has no lowering pass -> it stays ``np.stack`` but with the axis fixed.
+        (" out[:] = np.stack((a, b), axis=-1)\n", {"out": ("M", "N", "2")}, "axis=2)", "axis=-1"),
+    ],
+    ids=["flip", "stack"],
+)
+def test_flip_negative_axis_lowers_to_reverse_slice(
+    body: str, arrays: dict[str, tuple[str, ...]], present: str, absent: str
+) -> None:
+    out = desugar(body, a=("M", "N"), b=("M", "N"), **arrays)
+    assert present in out
+    assert absent not in out
 
 
 def test_positive_stack_axis_returned_verbatim() -> None:

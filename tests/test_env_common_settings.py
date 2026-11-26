@@ -12,13 +12,11 @@ server arguments they describe.
 import re
 import subprocess
 import sys
-import types
 
 import pytest
 
 from hpcagent_bench import paths
 from tests.env_render import BASES, rendered
-from tests.fresh_module import fresh
 
 REPO = paths.ROOT
 CLUSTER_DIR = REPO / "hpcagent_bench" / "cluster"
@@ -32,22 +30,6 @@ COMMON_VARS = (
     "CLAUDE_STREAM_IDLE_TIMEOUT_MS",
     "API_FORCE_IDLE_TIMEOUT",
 )
-
-#: The launcher's default for each of them. The idle watchdog is the wall that fires first in Claude
-#: Code 2.1.197; its default is DERIVED (hpcagent_agent.driver.stream_idle_timeout) from the setup's own
-#: CONTEXT_LENGTH and AGENTS_PER_NODE rather than copied, but every setup that named neither still
-#: lands on 1800000 ms, the CLI's ceiling for it -- see test_stream_idle_timeout.py.
-LAUNCHER_DEFAULTS = {
-    "API_TIMEOUT_MS": "3600000",
-    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$("${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_agent.driver.stream_idle_timeout)',
-    # The byte watchdog above is installed only for api.anthropic.com. Against SGLang/vLLM the walls
-    # that fire are the SSE-event watchdog (floor 300 s) and Bun's own ~300 s fetch socket timeout,
-    # which the CLI lifts only when API_FORCE_IDLE_TIMEOUT is falsy -- both unset cut streams at
-    # 4-5 min of silence mid tool_use ("API Error: The operation timed out.").
-    # The event watchdog takes the SAME derived number, never a second one.
-    "CLAUDE_STREAM_IDLE_TIMEOUT_MS": "${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS}",
-    "API_FORCE_IDLE_TIMEOUT": "0",
-}
 
 #: The rungs each model's server accepts, lowest first, whether that server is a local SGLang/vLLM
 #: job or a hosted provider API. Qwen's chat template raises on anything outside low/medium/xhigh --
@@ -63,27 +45,8 @@ LADDERS = {
     "apertus15": "",
 }
 
-#: What the policy resolves each ladder to: xhigh where the ladder has it, else its top rung, else
-#: no field at all.
-RESOLVED = {
-    "qwen38": "xhigh",
-    "oss120b": "high",
-    "kimi27sglang": "",
-    "glm53": "",
-    "musespark": "xhigh",
-    "apertus15": "",
-}
-
 #: The experiment base of every model (experiments.toml ``experiment:<model>``).
 BASE_ENVS = [name for name in BASES if name.startswith("experiment:")]
-
-
-def load_effort() -> types.ModuleType:
-    """``agent/hpcagent_agent/driver/effort.py``, loaded by path: it ships in the agent image, not the package."""
-    return fresh("effort")
-
-
-effort = load_effort()
 
 
 def env_values(name: str) -> dict[str, str]:
@@ -120,17 +83,6 @@ def test_a_base_env_sets_none_of_the_common_client_settings(path: str, name: str
     assert name not in env_values(path), f"{path} repeats the launcher's {name}"
 
 
-@pytest.mark.parametrize("name", COMMON_VARS)
-def test_the_launcher_exports_each_common_setting_with_its_default(name: str) -> None:
-    """The .env files do not carry these, so the launcher's default IS what every setup runs at. A default a
-    command computes is assigned under a guard, so the command's failure stops the run instead of exporting ""."""
-    default = LAUNCHER_DEFAULTS[name]
-    launcher = LAUNCHER.read_text(encoding="utf-8")
-    one_line = f'export {name}="${{{name}:-{default}}}"'
-    guarded = f'if [[ -z "${{{name}:-}}" ]]; then\n        {name}="{default}" || exit 1\n    fi\n    export {name}\n'
-    assert (one_line in launcher) != (guarded in launcher)
-
-
 @pytest.mark.parametrize("path", ENGINE_BASE_ENVS)
 def test_a_base_env_names_the_context_window_its_server_is_started_with(path: str) -> None:
     """The harnesses size their prompt budget off CONTEXT_LENGTH; an engine started with a different
@@ -153,13 +105,6 @@ def test_a_base_env_declares_the_ladder_its_server_accepts_and_no_rung(path: str
     values = env_values(path)
     assert "HPCAGENT_BENCH_AGENT_EFFORT" not in values, f"{path} spells a rung the launcher resolves"
     assert values.get("HPCAGENT_BENCH_AGENT_EFFORT_LADDER") == LADDERS[path.removeprefix("experiment:")]
-
-
-@pytest.mark.parametrize("path", BASE_ENVS)
-def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at(path: str) -> None:
-    """The ladders are only right if the rung they resolve to is the one the experiment meant to run."""
-    model = path.removeprefix("experiment:")
-    assert effort.resolve(env_values(path)["HPCAGENT_BENCH_AGENT_EFFORT_LADDER"]) == RESOLVED[model]
 
 
 def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:

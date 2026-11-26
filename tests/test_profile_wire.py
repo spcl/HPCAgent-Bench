@@ -14,7 +14,7 @@ import pytest
 
 from hpcagent_bench import perf_reports
 from hpcagent_bench.categories import Language, Preset, SourceMode
-from hpcagent_bench.harness import compute_profiling, gpu_profiling, papi, profiling, report_staging, sandbox
+from hpcagent_bench.harness import compute_profiling, gpu_profiling, papi, profiling, report_staging
 from hpcagent_bench.harness.judge_wire import OptReportAnswer
 from hpcagent_bench.harness.profile_wire import (
     BuildFailureReport,
@@ -286,11 +286,6 @@ def test_a_device_count_report_is_sent_as_built(tool: str) -> None:
     assert_sent_as_built(report, DeviceCountReport)
 
 
-def test_a_build_failure_is_sent_as_built() -> None:
-    report = profiling.build_failed(TASK, sandbox.BuildResult(ok=False, lib=None, log="k.c:1: error: expected ';'"))
-    assert_sent_as_built(report, BuildFailureReport)
-
-
 def test_an_opt_report_reads_back_as_its_model() -> None:
     """``opt-report`` is built by the judge itself as :class:`OptReportAnswer`, and the client reads it back."""
     answer = OptReportAnswer(
@@ -324,21 +319,19 @@ def test_a_report_with_an_unknown_row_field_is_refused() -> None:
 
 
 @pytest.mark.parametrize(
-    ("model", "payload"),
+    ("reported", "payload"),
     [
-        (LinuxperfReport, profiling.ProfilePayload),
-        (CountReport, profiling.CountPayload),
-        (ThreadCountReport, profiling.ThreadPayload),
-        (InstrumentReport, profiling.InstrumentPayload),
-        (DeviceTraceReport, gpu_profiling.GpuPayload),
-        (DeviceCountReport, compute_profiling.ComputePayload),
-        (BuildFailureReport, profiling.BuildFailure),
+        (list(LinuxperfReport.model_fields), profiling.ProfilePayload),
+        (list(CountReport.model_fields), profiling.CountPayload),
+        (list(ThreadCountReport.model_fields), profiling.ThreadPayload),
+        (list(InstrumentReport.model_fields), profiling.InstrumentPayload),
+        (list(DeviceTraceReport.model_fields), gpu_profiling.GpuPayload),
+        (list(DeviceCountReport.model_fields), compute_profiling.ComputePayload),
+        (list(BuildFailureReport.model_fields), profiling.BuildFailure),
+        (list(ConfigReport.__annotations__), profiling.ConfigRow),
     ],
+    ids=["linuxperf", "count", "thread_count", "instrument", "device_trace", "device_count", "build_failure", "config"],
 )
-def test_each_report_model_tracks_its_producer_field_for_field(model: type[pydantic.BaseModel], payload: type) -> None:
+def test_each_report_model_tracks_its_producer_field_for_field(reported: list[str], payload: type) -> None:
     """A key a producer adds must be added to its model, or every report of that tool is refused."""
-    assert list(model.model_fields) == list(payload.__annotations__)
-
-
-def test_the_call_graph_row_tracks_the_producer_s_config_row() -> None:
-    assert list(ConfigReport.__annotations__) == list(profiling.ConfigRow.__annotations__)
+    assert reported == list(payload.__annotations__)

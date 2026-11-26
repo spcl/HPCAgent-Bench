@@ -3,6 +3,7 @@
 """The configuration model (hpcagent_bench/config.py): env parsing, precedence, validation, and the readers
 that take their defaults from it."""
 
+import contextlib
 import pathlib
 import re
 from collections.abc import Callable
@@ -75,9 +76,16 @@ def test_a_flag_reads_every_boolean_spelling(monkeypatch: pytest.MonkeyPatch, te
     assert config.current().record.enabled is want
 
 
-def test_a_flag_that_is_no_boolean_spelling_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_LOG_CALLS", "maybe")
-    with pytest.raises(ValueError, match="HPCAGENT_BENCH_RECORD_LOG_CALLS"):
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        pytest.param("HPCAGENT_BENCH_RECORD_LOG_CALLS", "maybe", id="no-boolean-spelling"),
+        pytest.param("HPCAGENT_BENCH_MEASUREMENT_REPEAT", "0", id="out-of-range"),
+    ],
+)
+def test_an_invalid_env_value_raises_naming_its_variable(monkeypatch: pytest.MonkeyPatch, name: str, text: str) -> None:
+    monkeypatch.setenv(name, text)
+    with pytest.raises(ValueError, match=name):
         config.current()
 
 
@@ -88,24 +96,42 @@ def test_a_nullable_key_reads_every_null_spelling(monkeypatch: pytest.MonkeyPatc
     assert config.current().attempts.token_budget is None
 
 
-@pytest.mark.parametrize(("text", "want"), [("/a, /b", ("/a", "/b")), ('["/a,b"]', ("/a,b",)), ("", ())])
+@pytest.mark.parametrize(
+    ("name", "text", "read", "want"),
+    [
+        # ``/a,/b`` is two paths to hide, never the one path ``/a,/b``.
+        pytest.param(
+            "HPCAGENT_BENCH_GRADING_SEAL_HIDE",
+            "/a, /b",
+            lambda: config.current().grading.seal_hide,
+            ("/a", "/b"),
+            id="comma",
+        ),
+        pytest.param(
+            "HPCAGENT_BENCH_GRADING_SEAL_HIDE",
+            '["/a,b"]',
+            lambda: config.current().grading.seal_hide,
+            ("/a,b",),
+            id="json",
+        ),
+        pytest.param(
+            "HPCAGENT_BENCH_GRADING_SEAL_HIDE", "", lambda: config.current().grading.seal_hide, (), id="empty"
+        ),
+        pytest.param(
+            "HPCAGENT_BENCH_TIMEOUTS_KERNEL_S_BY_LEVEL",
+            '{"1": 5}',
+            lambda: config.current().timeouts.kernel_s_by_level,
+            {1: 5.0},
+            id="map-json-object",
+        ),
+    ],
+)
 def test_a_list_key_reads_a_comma_list_or_a_json_array(
-    monkeypatch: pytest.MonkeyPatch, text: str, want: tuple[str, ...]
+    monkeypatch: pytest.MonkeyPatch, name: str, text: str, read: Callable[[], object], want: object
 ) -> None:
-    """``/a,/b`` is two paths to hide, never the one path ``/a,/b``."""
-    monkeypatch.setenv("HPCAGENT_BENCH_GRADING_SEAL_HIDE", text)
-    assert config.current().grading.seal_hide == want
-
-
-def test_a_map_key_reads_a_json_object(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_TIMEOUTS_KERNEL_S_BY_LEVEL", '{"1": 5}')
-    assert config.current().timeouts.kernel_s_by_level == {1: 5.0}
-
-
-def test_an_out_of_range_value_names_its_variable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_MEASUREMENT_REPEAT", "0")
-    with pytest.raises(ValueError, match="HPCAGENT_BENCH_MEASUREMENT_REPEAT"):
-        config.current()
+    """A list key reads a comma list or a JSON array; a map key reads a JSON object."""
+    monkeypatch.setenv(name, text)
+    assert read() == want
 
 
 # unknown keys
@@ -145,19 +171,30 @@ def test_a_renamed_name_is_an_error_naming_its_new_name(monkeypatch: pytest.Monk
         config.current()
 
 
-def test_overriding_an_unknown_key_raises() -> None:
-    with pytest.raises(KeyError, match=r"measurement\.repeats"):
-        config.set_override("measurement.repeats", 5)
-
-
-def test_overriding_a_constrained_key_with_a_value_out_of_its_range_raises() -> None:
-    with pytest.raises(pydantic.ValidationError):
-        config.set_override("measurement.repeat", 0)
-
-
-def test_get_of_an_unknown_key_raises() -> None:
-    with pytest.raises(KeyError):
-        config.get("measurement.repeats")
+@pytest.mark.parametrize(
+    ("call", "exception", "match"),
+    [
+        pytest.param(
+            lambda: config.set_override("measurement.repeats", 5),
+            KeyError,
+            r"measurement\.repeats",
+            id="override-unknown",
+        ),
+        pytest.param(
+            lambda: config.set_override("measurement.repeat", 0), pydantic.ValidationError, "", id="out-of-range"
+        ),
+        pytest.param(lambda: config.get("measurement.repeats"), KeyError, "", id="get-unknown"),
+        pytest.param(
+            lambda: config.set_override("measurement.timing_backend", "mannwhitney"),
+            pydantic.ValidationError,
+            "mannwhitney",
+            id="unknown-timing-backend-not-reduced-with-min-of-k",
+        ),
+    ],
+)
+def test_overriding_an_unknown_key_raises(call: Callable[[], object], exception: type[Exception], match: str) -> None:
+    with pytest.raises(exception, match=match):
+        call()
 
 
 #: The files that may name a renamed env name: its refusal table and the changelog.
@@ -193,10 +230,7 @@ def test_an_override_wins_over_the_scoped_environment_which_wins_over_os_environ
         with config.overridden("record.study", "override"):
             assert config.current().record.study == "override"
     assert config.current().record.study == "process"
-
-
-def test_the_container_backend_honours_an_override_over_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The raw env read before the config made the env win over set_override and the scoped env."""
+    # The raw env read before the config made the env win over set_override and the scoped env.
     monkeypatch.setenv("HPCAGENT_BENCH_RUNTIME_BACKEND", "apptainer")
     with config.overridden("runtime.backend", ContainerRuntime.PODMAN):
         assert containers.resolve_backend() is ContainerRuntime.PODMAN
@@ -216,9 +250,8 @@ def test_the_agent_worker_count_honours_an_override_over_the_environment(monkeyp
     monkeypatch.setenv("HPCAGENT_BENCH_AGENT_WORKERS", "7")
     with config.overridden("agent.workers", 3):
         assert pipeline.agent_workers([None], ["http://judge"]) == 3
-
-
-def test_null_agent_workers_is_one_per_endpoint() -> None:
+    # A null count is one worker per endpoint.
+    monkeypatch.delenv("HPCAGENT_BENCH_AGENT_WORKERS")
     assert pipeline.agent_workers([None, None], ["a", "b", "c"]) == 3
 
 
@@ -257,11 +290,6 @@ def test_a_reader_without_an_override_returns_the_model_default(read: Callable[[
     assert read() == want
 
 
-def test_an_unknown_timing_backend_raises_instead_of_reducing_with_min_of_k() -> None:
-    with pytest.raises(pydantic.ValidationError, match="mannwhitney"):
-        config.set_override("measurement.timing_backend", "mannwhitney")
-
-
 def test_a_level_free_budget_still_honours_the_overrides() -> None:
     """A kernel whose spec does not load fell back to kernel_s / token_budget, past both overrides."""
     with config.overridden("timeouts.kernel_s_override", 60.0), config.overridden("attempts.token_budget_override", 9):
@@ -285,17 +313,17 @@ def test_a_null_gpu_count_splits_the_node_by_the_detected_gpus(monkeypatch: pyte
         assert len(native_call.grading_cpus(0)) == len(whole) // detected
 
 
-def test_an_undeclared_device_does_not_gate_and_is_recorded_as_cpu() -> None:
+@pytest.mark.parametrize(
+    ("device", "gate"), [pytest.param(None, None, id="undeclared"), pytest.param("cpu", True, id="cpu")]
+)
+def test_an_undeclared_device_does_not_gate_and_is_recorded_as_cpu(device: str | None, gate: bool | None) -> None:
     """``record.device`` null: no host-only gate (the yaml default ``cpu`` gated every undeclared setup when
-    read through the config), and the row is still stamped cpu."""
-    assert config.current().record.device is None
-    assert task.setup_declared_host_only() is None
-    assert recording.device_tag() == recording.RecordDevice.CPU
-
-
-def test_a_declared_cpu_device_gates() -> None:
-    with config.overridden("record.device", "cpu"):
-        assert task.setup_declared_host_only() is True
+    read through the config), and the row is still stamped cpu; a declared ``cpu`` gates."""
+    with config.overridden("record.device", device) if device else contextlib.nullcontext():
+        if device is None:
+            assert config.current().record.device is None
+        assert task.setup_declared_host_only() is gate
+        assert recording.device_tag() == recording.RecordDevice.CPU
 
 
 def test_the_seal_hides_the_configured_generated_reference_cache(tmp_path: pathlib.Path) -> None:

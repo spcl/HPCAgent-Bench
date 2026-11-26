@@ -27,20 +27,23 @@ def test_a_bracket_inside_a_comment_indexes_nothing() -> None:
 
 
 @pytest.mark.parametrize(
-    ("code", "expected_reason"),
+    ("source", "expected_reason"),
     [
-        ("a[i] = (a[(i + 1)] * a[i]);", None),
+        (scop("a[i] = (a[(i + 1)] * a[i]);"), None),
         # A stride and an offset are still affine.
-        ("for (i = 0; i < N; i += 2) c[i] = a[i] + b[(i - 3)];", None),
-        ("a[i] = (a[i] + (b[ip[i]] * 2.0));", "indirection"),
+        (scop("for (i = 0; i < N; i += 2) c[i] = a[i] + b[(i - 3)];"), None),
+        (scop("a[i] = (a[i] + (b[ip[i]] * 2.0));"), "indirection"),
         # Indirection nested one level deeper is still caught.
-        ("out[idx[k]] = v[k];", "indirection"),
+        (scop("out[idx[k]] = v[k];"), "indirection"),
         # ``table[i][j]`` is two SEPARATE affine subscripts, not a nested (indirect) one.
-        ("table[i][j] = table[(i + 1)][(j - 1)];", None),
+        (scop("table[i][j] = table[(i + 1)][(j - 1)];"), None),
         # ``/`` OUTSIDE a subscript (in the value) does not affect the polyhedral model.
-        ("a[i] = (b[i] / 2.0);", None),
-        ("a[i % k] = b[i];", "modulo"),
-        ("a[i / 2] = b[i];", "integer-division"),
+        (scop("a[i] = (b[i] / 2.0);"), None),
+        (scop("a[i % k] = b[i];"), "modulo"),
+        (scop("a[i / 2] = b[i];"), "integer-division"),
+        # Robust when the scop markers are absent: the whole text is scanned for subscripts.
+        ("x[y[i]] = 1;", "indirection"),
+        ("x[i] = y[i];", None),
     ],
     ids=[
         "plain-affine",
@@ -51,16 +54,14 @@ def test_a_bracket_inside_a_comment_indexes_nothing() -> None:
         "value-side-division-not-flagged",
         "modulo-flagged",
         "int-div-flagged",
+        "no-pragma-indirection-flagged",
+        "no-pragma-affine",
     ],
 )
-def test_a_non_affine_subscript_kind_is_named_and_an_affine_one_is_not(code: str, expected_reason: str | None) -> None:
-    assert scop_nonaffine_reason(scop(code)) == expected_reason
-
-
-def test_no_pragma_falls_back_to_scanning_whole_text() -> None:
-    # Robust when the scop markers are absent -- still scans the subscripts.
-    assert scop_nonaffine_reason("x[y[i]] = 1;") == "indirection"
-    assert scop_nonaffine_reason("x[i] = y[i];") is None
+def test_a_non_affine_subscript_kind_is_named_and_an_affine_one_is_not(
+    source: str, expected_reason: str | None
+) -> None:
+    assert scop_nonaffine_reason(source) == expected_reason
 
 
 _KINDS = ("bug", "caveat")

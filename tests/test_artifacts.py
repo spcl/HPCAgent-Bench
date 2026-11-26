@@ -172,25 +172,24 @@ def test_a_local_git_clone_in_the_workspace_is_archived_whole_with_its_hard_link
         name: hashlib.sha256(data).hexdigest() for name, data in clone.items()
     }
 
-
-def test_a_hard_link_in_workspaces_tar_is_archived_as_a_file_of_its_own(tmp_path: pathlib.Path) -> None:
-    """``tar --create`` (data_guard.archive) writes a clone's second name of an object as a hard link. The pack copied
-    the link unchecked while it omitted its target, so the episode archive could not be unpacked any more."""
-    run = run_dir(tmp_path)
+    # The same link read from ``workspaces.tar``: ``tar --create`` (data_guard.archive) writes a clone's second name
+    # of an object as a hard link; the pack copied it unchecked while it omitted its target, so the archive could
+    # not be unpacked.
+    linked = run_dir(tmp_path, "linked")
     data = GIT_OBJECTS["objects/1c/9ce2"]
     first, second = f"{FOLDER}/repo/.git/objects/1c/9ce2", f"{FOLDER}/work/.git/objects/1c/9ce2"
-    with tarfile.open(run / run_layout.WORKSPACES_ARCHIVE, "a") as tar:
+    with tarfile.open(linked / run_layout.WORKSPACES_ARCHIVE, "a") as tar:
         info = tarfile.TarInfo(first)
         info.size = len(data)
         tar.addfile(info, io.BytesIO(data))
         link = tarfile.TarInfo(second)
         link.type, link.linkname = tarfile.LNKTYPE, first
         tar.addfile(link)
-    (directory,) = artifacts.pack_run(run)
-    restored = tmp_path / "restored"
-    artifacts.unpack_episode(directory, restored)
+    (linked_directory,) = artifacts.pack_run(linked)
+    linked_restored = tmp_path / "linked-restored"
+    artifacts.unpack_episode(linked_directory, linked_restored)
     digest = hashlib.sha256(data).hexdigest()
-    assert tree(restored) == digests(LOOSE | ARCHIVED) | {first: digest, second: digest}
+    assert tree(linked_restored) == digests(LOOSE | ARCHIVED) | {first: digest, second: digest}
 
 
 def test_an_archive_with_a_hard_link_to_a_file_it_omitted_still_unpacks(tmp_path: pathlib.Path) -> None:
@@ -316,19 +315,17 @@ def test_a_pack_cut_off_before_it_indexed_its_folder_is_indexed_by_the_next_pack
     assert list(artifacts.index(run)) == [LABEL]
     assert artifacts.verify_run(run) == []
 
-
-def test_a_torn_last_line_in_the_job_s_logs_does_not_stop_packing(tmp_path: pathlib.Path) -> None:
-    """A job killed mid-append leaves half a JSON line at the end of agent-folders.jsonl or the episode index; reading
-    either raised on it, so no episode of the run could be packed, verified or restored again."""
-    run = run_dir(tmp_path)
-    with (run / "agent-folders.jsonl").open("a") as log:
+    # A job killed mid-append leaves half a JSON line at the end of agent-folders.jsonl or the episode index; reading
+    # either raised on it, so no episode of the run could be packed, verified or restored again.
+    torn = run_dir(tmp_path, "torn")
+    with (torn / "agent-folders.jsonl").open("a") as log:
         log.write('{"episode_id": "exp-kimi-c.n1.p7')
-    (run / "episodes").mkdir()
-    (run / "episodes" / "index.jsonl").write_text('{"label": "exp-kimi')
-    (directory,) = artifacts.pack_run(run)
-    assert list(artifacts.index(run)) == [LABEL]
-    assert artifacts.pack_run(run) == [directory]
-    assert artifacts.verify_run(run) == []
+    (torn / "episodes").mkdir()
+    (torn / "episodes" / "index.jsonl").write_text('{"label": "exp-kimi')
+    (torn_directory,) = artifacts.pack_run(torn)
+    assert list(artifacts.index(torn)) == [LABEL]
+    assert artifacts.pack_run(torn) == [torn_directory]
+    assert artifacts.verify_run(torn) == []
 
 
 def test_remove_loose_also_drops_what_the_archives_make_redundant(tmp_path: pathlib.Path) -> None:
@@ -374,20 +371,21 @@ def test_verify_reports_a_member_that_changed_or_went(tmp_path: pathlib.Path) ->
     assert artifacts.main(["verify", str(run)]) == 1
 
 
-def test_an_episode_with_no_ended_attempt_is_skipped_and_refused_alone(tmp_path: pathlib.Path) -> None:
+def test_an_episode_with_no_ended_attempt_is_skipped_and_refused_alone(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run = run_dir(tmp_path)
     assert [path.name for path in artifacts.pack_run(run)] == [LABEL]
     with pytest.raises(SystemExit, match="no ended episode"):
         artifacts.pack_episode(run, "exp-kimi-c.n1.p3.w1")
 
-
-def test_a_job_still_in_squeue_is_refused(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    run = run_dir(tmp_path, "4242")
+    # A job still in squeue is refused.
+    running = run_dir(tmp_path, "4242")
     bash_stub(tmp_path / "bin", "squeue", "echo 4242")
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:{os.environ['PATH']}")
     with pytest.raises(SystemExit, match="still in squeue"):
-        artifacts.pack_run(run)
-    assert not (run / "episodes").exists()
+        artifacts.pack_run(running)
+    assert not (running / "episodes").exists()
 
 
 def test_stage_restores_each_continued_episode_under_its_problem_id(tmp_path: pathlib.Path) -> None:

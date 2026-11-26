@@ -87,20 +87,17 @@ def test_a_promotion_proves_the_episode_it_submits_for(
     [
         ({"judge_rank": 2}, 2),  # /health is the one route that reports its own, configured ranks go stale
         ({"rank": 1}, 1),  # the router answers `judge_rank`, the judge behind it `rank`; either is authoritative
+        (None, None),  # an unreachable judge: a promotion attempted with the default rank beats one never attempted
     ],
-    ids=["judge_rank-key", "rank-key"],
+    ids=["judge_rank-key", "rank-key", "unreachable-falls-back"],
 )
 def test_the_rank_is_asked_of_the_judge_itself(
-    promoter: ModuleType, monkeypatch: pytest.MonkeyPatch, health: dict[str, int], expected_rank: int
+    promoter: ModuleType, monkeypatch: pytest.MonkeyPatch, health: dict[str, int] | None, expected_rank: int | None
 ) -> None:
-    monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], health=health))
-    assert promoter.judge_rank("http://judge:8800") == expected_rank
-
-
-def test_an_unreachable_judge_falls_back_rather_than_skipping(
-    promoter: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A promotion attempted with the default rank still beats one never attempted."""
+    if health is not None:
+        monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], health=health))
+        assert promoter.judge_rank("http://judge:8800") == expected_rank
+        return
 
     def boom(req: Request, timeout: float | None = None) -> None:
         raise OSError("no route to host")
@@ -143,20 +140,26 @@ def make_run_dir(
     return tmp_path
 
 
-def test_the_device_row_is_never_submitted_as_the_host_source(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Both halves sort together by ts, so an unfiltered 'newest wins' picks the device unit."""
-    run_dir = make_run_dir(tmp_path, "/* host */", "/* __global__ */", setup=HIP)
+@pytest.mark.parametrize(
+    ("source", "device_source", "setup"),
+    [
+        pytest.param("/* host */", "/* __global__ */", HIP, id="device-unit"),
+        pytest.param("void gemm(void){}", None, None, id="host-only"),
+    ],
+)
+def test_the_device_row_is_never_submitted_as_the_host_source(
+    promoter: ModuleType, tmp_path: pathlib.Path, source: str, device_source: str | None, setup: results_db.Setup | None
+) -> None:
+    """Both halves sort together by ts, so an unfiltered 'newest wins' picks the device unit; a host-only setup
+    promotes without one."""
+    run_dir = make_run_dir(tmp_path, source, device_source, setup=setup)
     (item,) = promoter.candidates(run_dir)
-    assert item["language"] == "hip"
-    assert item["source"] == "/* host */"
-    assert item["device_source"] == "/* __global__ */"
-
-
-def test_a_host_only_setup_promotes_without_a_device_unit(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
-    run_dir = make_run_dir(tmp_path, "void gemm(void){}")
-    (item,) = promoter.candidates(run_dir)
-    assert item["source"] == "void gemm(void){}"
-    assert "device_source" not in item
+    assert item["source"] == source
+    if device_source is None:
+        assert "device_source" not in item
+    else:
+        assert item["language"] == "hip"
+        assert item["device_source"] == device_source
 
 
 def test_a_library_score_is_promoted_by_its_path(
@@ -336,27 +339,26 @@ def test_a_torn_last_line_in_the_folder_record_does_not_hide_the_episodes_folder
     assert promoter.workspace_dir(run, "setup.n0.p7.w7") == run / "shared" / WORKSPACE_FOLDER
 
 
+@pytest.mark.parametrize("paired", [True, False], ids=["two-units", "one-unit"])
 @pytest.mark.parametrize(("extension", "language"), [(".hip", "hip"), (".cu", "cuda")])
 def test_workspace_candidate_pairs_the_device_unit(
-    promoter: ModuleType, tmp_path: pathlib.Path, extension: str, language: str
+    promoter: ModuleType, tmp_path: pathlib.Path, extension: str, language: str, paired: bool
 ) -> None:
     """A GPU delivery can be two translation units and the host half alone does not build, so a harvest
-    that sent only `source` would be refused for a reason that looks like the agent's fault."""
-    run = workspace_run(tmp_path, "stencil.cpp", "// host\n")
-    (run / "shared" / WORKSPACE_FOLDER / f"stencil{extension}").write_text("// device\n")
+    that sent only `source` would be refused for a reason that looks like the agent's fault; a one-unit delivery
+    is read whole."""
+    if paired:
+        run = workspace_run(tmp_path, "stencil.cpp", "// host\n")
+        (run / "shared" / WORKSPACE_FOLDER / f"stencil{extension}").write_text("// device\n")
+    else:
+        run = workspace_run(tmp_path, f"stencil{extension}", "// both\n")
     item = promoter.workspace_candidate(run, "setup.n0.p7.w7", "track/stencil")
     assert item["language"] == language
-    assert item["device_source"] == "// device\n"
-
-
-@pytest.mark.parametrize(("extension", "language"), [(".hip", "hip"), (".cu", "cuda")])
-def test_workspace_candidate_reads_a_one_unit_gpu_delivery(
-    promoter: ModuleType, tmp_path: pathlib.Path, extension: str, language: str
-) -> None:
-    run = workspace_run(tmp_path, f"stencil{extension}", "// both\n")
-    item = promoter.workspace_candidate(run, "setup.n0.p7.w7", "track/stencil")
-    assert (item["language"], item["source"]) == (language, "// both\n")
-    assert "device_source" not in item
+    if paired:
+        assert item["device_source"] == "// device\n"
+    else:
+        assert item["source"] == "// both\n"
+        assert "device_source" not in item
 
 
 def test_workspace_candidate_is_absent_when_the_agent_wrote_nothing(
@@ -458,25 +460,27 @@ def add_schemaless_shards(run_dir: pathlib.Path) -> None:
     (run_dir / "judge" / "rank-1" / "hpcagent_bench1.db").write_bytes(b"")
 
 
-def test_a_shard_with_no_schema_does_not_fail_every_promotion(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("wrong_schema", [False, True], ids=["no-schema", "wrong-schema"])
+def test_a_shard_with_no_schema_does_not_fail_every_promotion(
+    promoter: ModuleType, tmp_path: pathlib.Path, wrong_schema: bool
+) -> None:
     """An empty shard answered "no such table", and the catch-all reported every worker's promotion
-    as failed: 110 of 120 workers of one job lost their verified kernel."""
+    as failed: 110 of 120 workers of one job lost their verified kernel. Only a missing schema is skipped: a
+    shard whose table lacks a column is a real fault."""
+    if wrong_schema:
+        rank = tmp_path / "judge" / "rank-0"
+        rank.mkdir(parents=True)
+        with connect(rank / "hpcagent_bench0.db") as con:
+            con.execute("create table grades (kernel text)")
+            con.execute("create table episodes (label text)")
+        with pytest.raises(sqlite3.OperationalError, match="no such column"):
+            promoter.submitted_pairs(tmp_path)
+        return
     run_dir = make_run_dir(tmp_path, "void gemm(void){}")
     add_schemaless_shards(run_dir)
     (item,) = promoter.candidates(run_dir)
     assert item["source"] == "void gemm(void){}"
     assert promoter.submitted_pairs(run_dir) == set()
-
-
-def test_a_shard_with_a_wrong_schema_still_fails_loudly(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Only a missing schema is skipped: a shard whose table lacks a column is a real fault."""
-    rank = tmp_path / "judge" / "rank-0"
-    rank.mkdir(parents=True)
-    with connect(rank / "hpcagent_bench0.db") as con:
-        con.execute("create table grades (kernel text)")
-        con.execute("create table episodes (label text)")
-    with pytest.raises(sqlite3.OperationalError, match="no such column"):
-        promoter.submitted_pairs(tmp_path)
 
 
 def make_relaunched_run_dir(tmp_path: pathlib.Path, episode_id: str = "setup.n0.p1.w1") -> pathlib.Path:
@@ -491,24 +495,23 @@ def make_relaunched_run_dir(tmp_path: pathlib.Path, episode_id: str = "setup.n0.
     return tmp_path
 
 
-def test_a_grade_from_before_the_final_attempt_is_not_promoted(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ("since_ms", "source"),
+    [pytest.param(2000, "/* the answer */", id="cut"), pytest.param(0, "/* wiped */", id="no-cut")],
+)
+def test_a_grade_from_before_the_final_attempt_is_not_promoted(
+    promoter: ModuleType, tmp_path: pathlib.Path, since_ms: int, source: str
+) -> None:
     """T5/X7: the crashed attempt's 9.0x was scored on a source the relaunch deleted. Promoting it
     would submit an answer the agent that finished the task never held -- and its 9.0x outranks the
-    real one, so without the cut it is the one that gets sent."""
+    real one, so without the cut it is the one that gets sent. Read with no stamp, the wiped attempt's 9.0x is
+    the best correct score, which is why the cut has to be passed rather than inferred."""
     run_dir = make_relaunched_run_dir(tmp_path)
 
-    (item,) = promoter.candidates(run_dir, only_episode_id="setup.n0.p1.w1", since_ms=2000)
-    assert item["source"] == "/* the answer */"
-
-
-def test_without_a_cut_the_wiped_attempts_grade_still_wins(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
-    """The same shard read with no stamp: the wiped attempt's 9.0x is the best correct score, which is
-    why the cut has to be passed rather than inferred."""
-    run_dir = make_relaunched_run_dir(tmp_path)
-
-    (item,) = promoter.candidates(run_dir, only_episode_id="setup.n0.p1.w1")
-    assert item["source"] == "/* wiped */"  # the best correct score wins
-    assert promoter.best_speedups(run_dir)[("setup.n0.p1.w1", "gemm")] == 9.0
+    (item,) = promoter.candidates(run_dir, only_episode_id="setup.n0.p1.w1", since_ms=since_ms)
+    assert item["source"] == source
+    if not since_ms:
+        assert promoter.best_speedups(run_dir)[("setup.n0.p1.w1", "gemm")] == 9.0
 
 
 def test_a_correct_but_slower_score_is_promoted(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
@@ -546,34 +549,30 @@ def add_submission(run_dir: pathlib.Path, ts: int, episode_id: str = "setup.n0.p
     results_seed.submission(run_dir / SHARD, episode_id, "gemm", ts)
 
 
+@pytest.mark.parametrize(
+    ("ts", "since_ms", "promoted"),
+    [
+        # tsvc_2_s152: the crashed attempt submitted at 1000, the relaunch scored correct at 3000 and timed out.
+        # X7 drops the 1000 row, so skipping the promotion over it left NO answer at all.
+        pytest.param(1000, 2000, True, id="wiped-attempt"),
+        # The agent's own answer from the attempt that finished stands: nothing is promoted over it.
+        pytest.param(3500, 2000, False, id="final-attempt"),
+        # A worker that never relaunched has no cut, and every submission it made is its own answer.
+        pytest.param(1000, 0, False, id="no-cut"),
+    ],
+)
 def test_a_submission_from_the_wiped_attempt_does_not_block_the_final_attempts_promotion(
-    promoter: ModuleType, tmp_path: pathlib.Path
+    promoter: ModuleType, tmp_path: pathlib.Path, ts: int, since_ms: int, promoted: bool
 ) -> None:
-    """tsvc_2_s152: the crashed attempt submitted at 1000, the relaunch scored correct at 3000
-    and timed out. X7 drops the 1000 row, so skipping the promotion over it left NO answer at all."""
     run_dir = make_relaunched_run_dir(tmp_path)
-    add_submission(run_dir, 1000)
+    add_submission(run_dir, ts)
 
-    (item,) = promoter.candidates(run_dir, only_episode_id="setup.n0.p1.w1", since_ms=2000)
-    assert item["source"] == "/* the answer */"
-
-
-def test_a_submission_from_the_final_attempt_still_blocks_its_promotion(
-    promoter: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """The agent's own answer from the attempt that finished stands: nothing is promoted over it."""
-    run_dir = make_relaunched_run_dir(tmp_path)
-    add_submission(run_dir, 3500)
-
-    assert promoter.candidates(run_dir, only_episode_id="setup.n0.p1.w1", since_ms=2000) == []
-
-
-def test_without_a_cut_any_submission_blocks_the_promotion(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
-    """A worker that never relaunched has no cut, and every submission it made is its own answer."""
-    run_dir = make_relaunched_run_dir(tmp_path)
-    add_submission(run_dir, 1000)
-
-    assert promoter.candidates(run_dir, only_episode_id="setup.n0.p1.w1") == []
+    found = promoter.candidates(run_dir, only_episode_id="setup.n0.p1.w1", since_ms=since_ms)
+    if promoted:
+        (item,) = found
+        assert item["source"] == "/* the answer */"
+    else:
+        assert found == []
 
 
 def test_the_teardown_sweep_ignores_a_submission_from_before_the_workers_cut(
@@ -613,13 +612,18 @@ def test_a_promotion_reads_the_routers_verdict(
     assert promoter.promote("http://judge:8800", item, dry_run=False, rank=0).startswith(expected)
 
 
-def test_the_old_budget_name_is_refused_not_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("name", "refused"),
+    [
+        pytest.param("PROMOTE_BUDGET_S", True, id="old-name"),
+        pytest.param("PROMOTE_BUDGET_SECONDS", False, id="seconds-name"),
+    ],
+)
+def test_the_old_budget_name_is_refused_not_ignored(monkeypatch: pytest.MonkeyPatch, name: str, refused: bool) -> None:
     """PROMOTE_BUDGET_S became PROMOTE_BUDGET_SECONDS; read silently, the old name would leave the 1800 s default."""
-    monkeypatch.setenv("PROMOTE_BUDGET_S", "60")
-    with pytest.raises(SystemExit, match="PROMOTE_BUDGET_S is renamed PROMOTE_BUDGET_SECONDS"):
-        fresh("promote_unsubmitted")
-
-
-def test_the_budget_reads_its_seconds_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PROMOTE_BUDGET_SECONDS", "60")
-    assert fresh("promote_unsubmitted").PROMOTE_BUDGET_S == 60.0
+    monkeypatch.setenv(name, "60")
+    if refused:
+        with pytest.raises(SystemExit, match="PROMOTE_BUDGET_S is renamed PROMOTE_BUDGET_SECONDS"):
+            fresh("promote_unsubmitted")
+    else:
+        assert fresh("promote_unsubmitted").PROMOTE_BUDGET_S == 60.0

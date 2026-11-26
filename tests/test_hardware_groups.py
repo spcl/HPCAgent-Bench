@@ -81,18 +81,24 @@ def test_nothing_is_reported_deselected_when_no_hardware_test_was_collected() ->
     assert deselected == []
 
 
-def test_a_host_with_the_device_and_every_tool_lacks_nothing(tmp_path: pathlib.Path) -> None:
-    device = tmp_path / "kfd"
-    device.write_text("")
-    assert conftest.device_and_tools_missing(device, ("rocminfo", "rocprofv3"), which=lambda tool: f"/bin/{tool}") == ""
-
-
-def test_a_host_without_the_device_names_the_device_and_each_missing_tool(tmp_path: pathlib.Path) -> None:
-    device = tmp_path / "nvidiactl"
-    missing = conftest.device_and_tools_missing(
-        device, ("nsys", "ncu"), which=lambda tool: "/usr/bin/nsys" if tool == "nsys" else None
+@pytest.mark.parametrize(
+    ("has_device", "tools", "present", "missing"),
+    [
+        (True, ("rocminfo", "rocprofv3"), {"rocminfo", "rocprofv3"}, ""),
+        (False, ("nsys", "ncu"), {"nsys"}, "{device}, ncu"),
+    ],
+    ids=["lacks-nothing", "lacks-device-and-a-tool"],
+)
+def test_a_host_without_the_device_names_the_device_and_each_missing_tool(
+    tmp_path: pathlib.Path, has_device: bool, tools: tuple[str, ...], present: set[str], missing: str
+) -> None:
+    device = tmp_path / "device"
+    if has_device:
+        device.write_text("")
+    found = conftest.device_and_tools_missing(
+        device, tools, which=lambda tool: f"/usr/bin/{tool}" if tool in present else None
     )
-    assert missing == f"{device}, ncu"
+    assert found == missing.format(device=device)
 
 
 def test_a_selected_hardware_test_fails_at_setup_on_a_host_without_the_hardware(
@@ -102,11 +108,6 @@ def test_a_selected_hardware_test_fails_at_setup_on_a_host_without_the_hardware(
     monkeypatch.setattr(conftest, "HARDWARE_GROUPS", {"amd": conftest.HardwareGroup("an AMD GPU", lambda: "/dev/kfd")})
     with pytest.raises(pytest.fail.Exception, match="amd group, but this host lacks: /dev/kfd"):
         conftest.pytest_runtest_setup(FakeItem("amd", "amd"))
-
-
-def test_a_selected_hardware_test_on_a_capable_host_passes_setup(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(conftest, "HARDWARE_GROUPS", {"amd": conftest.HardwareGroup("an AMD GPU", lambda: "")})
-    conftest.pytest_runtest_setup(FakeItem("amd", "amd"))
 
 
 def test_the_papi_probe_names_the_missing_library(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,11 +130,8 @@ def test_the_perf_probe_passes_on_perfs_own_refusal(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(perf_reports, "perf_check", refuse)
     assert "perf_event_paranoid=4" in conftest.perf_missing()
-
-
-def test_the_perf_probe_is_satisfied_when_perf_can_sample(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(perf_reports, "perf_check", lambda: "/usr/bin/perf")
-    assert conftest.perf_missing() == ""
+    assert conftest.perf_missing() == ""  # satisfied when perf can sample
 
 
 @pytest.mark.parametrize("group", sorted(conftest.HARDWARE_GROUPS))

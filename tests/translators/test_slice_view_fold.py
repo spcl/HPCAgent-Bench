@@ -10,7 +10,6 @@ import pytest
 
 from hpcagent_bench.categories import Preset
 from hpcagent_bench.translators.numpyto_common.lowering import fold_slice_view_aliases
-from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from tests.translators.op_oracle import run_op
 
 
@@ -130,26 +129,40 @@ def test_conv2d_batch_norm_scaling_c_matches_numpy() -> None:
     assert status.get("c") == "ok", status
 
 
-def test_a_folded_staging_local_is_reported_dead() -> None:
-    # A folded alias whose name no longer appears anywhere is reported back so the
-    # caller can drop its entry from ``zeros_locals``: the slice lifter's ``__hcall``
-    # staging copy is exactly this shape, and leaving it allocated emits a
-    # malloc/free pair for a buffer nothing writes or reads (and, with no use left to
-    # place it against, hoisted to function top -- see
-    # test_runtime_axis_dispatch.test_a_branch_allocates_only_its_own_buffers).
-    src = "def f(x, out):\n    __hcall1 = x[0:3, :]\n    out[0] = __hcall1[1, 2]\n"
+@pytest.mark.parametrize(
+    ("src", "shapes", "dead", "gone"),
+    [
+        # A folded alias whose name no longer appears anywhere is reported back so the
+        # caller can drop its entry from ``zeros_locals``: the slice lifter's ``__hcall``
+        # staging copy is exactly this shape, and leaving it allocated emits a
+        # malloc/free pair for a buffer nothing writes or reads (and, with no use left to
+        # place it against, hoisted to function top -- see
+        # test_runtime_axis_dispatch.test_a_branch_allocates_only_its_own_buffers).
+        pytest.param(
+            "def f(x, out):\n    __hcall1 = x[0:3, :]\n    out[0] = __hcall1[1, 2]\n",
+            {"x": ["n", "m"], "__hcall1": ["3", "m"]},
+            {"__hcall1"},
+            True,
+            id="folded",
+        ),
+        # The write-through alias of test_view_written_through_is_not_folded: the name
+        # stays live, so nothing may be pruned from the allocation table.
+        pytest.param(
+            "def f(x, out):\n    v = x[0:3, :]\n    v[1, 2] = 5.0\n    out[0] = v[1, 2]\n",
+            {"x": ["n", "m"], "v": ["3", "m"]},
+            set(),
+            False,
+            id="declined",
+        ),
+    ],
+)
+def test_a_folded_staging_local_is_reported_dead(
+    src: str, shapes: dict[str, list[str]], dead: set[str], gone: bool
+) -> None:
     tree = ast.parse(src).body[0]
-    dead = fold_slice_view_aliases(tree, {"x": ["n", "m"], "__hcall1": ["3", "m"]})
-    assert dead == {"__hcall1"}
-    assert "__hcall1" not in ast.unparse(tree)
-
-
-def test_a_declined_fold_reports_nothing_dead() -> None:
-    # The write-through alias of test_view_written_through_is_not_folded: the name
-    # stays live, so nothing may be pruned from the allocation table.
-    src = "def f(x, out):\n    v = x[0:3, :]\n    v[1, 2] = 5.0\n    out[0] = v[1, 2]\n"
-    tree = ast.parse(src).body[0]
-    assert fold_slice_view_aliases(tree, {"x": ["n", "m"], "v": ["3", "m"]}) == OrderedSet()
+    assert fold_slice_view_aliases(tree, shapes) == dead
+    if gone:
+        assert "__hcall1" not in ast.unparse(tree)
 
 
 def test_chained_index_array_split_by_a_slice_is_not_flattened() -> None:

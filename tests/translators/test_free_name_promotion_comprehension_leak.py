@@ -34,37 +34,47 @@ def kir_(body: str, input_args: list) -> KernelIR:
     return KernelIR(tree=tree, kernel_name="k", input_args=list(input_args))
 
 
-def test_listcomp_target_not_promoted_to_param() -> None:
-    kir = kir_(
-        "def k(xs, size, out):\n    out[0] = sum(int(round(fr * size)) for fr in xs)\n",
-        ["xs", "size", "out"],
-    )
-    promote_free_names_to_params(kir)
-    assert "fr" not in kir.input_args
-    assert [s.name for s in kir.symbols] == []
-
-
 @pytest.mark.parametrize(
-    ("body", "bound_names"),
+    ("body", "args", "bound_names", "no_symbols"),
     [
         (
-            "def k(xs, out):\n    d = {v: v * 2 for v in xs}\n    s = {w for w in xs}\n    out[0] = len(d) + len(s)\n",
-            ("v", "w"),
+            "def k(xs, size, out):\n    out[0] = sum(int(round(fr * size)) for fr in xs)\n",
+            ["xs", "size", "out"],
+            ("fr",),
+            True,
         ),
-        ("def k(xs, out):\n    f = lambda z: z + 1\n    out[0] = f(xs[0])\n", ("z",)),
-        ("def k(xs, out):\n    if (n := len(xs)) > 0:\n        out[0] = n\n", ("n",)),
+        (
+            "def k(xs, out):\n    d = {v: v * 2 for v in xs}\n    s = {w for w in xs}\n    out[0] = len(d) + len(s)\n",
+            ["xs", "out"],
+            ("v", "w"),
+            False,
+        ),
+        ("def k(xs, out):\n    f = lambda z: z + 1\n    out[0] = f(xs[0])\n", ["xs", "out"], ("z",), False),
+        ("def k(xs, out):\n    if (n := len(xs)) > 0:\n        out[0] = n\n", ["xs", "out"], ("n",), False),
         (
             "def k(xs, out):\n    try:\n        out[0] = xs[0]\n    except IndexError as err:\n        out[0] = 0\n",
+            ["xs", "out"],
             ("err",),
+            False,
         ),
     ],
-    ids=["set_and_dict_comprehension_targets", "lambda_args", "walrus_target", "except_handler_name"],
+    ids=[
+        "listcomp_target",
+        "set_and_dict_comprehension_targets",
+        "lambda_args",
+        "walrus_target",
+        "except_handler_name",
+    ],
 )
-def test_locally_bound_names_are_not_promoted_to_params(body: str, bound_names: tuple[str, ...]) -> None:
-    kir = kir_(body, ["xs", "out"])
+def test_locally_bound_names_are_not_promoted_to_params(
+    body: str, args: list[str], bound_names: tuple[str, ...], no_symbols: bool
+) -> None:
+    kir = kir_(body, args)
     promote_free_names_to_params(kir)
     for name in bound_names:
         assert name not in kir.input_args
+    if no_symbols:
+        assert [s.name for s in kir.symbols] == []
 
 
 # end-to-end pin: the real kernel this was found on

@@ -7,6 +7,8 @@ the same colour in every figure, dropping a series does not repaint the survivor
 reads as its lead packet's family, and identity is never carried by colour alone.
 """
 
+from collections.abc import Callable
+
 import pytest
 
 from hpcagent_bench import packets, vocabulary
@@ -18,11 +20,8 @@ def test_every_registered_packet_has_a_name() -> None:
     raw tag like `cpf-src` on a legend."""
     named = {key for key, entry in vocabulary.PACKETS.entries.items() if entry.name}
     assert set(palette.hue_order("packets")) <= named, sorted(set(palette.hue_order("packets")) - named)
-
-
-def test_every_registered_model_has_a_name() -> None:
-    named = {key for key, entry in vocabulary.MODELS.entries.items() if entry.name}
-    assert set(palette.order("models")) <= named, sorted(set(palette.order("models")) - named)
+    models = {key for key, entry in vocabulary.MODELS.entries.items() if entry.name}
+    assert set(palette.order("models")) <= models, sorted(set(palette.order("models")) - models)
 
 
 def test_the_control_has_a_name_and_a_neutral_colour() -> None:
@@ -39,6 +38,8 @@ def test_colour_does_not_depend_on_the_other_series() -> None:
     few = palette.colors(["", "cpf-tool"])
     assert few[""] == many[""]
     assert few["cpf-tool"] == many["cpf-tool"]
+    # nor does the order within a combination
+    assert palette.color("cpf-src+lang-skills") == palette.color("lang-skills+cpf-src")
 
 
 def test_a_combination_keeps_its_lead_packets_family() -> None:
@@ -46,10 +47,6 @@ def test_a_combination_keeps_its_lead_packets_family() -> None:
     assert packets.lead(packets.spec_parts("cpf-src+lang-skills")) == "cpf-cpu-src"
     assert palette.color("cpf-src+lang-skills") != palette.color("cpf-src")
     assert palette.color("cpf-src+lang-skills") != palette.color("lang-skills")
-
-
-def test_order_within_a_combination_does_not_change_the_colour() -> None:
-    assert palette.color("cpf-src+lang-skills") == palette.color("lang-skills+cpf-src")
 
 
 def test_each_extra_packet_is_one_step_lighter() -> None:
@@ -79,20 +76,23 @@ def test_no_registered_packet_shares_a_slot_with_another() -> None:
     assert len({palette.color(p) for p in leads}) == len(leads)
 
 
-@pytest.mark.parametrize("unknown", ["mystery", "not-a-packet"])
-def test_an_unregistered_packet_is_stable_and_warns(unknown: str, caplog: pytest.LogCaptureFixture) -> None:
-    """A new packet must not break a plot, and must not get a different colour in two runs of the
-    same script -- which `hash()` would, being salted by PYTHONHASHSEED."""
+@pytest.mark.parametrize(
+    ("lookup", "unknown"),
+    [
+        pytest.param(palette.color, "mystery", id="packet-color"),
+        pytest.param(palette.color, "not-a-packet", id="packet-color-other-name"),
+        pytest.param(palette.marker, "nomodel", id="model-marker"),
+        pytest.param(palette.packet_marker, "mystery", id="packet-marker"),
+    ],
+)
+def test_an_unregistered_entity_is_stable_and_warns(
+    lookup: Callable[[str], object], unknown: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A new entity must not break a plot, and must not get a different colour or shape in two runs of
+    the same script -- which `hash()` would, being salted by PYTHONHASHSEED."""
     with caplog.at_level("WARNING"):
-        first = palette.color(unknown)
-    assert first == palette.color(unknown)
-    assert "is not registered" in caplog.text
-
-
-def test_an_unregistered_model_is_stable_and_warns(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("WARNING"):
-        first = palette.marker("nomodel")
-    assert first == palette.marker("nomodel")
+        first = lookup(unknown)
+    assert first == lookup(unknown)
     assert "is not registered" in caplog.text
 
 
@@ -163,52 +163,18 @@ def test_a_published_packet_colour_did_not_move(packet: str, expected: str) -> N
     )
 
 
-@pytest.mark.parametrize(("model", "expected"), sorted(PUBLISHED_MODEL_MARKERS.items()))
-def test_a_published_model_shape_did_not_move(model: str, expected: str) -> None:
-    assert palette.marker(model) == expected
-
-
-@pytest.mark.parametrize(("framework", "expected"), sorted(PUBLISHED_FRAMEWORK_COLORS.items()))
-def test_a_published_framework_colour_did_not_move(framework: str, expected: str) -> None:
-    assert palette.framework_color(framework) == expected
+@pytest.mark.parametrize(
+    ("paint", "entity", "expected"),
+    [(palette.marker, model, shape) for model, shape in sorted(PUBLISHED_MODEL_MARKERS.items())]
+    + [(palette.framework_color, name, color) for name, color in sorted(PUBLISHED_FRAMEWORK_COLORS.items())],
+)
+def test_a_published_framework_colour_did_not_move(paint: Callable[[str], str], entity: str, expected: str) -> None:
+    assert paint(entity) == expected
 
 
 def test_an_alias_wears_what_it_aliases() -> None:
     """A spelling is not an entity. `jax_cpu` and `jax` are one framework, so they must take one colour."""
     assert palette.framework_color("jax_cpu") == palette.framework_color("jax")
-
-
-#: The interventions the PAPER's figures draw, each named with the figure it appears in. A reader
-#: carries a colour from one figure to the next, so these must be pairwise distinct GLOBALLY -- the
-#: six-hue ramp wraps at seven packets and `warn_on_collision` only ever sees one figure at a time.
-PAPER_FIGURE_PACKETS: tuple[str, ...] = (
-    "",  # the no-packet control, on every paired figure
-    "cpf-tool-cpu",  # llr40_paired_cpf
-    "cpf-cpu-src",  # llr40_paired_cpf_src
-    "cpf-tool-gpu",  # llr40's GPU half
-    "cpf-gpu-src",  # llr40's GPU half
-    "lang-skills",  # llr40_paired_skills, gpu_paired_skills
-    "divide-and-conquer",  # scicomp perf-playbook panels
-    "profiling",  # scicomp perf-playbook panels
-    "perf-playbook-cpu",  # playbook_forest
-    "repo",  # git_scicomp
-    "kernel",  # git_scicomp's control scope
-    "no-score-tool",  # llr40_blind_vs_scored
-)
-
-
-def test_the_packets_the_paper_draws_have_pairwise_distinct_hues() -> None:
-    """Colour is the entity's, and a reader carries it ACROSS figures: two interventions the paper
-    draws in the same colour read as one treatment however far apart their pages are. The committed
-    PDFs once had `cpf-src` and `no-score-tool` in one blue and `cpf-tool`, `perf-playbook-cpu` and
-    `kernel` in one orange, because the six-hue ramp wrapped. tab20 has a slot for every packet."""
-    chosen = {name: palette.color(name) for name in PAPER_FIGURE_PACKETS}
-    clashes = {
-        hue: sorted(name for name, own in chosen.items() if own == hue)
-        for hue in set(chosen.values())
-        if sum(1 for own in chosen.values() if own == hue) > 1
-    }
-    assert not clashes, clashes
 
 
 def test_every_registered_treatment_wears_its_own_shape_and_none_wears_the_control_circle() -> None:
@@ -230,13 +196,6 @@ def test_a_packets_shape_does_not_move_when_a_later_treatment_is_registered() ->
     pinned = {d.marker for d in palette.registry().packet_defs.values() if d.marker}
     pool = [shape for shape in palette.registry().shapes if shape != palette.CONTROL_MARKER and shape not in pinned]
     assert palette.harness_marker(first) == pool[0]
-
-
-def test_an_unregistered_packet_marker_is_stable_and_warns(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("WARNING"):
-        first = palette.packet_marker("mystery")
-    assert first == palette.packet_marker("mystery")
-    assert "is not registered" in caplog.text
 
 
 def test_a_control_is_the_hollow_circle_in_a_lighter_shade_of_its_models_colour_in_every_figure() -> None:

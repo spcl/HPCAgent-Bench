@@ -112,17 +112,13 @@ def build_run_dir(
 
 
 # an intact run: everything PASSes
-def test_intact_run_passes_every_check(tmp_path: pathlib.Path, validate_run: types.ModuleType) -> None:
-    run_dir = build_run_dir(tmp_path)
+@pytest.mark.parametrize("log_name", ["claude.log", "miniswe.log"], ids=["claude", "runner_harness"])
+def test_intact_run_passes_every_check(tmp_path: pathlib.Path, validate_run: types.ModuleType, log_name: str) -> None:
+    """mini-SWE writes ``miniswe.log`` and no ``claude.log``: its logs and the judge tail still check."""
+    run_dir = build_run_dir(tmp_path, log_name=log_name)
     results = validate_run.run_checks(run_dir)
     assert all(r.ok for r in results), results
     assert validate_run.main([str(run_dir)]) == 0
-
-
-def test_a_runner_harness_run_passes_on_its_own_log(tmp_path: pathlib.Path, validate_run: types.ModuleType) -> None:
-    """mini-SWE writes ``miniswe.log`` and no ``claude.log``: its logs and the judge tail still check."""
-    run_dir = build_run_dir(tmp_path, log_name="miniswe.log")
-    assert all(r.ok for r in validate_run.run_checks(run_dir)), validate_run.run_checks(run_dir)
 
 
 def test_db_shards_check_reports_per_shard_and_merged_totals(
@@ -164,26 +160,24 @@ def test_missing_log_and_empty_agent_dir_fail_only_those_checks(
         ("check_submissions_disk", "no shared/ dir"),
         ("check_agent_logs", "no agents/ dir"),
         ("check_monitor", "no monitor/ dir"),
+        ("", ""),  # no run dir at all
     ],
-    ids=["judge", "shared", "agents", "monitor"],
+    ids=["judge", "shared", "agents", "monitor", "no_run_dir"],
 )
 def test_a_missing_subtree_fails_cleanly(
     tmp_path: pathlib.Path, validate_run: types.ModuleType, check_name: str, expected_summary: str
 ) -> None:
     run_dir = tmp_path / "run"
+    if not check_name:
+        run_dir = tmp_path / "does-not-exist"
+        results = validate_run.run_checks(run_dir)
+        assert all(not r.ok for r in results)
+        assert validate_run.main([str(run_dir)]) == 1
+        return
     run_dir.mkdir()
     result = modules.member(validate_run, check_name)(run_dir)
     assert not result.ok
     assert expected_summary in result.summary
-
-
-def test_a_run_dir_that_does_not_exist_at_all_still_reports_cleanly(
-    tmp_path: pathlib.Path, validate_run: types.ModuleType
-) -> None:
-    run_dir = tmp_path / "does-not-exist"
-    results = validate_run.run_checks(run_dir)
-    assert all(not r.ok for r in results)
-    assert validate_run.main([str(run_dir)]) == 1
 
 
 def test_a_judge_that_stopped_before_its_agents_fails_judge_tail(
@@ -254,16 +248,17 @@ def test_a_judge_comparing_on_the_host_fails_only_device_compare(
     assert [r.name for r in validate_run.run_checks(run_dir) if not r.ok] == ["device_compare"]
 
 
-def test_the_merge_failed_marker_fails_only_merge(tmp_path: pathlib.Path, validate_run: types.ModuleType) -> None:
+@pytest.mark.parametrize("fault", ["merge_failed_marker", "monitor_csv_without_rows"])
+def test_the_merge_failed_marker_fails_only_merge(
+    tmp_path: pathlib.Path, validate_run: types.ModuleType, fault: str
+) -> None:
     run_dir = build_run_dir(tmp_path)
-    assert validate_run.check_merge(run_dir).ok
-    (run_dir / "MERGE_FAILED").write_text("merge_results exited 1\n")
-    failed = [result.name for result in validate_run.run_checks(run_dir) if not result.ok]
-    assert failed == ["merge"]
-
-
-def test_monitor_csv_with_no_data_rows_is_flagged(tmp_path: pathlib.Path, validate_run: types.ModuleType) -> None:
-    run_dir = build_run_dir(tmp_path)
+    if fault == "merge_failed_marker":
+        assert validate_run.check_merge(run_dir).ok
+        (run_dir / "MERGE_FAILED").write_text("merge_results exited 1\n")
+        failed = [result.name for result in validate_run.run_checks(run_dir) if not result.ok]
+        assert failed == ["merge"]
+        return
     (run_dir / "monitor" / "judge-nid002.csv").write_text(MONITOR_HEADER + "\n")  # header only, 0 samples
     result = validate_run.check_monitor(run_dir)
     assert not result.ok
@@ -341,38 +336,29 @@ def test_merge_results_never_turns_a_correct_score_into_a_submission(tmp_path: p
 
 
 # monitor_report must skip a garbage CSV, not lose the good ones with it
-def test_monitor_report_skips_garbage_csv_and_still_reports_the_rest(
-    tmp_path: pathlib.Path,
-    monitor_report: types.ModuleType,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monitor_dir = tmp_path / "monitor"
-    monitor_dir.mkdir()
-    (monitor_dir / "vllm-nid001.csv").write_text(f"{MONITOR_HEADER}\n{MONITOR_ROW}\n")
-    (monitor_dir / "judge-nid002.csv").write_bytes(GARBAGE_BYTES)
-
-    monkeypatch.setattr(sys, "argv", ["monitor_report.py", str(monitor_dir)])
-    monitor_report.main()
-
-    out, err = capsys.readouterr()
-    assert "nid001" in out
-    assert "skipped 1/2 CSV files" in out
-    assert "skipped" in err
-    assert "nid002" in err
-
-
+@pytest.mark.parametrize("with_good_csv", [True, False], ids=["skips_garbage_and_reports_the_rest", "every_csv_bad"])
 def test_monitor_report_exits_nonzero_when_every_csv_is_bad(
     tmp_path: pathlib.Path,
     monitor_report: types.ModuleType,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    with_good_csv: bool,
 ) -> None:
     monitor_dir = tmp_path / "monitor"
     monitor_dir.mkdir()
+    if with_good_csv:
+        (monitor_dir / "vllm-nid001.csv").write_text(f"{MONITOR_HEADER}\n{MONITOR_ROW}\n")
     (monitor_dir / "judge-nid002.csv").write_bytes(GARBAGE_BYTES)
 
     monkeypatch.setattr(sys, "argv", ["monitor_report.py", str(monitor_dir)])
+    if with_good_csv:
+        monitor_report.main()
+        out, err = capsys.readouterr()
+        assert "nid001" in out
+        assert "skipped 1/2 CSV files" in out
+        assert "skipped" in err
+        assert "nid002" in err
+        return
     with pytest.raises(SystemExit) as excinfo:
         monitor_report.main()
 

@@ -72,13 +72,10 @@ def test_an_older_source_with_the_empty_table_merges_into_a_new_file(tmp_path: p
     assert "disqualifications" not in tables(merged)
     assert "disqualifications" in tables(source) and version(source) == BEFORE  # a source is read, never upgraded
 
-
-def test_a_new_source_merges_into_an_older_file(tmp_path: pathlib.Path) -> None:
-    dest, source = old_file(tmp_path / "results.db"), tmp_path / "shard.db"
-    results_seed.score(source, "setup.n0.p1.w2", "gemm", 2, 3.0)
-
-    results_db.merge(dest, [source])
-
+    # the mirror direction: a new source merges into an older file
+    dest, new_source = old_file(tmp_path / "results.db"), tmp_path / "new-shard.db"
+    results_seed.score(new_source, "setup.n0.p1.w2", "gemm", 2, 3.0)
+    results_db.merge(dest, [new_source])
     assert grade_count(dest) == 2
     assert "disqualifications" not in tables(dest) and version(dest) == results_db.SCHEMA_VERSION
 
@@ -95,14 +92,11 @@ def test_an_older_file_with_a_withdrawn_grade_is_refused_and_left_as_it_was(tmp_
         assert conn.execute("SELECT COUNT(*) FROM disqualifications").fetchone()[0] == 1
     assert grade_count(path) == 1 and len(path.read_bytes()) == len(before)
 
-
-def test_a_source_with_a_withdrawn_grade_is_refused_and_the_destination_unchanged(tmp_path: pathlib.Path) -> None:
-    source, merged = old_file(tmp_path / "shard.db", withdrawn=True), tmp_path / "merged.db"
+    # a source holding a withdrawn grade is refused on merge too, and the destination is unchanged
+    withdrawn_source, merged = old_file(tmp_path / "shard.db", withdrawn=True), tmp_path / "merged.db"
     results_seed.score(merged, "setup.n0.p1.w2", "gemm", 2, 3.0)
     kept = tmp_path / "kept.db"
     shutil.copy(merged, kept)
-
     with pytest.raises(results_db.SchemaVersionError, match="disqualifications"):
-        results_db.merge(merged, [source])
-
+        results_db.merge(merged, [withdrawn_source])
     assert results_db.held_rows(merged) == results_db.held_rows(kept)

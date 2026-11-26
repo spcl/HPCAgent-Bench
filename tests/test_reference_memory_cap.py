@@ -50,10 +50,7 @@ def mi300_rank(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_rank_bound_to_a_quarter_of_the_cores_owns_a_quarter_of_the_ram(monkeypatch: pytest.MonkeyPatch) -> None:
     mi300_rank(monkeypatch)
     assert sizing.rank_memory_share_bytes() == NODE_RAM // 4
-
-
-def test_an_unpinned_process_owns_the_whole_node(monkeypatch: pytest.MonkeyPatch) -> None:
-    mi300_rank(monkeypatch)
+    # An unpinned process owns the whole node.
     monkeypatch.setattr(sizing.os, "sched_getaffinity", lambda _pid: set(range(NODE_CORES)))
     assert sizing.rank_memory_share_bytes() == NODE_RAM
 
@@ -109,7 +106,7 @@ def capture_caps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 def test_the_compiled_references_run_under_the_reference_cap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """c and c-autopar (and the C oracle) go through run_compiled_reference."""
+    """c and c-autopar (and the C oracle) go through run_compiled_reference; numba through time_numba_isolated."""
     caps = capture_caps(monkeypatch)
     monkeypatch.setattr(
         grading, "build_reference_lib", lambda root, *_a, **_k: BuildResult(True, tmp_path / "lib.so", "")
@@ -120,11 +117,8 @@ def test_the_compiled_references_run_under_the_reference_cap(
     assert caps == [sizing.reference_memory_gb(20.0)]
     assert caps[0] > 20.0
 
-
-def test_the_numba_reference_runs_under_the_reference_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    caps = capture_caps(monkeypatch)
-    spec = BenchSpec.load(KERNEL)
-    data = grading.data_seeded(KERNEL, Preset.S, "float64", 1)
+    # The numba reference runs under the same cap.
+    caps.clear()
     grading.time_numba_isolated(spec, binding_from_spec(spec), data, 2, 60.0, 20.0)
     assert caps == [sizing.reference_memory_gb(20.0)]
 

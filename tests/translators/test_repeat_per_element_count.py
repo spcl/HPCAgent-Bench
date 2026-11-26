@@ -74,10 +74,8 @@ def test_extent_telescopes_to_diff_endpoints() -> None:
     assert shape_table["row_index"] == ("p[M + 1 - 1] - p[0]",)
     assert fresh_local_allocs["row_index"] == ("p[M + 1 - 1] - p[0]",)
 
-
-def test_non_diff_per_element_count_refused() -> None:
-    """A per-element count with no derivable sum (a bare counts array, not ``np.diff(p)``) must
-    NOT guess an extent -- refuse with a clear message naming the offending form."""
+    # A per-element count with no derivable sum (a bare counts array, not ``np.diff(p)``) must NOT guess an extent:
+    # it is refused with a message naming the offending form.
     with pytest.raises(NotImplementedError, match="derivable sum"):
         expand_("row_index = np.repeat(a, counts)", {"a": ("M",), "counts": ("M",)})
 

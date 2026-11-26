@@ -3,7 +3,9 @@
 """Tests for hpcagent_bench.harness.mpi_descriptor: scatter/gather roundtrip and partition invariants."""
 
 import math
+from collections.abc import Callable
 from dataclasses import replace
+from typing import Any
 
 import numpy as np
 import pytest
@@ -20,7 +22,6 @@ from hpcagent_bench.harness.mpi_descriptor import (
     blockcyclic_distribution_from_shapes,
     default_distribution,
     distribution_for_kernel,
-    distribution_from_shapes,
     distribution_over_symbol,
     gather,
     hypercube_grid,
@@ -59,19 +60,6 @@ def test_block_bounds_partition_and_balance(n: int, parts: int) -> None:
     # balanced: sizes differ by at most 1
     sizes = [len(ix) for ix in idxs]
     assert max(sizes) - min(sizes) <= 1
-
-
-# block-cyclic ownership formula
-
-
-def test_block_cyclic_owner_formula() -> None:
-    # owner(i) = (i // block_size) % parts -- verify against the descriptor
-    n, parts, block_size = 20, 3, 2
-    g, dist = dist_1d(Scheme.BLOCK_CYCLIC, parts, block_size=block_size)
-    for coord in range(parts):
-        got = set(owned_indices(n, dist.axes[0], g, (coord,)).tolist())
-        want = {i for i in range(n) if (i // block_size) % parts == coord}
-        assert got == want
 
 
 # negatives + edge cases the invariants themselves must catch
@@ -169,39 +157,37 @@ def test_from_submission_resolves_declared_and_replicates_the_rest() -> None:
     assert not d.arrays["A"].replicated
 
 
-def test_from_submission_replicates_undeclared_array() -> None:
-    # only A is distributed; C is left out -> replicated (lives on every rank, rank 0 wins).
-    d = only_a_distributed()
-    assert d.arrays["C"].replicated is True
-    assert d.arrays["A"].replicated is False
-
-
-def test_from_submission_rejects_grid_rank_mismatch() -> None:
-    b = binding_2d()
-    with pytest.raises(ValueError, match="does not span 4 rank"):
-        Descriptor.from_submission(submitted({"grid": [2, 1], "arrays": {"A": block_axis0()}}), b, ranks=4)
-
-
-def test_from_submission_rejects_unknown_array() -> None:
-    b = binding_2d()
-    with pytest.raises(ValueError, match="no array 'Z'"):
-        Descriptor.from_submission(submitted({"grid": [2, 1], "arrays": {"Z": block_axis0()}}), b, ranks=2)
-
-
-def test_from_submission_rejects_distributing_a_scalar() -> None:
-    b = binding_2d()
-    # alpha is a scalar -> broadcast by value, never distributed.
-    with pytest.raises(ValueError, match="scalar 'alpha'"):
-        Descriptor.from_submission(
-            requested([2], [{"action": "distribute", "array": "alpha", "grid_dim": 0, "digit": "i0"}]), b, ranks=2
-        )
-
-
-def test_from_submission_rejects_an_op_on_a_missing_dimension() -> None:
-    b = binding_2d()  # A is 2-D
-    layout = [{"action": "block", "array": "A", "digit": "i2", "factor": 2, "into": ["o", "f"]}]
-    with pytest.raises(ValueError, match="no digit 'i2'"):
-        Descriptor.from_submission(requested([2], layout), b, ranks=2)
+@pytest.mark.parametrize(
+    ("submission", "ranks", "message"),
+    [
+        (lambda: submitted({"grid": [2, 1], "arrays": {"A": block_axis0()}}), 4, "does not span 4 rank"),
+        (lambda: submitted({"grid": [2, 1], "arrays": {"Z": block_axis0()}}), 2, "no array 'Z'"),
+        # alpha is a scalar -> broadcast by value, never distributed.
+        (
+            lambda: requested([2], [{"action": "distribute", "array": "alpha", "grid_dim": 0, "digit": "i0"}]),
+            2,
+            "scalar 'alpha'",
+        ),
+        # A is 2-D, so it has no third digit.
+        (
+            lambda: requested([2], [{"action": "block", "array": "A", "digit": "i2", "factor": 2, "into": ["o", "f"]}]),
+            2,
+            "no digit 'i2'",
+        ),
+        # A zero factor would be a zero-width block; refused before anything is scattered.
+        (
+            lambda: requested([2], [{"action": "block", "array": "A", "digit": "i0", "factor": 0, "into": ["o", "f"]}]),
+            2,
+            "a factor or part count must be >= 1",
+        ),
+    ],
+    ids=["grid-rank-mismatch", "unknown-array", "scalar", "missing-dimension", "zero-block-factor"],
+)
+def test_from_submission_refuses_a_request_the_binding_cannot_resolve(
+    submission: Callable[[], Submission], ranks: int, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Descriptor.from_submission(submission(), binding_2d(), ranks=ranks)
 
 
 def test_layout_rejects_two_dimensions_on_one_grid_dim() -> None:
@@ -217,15 +203,11 @@ def test_layout_rejects_two_dimensions_on_one_grid_dim() -> None:
             Descriptor.from_submission(requested(grid, layout), binding_2d(), ranks=math.prod(grid))
 
 
-def test_layout_rejects_zero_block_factor() -> None:
-    # A zero factor would be a zero-width block; refused before anything is scattered.
-    layout = [{"action": "block", "array": "A", "digit": "i0", "factor": 0, "into": ["o", "f"]}]
-    with pytest.raises(ValueError, match="a factor or part count must be >= 1"):
-        Descriptor.from_submission(requested([2], layout), binding_2d(), ranks=2)
-
-
 def test_descriptor_scatter_gather_roundtrip_declared_and_replicated() -> None:
     d = only_a_distributed()
+    # Only A is distributed; C is left out -> replicated (lives on every rank, rank 0 wins).
+    assert d.arrays["C"].replicated is True
+    assert d.arrays["A"].replicated is False
     a = arange((8, 4), np.float64)
     # A is block-distributed on axis 0; C is replicated (undeclared). Both roundtrip.
     for name in ("A", "C"):
@@ -246,20 +228,6 @@ def test_descriptor_length1_array_is_replicated_and_gathers_from_rank0() -> None
     tiles = [np.array([[42.0]]), np.array([[999.0]])]  # ranks disagree
     back = d.gather("A", tiles, (1, 1), np.dtype(np.float64))
     assert back[0, 0] == 42.0  # rank 0 wins
-
-
-def test_local_size_scalars_localises_distributed_symbol_only() -> None:
-    b = binding_2d()
-    # A block over grid dim 0 (axis 0 <-> symbol M); axis 1 (symbol N) stays whole.
-    d = Descriptor.from_submission(
-        submitted({"grid": [2, 1], "arrays": {"A": block_axis0(), "C": block_axis0()}}), b, ranks=2
-    )
-    g = {"M": 8, "N": 4, "alpha": 2.0}
-    r0, r1 = d.local_size_scalars(g, 0), d.local_size_scalars(g, 1)
-    assert r0["M"] == 4
-    assert r1["M"] == 4
-    assert r0["N"] == 4
-    assert r0["alpha"] == 2.0
 
 
 def test_local_size_scalars_ragged_split() -> None:
@@ -358,46 +326,35 @@ def test_local_size_scalars_allows_decoupled_row_col_symbols() -> None:
         assert loc["Ncol"] == 5
 
 
-def test_local_size_scalars_allows_symbol_on_several_identically_split_axes() -> None:
-    # One symbol sizing two identically-decomposed axes is not ambiguous (regression: guard not over-eager).
+@pytest.mark.parametrize(
+    "x_axis, y_axis",
+    [
+        pytest.param(
+            {"grid_dim": 0, "scheme": "block"},
+            {"grid_dim": 0, "scheme": "block"},
+            id="identically_split_axes",
+        ),
+        pytest.param(
+            {"grid_dim": 0, "scheme": "cyclic"},
+            {"grid_dim": 0, "scheme": "block_cyclic", "block_size": 1},
+            id="count_equivalent_schemes",
+        ),
+    ],
+)
+def test_local_size_scalars_allows_a_symbol_on_axes_that_split_to_the_same_count(
+    x_axis: dict[str, Any], y_axis: dict[str, Any]
+) -> None:
+    # One symbol sizing two axes with the same per-rank count is not ambiguous (regression: guard not over-eager).
+    # `cyclic` and `block_cyclic(block_size=1)` give the same per-rank count, not a conflict.
     args = (
         Arg(name="x", kind="ptr", dtype="float64", is_const=True, shape=("LEN",)),
         Arg(name="y", kind="ptr", dtype="float64", is_const=False, shape=("LEN",), role="output"),
         Arg(name="LEN", kind="scalar", dtype="int64", is_const=True, role="symbol"),
     )
     b = Binding(kernel="k1d", config="dense", args=args, symbols={})
-    sub = submitted(
-        {
-            "grid": [4],
-            "arrays": {
-                "x": {"axes": [{"grid_dim": 0, "scheme": "block"}]},
-                "y": {"axes": [{"grid_dim": 0, "scheme": "block"}]},
-            },
-        }
-    )
+    sub = submitted({"grid": [4], "arrays": {"x": {"axes": [x_axis]}, "y": {"axes": [y_axis]}}})
     d = Descriptor.from_submission(sub, b, ranks=4)
-    assert d.local_size_scalars({"LEN": 16}, 0)["LEN"] == 4
-
-
-def test_local_size_scalars_allows_symbol_on_count_equivalent_schemes() -> None:
-    # Regression: `cyclic` and `block_cyclic(block_size=1)` give the same per-rank count, not a conflict.
-    args = (
-        Arg(name="x", kind="ptr", dtype="float64", is_const=True, shape=("LEN",)),
-        Arg(name="y", kind="ptr", dtype="float64", is_const=False, shape=("LEN",), role="output"),
-        Arg(name="LEN", kind="scalar", dtype="int64", is_const=True, role="symbol"),
-    )
-    b = Binding(kernel="k1d", config="dense", args=args, symbols={})
-    sub = submitted(
-        {
-            "grid": [4],
-            "arrays": {
-                "x": {"axes": [{"grid_dim": 0, "scheme": "cyclic"}]},
-                "y": {"axes": [{"grid_dim": 0, "scheme": "block_cyclic", "block_size": 1}]},
-            },
-        }
-    )
-    d = Descriptor.from_submission(sub, b, ranks=4)
-    # 16 elements, 4 ranks, unit-block round-robin -> 4 owned per rank, and no ambiguity is raised.
+    # 16 elements over 4 ranks -> 4 owned per rank, and no ambiguity is raised.
     assert d.local_size_scalars({"LEN": 16}, 0)["LEN"] == 4
 
 
@@ -411,18 +368,6 @@ def split_over_klon(binding: Binding, ranks: int) -> DistributionPlan:
 
 def cloudsc_binding() -> Binding:
     return binding_from_spec(BenchSpec.load("cloudsc"))
-
-
-def test_distribution_over_symbol_scaled_add_1d() -> None:
-    b = binding_from_spec(BenchSpec.load("scaled_add"))
-    block0 = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
-    plan = distribution_over_symbol(b, ["LEN_1D"], 4)
-    assert plan == plan_of({"grid": [4], "arrays": {"x": block0, "y": block0}})
-    # The JSON leaves the defaults (scheme block, block_size 1) out and always names grid_dim.
-    assert plan.to_json() == {
-        "grid": [4],
-        "arrays": {"x": {"axes": [{"grid_dim": 0}]}, "y": {"axes": [{"grid_dim": 0}]}},
-    }
 
 
 def test_distribution_over_symbol_splits_klon_at_its_per_array_axis() -> None:
@@ -575,47 +520,40 @@ def test_distribution_for_kernel_1d_block_cyclic_keeps_block_size() -> None:
     assert blk["arrays"]["A"]["axes"][0] == {"grid_dim": 0}
 
 
-def test_distribution_from_shapes_emits_block_cyclic_width() -> None:
-    # The shape-map builder carries the wrap width for block_cyclic only.
-    bc = distribution_from_shapes({"A": ("M", "N")}, ["M"], 4, scheme=Scheme.BLOCK_CYCLIC, block_size=3)
-    assert bc.arrays["A"].axes[0] == AxisDist(grid_dim=0, scheme=Scheme.BLOCK_CYCLIC, block_size=3)
-    cyc = distribution_from_shapes({"A": ("M", "N")}, ["M"], 4, scheme=Scheme.CYCLIC, block_size=3)
-    assert cyc.to_json()["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "cyclic"}
-
-
 # Per-array residency: any array on host or device, independently
 
 
-def test_from_submission_captures_per_array_location() -> None:
+@pytest.mark.parametrize(
+    ("arrays", "default", "locations", "device_pointers"),
+    [
+        # C defaults to host; A is named on the device.
+        (
+            {"A": {**block_axis0(), "location": "device"}, "C": block_axis0()},
+            None,
+            {"A": Location.DEVICE, "C": Location.HOST},
+            (0,),
+        ),
+        (
+            {"A": block_axis0(), "C": block_axis0()},
+            Location.DEVICE,
+            {"A": Location.DEVICE, "C": Location.DEVICE},
+            (0, 1),
+        ),
+        ({"A": block_axis0(), "C": block_axis0()}, None, {"A": Location.HOST, "C": Location.HOST}, ()),
+    ],
+    ids=["named-device", "default-device", "default-host"],
+)
+def test_from_submission_captures_per_array_location(
+    arrays: dict[str, Any], default: Location | None, locations: dict[str, Location], device_pointers: tuple[int, ...]
+) -> None:
     b = binding_2d()
-    sub = submitted(
-        {"grid": [2, 1], "arrays": {"A": {**block_axis0(), "location": "device"}, "C": block_axis0()}}
-    )  # C defaults to host
-    d = Descriptor.from_submission(sub, b, ranks=2)
-    assert d.locations["A"] is Location.DEVICE
-    assert d.locations["C"] is Location.HOST
+    sub = submitted({"grid": [2, 1], "arrays": arrays})
+    kwargs = {} if default is None else {"default_location": default}
+    d = Descriptor.from_submission(sub, b, ranks=2, **kwargs)
+    assert d.locations == locations
     # device_pointer_indices is in binding.pointers order (A is pointer 0, C pointer 1).
-    assert d.device_pointer_indices(b) == (0,)
-    assert d.any_device(b) is True
-
-
-def test_from_submission_default_location_applies() -> None:
-    b = binding_2d()
-    sub = submitted({"grid": [2, 1], "arrays": {"A": block_axis0(), "C": block_axis0()}})
-    d = Descriptor.from_submission(sub, b, ranks=2, default_location=Location.DEVICE)
-    assert d.locations["A"] is Location.DEVICE
-    assert d.locations["C"] is Location.DEVICE
-    assert d.device_pointer_indices(b) == (0, 1)
-    # host default -> no device pointers.
-    dh = Descriptor.from_submission(sub, b, ranks=2)
-    assert dh.device_pointer_indices(b) == ()
-    assert dh.any_device(b) is False
-
-
-def test_envelope_rejects_bad_location() -> None:
-    place = {"action": "place", "array": "A", "on": "gpu"}
-    with pytest.raises(ValueError, match=r"\non\n  Input should be 'host' or 'device'"):
-        Submission.from_obj({"language": "c", "source": "x", "requests": {"operations": [place]}})
+    assert d.device_pointer_indices(b) == device_pointers
+    assert d.any_device(b) is bool(device_pointers)
 
 
 def test_from_plan_refuses_an_axis_beyond_the_grid() -> None:

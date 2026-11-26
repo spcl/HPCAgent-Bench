@@ -53,6 +53,15 @@ TWO_STRIDES_SRC = (
     "    out_b[:] = x[:(4 - 1) * stride_b + 1:stride_b] * 1.0\n"
 )
 
+ONE_HELPER_SRC = (
+    "import numpy as np\n"
+    "def pool(v, k, m):\n"
+    "    return v[:(m - 1) * k + 1:k] * 1.0\n"
+    "def f(x, out2, out3):\n"
+    "    out2[:] = pool(x, 2, 6)\n"
+    "    out3[:] = pool(x, 3, 4)\n"
+)
+
 REBOUND_SRC = (
     "import numpy as np\n"
     "def f(x, stride, out):\n"
@@ -119,40 +128,6 @@ def test_manifest_scalar_step_stays_symbolic() -> None:
     assert "stride" in kir.param_order(), kir.param_order()
 
 
-def test_two_distinct_manifest_steps_do_not_collapse() -> None:
-    """Two manifest-constant strides in one kernel each keep their OWN name.
-
-    Collapsing them is the failure mode that produces a wrong answer rather than a refusal: both
-    slices would compile, and the second would silently walk the first's stride. The numbers, not
-    the exit code, are what decide it -- see the numeric sibling below.
-    """
-    kir = parse(
-        TWO_STRIDES_SRC,
-        ["x", "stride_a", "stride_b", "out_a", "out_b"],
-        ["x", "out_a", "out_b"],
-        {"x": "(N,)", "out_a": "(6,)", "out_b": "(4,)"},
-        {"N": 12, "stride_a": 2, "stride_b": 3},
-    )
-    assert steps(kir) == [None, None], steps(kir)
-    assert [p for p in kir.param_order() if p.startswith("stride")] == ["stride_a", "stride_b"], kir.param_order()
-
-
-def test_two_distinct_manifest_steps_walk_their_own_stride() -> None:
-    """out_a reads 1 3 5 7 9 11 and out_b reads 1 4 7 10; a collapse fills one of them with the
-    other's stride and still compiles."""
-    assert_all_ok(
-        run_op(
-            TWO_STRIDES_SRC,
-            "f",
-            {"x": A12, "stride_a": 2, "stride_b": 3},
-            {"out_a": (6,), "out_b": (4,)},
-            {"N": 12, "stride_a": 2, "stride_b": 3},
-            shapes={"x": "(N,)", "out_a": "(6,)", "out_b": "(4,)"},
-            backends=NATIVE,
-        )
-    )
-
-
 # the guard still fires on a step that is genuinely not compile-time
 
 
@@ -168,23 +143,15 @@ def test_a_bounded_step_absent_from_the_manifest_lowers_symbolically() -> None:
     assert "step" in kir.param_order(), kir.param_order()
 
 
-def test_a_rebound_step_name_is_not_folded() -> None:
-    """Once the body assigns to it, the manifest default is not what the slice reads.
-
-    Folding is refused -- a wrong stride that compiles is the worst outcome of the three, and the
-    same rule ``FoldConstantSymbols`` applies to its own substitution. The step is carried
-    symbolically instead of refusing the kernel outright, so the slice reads the REBOUND value.
-    """
-    kir = parse(REBOUND_SRC, ["x", "stride", "out"], ["x", "out"], {"x": "(N,)", "out": "(4,)"}, {"N": 12, "stride": 2})
-    assert steps(kir) == [None], steps(kir)
-
-
 def test_a_rebound_step_walks_the_rebound_stride_on_every_backend() -> None:
     """``stride`` arrives as 2 and is rebound to 3, so the read is 1 4 7 10.
 
     Had the manifest's 2 been folded in, the same kernel would fill ``out`` with 1 3 5 7 -- it
-    compiles either way, which is why the numbers rather than the exit code decide it.
+    compiles either way, which is why the numbers rather than the exit code decide it. The step is carried
+    symbolically, not folded: once the body assigns to the name, the manifest default is not what the slice reads.
     """
+    kir = parse(REBOUND_SRC, ["x", "stride", "out"], ["x", "out"], {"x": "(N,)", "out": "(4,)"}, {"N": 12, "stride": 2})
+    assert steps(kir) == [None], steps(kir)
     assert_all_ok(
         run_op(
             REBOUND_SRC,
@@ -214,44 +181,37 @@ def test_an_unbounded_symbolic_step_is_still_refused() -> None:
 # numerical: every backend walks the declared stride
 
 
-def test_manifest_step_matches_numpy_on_every_backend() -> None:
-    # The stride arrives across the ABI: a lost one reads 1..6 instead of 1 3 5 7 9 11.
-    assert_all_ok(
-        run_op(
-            POOL_SRC,
-            "f",
-            {"x": A12, "stride": 2},
-            {"out": (6,)},
-            {"N": 12, "stride": 2},
-            shapes={"x": "(N,)", "out": "(6,)"},
-            backends=NATIVE,
-        )
-    )
-
-
-def test_one_helper_two_different_literal_steps_matches_numpy() -> None:
-    """The shape every ML port has: ONE ``_conv2d``/``_maxpool2d``, called with DIFFERENT strides.
-
-    Each call site inlines its own copy, so each must keep the literal IT was passed. If the two
-    collapsed onto one stride the kernel would still compile and still fill both buffers -- ``out3``
-    would just hold ``1 3 5 7`` instead of ``1 4 7 10``.
-    """
-    src = (
-        "import numpy as np\n"
-        "def pool(v, k, m):\n"
-        "    return v[:(m - 1) * k + 1:k] * 1.0\n"
-        "def f(x, out2, out3):\n"
-        "    out2[:] = pool(x, 2, 6)\n"
-        "    out3[:] = pool(x, 3, 4)\n"
-    )
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
+@pytest.mark.parametrize(
+    ("source", "inputs", "outputs", "preset", "shapes"),
+    [
+        # The stride arrives across the ABI: a lost one reads 1..6 instead of 1 3 5 7 9 11.
+        (POOL_SRC, {"x": A12, "stride": 2}, {"out": (6,)}, {"N": 12, "stride": 2}, {"x": "(N,)", "out": "(6,)"}),
+        # out_a reads 1 3 5 7 9 11 and out_b reads 1 4 7 10; a collapse fills one of them with the other's stride
+        # and still compiles.
+        (
+            TWO_STRIDES_SRC,
+            {"x": A12, "stride_a": 2, "stride_b": 3},
+            {"out_a": (6,), "out_b": (4,)},
+            {"N": 12, "stride_a": 2, "stride_b": 3},
+            {"x": "(N,)", "out_a": "(6,)", "out_b": "(4,)"},
+        ),
+        # The shape every ML port has: ONE helper called with DIFFERENT strides, each call site inlining its own
+        # copy with the literal IT was passed; collapsed, ``out3`` would hold ``1 3 5 7`` instead of ``1 4 7 10``.
+        (
+            ONE_HELPER_SRC,
             {"x": A12},
             {"out2": (6,), "out3": (4,)},
             {"N": 12},
-            shapes={"x": "(N,)", "out2": "(6,)", "out3": "(4,)"},
-            backends=NATIVE,
-        )
-    )
+            {"x": "(N,)", "out2": "(6,)", "out3": "(4,)"},
+        ),
+    ],
+    ids=["one_manifest_step", "two_distinct_manifest_steps", "one_helper_two_literal_steps"],
+)
+def test_manifest_step_matches_numpy_on_every_backend(
+    source: str,
+    inputs: dict[str, object],
+    outputs: dict[str, tuple[int, ...]],
+    preset: dict[str, int],
+    shapes: dict[str, str],
+) -> None:
+    assert_all_ok(run_op(source, "f", inputs, outputs, preset, shapes=shapes, backends=NATIVE))

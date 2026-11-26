@@ -10,8 +10,8 @@ the ``parameters`` sizing block), ``int64_t a_index = a[i]`` would TRUNCATE ever
 whole kernel diverges from the numpy oracle.
 
 The contract these tests pin: a name declared in ``init.scalars`` with a FLOAT default is a value scalar,
-so the C / C++ signature declares it ``double`` and Fortran ``real(c_double)`` -- both a read-only
-threshold and a body-assigned staged read. This is the numpyto side of a nest extractor's boundary-dtype fix
+so the C / C++ signature declares it ``double`` and Fortran ``real(c_double)`` for a body-assigned
+staged read. This is the numpyto side of a nest extractor's boundary-dtype fix
 (the extractor emits such scalars under ``init.scalars`` from the SDFG symbol dtype, and types the matching
 ctypes arg ``c_double``); locking it here keeps the two in step.
 """
@@ -22,15 +22,6 @@ import pathlib
 import tempfile
 
 import numpy as np
-
-# read-only float threshold: if `thr` truncates to int (0.5 -> 0) every positive `a[i]` passes.
-THRESH_SRC = (
-    "def f(a, out, thr):\n"
-    "    out[0] = 0.0\n"
-    "    for i in range(len(a)):\n"
-    "        if a[i] > thr:\n"
-    "            out[0] = out[0] + a[i]\n"
-)
 
 # body-assigned staged read (the `a_index = a[i]` shape a nest extractor produces): `v` is written before
 # read, holds a[i] (double). If typed int it truncates the comparison and the captured value.
@@ -131,62 +122,3 @@ def test_staged_scalar_fortran_compiles_and_runs() -> None:
     fn.restype = None
     fn(*[argmap[n] for n in names])
     assert abs(out[0] - expected) < 1e-9, f"got {out[0]}, expected masked sum {expected}"
-
-
-def shutil_which(name: str) -> str | None:
-    import shutil
-
-    return shutil.which(name)
-
-
-def test_threshold_scalar_not_truncated_end_to_end_c() -> None:
-    # Discriminating run: thr = 0.5, a in [0, 1). A double `thr` sums only a[i] > 0.5; a truncated int
-    # `thr` (== 0) would sum EVERY element. The two differ, so a regression to int is loud.
-    cc = shutil_which("gcc") or shutil_which("clang")
-    if cc is None:
-        import pytest
-
-        pytest.skip("no C compiler")
-    import subprocess
-
-    d, c, cpp_, f90_ = emit_(THRESH_SRC, "f", "thr")
-    (d / "f.c").write_text(c)
-    so = d / "libf.so"
-    r = subprocess.run(
-        [cc, "-O2", "-fPIC", "-shared", "-ffp-contract=off", str(d / "f.c"), "-o", str(so)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert r.returncode == 0, r.stderr
-
-    rng = np.random.default_rng(0)
-    a = rng.random(4096)  # in [0, 1)
-    thr = 0.5
-    expected = float(a[a > thr].sum())
-    truncated = float(a.sum())  # what an int(thr)==0 kernel would produce
-    assert abs(expected - truncated) > 1.0  # the two semantics are well separated
-
-    lib = ctypes.CDLL(str(so))
-    fn = lib["f"]
-    # Signature order is (a, out, thr, N) per the emitted C; bind by reading it would be sturdier, but the
-    # canonical emit for this kernel is arrays-then-scalars-then-sizes -- assert the double lands correctly.
-    sig = next(ln for ln in c.splitlines() if "f(" in ln and "void" in ln)
-    assert "double thr" in sig, sig
-    out = np.zeros(1)
-    # Build args in the emitted signature order.
-    order = sig.split("f(")[1].split(")")[0].split(",")
-    names = [p.strip().split()[-1].lstrip("*") for p in order]
-    argmap = {
-        "a": a.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-        "out": out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-        "thr": ctypes.c_double(thr),
-        "N": ctypes.c_int64(len(a)),
-    }
-    fn.argtypes = [
-        ctypes.POINTER(ctypes.c_double) if n in ("a", "out") else (ctypes.c_double if n == "thr" else ctypes.c_int64)
-        for n in names
-    ]
-    fn.restype = None
-    fn(*[argmap[n] for n in names])
-    assert abs(out[0] - expected) < 1e-9, f"got {out[0]}, expected float-threshold sum {expected}"

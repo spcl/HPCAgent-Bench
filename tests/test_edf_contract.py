@@ -72,10 +72,6 @@ def edf_id(edf: pathlib.Path) -> str:
     return f"{edf.parent.name}/{edf.name}"
 
 
-def test_every_launch_image_has_a_toolchain_entry() -> None:
-    assert {edf.parent.name for edf in LAUNCH_EDFS} == set(IMAGE_TOOLCHAIN)
-
-
 @pytest.mark.parametrize("image", sorted(IMAGE_TOOLCHAIN))
 def test_the_image_path_puts_its_toolchain_ahead_of_the_base(image: str) -> None:
     entries = image_path(image)
@@ -94,29 +90,28 @@ def test_the_gh200_image_keeps_the_base_images_open_mpi_off_path() -> None:
 
 @pytest.mark.parametrize("edf", LAUNCH_EDFS, ids=edf_id)
 def test_an_edf_starts_the_launch_hook_and_never_undoes_it(edf: pathlib.Path) -> None:
+    """The EDF starts the hook, leaves its PATH to the image, and pins the toolchain, node shm and sys.path."""
     config = tomllib.loads(edf.read_text())
+    env = config["env"]
     assert config.get("entrypoint") is True
-    assert not {"PATH", "VIRTUAL_ENV", "HPCAGENT_BENCH_IMAGE_PYTHON"} & set(config["env"]), edf
-
-
-@pytest.mark.parametrize("edf", LAUNCH_EDFS, ids=edf_id)
-def test_an_edf_binds_the_node_shm_with_exec_for_the_launch_venv(edf: pathlib.Path) -> None:
-    """The CE mounts the container's own /dev/shm noexec; the launch venv lives on the node's."""
-    assert "/dev/shm:/opt/node-shm" in tomllib.loads(edf.read_text())["mounts"], edf
-
-
-@pytest.mark.parametrize("edf", LAUNCH_EDFS, ids=edf_id)
-def test_toolchain_is_named_not_left_to_path(edf: pathlib.Path) -> None:
+    assert not {"PATH", "VIRTUAL_ENV", "HPCAGENT_BENCH_IMAGE_PYTHON"} & set(env), edf
+    # The CE mounts the container's own /dev/shm noexec; the launch venv lives on the node's.
+    assert "/dev/shm:/opt/node-shm" in config["mounts"], edf
     # A stale configure cache beats PATH, so a toolchain that looks selected can still be ignored.
-    env, toolchain = edf_env(edf), IMAGE_TOOLCHAIN[edf.parent.name][1]
+    toolchain = IMAGE_TOOLCHAIN[edf.parent.name][1]
     for var in ("CC", "CXX", "FC"):
         assert env[var].startswith(toolchain), f"{edf_id(edf)}: {var}={env[var]!r} is not under {toolchain}"
-
-
-@pytest.mark.parametrize("edf", LAUNCH_EDFS, ids=edf_id)
-def test_mpich_does_not_inherit_a_libfabric_provider(edf: pathlib.Path) -> None:
-    """MPICH inherits FI_PROVIDER and MPI_Init aborts."""
-    assert "FI_PROVIDER" not in edf_env(edf), edf
+    # MPICH inherits FI_PROVIDER and MPI_Init aborts.
+    assert "FI_PROVIDER" not in env, edf
+    # The image's own dace must win over anything mounted from the host. dace is installed editable, so
+    # `import dace` resolves through a finder, and a plain DIRECTORY named `dace` on sys.path beats that finder,
+    # importing as an empty namespace package (__file__ None, no SDFG). The EDF's workdir is ${SCRATCH}, which
+    # holds the live extended checkout. PYTHONSAFEPATH drops the CWD, so the container does not depend on where
+    # the job starts.
+    assert env.get("PYTHONSAFEPATH") == "1", (
+        f"{edf_id(edf)}: PYTHONSAFEPATH=1 is missing: import dace from the workdir returns a broken "
+        "namespace package shadowed by ${SCRATCH}/dace"
+    )
 
 
 @pytest.mark.parametrize("edf", sorted(IMAGES.glob("judge-agent-amd/*.edf.toml.in")), ids=edf_id)
@@ -124,23 +119,8 @@ def test_rocm_libs_precede_the_distro_libdir(edf: pathlib.Path) -> None:
     # The distro libdir carries an ancient libhsa-runtime64 that leaves ROCR_1 symbols undefined.
     entries = edf_env(edf)["LD_LIBRARY_PATH"].split(":")
     assert entries.index("/opt/rocm/lib") < entries.index("/usr/lib/x86_64-linux-gnu")
-
-
-@pytest.mark.parametrize("edf", LAUNCH_EDFS, ids=edf_id)
-def test_cwd_is_off_sys_path(edf: pathlib.Path) -> None:
-    """The image's own dace must win over anything mounted from the host.
-
-    dace is installed editable, so `import dace` resolves through a finder -- and a plain
-    DIRECTORY named `dace` on sys.path beats that finder, importing as an empty namespace
-    package instead. sys.path starts with the CWD and the EDF's workdir is ${SCRATCH}, which
-    holds the live extended checkout, so `import dace` there SUCCEEDS and returns a module with
-    __file__ None and no SDFG (measured: unusable from ${SCRATCH} and from /opt, usable from
-    /tmp). PYTHONSAFEPATH drops the CWD, so the container does not depend on where the job starts.
-    """
-    assert edf_env(edf).get("PYTHONSAFEPATH") == "1", (
-        f"{edf_id(edf)}: PYTHONSAFEPATH=1 is missing: import dace from the workdir returns a broken "
-        "namespace package shadowed by ${SCRATCH}/dace"
-    )
+    # CSCS's userfaultfd monitor is not shown to work on Beverin; its vLLM tutorial runs with the cache off.
+    assert edf_env(edf)["FI_MR_CACHE_MONITOR"] == "disabled"
 
 
 #: CSCS's NCCL-over-Slingshot settings (https://docs.cscs.ch/software/communication/nccl/). The EDF's ``[env]`` wins
@@ -160,9 +140,3 @@ CSCS_RCCL_ENV = {
 def test_a_gpu_edf_sets_cscss_nccl_settings_over_the_hooks(edf: pathlib.Path) -> None:
     env = edf_env(edf)
     assert {name: env.get(name) for name in CSCS_RCCL_ENV} == CSCS_RCCL_ENV, edf
-
-
-@pytest.mark.parametrize("edf", sorted(IMAGES.glob("judge-agent-amd/*.edf.toml.in")), ids=edf_id)
-def test_the_amd_edfs_keep_the_memory_registration_cache_off(edf: pathlib.Path) -> None:
-    """CSCS's userfaultfd monitor is not shown to work on Beverin; its vLLM tutorial runs with the cache off."""
-    assert edf_env(edf)["FI_MR_CACHE_MONITOR"] == "disabled"

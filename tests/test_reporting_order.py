@@ -52,11 +52,7 @@ def test_by_dwarf_sections_hpc_then_foundation_then_ml() -> None:
         "conv2d",  # ML kept in original input order
     ]
     assert _labels(spans) == ["dense linear algebra", "structured grids", "loop_level_reasoning", "machine_learning"]
-
-
-def test_spans_tile_rows_contiguously() -> None:
-    names, spans = order_rows(_table(), BY_DWARF)
-    # Boundaries cover [0, len) with no gaps / overlaps.
+    # The spans tile the rows: boundaries cover [0, len) with no gaps or overlaps.
     assert spans[0].start == 0
     assert spans[-1].end == len(names)
     for a, b in itertools.pairwise(spans):

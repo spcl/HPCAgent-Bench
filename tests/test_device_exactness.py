@@ -112,16 +112,10 @@ FUNCTIONS: dict[str, Callable[[ModuleType], object]] = {
 }
 
 
-@pytest.mark.parametrize("name", sorted(DRAWS))
+CASES: dict[str, Callable[[ModuleType], object]] = {**DRAWS, **OPERATIONS, **FUNCTIONS}
+assert len(CASES) == len(DRAWS) + len(OPERATIONS) + len(FUNCTIONS), "a draw, operation or function name repeats"
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
 def test_a_draw_gives_the_same_bits_on_the_device(name: str) -> None:
-    assert_same_bits(DRAWS[name], name)
-
-
-@pytest.mark.parametrize("name", sorted(OPERATIONS))
-def test_an_ieee_operation_gives_the_same_bits_on_the_device(name: str) -> None:
-    assert_same_bits(OPERATIONS[name], name)
-
-
-@pytest.mark.parametrize("name", sorted(FUNCTIONS))
-def test_an_exact_math_function_gives_the_same_bits_on_the_device(name: str) -> None:
-    assert_same_bits(FUNCTIONS[name], name)
+    assert_same_bits(CASES[name], name)

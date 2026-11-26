@@ -138,11 +138,9 @@ def test_verify_image_binds_the_checkout_agent_tree_and_runs_its_checks_from_rep
     assert 'python3 "${REPO}/containers/images/tools_launch_check.py"' in text
     assert "exit $(( rc + sc + mpi_rc + tools_rc > 0 ))" in text
     assert "/hpcagent-bench}" not in text, "a hard-coded checkout path"
-
-
-def test_build_and_verify_hands_its_checkout_to_verify_image() -> None:
-    text = (CE_IMAGES / "build_and_verify.sbatch").read_text(encoding="utf-8")
-    assert re.search(r'REPO="\$\{REPO\}" bash "\$\{REPO\}/containers/images/verify_image\.sbatch"', text)
+    # build_and_verify hands its checkout to verify_image.
+    build = (CE_IMAGES / "build_and_verify.sbatch").read_text(encoding="utf-8")
+    assert re.search(r'REPO="\$\{REPO\}" bash "\$\{REPO\}/containers/images/verify_image\.sbatch"', build)
 
 
 def launch_check(agent_dir: pathlib.Path, web_search: pathlib.Path) -> subprocess.CompletedProcess[str]:
@@ -160,16 +158,20 @@ def fake_checkout(root: pathlib.Path, registry: str) -> tuple[pathlib.Path, path
     return agent_dir, web_search
 
 
-def test_the_launch_check_passes_when_the_bound_registry_lists_a_tool(tmp_path: pathlib.Path) -> None:
-    agent_dir, web_search = fake_checkout(tmp_path, 'import json\nprint(json.dumps({"allowed_tools": ["score"]}))\n')
+@pytest.mark.parametrize(
+    ("tools", "passes"),
+    [('["score"]', True), ("[]", False)],
+    ids=["a-registry-listing-a-tool", "a-registry-offering-none"],
+)
+def test_the_launch_check_passes_when_the_bound_registry_lists_a_tool(
+    tmp_path: pathlib.Path, tools: str, passes: bool
+) -> None:
+    agent_dir, web_search = fake_checkout(tmp_path, f'import json\nprint(json.dumps({{"allowed_tools": {tools}}}))\n')
     result = launch_check(agent_dir, web_search)
-    assert result.returncode == 0, result.stderr
-    assert "agent tools: score" in result.stdout
-
-
-def test_the_launch_check_fails_naming_the_registry_that_offers_no_tools(tmp_path: pathlib.Path) -> None:
-    agent_dir, web_search = fake_checkout(tmp_path, 'import json\nprint(json.dumps({"allowed_tools": []}))\n')
-    result = launch_check(agent_dir, web_search)
-    assert result.returncode != 0
-    assert str(agent_dir / "hpcagent_agent" / "tools" / "mcp_server.py") in result.stderr
-    assert "offers no tools" in result.stderr
+    if passes:
+        assert result.returncode == 0, result.stderr
+        assert "agent tools: score" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert str(agent_dir / "hpcagent_agent" / "tools" / "mcp_server.py") in result.stderr
+        assert "offers no tools" in result.stderr

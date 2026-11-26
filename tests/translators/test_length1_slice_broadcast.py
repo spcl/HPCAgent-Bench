@@ -77,16 +77,16 @@ K = 5
 SHAPES_BCAST = {"p": "(M, 1)", "n": "(M, K, 3)", "out": "(M, K, 3)"}
 
 
-def check_broadcast(body: str) -> None:
+def check_broadcast(body: str, p_shape: tuple[int, ...] = (M, 1), p_decl: str = "(M, 1)") -> None:
     rng = np.random.default_rng(0)
     src = f"import numpy as np\n\n\ndef f(p, n, out):\n{body}"
     result = run_op(
         src,
         "f",
-        {"p": rng.random((M, 1)), "n": rng.random((M, K, 3))},
+        {"p": rng.random(p_shape), "n": rng.random((M, K, 3))},
         {"out": (M, K, 3)},
         {"M": M, "K": K},
-        shapes=SHAPES_BCAST,
+        shapes={**SHAPES_BCAST, "p": p_decl},
         backends=BACKENDS,
     )
     bad = {k: v for k, v in result.items() if v != "ok" and not v.startswith("skip")}
@@ -95,11 +95,27 @@ def check_broadcast(body: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "body",
-    ["    out[:] = p[..., np.newaxis] * n\n", "    out[:] = p[:, :, None] * n\n"],
-    ids=["ellipsis_spelling", "explicit_slices_spelling"],
+    ("body", "p_shape", "p_decl"),
+    [
+        ("    out[:] = p[..., np.newaxis] * n\n", (M, 1), "(M, 1)"),
+        ("    out[:] = p[:, :, None] * n\n", (M, 1), "(M, 1)"),
+        # The rule is per-axis, not "the last axis": pinning must follow the size-1 axis wherever the array
+        # declares it.
+        ("    out[:] = p[:, :, np.newaxis] * n\n", (1, K), "(1, K)"),
+        # A leading newaxis shifts every following element one result axis to the right without consuming a
+        # source axis. Reading the operand's extent at the subscript POSITION rather than at the source axis
+        # would ask ``(1, 3)`` about axis 1 and pin the wrong one. pythran is skipped on its own numbers, not
+        # on ours: it compiles the identical hand-written source to a wrong result too.
+        ("    out[:] = p[np.newaxis, :, :] * n\n", (1, 3), "(1, 3)"),
+    ],
+    ids=[
+        "ellipsis_spelling",
+        "explicit_slices_spelling",
+        "size_1_axis_is_the_leading_one",
+        "newaxis_before_size_1_axis",
+    ],
 )
-def test_a_declared_size_1_axis_broadcasts_under_a_newaxis(body: str) -> None:
+def test_a_declared_size_1_axis_broadcasts_under_a_newaxis(body: str, p_shape: tuple[int, ...], p_decl: str) -> None:
     """cfd's ``pressure[..., np.newaxis] * normal``.
 
     ``...`` expands to full slices, so the operand reaches the scalarizer as ``p[:, :, None]`` --
@@ -108,49 +124,4 @@ def test_a_declared_size_1_axis_broadcasts_under_a_newaxis(body: str) -> None:
     the next row's element for every cell but the last, and past the allocation for that one.
     Both spellings must agree.
     """
-    check_broadcast(body)
-
-
-def test_a_size_1_axis_still_broadcasts_when_it_is_the_leading_one() -> None:
-    """The rule is per-axis, not "the last axis": pinning must follow the size-1 axis wherever the
-    array declares it."""
-    rng = np.random.default_rng(0)
-    src = "import numpy as np\n\n\ndef f(p, n, out):\n    out[:] = p[:, :, np.newaxis] * n\n"
-    result = run_op(
-        src,
-        "f",
-        {"p": rng.random((1, K)), "n": rng.random((M, K, 3))},
-        {"out": (M, K, 3)},
-        {"M": M, "K": K},
-        shapes={"p": "(1, K)", "n": "(M, K, 3)", "out": "(M, K, 3)"},
-        backends=BACKENDS,
-    )
-    bad = {k: v for k, v in result.items() if v != "ok" and not v.startswith("skip")}
-    assert any(v == "ok" for v in result.values()), f"every backend skipped; the comparison never ran: {result}"
-    assert not bad, bad
-
-
-def test_a_newaxis_BEFORE_the_size_1_axis_still_pins_the_right_one() -> None:
-    """A leading newaxis shifts every following element one result axis to the right without
-    consuming a source axis. Reading the operand's extent at the subscript POSITION rather than at
-    the source axis would ask ``(1, 3)`` about axis 1 and pin the wrong one.
-
-    pythran is skipped on its own numbers, not on ours: the emitted module is this body verbatim,
-    and pythran compiles the identical hand-written source to a wrong result too (checked
-    directly -- max abs error 2.47 against numpy on the same inputs). Emitting correct numpy is
-    the whole of this backend's job, so the gap is the tool's.
-    """
-    rng = np.random.default_rng(0)
-    src = "import numpy as np\n\n\ndef f(p, n, out):\n    out[:] = p[np.newaxis, :, :] * n\n"
-    result = run_op(
-        src,
-        "f",
-        {"p": rng.random((1, 3)), "n": rng.random((M, K, 3))},
-        {"out": (M, K, 3)},
-        {"M": M, "K": K},
-        shapes={"p": "(1, 3)", "n": "(M, K, 3)", "out": "(M, K, 3)"},
-        backends=BACKENDS,
-    )
-    bad = {k: v for k, v in result.items() if v != "ok" and not v.startswith("skip")}
-    assert any(v == "ok" for v in result.values()), f"every backend skipped; the comparison never ran: {result}"
-    assert not bad, bad
+    check_broadcast(body, p_shape, p_decl)

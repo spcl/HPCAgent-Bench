@@ -75,6 +75,10 @@ def test_every_setup_gives_every_harness_claudes_window_reply_and_trigger(
     limit, reply, trigger = claude_policy(driver, environment)
     assert (policy.limit, policy.reply) == (limit, reply)
     assert policy.trigger - 2 <= trigger <= policy.trigger
+    # One reply cap for vLLM and SGLang alike, whatever window the model is served at: [common] sets it, so a model
+    # never answers at another length than another because of its server. The one exception is the run-protocol
+    # smoke, whose own experiment lowers it so that replies are cut.
+    assert policy.reply == (2048 if path.startswith("smoke-protocol:") else 32768)
 
 
 def test_the_smallest_window_any_source_names_wins(harnesses: ModuleType) -> None:
@@ -84,15 +88,6 @@ def test_the_smallest_window_any_source_names_wins(harnesses: ModuleType) -> Non
         "VLLM_EXTRA_ARGS": "--dtype auto --max-model-len=131072 --gpu-memory-utilization 0.70",
     }
     assert harnesses.served_context(environment) == 131072
-
-
-def test_every_setup_sends_every_server_the_one_reply_cap_of_common(harnesses: ModuleType) -> None:
-    """One reply cap for vLLM and SGLang alike, whatever window the model is served at: [common] sets it, so a
-    model never answers at another length than another because of its server. The one exception is the run-protocol
-    smoke, whose own experiment lowers it so that replies are cut."""
-    reply = {path: harnesses.context_policy(env_values(path)).reply for path in BASES}
-    assert {cap for path, cap in reply.items() if not path.startswith("smoke-protocol:")} == {32768}
-    assert {cap for path, cap in reply.items() if path.startswith("smoke-protocol:")} == {2048}
 
 
 def test_a_setup_naming_no_window_gets_the_policy_cap(harnesses: ModuleType) -> None:

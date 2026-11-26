@@ -33,57 +33,83 @@ def tree(root: pathlib.Path) -> dict[str, str]:
     return {str(p.relative_to(root)): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
 
 
-def test_a_kernel_directory_the_shared_cache_lacks_is_published_whole(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ("local_files", "shared_files", "expected"),
+    [
+        pytest.param(
+            {"abc123/kernel.so": "binary", "abc123/__grp__kernel.json": "group"},
+            {},
+            {"abc123/kernel.so": "binary", "abc123/__grp__kernel.json": "group"},
+            id="new-directory-published-whole",
+        ),
+        # Entries are content-addressed: an existing one is another engine's valid result, and
+        # rewriting it under a concurrent reader is exactly what produced ESTALE.
+        pytest.param(
+            {"abc123/kernel.so": "mine"},
+            {"abc123/kernel.so": "theirs"},
+            {"abc123/kernel.so": "theirs"},
+            id="existing-entry-never-overwritten",
+        ),
+        pytest.param(
+            {"fxgraph/ab/new-graph": "new"},
+            {"fxgraph/ab/old-graph": "old"},
+            {"fxgraph/ab/new-graph": "new", "fxgraph/ab/old-graph": "old"},
+            id="missing-files-inside-a-shared-directory-are-added",
+        ),
+        pytest.param({"d1/f": "x", "top-file": "y"}, {"d2/g": "z"}, None, id="no-staging-entry-left-behind"),
+    ],
+)
+def test_a_kernel_directory_the_shared_cache_lacks_is_published_whole(
+    tmp_path: pathlib.Path,
+    local_files: dict[str, str],
+    shared_files: dict[str, str],
+    expected: dict[str, str] | None,
+) -> None:
     local, shared = tmp_path / "local", tmp_path / "shared"
-    write(local / "abc123" / "kernel.so", "binary")
-    write(local / "abc123" / "__grp__kernel.json", "group")
+    for name, text in local_files.items():
+        write(local / name, text)
     shared.mkdir()
+    for name, text in shared_files.items():
+        write(shared / name, text)
     run("publish", str(local), str(shared))
-    assert tree(shared) == {"abc123/kernel.so": "binary", "abc123/__grp__kernel.json": "group"}, tree(shared)
-
-
-def test_publish_never_overwrites_an_entry_the_shared_cache_already_has(tmp_path: pathlib.Path) -> None:
-    """Entries are content-addressed: an existing one is another engine's valid result, and
-    rewriting it under a concurrent reader is exactly what produced ESTALE."""
-    local, shared = tmp_path / "local", tmp_path / "shared"
-    write(local / "abc123" / "kernel.so", "mine")
-    write(shared / "abc123" / "kernel.so", "theirs")
-    run("publish", str(local), str(shared))
-    assert (shared / "abc123" / "kernel.so").read_text() == "theirs"
-
-
-def test_files_missing_inside_a_directory_both_sides_have_are_added(tmp_path: pathlib.Path) -> None:
-    local, shared = tmp_path / "local", tmp_path / "shared"
-    write(local / "fxgraph" / "ab" / "new-graph", "new")
-    write(shared / "fxgraph" / "ab" / "old-graph", "old")
-    run("publish", str(local), str(shared))
-    assert tree(shared) == {"fxgraph/ab/new-graph": "new", "fxgraph/ab/old-graph": "old"}, tree(shared)
-
-
-def test_publish_leaves_no_staging_entry_behind(tmp_path: pathlib.Path) -> None:
-    local, shared = tmp_path / "local", tmp_path / "shared"
-    write(local / "d1" / "f", "x")
-    write(local / "top-file", "y")
-    write(shared / "d2" / "g", "z")
-    run("publish", str(local), str(shared))
+    if expected is not None:
+        assert tree(shared) == expected, tree(shared)
     leftovers = [p for p in shared.rglob("*") if p.name.startswith(STAGE_PREFIX)]
     assert leftovers == [], leftovers
 
 
-def test_seed_copies_the_shared_cache_but_not_a_killed_publishers_staging_entry(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ("shared_files", "local_files", "expected"),
+    [
+        pytest.param(
+            {"abc123/kernel.so": "binary", f"{STAGE_PREFIX}.nid1.42.def456/kernel.so": "half"},
+            {},
+            {"abc123/kernel.so": "binary"},
+            id="staging-entry-not-copied",
+        ),
+        pytest.param(
+            {"abc123/kernel.so": "shared"},
+            {"abc123/kernel.so": "local"},
+            {"abc123/kernel.so": "local"},
+            id="local-entry-never-replaced",
+        ),
+        pytest.param(None, {}, {}, id="missing-shared-cache-creates-an-empty-layer"),
+    ],
+)
+def test_seed_copies_the_shared_cache_but_not_a_killed_publishers_staging_entry(
+    tmp_path: pathlib.Path,
+    shared_files: dict[str, str] | None,
+    local_files: dict[str, str],
+    expected: dict[str, str],
+) -> None:
     shared, local = tmp_path / "shared", tmp_path / "local"
-    write(shared / "abc123" / "kernel.so", "binary")
-    write(shared / f"{STAGE_PREFIX}.nid1.42.def456" / "kernel.so", "half")
-    run("seed", str(shared), str(local))
-    assert tree(local) == {"abc123/kernel.so": "binary"}, tree(local)
-
-
-def test_seed_never_replaces_an_entry_already_in_the_local_layer(tmp_path: pathlib.Path) -> None:
-    shared, local = tmp_path / "shared", tmp_path / "local"
-    write(shared / "abc123" / "kernel.so", "shared")
-    write(local / "abc123" / "kernel.so", "local")
-    run("seed", str(shared), str(local))
-    assert (local / "abc123" / "kernel.so").read_text() == "local"
+    for name, text in (shared_files or {}).items():
+        write(shared / name, text)
+    for name, text in local_files.items():
+        write(local / name, text)
+    run("seed", str(shared if shared_files is not None else tmp_path / "never-created"), str(local))
+    assert local.is_dir()
+    assert tree(local) == expected, tree(local)
 
 
 def test_a_seed_copy_that_fails_part_way_leaves_no_entry(tmp_path: pathlib.Path) -> None:
@@ -109,13 +135,6 @@ def test_seed_sweeps_a_dead_publishers_staging_entry_and_keeps_a_fresh_one(tmp_p
     run("seed", str(shared), str(local))
     assert not dead.exists()
     assert fresh.exists()
-
-
-def test_seed_of_a_cache_that_does_not_exist_yet_creates_an_empty_layer(tmp_path: pathlib.Path) -> None:
-    local = tmp_path / "local"
-    run("seed", str(tmp_path / "never-created"), str(local))
-    assert local.is_dir()
-    assert not any(local.iterdir())
 
 
 @pytest.mark.parametrize("variable", ["TRITON_CACHE_DIR", "TORCHINDUCTOR_CACHE_DIR", "VLLM_CACHE_ROOT"])

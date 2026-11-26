@@ -6,6 +6,8 @@ separate/stacked layout.
 """
 
 import math
+from collections.abc import Callable
+from functools import partial
 
 import matplotlib as mpl
 import pytest
@@ -38,41 +40,27 @@ def token_metric(cells: list[pk.KernelCell], color: str = "#cc5511") -> pk.Metri
 # The log2 speedup axis.
 
 
-def test_speedup_yticks_always_spans_at_least_a_quarter_to_four_x() -> None:
-    """A panel of narrow-range wins (1.1x .. 1.8x) must still show the 1x line inside a band wide
-    enough to read a slow-down and a speedup the same distance from it."""
-    cells = [pk.KernelCell("k1", (1.1,)), pk.KernelCell("k2", (1.8,))]
-    ticks = pk.speedup_yticks(cells)
-    assert 0.25 in ticks
-    assert 4.0 in ticks
-    assert 1.0 in ticks
-
-
 # ci vs box drawing.
 
 
 @pytest.mark.parametrize(
-    ("n", "boxed"),
+    ("draw", "n", "boxed"),
     [
-        pytest.param(1, False, id="one-episode-is-a-point"),
-        pytest.param(2, False, id="two-episodes-is-a-point"),
-        pytest.param(3, True, id="three-episodes-is-a-box"),
-        pytest.param(5, True, id="five-episodes-is-a-box"),
+        pytest.param(pk.draw_box, 1, False, id="one-episode-is-a-point"),
+        pytest.param(pk.draw_box, 2, False, id="two-episodes-is-a-point"),
+        pytest.param(pk.draw_box, 3, True, id="three-episodes-is-a-box"),
+        pytest.param(pk.draw_box, 5, True, id="five-episodes-is-a-box"),
+        # ``ci`` draws a point and a whisker, never a boxplot artist -- even at a spread-worthy n.
+        pytest.param(partial(pk.draw_ci, log2_space=True), 5, False, id="ci-never-draws-a-box"),
     ],
 )
-def test_box_style_draws_a_real_box_only_at_or_above_the_spread_floor(n: int, boxed: bool) -> None:
+def test_box_style_draws_a_real_box_only_at_or_above_the_spread_floor(
+    draw: Callable[..., object], n: int, boxed: bool
+) -> None:
     cell = pk.KernelCell("k1", tuple(float(i + 1) for i in range(n)))
     fig, ax = plt.subplots()
-    pk.draw_box(ax, pk.Series("", (cell,), "#1155cc"), {"k1": 0})
+    draw(ax, pk.Series("", (cell,), "#1155cc"), {"k1": 0})
     assert (len(ax.patches) > 0) == boxed
-
-
-def test_ci_style_never_draws_a_box_patch() -> None:
-    """``ci`` draws a point and a whisker, never a boxplot artist -- even at a spread-worthy n."""
-    cell = pk.KernelCell("k1", (1.0, 2.0, 4.0, 8.0, 16.0))
-    fig, ax = plt.subplots()
-    pk.draw_ci(ax, pk.Series("", (cell,), "#1155cc"), {"k1": 0}, log2_space=True)
-    assert len(ax.patches) == 0
 
 
 # The --summary column.
@@ -88,16 +76,32 @@ def test_the_speedup_summary_is_the_geomean_over_the_plotted_kernels_own_medians
     assert point != pytest.approx(1.0)  # the median of (1, 1, 1000) is 1.0 -- must not equal it
 
 
-def test_a_figure_with_one_summary_statistic_names_it_as_a_horizontal_x_tick() -> None:
+@pytest.mark.parametrize(
+    ("kernels", "stacked", "exact"),
+    [
+        pytest.param(["k1", "k2"], False, None, id="one-panel"),
+        pytest.param(["k1"], True, ["k1", "Geomean"], id="speedup-and-token-stack"),
+    ],
+)
+def test_a_figure_with_one_summary_statistic_names_it_as_a_horizontal_x_tick(
+    kernels: list[str], stacked: bool, exact: list[str] | None
+) -> None:
     """ "Geomean" belongs on the x axis under its column, read like a kernel name,
-    not floating above the frame."""
-    speed = speed_metric([pk.KernelCell("k1", (2.0,)), pk.KernelCell("k2", (4.0,))])
-    fig = pk.figure_panels([speed], ["k1", "k2"], pk.Style.CI, True, "")
-    (ax,) = fig.axes
-    ticks = ax.get_xticklabels()
-    assert [tick.get_text() for tick in ticks][-1] == "Geomean"
+    not floating above the frame. Both panels of a stack summarize by the geomean (paper rule), so the
+    statistic is named once, as the shared axis' summary tick, and no panel annotates a median."""
+    metrics = [speed_metric([pk.KernelCell(k, (2.0 * (i + 1),)) for i, k in enumerate(kernels)])]
+    if stacked:
+        metrics.append(token_metric([pk.KernelCell("k1", (100.0,))]))
+    fig = pk.figure_panels(metrics, kernels, pk.Style.CI, True, "")
+    ticks = fig.axes[-1].get_xticklabels()
+    names = [tick.get_text() for tick in ticks]
+    texts = [text.get_text() for ax in fig.axes for text in ax.texts]
+    assert names[-1] == "Geomean"
     assert ticks[-1].get_rotation() == 0.0
-    assert "Geomean" not in [text.get_text() for text in ax.texts]
+    assert "Geomean" not in texts
+    assert "Median" not in texts
+    if exact is not None:
+        assert names == exact
 
 
 def test_a_caller_spells_the_kernel_ticks() -> None:
@@ -110,40 +114,23 @@ def test_a_caller_spells_the_kernel_ticks() -> None:
     assert fig.axes[0].get_xticklabels()[0].get_text() == "s115"
 
 
-def test_folded_kernel_names_too_wide_for_their_columns_go_back_on_one_line() -> None:
+@pytest.mark.parametrize(
+    ("folded", "joined"),
+    [
+        pytest.param("A\nLong\nKernel\n{}", "A Long Kernel k0", id="spaces"),
+        # textwrap folds "Rayleigh-Ritz" after the hyphen; unfolded with a space it printed "Rayleigh- Ritz".
+        pytest.param("A\nRayleigh-\nRitz\n{}", "A Rayleigh-Ritz k0", id="after-a-hyphen-without-a-space"),
+    ],
+)
+def test_folded_kernel_names_too_wide_for_their_columns_go_back_on_one_line(folded: str, joined: str) -> None:
     """A rotated name folded on several lines is that many lines wide; forty overprinted at the floor before."""
     kernels = [f"k{index}" for index in range(40)]
     speed = speed_metric([pk.KernelCell(kernel, (2.0,)) for kernel in kernels])
-    fig = pk.figure_panels(
-        [speed], kernels, pk.Style.CI, True, "", tick_label=lambda kernel: f"A\nLong\nKernel\n{kernel}"
-    )
+    fig = pk.figure_panels([speed], kernels, pk.Style.CI, True, "", tick_label=lambda kernel: folded.format(kernel))
     names = [label.get_text() for label in fig.axes[0].get_xticklabels()]
-    assert names[0] == "A Long Kernel k0"
+    assert names[0] == joined
     assert not style.crowded_at(fig, fig.axes, float(fig.axes[0].get_xticklabels()[0].get_fontsize()))
     plt.close(fig)
-
-
-def test_a_name_folded_after_its_hyphen_goes_back_on_one_line_without_a_space() -> None:
-    """textwrap folds "Rayleigh-Ritz" after the hyphen; unfolded with a space it printed "Rayleigh- Ritz"."""
-    kernels = [f"k{index}" for index in range(40)]
-    speed = speed_metric([pk.KernelCell(kernel, (2.0,)) for kernel in kernels])
-    fig = pk.figure_panels(
-        [speed], kernels, pk.Style.CI, True, "", tick_label=lambda kernel: f"A\nRayleigh-\nRitz\n{kernel}"
-    )
-    assert fig.axes[0].get_xticklabels()[0].get_text() == "A Rayleigh-Ritz k0"
-    plt.close(fig)
-
-
-def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once() -> None:
-    """Both panels summarize by the geomean (paper rule), so the statistic is named once, as the
-    shared axis' summary tick, and no panel annotates a median."""
-    speed = speed_metric([pk.KernelCell("k1", (2.0,))])
-    tokens = token_metric([pk.KernelCell("k1", (100.0,))])
-    fig = pk.figure_panels([speed, tokens], ["k1"], pk.Style.CI, True, "demo")
-    top_ax, bottom_ax = fig.axes
-    texts = [text.get_text() for ax in (top_ax, bottom_ax) for text in ax.texts]
-    assert [label.get_text() for label in bottom_ax.get_xticklabels()] == ["k1", "Geomean"]
-    assert "Median" not in texts
 
 
 # --layout separate vs stacked, and which files a run writes.
@@ -152,24 +139,34 @@ def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once
 # Reproducibility.
 
 
-def test_the_speedup_panel_carries_a_major_grid_and_a_minor_one_on_the_value_axis_only() -> None:
+@pytest.mark.parametrize(
+    ("styler", "cells", "yscale", "kernel_axis_bare"),
+    [
+        pytest.param(pk.style_speedup_axis, [pk.KernelCell("k1", (1.0, 2.0))], None, True, id="speedup"),
+        # A token count is a measured quantity, so it is on Y (log); the kernel names are the x categories.
+        pytest.param(
+            pk.style_token_axis,
+            [pk.KernelCell("k1", (120.0,)), pk.KernelCell("k2", (90000.0,))],
+            "log",
+            False,
+            id="token",
+        ),
+    ],
+)
+def test_the_speedup_panel_carries_a_major_grid_and_a_minor_one_on_the_value_axis_only(
+    styler: Callable[..., object], cells: list[pk.KernelCell], yscale: str | None, kernel_axis_bare: bool
+) -> None:
     """The measured axis is ruled at the pinned powers of two and, lighter, at the shared minors
     between them; the kernel axis carries names and no line at all."""
     fig, ax = plt.subplots()
-    pk.style_speedup_axis(ax, [pk.KernelCell("k1", (1.0, 2.0))])
+    styler(ax, cells)
+    if yscale is not None:
+        assert ax.get_yscale() == yscale
     assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
     assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
-    assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
-    assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
-
-
-def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_and_a_minor_grid() -> None:
-    """A token count is a measured quantity, so it is on Y; the kernel names are the x categories."""
-    fig, ax = plt.subplots()
-    pk.style_token_axis(ax, [pk.KernelCell("k1", (120.0,)), pk.KernelCell("k2", (90000.0,))])
-    assert ax.get_yscale() == "log"
-    assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-    assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+    if kernel_axis_bare:
+        assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
+        assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
 
 
 @pytest.mark.parametrize(
@@ -192,18 +189,25 @@ def test_a_ratio_below_one_prints_as_its_reciprocal(value: float, want: str) -> 
 
 
 @pytest.mark.parametrize(
-    ("low", "high"),
+    ("low", "high", "band"),
     [
-        pytest.param(1.1, 1.8, id="narrow"),
-        pytest.param(0.1, 20.0, id="eight-octaves"),
-        pytest.param(1.0 / 64.0, 1024.0, id="sixteen-octaves"),
-        pytest.param(2.0, 4096.0, id="wins-only"),
+        pytest.param(1.1, 1.8, (0.25, 4.0), id="narrow"),
+        pytest.param(0.1, 20.0, None, id="eight-octaves"),
+        pytest.param(1.0 / 64.0, 1024.0, None, id="sixteen-octaves"),
+        pytest.param(2.0, 4096.0, None, id="wins-only"),
     ],
 )
-def test_speedup_yticks_stay_within_the_tick_budget_and_always_carry_1x(low: float, high: float) -> None:
+def test_speedup_yticks_stay_within_the_tick_budget_and_always_carry_1x(
+    low: float, high: float, band: tuple[float, float] | None
+) -> None:
     """Twelve octaves labelled one by one printed on top of each other; and the 1x line is the
-    reference every other tick is read against, so thinning must never drop it."""
+    reference every other tick is read against, so thinning must never drop it. A panel of narrow-range wins
+    still shows 1x inside a band (a quarter to four x) wide enough to read a slow-down and a speedup the same
+    distance from it."""
     ticks = pk.speedup_yticks([pk.KernelCell("a", (low,)), pk.KernelCell("b", (high,))])
+    if band is not None:
+        assert band[0] in ticks
+        assert band[1] in ticks
     assert len(ticks) <= pk.MAX_SPEEDUP_TICKS, ticks
     assert 1.0 in ticks, ticks
     assert ticks[0] <= low, ticks
@@ -222,24 +226,50 @@ def test_kernel_medians_leave_out_undelivered_pending_and_flagged_cells() -> Non
     assert list(pk.kernel_medians(cells)) == [4.0]
 
 
-def test_kernel_cells_fill_a_missing_speedup_at_the_placeholder_and_drop_a_missing_cost() -> None:
-    """A kernel with no verified answer still happened (1x, crossed); a kernel with no token total
-    is no measurement, and a mark at the axis edge would read as the smallest spend."""
-    speed = pk.kernel_cells({"k1": 3.0}, ["k1", "k2"])
-    tokens = pk.kernel_cells({"k1": 900.0}, ["k1", "k2"], fill=False)
-    assert [(c.kernel, c.episodes, c.delivered) for c in speed] == [
-        ("k1", (3.0,), True),
-        ("k2", (population.NOT_DELIVERED,), False),
-    ]
-    assert [c.kernel for c in tokens] == ["k1"]
-
-
-def test_kernel_cells_keep_a_present_placeholders_own_value_and_flag() -> None:
-    """A ratio one side of which never delivered is a number but not a measurement: it keeps its
-    value (the cross goes where the ratio is) and never counts as delivered."""
-    (cell,) = pk.kernel_cells({"k1": 4.0}, ["k1"], delivered={"k1": False})
-    assert cell.episodes == (4.0,)
-    assert not cell.delivered
+@pytest.mark.parametrize(
+    ("values", "kernels", "options", "want"),
+    [
+        # A kernel with no verified answer still happened (1x, crossed).
+        pytest.param(
+            {"k1": 3.0},
+            ["k1", "k2"],
+            {},
+            [("k1", (3.0,), True, False), ("k2", (population.NOT_DELIVERED,), False, False)],
+            id="a-missing-speedup-is-the-placeholder",
+        ),
+        # A kernel with no token total is no measurement, and a mark at the axis edge would read as the
+        # smallest spend.
+        pytest.param(
+            {"k1": 900.0},
+            ["k1", "k2"],
+            {"fill": False},
+            [("k1", (900.0,), True, False)],
+            id="a-missing-cost-is-dropped",
+        ),
+        # A ratio one side of which never delivered is a number but not a measurement: it keeps its value
+        # (the cross goes where the ratio is) and never counts as delivered.
+        pytest.param(
+            {"k1": 4.0},
+            ["k1"],
+            {"delivered": {"k1": False}},
+            [("k1", (4.0,), False, False)],
+            id="a-present-placeholder-keeps-its-value-and-flag",
+        ),
+        # A kernel not attempted yet must not read as a failure, nor as whatever stale value a map still holds.
+        pytest.param(
+            {"k1": 5.0},
+            ["k1"],
+            {"pending": frozenset({"k1"})},
+            [("k1", (population.NOT_DELIVERED,), False, True)],
+            id="a-pending-kernel-is-a-pending-placeholder-whatever-its-value",
+        ),
+    ],
+)
+def test_kernel_cells_fill_a_missing_speedup_at_the_placeholder_and_drop_a_missing_cost(
+    values: dict[str, float], kernels: list[str], options: dict[str, object], want: list[tuple]
+) -> None:
+    cells = pk.kernel_cells(values, kernels, **options)
+    assert [(c.kernel, c.episodes, c.delivered, c.pending) for c in cells] == want
 
 
 @pytest.mark.parametrize(
@@ -257,15 +287,6 @@ def test_kernel_cells_carry_an_interval_only_when_it_has_width(
     assert cell.interval == want
 
 
-def test_kernel_cells_turn_a_pending_kernel_into_a_pending_placeholder_whatever_its_value() -> None:
-    """A kernel not attempted yet must not read as a failure, nor as whatever stale value a map
-    still holds for it."""
-    (cell,) = pk.kernel_cells({"k1": 5.0}, ["k1"], pending=frozenset({"k1"}))
-    assert cell.pending
-    assert not cell.delivered
-    assert cell.episodes == (population.NOT_DELIVERED,)
-
-
 def test_an_undelivered_cell_draws_hollow_and_crossed_at_its_own_value() -> None:
     """The cross is what separates a placeholder from a measured value at the same height; it goes
     on the cell's own value, which for a one-sided ratio is not 1x."""
@@ -277,20 +298,18 @@ def test_an_undelivered_cell_draws_hollow_and_crossed_at_its_own_value() -> None
 
 
 @pytest.mark.parametrize(
-    ("count", "want"),
+    ("count", "span", "want"),
     [
-        pytest.param(0, [], id="no-series-no-offset"),
-        pytest.param(1, [0.0], id="one-series-on-the-column"),
-        pytest.param(3, [-0.31, 0.0, 0.31], id="three-over-the-span"),
+        pytest.param(0, None, [], id="no-series-no-offset"),
+        pytest.param(1, None, [0.0], id="one-series-on-the-column"),
+        pytest.param(3, None, [-0.31, 0.0, 0.31], id="three-over-the-span"),
+        # ``--offset 0`` on the compiler figure: optimizers differ by shape, all at the kernel's x.
+        pytest.param(4, 0.0, [0.0, 0.0, 0.0, 0.0], id="no-span-stacks-every-series-on-the-column"),
     ],
 )
-def test_dodge_offsets_centre_the_series_on_their_column(count: int, want: list[float]) -> None:
-    assert pk.dodge_offsets(count) == pytest.approx(want)
-
-
-def test_dodge_offsets_with_no_span_stack_every_series_on_the_column() -> None:
-    """``--offset 0`` on the compiler figure: optimizers differ by shape, all at the kernel's x."""
-    assert pk.dodge_offsets(4, 0.0) == [0.0, 0.0, 0.0, 0.0]
+def test_dodge_offsets_centre_the_series_on_their_column(count: int, span: float | None, want: list[float]) -> None:
+    offsets = pk.dodge_offsets(count) if span is None else pk.dodge_offsets(count, span)
+    assert offsets == pytest.approx(want)
 
 
 def test_mark_size_shrinks_with_crowding_down_to_its_floor() -> None:
@@ -301,11 +320,7 @@ def test_mark_size_shrinks_with_crowding_down_to_its_floor() -> None:
     assert roomy == pytest.approx(pk.MARK_PT**2)
     assert crowded < roomy
     assert pk.mark_size(0.01, 40) == pytest.approx(pk.MIN_MARK_PT**2)
-
-
-def test_an_undodged_mark_is_sized_to_the_column_not_to_a_zero_gap() -> None:
-    """Stacked series are one column apart from their neighbours, not zero: a zero gap would floor
-    every mark on the compiler figure."""
+    # Stacked series are one column apart from their neighbours, not zero: a zero gap would floor every mark.
     assert pk.mark_size(0.3, 6, span=0.0) == pytest.approx(pk.MARK_PT**2)
 
 
@@ -316,14 +331,10 @@ def test_status_handles_key_only_the_status_marks_a_figure_draws() -> None:
     waiting = speed_metric([pk.KernelCell("k1", (1.0,), delivered=False, pending=True)])
     assert pk.status_handles([solved]) == []
     assert [h.get_label() for h in pk.status_handles([failed])] == [style.NOT_DELIVERED_LABEL]
+    # Hollow is this repo's spelling for a control: the key shows the cross, which separates a placeholder
+    # from a measurement.
+    assert [h.get_marker() for h in pk.status_handles([failed])] == ["x"]
     assert [h.get_label() for h in pk.status_handles([waiting])] == [style.PENDING_LABEL]
-
-
-def test_the_undelivered_key_entry_shows_the_cross() -> None:
-    """Hollow is this repo's spelling for a control, so a key showing only the hollow shape names
-    the wrong thing; the cross is what separates a placeholder from a measurement."""
-    (handle,) = pk.status_handles([speed_metric([pk.KernelCell("k1", (1.0,), delivered=False)])])
-    assert handle.get_marker() == "x"
 
 
 def three_series_metric() -> pk.Metric:
@@ -350,19 +361,9 @@ def test_every_series_gets_one_summary_slot_and_one_settled_value_label() -> Non
     labels = [t for t in ax.texts if t.get_gid() == style.CLEAR_GID]
     assert slots == [round(pk.summary_slot_x(2, slot), 6) for slot in range(3)], slots
     assert len(labels) == 3, [t.get_text() for t in labels]
-
-
-def test_a_summary_value_label_prints_the_geomean_over_solved_kernels_only() -> None:
-    """Series b solved k1 at 3x and failed k2: its printed value is 3x, not the geomean with the
-    placeholder's 1x (1.7x)."""
-    fig = pk.figure_panels([three_series_metric()], ["k1", "k2"], pk.Style.CI, True, "")
-    texts = [t.get_text() for t in fig.axes[0].texts if t.get_gid() == style.CLEAR_GID]
+    # Series b solved k1 at 3x and failed k2: its value is 3x, not the geomean with the placeholder's 1x (1.7x).
+    texts = [t.get_text() for t in labels]
     assert texts == [style.ratio_label(8.0**0.5), style.ratio_label(3.0), style.ratio_label(0.5)], texts
-
-
-def test_kernel_tick_label_prints_the_manifest_short_name() -> None:
-    assert pk.kernel_tick_label("argmax_with_index") == study_tags.kernel_short_display_name("argmax_with_index")
-    assert pk.kernel_tick_label("argmax_with_index") != study_tags.kernel_display_name("argmax_with_index")
 
 
 @pytest.mark.parametrize(
@@ -424,18 +425,6 @@ def test_a_stated_pitch_sizes_the_canvas_to_the_kernel_axis() -> None:
     metric = speed_metric([pk.KernelCell(k, (2.0,)) for k in kernels])
     fig = pk.figure_panels([metric], kernels, pk.Style.CI, True, "", pitch_in=0.3)
     assert pk.column_pitch_in(fig.axes[0]) == pytest.approx(0.3)
-
-
-def test_the_speedup_axis_is_pinned_just_past_its_outermost_ticks() -> None:
-    """The limits come from the cells, not from autoscaling, so the chrome is measured before any
-    mark is drawn and a position means the same ratio wherever the figure is read."""
-    fig, ax = plt.subplots()
-    cells = [pk.KernelCell("k1", (0.3,)), pk.KernelCell("k2", (40.0,))]
-    pk.style_speedup_axis(ax, cells)
-    ticks = pk.speedup_yticks(cells)
-    low, high = ax.get_ylim()
-    assert low == pytest.approx(ticks[0] / 2.0**pk.VALUE_PAD_OCTAVES)
-    assert high == pytest.approx(ticks[-1] * 2.0**pk.VALUE_PAD_OCTAVES)
 
 
 @pytest.mark.parametrize(

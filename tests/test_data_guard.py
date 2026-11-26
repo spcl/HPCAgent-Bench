@@ -43,6 +43,7 @@ def make_db(path: pathlib.Path) -> pathlib.Path:
         ("src", True),  # the source itself
         ("src/out", True),  # inside the source
         (".", True),  # an ancestor of the source
+        ("shard.db", True),  # a source file: rewriting an output that IS an input DB would delete the input
         ("out", False),  # a sibling
         ("src-out", False),  # a name sharing the prefix is not inside
     ],
@@ -50,18 +51,12 @@ def make_db(path: pathlib.Path) -> pathlib.Path:
 def test_check_output_refuses_every_overlap(tmp_path: pathlib.Path, dest: str, refused: bool) -> None:
     """An output equal to, inside, or wrapping a source is refused; a sibling is returned resolved."""
     (tmp_path / "src").mkdir()
+    sources = [tmp_path / "src", make_db(tmp_path / "shard.db")]
     if refused:
         with pytest.raises(data_guard.ProtectedPathError):
-            data_guard.check_output(tmp_path / dest, [tmp_path / "src"])
+            data_guard.check_output(tmp_path / dest, sources)
     else:
-        assert data_guard.check_output(tmp_path / dest, [tmp_path / "src"]) == (tmp_path / dest).resolve()
-
-
-def test_check_output_refuses_a_source_file(tmp_path: pathlib.Path) -> None:
-    """Rewriting an output that IS an input DB would delete the input."""
-    db = make_db(tmp_path / "shard.db")
-    with pytest.raises(data_guard.ProtectedPathError):
-        data_guard.check_output(db, [db])
+        assert data_guard.check_output(tmp_path / dest, sources) == (tmp_path / dest).resolve()
 
 
 def test_protected_roots_are_runs_and_env(scratch: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,17 +65,29 @@ def test_protected_roots_are_runs_and_env(scratch: pathlib.Path, monkeypatch: py
     assert data_guard.protected_roots() == tuple((scratch / n).resolve() for n in ("hpcagent-bench-runs", "a", "b"))
 
 
-@pytest.mark.parametrize("out", ["camp/123/judge", "camp/123", "camp"])
+@pytest.mark.parametrize(
+    ("out", "regrades"),
+    [
+        pytest.param("camp/123/judge", None, id="a-judge-database-directory"),
+        pytest.param("camp/123", None, id="a-job-directory"),
+        pytest.param("camp", None, id="the-run-root"),
+        # A regrade directory is walked for every ``*.db``, with no skip of --out, so the skip's exception is not
+        # its.
+        pytest.param("regrades/out", "regrades", id="a-regrade-directory"),
+    ],
+)
 def test_extract_refuses_an_unscanned_output_that_is_a_source_or_holds_a_judge_database(
-    scratch: pathlib.Path, capsys: pytest.CaptureFixture, out: str
+    scratch: pathlib.Path, capsys: pytest.CaptureFixture, out: str, regrades: str | None
 ) -> None:
     """Skipping --out is no excuse to write into a judge database's directory (the skip would hide
     it), into a job directory the scan reads, or over the run root itself."""
     runs = scratch / "hpcagent-bench-runs"
     make_db(runs / "camp" / "123" / "judge" / "hpcagent_bench0.db")
-    rc = observations_extract.main(
-        ["--runs", str(runs / "camp"), "--benchmarks", str(scratch / "corpus"), "--out", str(runs / out)]
-    )
+    argv = ["--runs", str(runs / "camp"), "--benchmarks", str(scratch / "corpus"), "--out", str(runs / out)]
+    if regrades is not None:
+        (runs / regrades).mkdir()
+        argv += ["--regrades", str(runs / regrades)]
+    rc = observations_extract.main(argv)
     assert rc == 1
     assert "overlaps source" in capsys.readouterr().err
 
@@ -108,21 +115,6 @@ def test_extract_refuses_a_db_written_over_a_file_it_reads(
     assert rc == 1
     assert "overlaps source" in capsys.readouterr().err
     assert target.read_bytes() == before
-
-
-def test_extract_refuses_an_output_inside_a_regrade_directory(
-    scratch: pathlib.Path, capsys: pytest.CaptureFixture
-) -> None:
-    """A regrade directory is walked for every ``*.db``, with no skip of --out, so the skip's exception is not its."""
-    (scratch / "regrades").mkdir()
-    rc = observations_extract.main(
-        [
-            "--runs", str(scratch / "nomatch*"), "--benchmarks", str(scratch / "corpus"),
-            "--out", str(scratch / "regrades" / "out"), "--regrades", str(scratch / "regrades"),
-        ]
-    )  # fmt: skip
-    assert rc == 1
-    assert "overlaps source" in capsys.readouterr().err
 
 
 def test_extract_writes_a_jobs_own_record_inside_the_run_root_it_reads(scratch: pathlib.Path) -> None:

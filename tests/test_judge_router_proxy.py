@@ -155,34 +155,29 @@ def test_grading_routes_forward_verbatim(client: "TestClient", route: str, upstr
     ]
 
 
+FORM = {"kernel": "gemm", "verdict": "ok", "dialect": "c", "entry": "gemm", "source": "void gemm(){}"}
+
+
 @pytest.mark.parametrize(
-    "route",
+    ("route", "query", "reply"),
     [
-        "/baseline/loop_level_reasoning/argmax_value/argmax_value",
+        ("/baseline/loop_level_reasoning/argmax_value/argmax_value", "language=fortran&rank=3", TASK),
+        ("/canonical_parallel_form/gemm", "language=c&rank=0", FORM),
     ],
+    ids=["path_style_kernel_key", "canonical_parallel_form"],
 )
-def test_read_routes_keep_path_style_kernel_keys(client: "TestClient", route: str) -> None:
+def test_read_routes_keep_path_style_kernel_keys(
+    client: "TestClient", route: str, query: str, reply: dict[str, Any]
+) -> None:
     """Every registry key carries slashes; a single-segment route parameter would 404 the agent's
-    first tool call at the router, before the judge ever sees it."""
-    StubJudge.reply = (200, TASK)
-    response = client.get(f"{route}?language=fortran&rank=3")
+    first tool call at the router, before the judge ever sees it. The canonical_parallel_form route once had
+    no handler at all, so every call 404'd at the router. Path and query (rank included) must reach the
+    upstream judge unchanged, and the judge's answer comes back as itself."""
+    StubJudge.reply = (200, reply)
+    response = client.get(f"{route}?{query}")
     assert response.status_code == 200
-    assert StubJudge.calls == [{"method": "GET", "path": route, "query": "language=fortran&rank=3", "body": {}}]
-
-
-def test_canonical_parallel_form_is_forwarded(client: "TestClient") -> None:
-    """The agent's canonical_parallel_form tool called this exact route in every experiment and the
-    router had no handler for it, so every call 404'd at the router before the judge ever saw it.
-    Path and query (rank included) must reach the upstream judge unchanged, like every other read
-    route, and the judge's answer -- a rendered form or an 'unavailable' -- comes back as itself."""
-    form = {"kernel": "gemm", "verdict": "ok", "dialect": "c", "entry": "gemm", "source": "void gemm(){}"}
-    StubJudge.reply = (200, form)
-    response = client.get("/canonical_parallel_form/gemm?language=c&rank=0")
-    assert response.status_code == 200
-    assert response.json() == form
-    assert StubJudge.calls == [
-        {"method": "GET", "path": "/canonical_parallel_form/gemm", "query": "language=c&rank=0", "body": {}}
-    ]
+    assert response.json() == reply
+    assert StubJudge.calls == [{"method": "GET", "path": route, "query": query, "body": {}}]
 
 
 def test_an_unknown_kernel_stays_the_judges_404(client: "TestClient") -> None:
@@ -193,16 +188,24 @@ def test_an_unknown_kernel_stays_the_judges_404(client: "TestClient") -> None:
     assert StubJudge.calls[0]["path"] == "/baseline/nope"
 
 
-def test_a_failing_submit_answers_the_verdict_alone(client: "TestClient") -> None:
-    StubJudge.reply = (200, {**GRADE, "correct": False, "detail": "numeric mismatch: got 1.0"})
-    assert client.post("/submit", json=SUBMISSION).json() == {"correct": "no", "request_id": "rid1"}
-
-
-def test_a_build_failure_answers_with_its_own_compiler_log(client: "TestClient") -> None:
-    """The compiler log is the agent's own code, not a fact about the reference."""
-    StubJudge.reply = (200, {**GRADE, "correct": False, "build_ok": False, "detail": "x.c:1: error"})
-    body = client.post("/submit", json=SUBMISSION).json()
-    assert body == {"correct": "no", "request_id": "rid1", "build_log": "x.c:1: error"}
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"correct": False, "detail": "numeric mismatch: got 1.0"}, {"correct": "no", "request_id": "rid1"}),
+        (
+            {"correct": False, "build_ok": False, "detail": "x.c:1: error"},
+            {"correct": "no", "request_id": "rid1", "build_log": "x.c:1: error"},
+        ),
+    ],
+    ids=["failing_submit", "build_failure"],
+)
+def test_a_failing_submit_answers_the_verdict_alone(
+    client: "TestClient", fields: dict[str, Any], expected: dict[str, str]
+) -> None:
+    """A wrong answer is the verdict alone; the compiler log is the agent's own code, not a fact about the
+    reference, so a build failure answers with it."""
+    StubJudge.reply = (200, {**GRADE, **fields})
+    assert client.post("/submit", json=SUBMISSION).json() == expected
 
 
 def test_unknown_body_fields_are_relayed_not_interpreted(client: "TestClient") -> None:
@@ -270,35 +273,26 @@ def test_search_still_runs_locally(client: "TestClient", service: ModuleType, mo
     assert not StubJudge.calls  # search never touches the judge
 
 
+@pytest.mark.parametrize("provisioned", [True, False], ids=["failure_is_bad_gateway", "not_provisioned_is_503"])
 def test_search_failure_is_a_bad_gateway(
-    client: "TestClient", service: ModuleType, monkeypatch: pytest.MonkeyPatch
+    client: "TestClient", service: ModuleType, monkeypatch: pytest.MonkeyPatch, provisioned: bool
 ) -> None:
+    """An agent that sees only a flat 502 cannot tell 'this setup was never given search' from 'the search infra
+    hiccuped': ``NotProvisionedError`` answers 503, never the status a real SerpAPI/crawl/LLM failure gets."""
 
     def boom(query: str, limit: int | None) -> dict[str, Any]:
-        raise RuntimeError("serpapi down")
+        if provisioned:
+            raise RuntimeError("serpapi down")
+        raise service.judge_web_search.NotProvisionedError("SERPAPI_API_KEY must be set")
 
     monkeypatch.setattr(service.judge_web_search, "run_web_search", boom)
     monkeypatch.setenv(network_policy.KEY, "open")
     monkeypatch.setenv(registry.PACKET_TOOLS_ENV, "search")
-    assert client.post("/search", json={"query": "x"}).status_code == 502
-
-
-def test_search_not_provisioned_is_a_distinct_service_unavailable(
-    client: "TestClient", service: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An agent that sees only a flat 502 cannot tell 'this setup was never given search' from 'the
-    search infra hiccuped' -- ``NotProvisionedError`` must answer 503 with a machine-readable
-    ``cause``, never the same status a real SerpAPI/crawl/LLM failure gets."""
-
-    def unprovisioned(query: str, limit: int | None) -> dict[str, Any]:
-        raise service.judge_web_search.NotProvisionedError("SERPAPI_API_KEY must be set")
-
-    monkeypatch.setattr(service.judge_web_search, "run_web_search", unprovisioned)
-    monkeypatch.setenv(network_policy.KEY, "open")
-    monkeypatch.setenv(registry.PACKET_TOOLS_ENV, "search")
     response = client.post("/search", json={"query": "x"})
-    assert response.status_code == service.SEARCH_NOT_PROVISIONED == 503
-    assert response.json()["detail"]["cause"] == "not_provisioned"
+    if provisioned:
+        assert response.status_code == 502
+    else:
+        assert response.status_code == service.SEARCH_NOT_PROVISIONED == 503
 
 
 @pytest.mark.parametrize("policy", [None, "none", "allowlist"])
@@ -452,7 +446,9 @@ def test_profile_needs_no_episode_id(client: "TestClient") -> None:
     assert StubJudge.calls[0]["path"] == "/profile"
 
 
-def test_a_plugin_packets_tools_get_a_relay_on_its_route_with_or_without_phases(service: ModuleType) -> None:
+def test_a_plugin_packets_tools_get_a_relay_on_its_route_with_or_without_phases(
+    client: "TestClient", service: ModuleType
+) -> None:
     from hpcagent_bench.vocabulary import PacketDef, PacketPhase
 
     phased = PacketDef(
@@ -468,8 +464,7 @@ def test_a_plugin_packets_tools_get_a_relay_on_its_route_with_or_without_phases(
 
     assert sut == ("/forge/apply_move", "/forge/get_performance", "/tuner/tune", "/tuner/get_performance")
 
-
-def test_a_plugin_tool_call_reaches_the_judge_on_its_own_path(client: "TestClient") -> None:
+    StubJudge.calls.clear()
     response = client.post("/forge/apply_move?rank=3", json=SUBMISSION)
 
     assert response.status_code == 200

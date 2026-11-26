@@ -165,21 +165,6 @@ def test_forked_child_runs_openmp_after_the_parent_already_did(tmp_path: pathlib
 @pytest.mark.parametrize("runtime", ["gomp", "omp"])
 @pytest.mark.parametrize("mode", [OMP_PAUSE_HARD, OMP_PAUSE_SOFT], ids=["hard", "soft"])
 @isolated
-def test_the_parent_can_still_use_openmp_after_pausing(tmp_path: pathlib.Path, runtime: str, mode: int) -> None:
-    """Pausing must not cost the parent anything, under EITHER tear-down mode: a paused runtime
-    re-initialises on its next parallel region. Otherwise run_forked would fix the fork by
-    breaking every caller that later runs a kernel itself -- the pool is a cache, and tearing it
-    down is not the same as disabling OpenMP."""
-    so = build(tmp_path, runtime)
-    call_kernel(so)
-    pause_openmp_pools(mode)
-    np.testing.assert_allclose(call_kernel(so), np.ones(N))  # pool rebuilt, still correct
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("runtime", ["gomp", "omp"])
-@pytest.mark.parametrize("mode", [OMP_PAUSE_HARD, OMP_PAUSE_SOFT], ids=["hard", "soft"])
-@isolated
 def test_both_teardown_modes_make_the_fork_safe(tmp_path: pathlib.Path, runtime: str, mode: int) -> None:
     """BOTH omp_pause_resource_t options must buy fork safety -- but NOT always by tearing the
     pool down: libgomp drops it under either mode, whereas libomp's SOFT pause leaves the whole
@@ -214,6 +199,10 @@ def test_both_teardown_modes_make_the_fork_safe(tmp_path: pathlib.Path, runtime:
     os.waitpid(pid, 0)
     why = "produced nothing (hung on its parallel region, then was killed)" if not got else f"computed {got.decode()}"
     assert got == b"ok", f"lib{runtime} + omp_pause_{mode}: child {why}"
+    # Pausing must not cost the parent anything, under EITHER tear-down mode: a paused runtime
+    # re-initialises on its next parallel region, so run_forked does not break every caller that
+    # later runs a kernel itself. Checked after the fork, which a fresh parallel region would re-poison.
+    np.testing.assert_allclose(call_kernel(so), np.ones(N))  # pool rebuilt, still correct
 
 
 def mapped_omp() -> list[str]:

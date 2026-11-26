@@ -22,11 +22,6 @@ def source(checkout: pathlib.Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
 
 
-def test_the_checkouts_own_package_is_accepted() -> None:
-    done = source(paths.ROOT)
-    assert done.returncode == 0, done.stderr
-
-
 def test_another_checkouts_package_is_refused_and_a_scripts_only_tree_is_not(tmp_path: pathlib.Path) -> None:
     """A checkout with its own package served by another checkout's interpreter is refused; a tree of the scripts
     alone (no package of its own, as the cluster tests build) is served by the installed one."""
@@ -41,3 +36,5 @@ def test_another_checkouts_package_is_refused_and_a_scripts_only_tree_is_not(tmp
     # A judge container mounts the repository twice, so the package may be named by either path of it
     assert pathlib.Path(named).samefile(paths.ROOT), done.stderr
     assert f"not this checkout ({tmp_path})" in done.stderr
+    done = source(paths.ROOT)
+    assert done.returncode == 0, done.stderr

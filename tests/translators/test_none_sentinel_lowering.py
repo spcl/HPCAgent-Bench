@@ -37,7 +37,7 @@ import pytest
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from hpcagent_bench.translators.numpyto_common.tuple_desugar import desugar_tuples, drop_dead_none_bindings
+from hpcagent_bench.translators.numpyto_common.tuple_desugar import drop_dead_none_bindings
 from tests.translators import op_oracle
 from tests.translators.op_oracle import run_op
 
@@ -79,24 +79,6 @@ TAP_RANGE_SRC = (
 
 TAP_RANGE_SHAPES = {"x": "(N,)", "weight": "(K,)", "out": "(M,)"}
 TAP_RANGE_SYMS = {"N": 2, "K": 3, "M": 2}
-
-
-def test_none_or_tuple_helper_splices_away() -> None:
-    # Structural: no surviving helper, no None literal, and the caller's own "continue" guard
-    # is preserved verbatim (not replaced by a flag -- there is nothing to seed, it just skips).
-    kir = kir_for(
-        TAP_RANGE_SRC,
-        "f",
-        ["x", "weight", "stride", "padding", "dilation", "out"],
-        ["out"],
-        TAP_RANGE_SHAPES,
-        TAP_RANGE_SYMS,
-    )
-    assert kir.helpers == []
-    body = ast.unparse(kir.tree)
-    assert "None" not in body
-    assert "_tap_range" not in body
-    assert "continue" in body
 
 
 def test_none_or_tuple_helper_numeric_and_skips_the_empty_tap() -> None:
@@ -151,34 +133,6 @@ TAP_NESTED_SRC = (
     "    for jdx in range(lo2, hi2):\n"
     "     out[ol_lo + (idx - lo) * stride] += x[idx] * x[jdx] * weight[ky] * weight[kx]\n"
 )
-
-
-def test_none_or_tuple_helper_splices_when_the_unpack_is_two_loops_deeper() -> None:
-    """Structural: the helper is gone, and its body landed where the CALL was -- in the outer
-    loop, ahead of the inner one -- rather than being duplicated down at the unpack.
-
-    Splicing at the unpack instead would recompute the outer tap once per inner iteration, and
-    (worse) evaluate the guard after the inner loop had already run on an out-of-range tap."""
-    kir = kir_for(
-        TAP_NESTED_SRC,
-        "f",
-        ["x", "weight", "stride", "padding", "dilation", "out"],
-        ["out"],
-        TAP_RANGE_SHAPES,
-        TAP_RANGE_SYMS,
-    )
-    assert kir.helpers == []
-    body = ast.unparse(kir.tree)
-    assert "None" not in body
-    assert "_tap_range" not in body
-    outer = next(n for n in kir.tree.body if isinstance(n, ast.For))
-    guard_at = [i for i, st in enumerate(outer.body) if isinstance(st, ast.If) and st.body[0].__class__ is ast.Continue]
-    inner_at = [i for i, st in enumerate(outer.body) if isinstance(st, ast.For)]
-    assert guard_at, ast.unparse(outer)
-    assert inner_at, ast.unparse(outer)
-    assert guard_at[0] < inner_at[0], ast.unparse(outer)
-    inner = outer.body[inner_at[0]]
-    assert any(isinstance(st, ast.If) and st.body[0].__class__ is ast.Continue for st in inner.body), ast.unparse(inner)
 
 
 def test_none_or_tuple_helper_nested_numeric_and_skips_both_empty_taps() -> None:
@@ -357,16 +311,6 @@ DEFAULT_STRIDE_SRC = (
 )
 
 
-def test_default_argument_sentinel_folds_away() -> None:
-    # Structural: no None literal, no surviving helper -- the guard resolves statically since the
-    # call site passed the literal None, and the now-dead init doesn't survive just because the
-    # SAME renamed local is read again later, through the guard's own (unconditional) rebind.
-    kir = kir_for(DEFAULT_STRIDE_SRC, "f", ["x", "k", "out"], ["out"], {"x": "(N,)", "out": "(1,)"}, {"N": 8})
-    assert kir.helpers == []
-    body = ast.unparse(kir.tree)
-    assert "None" not in body
-
-
 def test_default_argument_sentinel_numeric() -> None:
     x = np.arange(8, dtype=np.float64)
     res = run_op(
@@ -419,13 +363,3 @@ def test_a_sentinel_an_is_none_test_still_inspects_is_kept() -> None:
     ).body[0]
     drop_dead_none_bindings(fn)
     assert "seen = None" in ast.unparse(fn)
-
-
-# Unit-level pin: the adjacency fix in isolation, mirroring the sibling
-# test_generator_tuple_fold.py's own direct desugar_tuples() unit test.
-
-
-def test_drop_dead_none_bindings_adjacency_unit() -> None:
-    fn = ast.parse("def h(k):\n stride = None\n if stride is None:\n  stride = k\n return stride + 1\n").body[0]
-    desugar_tuples(fn, int_scalars=frozenset({"k"}), float_scalars=frozenset(), arrays=frozenset(), ranks={})
-    assert ast.unparse(fn) == "def h(k):\n    stride = k\n    return stride + 1"

@@ -42,9 +42,6 @@ def test_pipeline_stages_default_to_one_per_node_and_tensor_parallelism_fills_th
     assert "sgl_tp=$(( GPUS_PER_NODE * INFERENCE_NODES / sgl_pp ))" in text
     assert '--tp-size "${sgl_tp}"' in text
     assert '--pp-size "${sgl_pp}"' in pp_branch()
-
-
-def test_single_node_sglang_endpoints_do_not_carry_the_flag() -> None:
-    """A single-node endpoint's command line stays exactly what it was."""
-    code = [line for line in SCRIPT.read_text().splitlines() if not line.lstrip().startswith("#")]
+    # A single-node endpoint's command line stays exactly what it was: the flag is nowhere outside the pipeline branch.
+    code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
     assert sum(line.count("--dist-timeout") for line in code) == 1, "the flag leaked outside the pipeline branch"

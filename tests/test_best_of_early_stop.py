@@ -167,7 +167,8 @@ def test_a_candidate_slower_than_the_leader_is_cut_on_its_first_run_and_is_never
     """xsbench: numba first, then C under a budget of max(floor, 2 x numba's slowest rep), not 300 s, recorded cut
     after its first run (grading.CUT_RETRIES re-runs: none). A lost C is a judge fault; a cut C ran and was slower,
     which is the race working."""
-    result, timed, budgets = grade(monkeypatch, c_ns=C_SLOW_NS, numba_samples=NUMBA_FAST)
+    colds: list[float] = []
+    result, timed, budgets = grade(monkeypatch, c_ns=C_SLOW_NS, numba_samples=NUMBA_FAST, colds=colds)
     assert timed == ["numba", "c"]
     cut = pytest.approx(max(1.0, 2 * max(NUMBA_FAST) * 1e-9))
     assert budgets == [cut] * (1 + grading.CUT_RETRIES)
@@ -177,25 +178,18 @@ def test_a_candidate_slower_than_the_leader_is_cut_on_its_first_run_and_is_never
     err = capsys.readouterr().err
     assert f"baseline {KERNEL}: best-of early stop cut c" in err
     assert "lost" not in err, err
-
-
-def test_the_cold_first_call_under_a_cut_gets_the_whole_per_rep_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A cut C's first call pays one-time costs (first touch, page faults): it runs under timeouts.kernel_s,
-    the later calls under the cut. Without a cut no call gets a separate alarm."""
-    colds: list[float] = []
-    grade(monkeypatch, c_ns=C_SLOW_NS, numba_samples=NUMBA_FAST, colds=colds)
+    # A cut C's first call pays one-time costs (first touch, page faults): it runs under timeouts.kernel_s,
+    # the later calls under the cut. Without a cut no call gets a separate alarm.
     assert colds == [300] * (1 + grading.CUT_RETRIES)
-    colds.clear()
-    grade(monkeypatch, c_ns=C_SLOW_NS, numba_samples=NUMBA_FAST, factor=0, colds=colds)
-    assert colds == [0.0]
-
-
-def test_a_cut_candidate_leaves_the_winner_of_the_full_race_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    cut, _, _ = grade(monkeypatch, c_ns=C_SLOW_NS, numba_samples=NUMBA_FAST)
-    full, _, budgets = grade(monkeypatch, c_ns=C_SLOW_NS, numba_samples=NUMBA_FAST, factor=0)
-    assert budgets == [300], budgets  # factor 0: no early stop, C timed in full
-    # The denominator, not the speedup: the candidate side is really timed and differs run to run.
-    assert (cut.baseline, cut.baseline_ns) == (full.baseline, full.baseline_ns) == ("numba", cut.baseline_ns)
+    # The cut leaves the winner of the full race unchanged. The denominator, not the speedup: the candidate side
+    # is really timed and differs run to run.
+    full_colds: list[float] = []
+    full, unused, full_budgets = grade(
+        monkeypatch, c_ns=C_SLOW_NS, numba_samples=NUMBA_FAST, factor=0, colds=full_colds
+    )
+    assert full_colds == [0.0]
+    assert full_budgets == [300], full_budgets  # factor 0: no early stop, C timed in full
+    assert (result.baseline, result.baseline_ns) == (full.baseline, full.baseline_ns) == ("numba", result.baseline_ns)
 
 
 def test_a_remembered_cut_is_replayed_not_retimed_and_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,29 +297,27 @@ def test_best_of_v3_is_its_own_identity(monkeypatch: pytest.MonkeyPatch) -> None
 # the cut's retry, in isolation
 
 
-def test_cut_retried_runs_a_cut_reference_cut_retries_more_times_then_lets_the_cut_propagate() -> None:
-    calls: list[int] = []
-
-    def always_cut() -> None:
-        calls.append(1)
-        raise NativeCallTimeout("native call exceeded 1s on a single rep and was killed")
-
-    with pytest.raises(NativeCallTimeout):
-        grading.cut_retried(always_cut, 1.0)
-    assert len(calls) == 1 + grading.CUT_RETRIES
-
-
-def test_cut_retried_without_a_cut_never_retries_a_timeout() -> None:
-    """At the flat timeout (no cut) a reference that ran out is lost or settled, not re-timed."""
+@pytest.mark.parametrize(
+    ("timeout_s", "message", "want_calls"),
+    [
+        # a cut reference is re-run CUT_RETRIES more times, then the cut propagates
+        pytest.param(1.0, "native call exceeded 1s on a single rep and was killed", 1 + grading.CUT_RETRIES, id="cut"),
+        # at the flat timeout (no cut) a reference that ran out is lost or settled, not re-timed
+        pytest.param(0.0, "native call exceeded 300s on a single rep and was killed", 1, id="no-cut"),
+    ],
+)
+def test_cut_retried_runs_a_cut_reference_cut_retries_more_times_then_lets_the_cut_propagate(
+    timeout_s: float, message: str, want_calls: int
+) -> None:
     calls: list[int] = []
 
     def timed_out() -> None:
         calls.append(1)
-        raise NativeCallTimeout("native call exceeded 300s on a single rep and was killed")
+        raise NativeCallTimeout(message)
 
     with pytest.raises(NativeCallTimeout):
-        grading.cut_retried(timed_out, 0.0)
-    assert calls == [1]
+        grading.cut_retried(timed_out, timeout_s)
+    assert len(calls) == want_calls
 
 
 # the retry

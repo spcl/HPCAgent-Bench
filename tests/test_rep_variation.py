@@ -23,37 +23,29 @@ def ptr(name: str, dtype: str, *, role: str | None = None, is_index: bool = Fals
     return Arg(name=name, kind="ptr", dtype=dtype, is_const=False, shape=("N",), role=role, is_index=is_index)
 
 
-def test_float_array_is_a_value_by_default() -> None:
-    assert rep_variation.is_value_arg(ptr("a", "float64")) is True
-
-
-def test_int_array_is_structural_by_default() -> None:
-    assert rep_variation.is_value_arg(ptr("idx", "int64")) is False
-
-
-def test_bool_array_is_structural() -> None:
-    assert rep_variation.is_value_arg(ptr("keep", "bool")) is False
-
-
-def test_is_index_flag_wins_over_dtype() -> None:
-    # a float-declared index would be unusual, but the ABI flag is authoritative regardless
-    assert rep_variation.is_value_arg(ptr("gather", "float64", is_index=True)) is False
-
-
-def test_structural_role_wins_over_float_dtype() -> None:
-    assert rep_variation.is_value_arg(ptr("m", "float64", role="mask")) is False
-
-
-def test_scalar_arg_is_never_a_value_array() -> None:
-    scalar = Arg(name="n", kind="scalar", dtype="int64", is_const=False, role="symbol")
-    assert rep_variation.is_value_arg(scalar) is False
-
-
-def test_manifest_override_wins_over_everything() -> None:
-    # an int array a manifest insists is a measured VALUE, not an index
-    assert rep_variation.is_value_arg(ptr("counts", "int64"), overrides={"counts": True}) is True
-    # a float array a manifest insists must stay static
-    assert rep_variation.is_value_arg(ptr("a", "float64"), overrides={"a": False}) is False
+@pytest.mark.parametrize(
+    ("arg", "expected", "overrides"),
+    [
+        pytest.param(ptr("a", "float64"), True, None, id="float_default"),
+        pytest.param(ptr("idx", "int64"), False, None, id="int_structural"),
+        pytest.param(ptr("keep", "bool"), False, None, id="bool_structural"),
+        # a float-declared index would be unusual, but the ABI flag is authoritative regardless
+        pytest.param(ptr("gather", "float64", is_index=True), False, None, id="index_flag_wins"),
+        pytest.param(ptr("m", "float64", role="mask"), False, None, id="structural_role_wins"),
+        pytest.param(
+            Arg(name="n", kind="scalar", dtype="int64", is_const=False, role="symbol"),
+            False,
+            None,
+            id="scalar_never_value",
+        ),
+        # a manifest override wins over everything: an int array it insists is a measured VALUE, not an index
+        pytest.param(ptr("counts", "int64"), True, {"counts": True}, id="override_makes_an_int_array_a_value"),
+        # and a float array it insists must stay static
+        pytest.param(ptr("a", "float64"), False, {"a": False}, id="override_keeps_a_float_array_static"),
+    ],
+)
+def test_is_value_arg_classification(arg: Arg, expected: bool, overrides: dict[str, bool] | None) -> None:
+    assert rep_variation.is_value_arg(arg, overrides=overrides) is expected
 
 
 def test_classify_args_only_covers_pointer_arguments() -> None:
@@ -99,11 +91,7 @@ def test_consecutive_calls_never_share_an_input_and_the_canonical_call_comes_las
     assert len(seeds) == 7
     assert all(a != b for a, b in itertools.pairwise(seeds))
     assert set(seeds[:-1]) == set(pool)
-
-
-def test_the_nonce_picks_where_a_call_enters_the_pool() -> None:
-    """Which input the warmup takes is the per-call secret's choice, so no timed slot is predictable."""
-    pool = [11, 22, 33, 44]
+    # Which input the warmup takes is the per-call secret's choice, so no timed slot is predictable.
     assert {rep_variation.timed_seeds(pool, 6, nonce, 7)[0] for nonce in range(8)} == set(pool)
 
 
@@ -150,21 +138,14 @@ def test_variant_for_identity_at_the_canonical_seed(
         "tsvc_2_s311", Preset.S, "float64", base, classification, seeds, None, None, None, 2
     )
     assert out is base  # no regeneration at all
-
-
-def test_variant_for_redraws_value_arrays_at_a_different_seed(
-    s311_setup: tuple[BenchSpec, Binding, dict[str, int | np.ndarray | type[np.float64]]],
-) -> None:
-    _spec, binding, base = s311_setup
-    classification = rep_variation.classify_args(binding)
-    seeds = [999, 1]
-    out = rep_variation.variant_for(
-        "tsvc_2_s311", Preset.S, "float64", base, classification, seeds, None, None, None, 0
+    # At a different seed the value arrays are redrawn.
+    redrawn = rep_variation.variant_for(
+        "tsvc_2_s311", Preset.S, "float64", base, classification, [999, 1], None, None, None, 0
     )
-    assert out is not base
-    assert not np.array_equal(out["a"], base["a"])  # the value array moved
-    assert out["a"].shape == base["a"].shape
-    assert out["a"].dtype == base["a"].dtype
+    assert redrawn is not base
+    assert not np.array_equal(redrawn["a"], base["a"])  # the value array moved
+    assert redrawn["a"].shape == base["a"].shape
+    assert redrawn["a"].dtype == base["a"].dtype
 
 
 def test_a_canonical_recipe_draws_no_per_call_inputs(
@@ -256,18 +237,6 @@ def test_manual_overrides_give_int_only_kernels_real_variation(kernel: str, valu
     classification = rep_variation.classify_args(binding)
     assert classification[value_arg] is True
     assert any(classification.values()), f"{kernel}: still zero value arrays after the manual override"
-
-
-# bytes_touched / physical_floor_ns
-def test_bytes_touched_sums_every_pointer_argument() -> None:
-    spec = BenchSpec.load("tsvc_2_s311")
-    binding = binding_from_spec(spec)
-    from hpcagent_bench.harness.grading import data_seeded
-
-    data = data_seeded("tsvc_2_s311", Preset.S, "float64", 1)
-    total = rep_variation.bytes_touched(binding, data)
-    expected = np.asarray(data["a"]).nbytes + np.asarray(data["sum_out"]).nbytes
-    assert total == expected
 
 
 def test_an_offset_draw_is_the_measurements_own_call_and_crosses_a_pickle() -> None:

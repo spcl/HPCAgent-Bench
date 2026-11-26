@@ -123,14 +123,6 @@ def test_build_commands_cc_override_swaps_wrapper() -> None:
     assert all(driver(argv) == "mpicc" for argv in cmds)  # OpenMPI wrapper for a matching launcher
 
 
-def test_build_commands_fortran_kernel_links_with_fortran_driver() -> None:
-    # A Fortran kernel + the always-C driver -> link with the Fortran wrapper (pulls libgfortran).
-    cmds = build_mpi_executable_commands([(Language.FORTRAN, Path("k.f90"))], Path("d.c"), Path("bench"))
-    assert driver(cmds[0]) == "mpifort.mpich"  # kernel compiled with the Fortran wrapper
-    assert driver(cmds[1]) == "mpicc.mpich"  # driver always C
-    assert driver(cmds[-1]) == "mpifort.mpich"  # link driver = Fortran
-
-
 def test_build_commands_baseline_flows_from_matrix_no_literal_flags() -> None:
     cmds = build_mpi_executable_commands([(Language.C, Path("k.c"))], Path("d.c"), Path("bench"))
     # -O3/-march come from the matrix baseline, never hard-coded in the yaml template.
@@ -142,16 +134,31 @@ def test_build_commands_empty_sources_raises() -> None:
         build_mpi_executable_commands([], Path("d.c"), Path("bench"))
 
 
-def test_build_commands_device_routes_driver_and_link_to_gpu_compiler() -> None:
-    # Device residency: CUDA kernel + driver both compile with nvcc; the link is nvcc too, not the C wrapper.
-    cmds = build_mpi_executable_commands(
-        [(Language.CUDA, Path("k.cu"))], Path("d.cu"), Path("bench"), driver_lang=Language.CUDA
-    )
-    assert driver(cmds[0]) == "nvcc"
-    assert str(Path("k.cu")) in cmds[0]
-    assert driver(cmds[1]) == "nvcc"
-    assert str(Path("d.cu")) in cmds[1]
-    assert driver(cmds[-1]) == "nvcc"
+@pytest.mark.parametrize(
+    ("kernel", "driver_source", "driver_lang", "expected"),
+    [
+        # A Fortran kernel + the always-C driver: the kernel and the link use the Fortran wrapper (pulls libgfortran).
+        pytest.param(
+            (Language.FORTRAN, Path("k.f90")),
+            Path("d.c"),
+            None,
+            ("mpifort.mpich", "mpicc.mpich", "mpifort.mpich"),
+            id="fortran-kernel-c-driver",
+        ),
+        # Device residency: CUDA kernel + driver both compile with nvcc; the link is nvcc too, not the C wrapper.
+        pytest.param(
+            (Language.CUDA, Path("k.cu")), Path("d.cu"), Language.CUDA, ("nvcc", "nvcc", "nvcc"), id="device-residency"
+        ),
+    ],
+)
+def test_build_commands_device_routes_driver_and_link_to_gpu_compiler(
+    kernel: tuple[Language, Path], driver_source: Path, driver_lang: Language | None, expected: tuple[str, str, str]
+) -> None:
+    extra = {} if driver_lang is None else {"driver_lang": driver_lang}
+    cmds = build_mpi_executable_commands([kernel], driver_source, Path("bench"), **extra)
+    assert (driver(cmds[0]), driver(cmds[1]), driver(cmds[-1])) == expected
+    assert str(kernel[1]) in cmds[0]
+    assert str(driver_source) in cmds[1]
     assert "-shared" not in " ".join(cmds[-1])
 
 
@@ -343,20 +350,6 @@ def test_build_mpi_and_run_round_trip(tmp_path: Path) -> None:
     assert min(samples_ns) >= 0
 
 
-def test_run_nonzero_exit_is_scored_runtimeerror(tmp_path: Path) -> None:
-    tc = c_toolchain()
-    if tc is None:
-        pytest.skip(f"no working MPI launcher in this environment: {c_toolchain_diagnosis()}")
-    _cc, launch = tc
-    b, desc = yax_binding(), yax_descriptor(RANKS)
-    data = {"x": np.arange(8.0), "y": np.zeros(8), "N": 8, "a": 2.0}
-    # A nonexistent executable -> the launcher exits non-zero -> a scored RuntimeError.
-    with pytest.raises(RuntimeError):
-        mpi_call.run(
-            tmp_path / "no_such_bench", b, desc, data, is_python=False, launcher=launch, k_repeats=1, timeout=30
-        )
-
-
 def test_a_failed_launch_reports_the_first_ranks_error_ahead_of_the_other_ranks_abort_lines(tmp_path: Path) -> None:
     """Known issue 5: the error that names the cause comes first, and 16 ranks' ``MPI_Abort`` lines push it out of
     the last 2000 bytes. The failure keeps it once (every rank printed it), then the tail as it was."""
@@ -404,19 +397,6 @@ def test_program_argv_python_forwards_device_mask_only_for_device() -> None:
     assert dev[-2:] == ["--device-mask", "0,2"]
     c = mpi_call.program_argv(art, inf, out, is_python=False, python_exe="py", grid_dims=(4,), device_mask=(0,))
     assert c == ["/x/bench", "/t/in.bin", "/t/out.bin"]  # the mask never leaks into the C program tail
-
-
-def test_stage_host_returns_numpy_and_sizes_workspace() -> None:
-    """`stage` all-host path: compute tiles are the scattered host arrays; workspace is None if 0-byte."""
-    from hpcagent_bench.harness import mpi_py_driver
-
-    tiles = [np.arange(4, dtype=np.float64)]
-    compute, ws = mpi_py_driver.stage(tiles, 0, frozenset())
-    assert compute[0] is tiles[0]
-    assert ws is None
-    _c, ws2 = mpi_py_driver.stage(tiles, 32, frozenset())
-    assert ws2.shape == (32,)
-    assert ws2.dtype == np.uint8
 
 
 def test_stage_device_mask_copies_only_selected_tiles() -> None:

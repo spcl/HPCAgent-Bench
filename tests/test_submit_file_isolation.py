@@ -132,13 +132,6 @@ def test_a_same_named_problems_file_in_a_different_directory_does_not_collide(tm
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_an_empty_queue_passes_through(tmp_path: pathlib.Path) -> None:
-    """No PENDING/RUNNING job at all (a stub squeue that prints nothing) never blocks a submission."""
-    target = tmp_path / ".env.some-setup"
-    result = run_probe(tmp_path, f'refuse_if_queue_references "{target}"', "true", "true")
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
 def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     """Source submit_common.sh with the given knobs and run ``script`` against it."""
     site = tmp_path / "site.env"

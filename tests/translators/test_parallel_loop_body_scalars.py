@@ -16,6 +16,7 @@ import ctypes
 import importlib.util
 import pathlib
 import subprocess
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -49,15 +50,14 @@ def lowered(src: str, n: int) -> KernelIR:
     return lower(parse_source(src, "f", ["x"], ["r", "q"], SHAPES, {"N": n}))
 
 
-def test_c_omp_privatises_the_body_temps() -> None:
-    c = emit_c_omp(lowered(TWO_TEMPS, 16), fn_name="f")
-    pragma = next(line for line in c.splitlines() if "#pragma omp parallel for" in line)
-    assert "private(t, u)" in pragma, pragma
-
-
-def test_fortran_omp_privatises_the_body_temps() -> None:
-    f = emit_fortran_omp(lowered(TWO_TEMPS, 16), fn_name="f")
-    pragma = next(line for line in f.splitlines() if "!$omp parallel do" in line)
+@pytest.mark.parametrize(
+    ("emit", "marker"),
+    [(emit_c_omp, "#pragma omp parallel for"), (emit_fortran_omp, "!$omp parallel do")],
+    ids=["c", "fortran"],
+)
+def test_c_omp_privatises_the_body_temps(emit: Callable[..., str], marker: str) -> None:
+    text = emit(lowered(TWO_TEMPS, 16), fn_name="f")
+    pragma = next(line for line in text.splitlines() if marker in line)
     assert "private(t, u)" in pragma, pragma
 
 
@@ -107,17 +107,16 @@ REBOUND_AFTER = (
 )
 
 
-def test_a_loop_whose_body_scalar_is_read_after_it_stays_serial() -> None:
-    tree = ast.parse(LIVE_AFTER)
-    assert not loop_is_parallel_safe(first_loop(tree), tree)
-    assert "nb.prange" not in emit_numba(LIVE_AFTER)
-
-
-def test_a_body_scalar_rebound_before_any_later_read_keeps_the_loop_parallel() -> None:
+@pytest.mark.parametrize(
+    ("source", "parallel"),
+    [(LIVE_AFTER, False), (REBOUND_AFTER, True)],
+    ids=["read_after_the_loop_stays_serial", "rebound_before_any_later_read_keeps_it_parallel"],
+)
+def test_a_loop_whose_body_scalar_is_read_after_it_stays_serial(source: str, parallel: bool) -> None:
     """The check is liveness, not "the name appears again": a later rebinding kills the value."""
-    tree = ast.parse(REBOUND_AFTER)
-    assert loop_is_parallel_safe(first_loop(tree), tree)
-    assert "nb.prange" in emit_numba(REBOUND_AFTER)
+    tree = ast.parse(source)
+    assert loop_is_parallel_safe(first_loop(tree), tree) is parallel
+    assert ("nb.prange" in emit_numba(source)) is parallel
 
 
 def first_loop(tree: ast.Module) -> ast.For:

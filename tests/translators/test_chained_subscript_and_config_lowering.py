@@ -80,42 +80,38 @@ def test_a_chained_subscript_collapses_to_one_subscript(
 ABI_BACKENDS = ("c", "fortran")
 
 
-def test_a_gather_then_a_row_index_reads_the_gathered_row() -> None:
-    # ``A[idx][j]`` is row ``idx[j]`` of A, not ``A[idx, j]``: that column read compiles on a square A
-    # and returns wrong numbers.
-    src = "import numpy as np\ndef f(A, idx, out):\n    for j in range(idx.shape[0]):\n        out[j, :] = A[idx][j]\n"
-    M = 4
-    A = np.random.default_rng(3).standard_normal((M, M))
-    idx = np.array([3, 1, 0, 2], dtype=np.int64)
-    res = run_op(
-        src,
-        "f",
-        {"A": A, "idx": idx},
-        {"out": (M, M)},
-        {"M": M},
-        shapes={"A": "(M,M)", "idx": "(M,)", "out": "(M,M)"},
-        backends=ABI_BACKENDS,
-    )
-    ok, r = all_ok(res)
-    assert ok, r
+GATHER_IDX = np.array([3, 1, 0, 2], dtype=np.int64)
 
 
-def test_a_gather_through_a_partial_slice_offsets_the_index_array() -> None:
-    # ``a[1:5][jdx]`` is ``a[1 + jdx]``; left unflattened the chain reaches the emitter as an index
-    # with more axes than ``a`` has.
-    src = "import numpy as np\ndef f(a, jdx, out):\n    out[:] = a[1:5][jdx]\n"
-    N, P = 6, 4
-    a = np.random.default_rng(4).standard_normal(N)
-    jdx = np.array([3, 1, 0, 2], dtype=np.int64)
-    res = run_op(
-        src,
-        "f",
-        {"a": a, "jdx": jdx},
-        {"out": (P,)},
-        {"N": N, "P": P},
-        shapes={"a": "(N,)", "jdx": "(P,)", "out": "(P,)"},
-        backends=ABI_BACKENDS,
-    )
+@pytest.mark.parametrize(
+    ("src", "inputs", "out_shape", "syms", "shapes"),
+    [
+        # ``A[idx][j]`` is row ``idx[j]`` of A, not ``A[idx, j]``: that column read compiles on a square A and returns
+        # wrong numbers.
+        pytest.param(
+            "import numpy as np\ndef f(A, idx, out):\n    for j in range(idx.shape[0]):\n        out[j, :] = A[idx][j]\n",
+            {"A": np.random.default_rng(3).standard_normal((4, 4)), "idx": GATHER_IDX},
+            (4, 4),
+            {"M": 4},
+            {"A": "(M,M)", "idx": "(M,)", "out": "(M,M)"},
+            id="row-of-the-gathered-rows",
+        ),
+        # ``a[1:5][jdx]`` is ``a[1 + jdx]``; left unflattened the chain reaches the emitter as an index with more
+        # axes than ``a`` has.
+        pytest.param(
+            "import numpy as np\ndef f(a, jdx, out):\n    out[:] = a[1:5][jdx]\n",
+            {"a": np.random.default_rng(4).standard_normal(6), "jdx": GATHER_IDX},
+            (4,),
+            {"N": 6, "P": 4},
+            {"a": "(N,)", "jdx": "(P,)", "out": "(P,)"},
+            id="partial-slice-offsets-the-index-array",
+        ),
+    ],
+)
+def test_a_gather_then_a_row_index_reads_the_gathered_row(
+    src: str, inputs: dict[str, np.ndarray], out_shape: tuple[int, ...], syms: dict[str, int], shapes: dict[str, str]
+) -> None:
+    res = run_op(src, "f", inputs, {"out": out_shape}, syms, shapes=shapes, backends=ABI_BACKENDS)
     ok, r = all_ok(res)
     assert ok, r
 
@@ -483,15 +479,10 @@ def test_trailing_pad_reads_local_offset_for_nonzero_start() -> None:
     # (the absolute ``si`` would run off the axis).
     assert pad_trailing("dH[a, b]", 2, ("A", "B", "M")) == "dH[a, b, si - 2]"
 
-
-# iter-start offset copies the shared start node (no AST aliasing)
-
-
-def test_iter_minus_start_copies_shared_start_node() -> None:
-    # ``start`` is the SAME node object as the loop-header ``range`` lower bound, so
-    # ``iter_minus_start`` must embed a COPY -- else one mutable subtree lives in two
-    # tree positions and a later in-place rewrite of the loop bound corrupts the
-    # gather offset (and vice versa).
+    # The iter-start offset copies the shared start node (no AST aliasing): ``start`` is the SAME node object as the
+    # loop-header ``range`` lower bound, so ``iter_minus_start`` must embed a COPY -- else one mutable subtree lives
+    # in two tree positions and a later in-place rewrite of the loop bound corrupts the gather offset (and vice
+    # versa).
     start = expr_("ip * n")  # a shared BinOp: the slice lower bound / loop start
     iv = ast.Name(id="si", ctx=ast.Load())
     out = lowering.SliceToScalarRewriter.iter_minus_start(iv, start)

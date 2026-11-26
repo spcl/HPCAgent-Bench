@@ -40,6 +40,8 @@ def test_a_subagent_file_reads_its_name_description_tools_and_prompt() -> None:
     helper = subagents.parse(HELPER)
     assert helper == subagents.Subagent("helper", "reads one file and summarizes it", ("bash",), "You summarize files.")
     assert subagents.parse(HELPER.replace("tools: bash\n", "")).tools is None
+    with pytest.raises(ValueError, match="description"):
+        subagents.parse("---\nname: x\n---\nbody")
 
 
 @pytest.mark.parametrize(
@@ -51,11 +53,6 @@ def test_a_tools_line_reads_the_same_in_every_yaml_list_spelling(tools: str) -> 
     assert subagents.parse(HELPER.replace("tools: bash", tools)).tools == ("bash", "score")
 
 
-def test_a_subagent_file_without_a_description_is_refused() -> None:
-    with pytest.raises(ValueError, match="description"):
-        subagents.parse("---\nname: x\n---\nbody")
-
-
 def test_a_subagent_gets_its_own_tools_and_never_the_task_tool() -> None:
     available = ["bash", "score", subagents.TASK_TOOL]
     assert subagents.tool_names(subagents.parse(HELPER), available) == ["bash"]
@@ -65,7 +62,7 @@ def test_a_subagent_gets_its_own_tools_and_never_the_task_tool() -> None:
 
 
 def test_the_driver_stages_exactly_the_subagents_the_packet_names(tmp_path: pathlib.Path) -> None:
-    write_plugin(tmp_path / "plugins")
+    folder = write_plugin(tmp_path / "plugins")
     home = tmp_path / "home"
     environ = {plugins.USER_PLUGIN_DIRS_ENV: str(tmp_path / "plugins"), plugins.PACKET_AGENTS_ENV: "helper"}
     assert plugins.stage_agents(home, environ) == ("helper",)
@@ -75,10 +72,7 @@ def test_the_driver_stages_exactly_the_subagents_the_packet_names(tmp_path: path
     assert plugins.stage_agents(tmp_path / "other", {**environ, plugins.PACKET_AGENTS_ENV: ""}) == ()
     with pytest.raises(ValueError, match="no plugin ships"):
         plugins.stage_agents(home, {**environ, plugins.PACKET_AGENTS_ENV: "absent"})
-
-
-def test_a_packet_naming_a_subagent_exports_it_to_the_job(tmp_path: pathlib.Path) -> None:
-    folder = write_plugin(tmp_path / "plugins")
+    # a packet naming a subagent exports it to the job
     (folder / "plugin.toml").write_text(
         'name = "subplugin"\n\n[packets.subprobe]\nname = "Sub probe"\nagents = ["helper"]\n'
     )

@@ -30,9 +30,7 @@ def test_an_override_replaces_the_core_tool_only_for_its_packet(monkeypatch: pyt
     assert registry.served(plain)["submit"].run({})["from"] == "core"
     packet = registry.Setup.read({registry.PACKET_TOOLS_ENV: "submit"})
     assert registry.served(packet)["submit"].run({})["from"] == "plugin"
-
-
-def test_a_preview_override_stays_unserved_in_blind_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A preview override stays unserved in blind mode.
     entry = registry.Tool("score", registry.Spec("plugin", NoArgs), plugin_run, core=False, preview=True)
     blind = registry.Setup.read({registry.PACKET_TOOLS_ENV: "score", "AGENT_SUBMISSION_MODE": "blind"})
     assert registry.offered(entry, blind) is blind.preview_served

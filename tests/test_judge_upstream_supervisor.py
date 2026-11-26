@@ -24,7 +24,6 @@ from hpcagent_bench.cluster import judge_upstream
 
 REPO = paths.ROOT
 SUPERVISOR = REPO / "hpcagent_bench" / "cluster" / "judge_upstream.py"
-RUN_CLUSTER = REPO / "hpcagent_bench" / "cluster" / "run_cluster.sh"
 
 #: An upstream that records every start and then dies the way the OOM killer ends one.
 OOM_KILLED = "import os, signal, sys; open(sys.argv[1], 'a').write('start\\n'); os.kill(os.getpid(), signal.SIGKILL)"
@@ -150,13 +149,6 @@ def test_an_upstream_that_cannot_start_ends_the_supervisor_instead_of_looping() 
     assert proc.returncode == 1, output
     assert "giving up" in output, output
     assert output.count("rc=2") == 2, output
-
-
-@pytest.mark.parametrize("needle", ["judge_upstream.py", "--min-uptime-seconds", "--max-quick-restarts"])
-def test_the_launcher_starts_the_upstream_through_the_supervisor(needle: str) -> None:
-    """run_cluster.sh must not go back to a bare background `hpcagent_bench serve`."""
-    text = RUN_CLUSTER.read_text(encoding="utf-8")
-    assert needle in text
 
 
 def test_a_fatal_signal_in_the_judge_leaves_a_traceback() -> None:

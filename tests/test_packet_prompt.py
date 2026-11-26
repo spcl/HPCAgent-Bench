@@ -86,6 +86,21 @@ def test_a_packet_replaces_and_turns_off_sections_only_in_its_own_setups(plugin_
     assert "The plugin times gemm itself." not in without
     assert "## Scoring" in without
 
+    # Two packets apply their overlays in spec order.
+    registered_plugin(plugin_root, "promptone", 'task:\n  set:\n    timing: {text: "file:timing.md"}\n')
+    registered_plugin(plugin_root, "prompttwo", 'task:\n  set:\n    timing: {text: "file:timing_two.md"}\n')
+    with config.overridden("record.packet", "promptone+prompttwo"):
+        ordered = build_prompt(TASK)
+    assert "The second plugin times gemm." in ordered
+    assert "The plugin times gemm itself." not in ordered
+
+    # A packet's about text follows the intro, and only in its own setups.
+    registered_plugin(plugin_root, "promptabout", ABOUT)
+    with config.overridden("record.packet", "promptabout"):
+        about = build_prompt(TASK)
+    assert about.index("The plugin also counts the kernel's calls.") < about.index("## Timing")
+    assert "The plugin also counts" not in without
+
 
 def test_the_users_own_overlays_win_over_the_packet(plugin_root: pathlib.Path, tmp_path: pathlib.Path) -> None:
     registered_plugin(plugin_root, "promptprobe", TIMING_OFF_SCORING)
@@ -98,16 +113,16 @@ def test_the_users_own_overlays_win_over_the_packet(plugin_root: pathlib.Path, t
     assert "## Scoring" in sut
     assert "The plugin times gemm itself." in sut
 
-
-def test_two_packets_apply_their_overlays_in_spec_order(plugin_root: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptone", 'task:\n  set:\n    timing: {text: "file:timing.md"}\n')
-    registered_plugin(plugin_root, "prompttwo", 'task:\n  set:\n    timing: {text: "file:timing_two.md"}\n')
-
-    with config.overridden("record.packet", "promptone+prompttwo"):
+    # The user's own inserted text follows the packet's.
+    registered_plugin(plugin_root, "promptabout", ABOUT)
+    inserted = tmp_path / "inserted.yaml"
+    inserted.write_text(
+        'task:\n  insert:\n    - {after: promptabout, block: {id: own, text: "The user reads {{ kernel }}\'s log.\\n\\n"}}\n',
+        encoding="utf-8",
+    )
+    with config.overridden("prompt.overlays", (str(inserted),)), config.overridden("record.packet", "promptabout"):
         sut = build_prompt(TASK)
-
-    assert "The second plugin times gemm." in sut
-    assert "The plugin times gemm itself." not in sut
+    assert sut.index("The plugin also counts the kernel's calls.") < sut.index("The user reads gemm's log.")
 
 
 def test_a_gpu_setup_takes_the_device_form_of_its_packet_in_both_prompts(
@@ -128,17 +143,6 @@ def test_a_gpu_setup_takes_the_device_form_of_its_packet_in_both_prompts(
     assert task_packet == agent_packet == "promptprobegpu"
     assert "The plugin also counts the kernel's calls." in sut
     assert "The plugin times gemm itself." not in sut
-
-
-def test_a_packets_about_text_follows_the_intro_only_in_its_own_setups(plugin_root: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptprobe", ABOUT)
-    without = build_prompt(TASK)
-
-    with config.overridden("record.packet", "promptprobe"):
-        sut = build_prompt(TASK)
-
-    assert sut.index("The plugin also counts the kernel's calls.") < sut.index("## Timing")
-    assert "The plugin also counts" not in without
 
 
 def test_a_packet_reshapes_the_cluster_prompt_of_its_setups(
@@ -179,20 +183,6 @@ def test_a_block_no_prompt_has_is_refused(plugin_root: pathlib.Path) -> None:
 
     with config.overridden("record.packet", "promptprobe"), pytest.raises(ValueError, match="nosuch"):
         build_prompt(TASK)
-
-
-def test_the_users_own_inserted_text_follows_the_packets(plugin_root: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptprobe", ABOUT)
-    mine = tmp_path / "mine.yaml"
-    mine.write_text(
-        'task:\n  insert:\n    - {after: promptprobe, block: {id: own, text: "The user reads {{ kernel }}\'s log.\\n\\n"}}\n',
-        encoding="utf-8",
-    )
-
-    with config.overridden("prompt.overlays", (str(mine),)), config.overridden("record.packet", "promptprobe"):
-        sut = build_prompt(TASK)
-
-    assert sut.index("The plugin also counts the kernel's calls.") < sut.index("The user reads gemm's log.")
 
 
 def test_a_plugin_packets_skill_page_is_indexed_in_the_task_prompt(

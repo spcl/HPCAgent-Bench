@@ -62,13 +62,6 @@ def test_a_merge_keeps_the_record_with_its_grade(tmp_path: pathlib.Path) -> None
     )
 
 
-def test_an_absent_record_loads_as_none(tmp_path: pathlib.Path) -> None:
-    for name, folder in (("none.db", None), ("empty.db", tmp_path / "no-records")):
-        graded(tmp_path / name, folder)
-        assert kept_records.latest(tmp_path / name, SETUP, short_name(), EPISODE, "alloy") is None
-        assert kept_records.load(tmp_path / name) == []
-
-
 def test_a_record_over_the_cap_is_refused_by_the_plugin_and_passed_over_by_the_judge(tmp_path: pathlib.Path) -> None:
     folder, db = tmp_path / "episode", tmp_path / "results.db"
     with pytest.raises(ValueError, match="over the"):
@@ -80,16 +73,19 @@ def test_a_record_over_the_cap_is_refused_by_the_plugin_and_passed_over_by_the_j
     with results_db.reading(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM grades").fetchone()[0] == 1, "the grade is recorded all the same"
     assert kept_records.load(db) == []
+    # a linked or malformed record is passed over as well
+    mixed = tmp_path / "mixed"
+    plugin_records.keep(mixed, "good", 1, {"ok": True})
+    (mixed / plugin_records.FOLDER / "linked.json").symlink_to(mixed / plugin_records.FOLDER / "good.json")
+    (mixed / plugin_records.FOLDER / "bad.json").write_text('{"data": 1}', encoding="utf-8")
+    assert set(plugin_records.found(mixed)) == {"good"}
 
 
-def test_a_linked_or_malformed_record_is_passed_over(tmp_path: pathlib.Path) -> None:
-    folder = tmp_path / "episode"
-    plugin_records.keep(folder, "good", 1, {"ok": True})
-    (folder / plugin_records.FOLDER / "linked.json").symlink_to(folder / plugin_records.FOLDER / "good.json")
-    (folder / plugin_records.FOLDER / "bad.json").write_text('{"data": 1}', encoding="utf-8")
-    assert set(plugin_records.found(folder)) == {"good"}
-
-
-def test_a_flavor_without_an_episode_folder_keeps_no_record() -> None:
+def test_a_flavor_without_an_episode_folder_keeps_no_record(tmp_path: pathlib.Path) -> None:
     with pytest.raises(ValueError, match="needs an episode folder"):
         FlavorOptimizer("dace_cpu_canon_none").keep_record(1, {})
+    # an absent record loads as none, whether the grade named no folder or the folder holds no records
+    for name, folder in (("none.db", None), ("empty.db", tmp_path / "no-records")):
+        graded(tmp_path / name, folder)
+        assert kept_records.latest(tmp_path / name, SETUP, short_name(), EPISODE, "alloy") is None
+        assert kept_records.load(tmp_path / name) == []

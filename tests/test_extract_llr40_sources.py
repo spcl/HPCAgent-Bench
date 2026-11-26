@@ -94,12 +94,8 @@ def test_a_multi_setup_job_files_a_workers_last_saved_source_under_its_own_setup
     assert len(saved) == 1
     assert saved[0].read_text(encoding="utf-8") == "// last saved hip source\n"
 
-
-def test_the_sources_index_row_carries_the_workers_own_setup_and_episode_id(tmp_path: pathlib.Path) -> None:
-    """``llr40_sources_index.csv``'s row for the last-saved file must carry SETUP_B and w17's real
-    episode id, not the job's other setup and a blank episode id."""
-    out = extract_two_setup_job(tmp_path)
-
+    # ``llr40_sources_index.csv``'s row for the last-saved file carries SETUP_B and w17's real episode id, not the
+    # job's other setup and a blank episode id.
     with (out / "llr40_sources_index.csv").open(newline="", encoding="utf-8") as handle:
         rows = [row for row in csv.DictReader(handle) if row["worker_index"] == "17" and row["kind"] == "candidate"]
     assert len(rows) == 1

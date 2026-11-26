@@ -35,27 +35,24 @@ def unparse_(node: ast.AST) -> str:
 
 
 @pytest.mark.parametrize(
-    ("src", "folded"),
+    ("src", "dims", "folded", "is_tuple"),
     [
         # ``v[..., None].shape[-1]`` on a 3-D ``v`` -> the inserted size-1 axis (1).
-        ("y = v[:, :, :, None].shape[-1]", "1"),
-        ("y = v[:, :, :, None].shape[0]", "Lb"),
+        ("y = v[:, :, :, None].shape[-1]", {"v": ["Lb", "Lb", "Lb"]}, "1", False),
+        ("y = v[:, :, :, None].shape[0]", {"v": ["Lb", "Lb", "Lb"]}, "Lb", False),
+        # ``psi[f].shape`` -> the residual (Lb, Lb, Lb, nstate) as a literal Tuple.
+        ("s = psi[f].shape", {"psi": ["nfrag", "Lb", "Lb", "Lb", "nstate"]}, "(Lb, Lb, Lb, nstate)", True),
     ],
-    ids=["negative_axis_is_the_inserted_size_1", "positive_axis_is_a_source_extent"],
+    ids=["negative_axis_is_the_inserted_size_1", "positive_axis_is_a_source_extent", "bare_shape_is_a_tuple"],
 )
-def test_shape_index_on_newaxis_subscript_folds_to_static_dim(src: str, folded: str) -> None:
+def test_shape_index_on_newaxis_subscript_folds_to_static_dim(
+    src: str, dims: dict[str, list[str]], folded: str, is_tuple: bool
+) -> None:
     tree = ast.parse(src)
-    ShapeMidExpressionRewriter({"v": ["Lb", "Lb", "Lb"]}).visit(tree)
-    assert unparse_(tree.body[0].value) == folded
-
-
-def test_bare_shape_on_subscript_base_folds_to_tuple() -> None:
-    # ``psi[f].shape`` -> the residual (Lb, Lb, Lb, nstate) as a literal Tuple.
-    tree = ast.parse("s = psi[f].shape")
-    ShapeMidExpressionRewriter({"psi": ["nfrag", "Lb", "Lb", "Lb", "nstate"]}).visit(tree)
+    ShapeMidExpressionRewriter(dims).visit(tree)
     val = tree.body[0].value
-    assert isinstance(val, ast.Tuple)
-    assert unparse_(val) == "(Lb, Lb, Lb, nstate)"
+    assert isinstance(val, ast.Tuple) is is_tuple
+    assert unparse_(val) == folded
 
 
 def test_shape_fold_leaves_name_base_untouched_when_unknown() -> None:
@@ -71,20 +68,27 @@ def test_shape_fold_leaves_name_base_untouched_when_unknown() -> None:
 # shape-tuple local forward-substitution                                       #
 
 
-def test_tuple_local_propagator_inlines_and_drops_assignment() -> None:
-    tree = ast.parse("shp = (Lb, Lb, Lb, nstate)\nk = shp[-1]\ny = np.reshape(mm, shp)\n")
+@pytest.mark.parametrize(
+    ("src", "present", "absent"),
+    [
+        (
+            "shp = (Lb, Lb, Lb, nstate)\nk = shp[-1]\ny = np.reshape(mm, shp)\n",
+            ["(Lb, Lb, Lb, nstate)[-1]", "np.reshape(mm, (Lb, Lb, Lb, nstate))"],  # inlined into the subscript
+            ["shp = "],  # dead assignment dropped
+        ),
+        # A twice-assigned Name is not a fixed shape descriptor -- leave it alone.
+        ("shp = (a, b)\nshp = (c, d)\ny = shp[0]\n", ["shp = (a, b)"], []),
+    ],
+    ids=["inlines_and_drops_assignment", "skips_reassigned_name"],
+)
+def test_tuple_local_propagator_inlines_and_drops_assignment(src: str, present: list[str], absent: list[str]) -> None:
+    tree = ast.parse(src)
     TupleLocalPropagator().run(tree)
     out = unparse_(tree)
-    assert "shp = " not in out  # dead assignment dropped
-    assert "(Lb, Lb, Lb, nstate)[-1]" in out  # inlined into the subscript
-    assert "np.reshape(mm, (Lb, Lb, Lb, nstate))" in out
-
-
-def test_tuple_local_propagator_skips_reassigned_name() -> None:
-    # A twice-assigned Name is not a fixed shape descriptor -- leave it alone.
-    tree = ast.parse("shp = (a, b)\nshp = (c, d)\ny = shp[0]\n")
-    TupleLocalPropagator().run(tree)
-    assert "shp = (a, b)" in unparse_(tree)
+    for text in present:
+        assert text in out
+    for text in absent:
+        assert text not in out
 
 
 # mutated scalar excluded from inlined-dim substitution                        #

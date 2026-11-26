@@ -80,32 +80,20 @@ def test_override_replaces_the_generated_scop_and_never_touches_it(tmp_path: pat
     assert generated.read_text() == before_text, "the generated scop's content changed"
 
 
-def test_the_override_file_itself_is_never_written_to(tmp_path: pathlib.Path) -> None:
-    """Resolving an override materializes its retyped copies and leaves the TRACKED file alone --
-    byte-identical and mtime-identical. It lives in the repo, so a build that touched it would show
-    up as a dirty ``git status`` on every run."""
-    bench_dir = tmp_path / "kern"
-    bench_dir.mkdir()
-    override = bench_dir / "kern_pluto_reference.c"
-    override.write_text(
-        "#define DATA_TYPE double\nvoid kern_fp64(double *A) {\n#pragma scop\nA[0] = 1.0;\n#pragma endscop\n}\n"
-    )
-    before = override.read_bytes(), override.stat().st_mtime_ns
-
-    pluto_transform.scop_inputs(bench_dir / "cpp_backend", "kern", bench_dir=bench_dir)
-
-    assert (override.read_bytes(), override.stat().st_mtime_ns) == before
-
-
 def test_override_transform_output_stays_out_of_the_tracked_source_dir(tmp_path: pathlib.Path) -> None:
     """polycc's output for an override lands under the kernel's gitignored ``cpp_backend``, not
-    beside the tracked ``_pluto_reference.c`` -- a build artifact must never dirty ``git status``."""
+    beside the tracked ``_pluto_reference.c`` -- a build artifact must never dirty ``git status``.
+    Resolving an override materializes its retyped copies and leaves the TRACKED file alone --
+    byte-identical and mtime-identical."""
     bench_dir = tmp_path / "kern3"
     bench_dir.mkdir()
     override = bench_dir / "kern3_pluto_reference.c"
     override.write_text("#pragma scop\nz = 3;\n#pragma endscop\n")
+    before = override.read_bytes(), override.stat().st_mtime_ns
 
+    pluto_transform.scop_inputs(bench_dir / "cpp_backend", "kern3", bench_dir=bench_dir)
     out = pluto_transform.transformed_path(override)
+    assert (override.read_bytes(), override.stat().st_mtime_ns) == before
 
     assert out.parent == bench_dir / "cpp_backend"
     assert out.name == "kern3_fp64_pluto_override.c"
@@ -194,22 +182,15 @@ def test_override_resolves_to_one_scop_per_precision(tmp_path: pathlib.Path) -> 
     assert "void mm_fp32(" in resolved[0].read_text()
     assert resolved[1].read_text() == override.read_text()
 
-
-def test_fp32_and_fp64_artifacts_cannot_overwrite_each_other(tmp_path: pathlib.Path) -> None:
-    """Separate scop inputs AND separate transform outputs, none of them colliding with the
-    translator's generated names. Publishing the fp64 override output onto `<base>_fp64_pluto.c`
-    -- the generated fp64 name -- would make one file for two producers."""
-    bench_dir = tmp_path / "kern"
-    write_override(bench_dir, "mm")
-
-    scops = pluto_transform.scop_inputs(bench_dir / "cpp_backend", "mm", bench_dir=bench_dir)
-    outs = [pluto_transform.transformed_path(s) for s in scops]
-
-    assert len({p.name for p in scops}) == 2, "the two precisions share a scop input"
+    # Separate scop inputs AND separate transform outputs, none of them colliding with the
+    # translator's generated names. Publishing the fp64 override output onto `<base>_fp64_pluto.c`
+    # -- the generated fp64 name -- would make one file for two producers.
+    outs = [pluto_transform.transformed_path(p) for p in resolved]
+    assert len({p.name for p in resolved}) == 2, "the two precisions share a scop input"
     assert len({p.name for p in outs}) == 2, "the two precisions share a transform output"
     assert [p.name for p in outs] == ["mm_fp32_pluto_override.c", "mm_fp64_pluto_override.c"]
     generated = {"mm_fp32_pluto_input.c", "mm_fp64_pluto_input.c", "mm_fp32_pluto.c", "mm_fp64_pluto.c"}
-    assert not generated & {p.name for p in scops + outs}, "an override artifact took a generated name"
+    assert not generated & {p.name for p in resolved + outs}, "an override artifact took a generated name"
 
 
 def test_rematerializing_an_unchanged_override_does_not_bump_mtimes(tmp_path: pathlib.Path) -> None:

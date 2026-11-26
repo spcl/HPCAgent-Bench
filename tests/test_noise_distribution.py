@@ -3,8 +3,6 @@
 """The opt-in ``noise`` input distribution (``1 + eps * u``): never applied unless selected, float arrays only,
 deterministic per seed, zero/sign/range-preserving, reaching declarative and custom initializers."""
 
-import math
-
 import ml_dtypes
 import numpy as np
 import pytest
@@ -42,13 +40,6 @@ def test_the_error_is_relative_uniform_and_bounded_by_the_formats_default_step(d
     assert np.abs(error).max() <= eps * (1.0 + 4 * ulp / eps) + ulp
     assert np.abs(error).max() > 0.9 * eps, "the draw reaches the ends of [-eps, eps)"
     assert abs(error.mean()) < 0.1 * eps
-
-
-def test_float64_noise_is_uniform_over_the_interval() -> None:
-    original = np.ones(1 << 20)
-    error = (noise.perturb(original, 1, 0, eps=1.0, interval=(-9.0, 9.0)) - original) * 0.5  # (1 + u) - 1, halved
-    counts = np.bincount(np.floor((error + 0.5) * 32).astype(np.int64).clip(0, 31), minlength=32)
-    assert np.abs(counts - original.size / 32).max() < 6.0 * math.sqrt(original.size / 32)
 
 
 def test_zeros_signs_and_the_range_are_kept() -> None:

@@ -55,14 +55,10 @@ def test_each_rule_contributes_exactly_its_count_sorted_in_rule_order() -> None:
     assert set(picked[5:]) <= lvl2
     assert picked[:5] == sorted(picked[:5])
     assert picked[5:] == sorted(picked[5:])
-
-
-def test_overlapping_rules_never_pick_the_same_kernel_twice() -> None:
-    picked = tags.sample((("machine_learning@lvl1", 5), ("machine_learning", 20)), 0)
-    assert len(picked) == len(set(picked)) == 25
-
-
-def test_appending_a_rule_leaves_the_earlier_picks_unchanged() -> None:
+    # Overlapping rules never pick the same kernel twice.
+    overlapping = tags.sample((("machine_learning@lvl1", 5), ("machine_learning", 20)), 0)
+    assert len(overlapping) == len(set(overlapping)) == 25
+    # Appending a rule leaves the earlier picks unchanged.
     before = tags.sample(ML_RULES, 3)
     after = tags.sample((*ML_RULES, ("machine_learning", 4)), 3)
     assert after[: len(before)] == before
@@ -71,37 +67,30 @@ def test_appending_a_rule_leaves_the_earlier_picks_unchanged() -> None:
 def test_a_count_above_the_candidates_raises_naming_the_selector_count_and_size() -> None:
     with pytest.raises(ValueError, match=r"'three' asks for 4 kernels but only 3"):
         tags.sample(((THREE, 4),), 0)
+    # The same error when the pool's intersection with the selector is what falls short.
+    with pytest.raises(ValueError, match="only 1 are available"):
+        tags.sample(((THREE, 2),), 0, sorted(keys("kmp")))
 
 
-def test_a_pool_restricts_every_rules_candidates() -> None:
+def test_a_pool_restricts_every_rules_candidates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     pool = keys("kmp", "dfa")
     assert set(tags.sample(((THREE, 2),), 0, sorted(pool))) == pool
-
-
-def test_a_count_above_the_pool_intersection_raises() -> None:
-    pool = sorted(keys("kmp"))
-    with pytest.raises(ValueError, match="only 1 are available"):
-        tags.sample(((THREE, 2),), 0, pool)
+    # The CLI's --from-file is the same pool, read from a listing.
+    listing = tmp_path / "pool.list"
+    listing.write_text("# pool\nkmp\ndfa  # trailing comment\n")
+    assert run_cli(monkeypatch, "sample", f"{THREE}:2", "--from-file", str(listing)) == 0
+    assert set(capsys.readouterr().out.splitlines()) == pool
 
 
 def test_an_excluded_selector_is_never_drawn() -> None:
     assert set(tags.sample(((THREE, 2),), 0, exclude=["kmp"])) == keys("dfa", "heat_3d")
     with pytest.raises(ValueError, match="only 2 are available"):
         tags.sample(((THREE, 3),), 0, exclude=["kmp"])
-
-
-def test_the_saved_note_records_the_exclusion(monkeypatch: pytest.MonkeyPatch, temp_tags: pathlib.Path) -> None:
-    assert run_cli(monkeypatch, "sample", f"{THREE}:2", "--exclude", "kmp", "--save", "control") == 0
-    assert set(tags.resolve("control")) == keys("dfa", "heat_3d")
-    assert f"# tags sample {THREE}:2 seed=0 exclude=kmp on " in (temp_tags / "control.txt").read_text()
-
-
-def test_a_tag_and_a_selector_are_both_valid_rule_selectors() -> None:
+    # A tag and a selector are both valid rule selectors, and a CLI rule is a selector and a count.
     assert set(tags.sample(((THREE, 3),), 0)) == keys("kmp", "dfa", "heat_3d")
     assert set(tags.sample((("kmp", 1),), 0)) == keys("kmp")
-
-
-def test_a_cli_rule_is_a_selector_and_a_count() -> None:
     assert tags.parse_rule("machine_learning@lvl1:5") == ("machine_learning@lvl1", 5)
 
 
@@ -126,20 +115,14 @@ def test_save_writes_a_tag_file_that_resolves_to_the_same_draw(
     assert tags.resolve("frozen") == sorted(printed)
     assert "# tags sample machine_learning:6 seed=2 on " in (temp_tags / "frozen.txt").read_text()
 
+    # The saved note records the exclusion.
+    assert run_cli(monkeypatch, "sample", f"{THREE}:2", "--exclude", "kmp", "--save", "control") == 0
+    assert set(tags.resolve("control")) == keys("dfa", "heat_3d")
+    assert f"# tags sample {THREE}:2 seed=0 exclude=kmp on " in (temp_tags / "control.txt").read_text()
 
-def test_save_refuses_an_existing_tag_name(
-    monkeypatch: pytest.MonkeyPatch, temp_tags: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+    # A save refuses an existing tag name.
+    capsys.readouterr()
     original = (temp_tags / f"{THREE}.txt").read_text()
     assert run_cli(monkeypatch, "sample", "machine_learning:3", "--save", THREE) == 2
     assert "already exists" in capsys.readouterr().err
     assert (temp_tags / f"{THREE}.txt").read_text() == original
-
-
-def test_from_file_restricts_the_pool(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    listing = tmp_path / "pool.list"
-    listing.write_text("# pool\nkmp\ndfa  # trailing comment\n")
-    assert run_cli(monkeypatch, "sample", f"{THREE}:2", "--from-file", str(listing)) == 0
-    assert set(capsys.readouterr().out.splitlines()) == keys("kmp", "dfa")

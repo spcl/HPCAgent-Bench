@@ -35,17 +35,6 @@ def _dimensions(spec: BenchSpec) -> dict[str, dict[str, Any]]:
     }
 
 
-def test_a_manifest_without_config_exposes_parameters() -> None:
-    """A manifest with only a 'parameters:' block: the size symbols mirror it verbatim and 'config'
-    stays empty."""
-    raw = raw_manifest(parameters={"S": {"N": 16}, "M": {"N": 32}})
-    spec = BenchSpec.from_dict(raw, SITE, source="<test>")
-    assert spec.parameters == {"S": {"N": 16}, "M": {"N": 32}}
-    assert _dimensions(spec) == {"S": {"N": 16}, "M": {"N": 32}}
-    assert spec.config == {}
-    assert spec.constraints == ()
-
-
 def test_parameters_and_config_stay_apart() -> None:
     """A manifest declaring 'parameters:' + 'config:' keeps them apart as size symbols/.config,
     while .parameters merges each config knob's representative value into every preset -- the
@@ -88,25 +77,35 @@ def test_parameters_and_config_stay_apart() -> None:
             },
             r"constraint 'lvn <= nproma' is violated",
         ),
+        # A short curated row would leave that symbol bound to whatever the preset carried.
+        ({"config": [{"a": 0, "b": 0}, {"a": 1}]}, "same symbols"),
+        # Hand-picked rows are authored, so a violation is a bug: silently dropping it would shrink the graded
+        # space without saying so.
+        (
+            {
+                "config": [{"okvan": False, "okpaw": False}, {"okvan": False, "okpaw": True}],
+                "constraints": ["okpaw <= okvan"],
+            },
+            "violates constraint",
+        ),
+        # ``fuzz.configs`` reads as 'only the fuzzed preset explores configs'; two homes for one space is how a
+        # kernel gets graded on a space it did not declare.
+        ({"fuzz": {"configs": {"valid": [{"a": 1}]}}}, re.escape("fuzz.configs")),
     ],
-    ids=["domain_and_value", "neither_domain_nor_value", "dimension_and_config_overlap", "violated_constraint"],
+    ids=[
+        "domain_and_value",
+        "neither_domain_nor_value",
+        "dimension_and_config_overlap",
+        "violated_constraint",
+        "curated_row_missing_a_symbol",
+        "curated_row_violating_a_constraint",
+        "fuzz_configs",
+    ],
 )
 def test_an_ill_formed_config_or_constraint_is_refused_at_load(overrides: dict[str, Any], message: str) -> None:
     raw = raw_manifest(**{"parameters": {"S": {"N": 16}}, **overrides})
     with pytest.raises(ValueError, match=message):
         BenchSpec.from_dict(raw, SITE, source="<test>")
-
-
-def test_satisfied_constraint_loads() -> None:
-    """A constraint that holds for every preset is a no-op at load time and survives on the spec."""
-    raw = raw_manifest(
-        parameters={"S": {"nproma": 64}},
-        config={"lvn": {"value": 32}},
-        constraints=["lvn <= nproma"],
-    )
-    spec = BenchSpec.from_dict(raw, SITE, source="<test>")
-    assert spec.constraints == ("lvn <= nproma",)
-    assert spec.parameters == {"S": {"nproma": 64, "lvn": 32}}
 
 
 def test_a_knob_in_both_a_preset_and_init_scalars_is_rejected() -> None:
@@ -178,29 +177,6 @@ def test_a_list_config_is_a_curated_space_taken_verbatim() -> None:
     assert spec.config_names == {"a", "b"}
 
 
-def test_a_curated_row_missing_a_symbol_is_rejected() -> None:
-    """A short row would leave that symbol bound to whatever the preset carried."""
-    with pytest.raises(ValueError, match="same symbols"):
-        BenchSpec.from_dict(
-            raw_manifest(parameters={"S": {"N": 16}}, config=[{"a": 0, "b": 0}, {"a": 1}]), SITE, source="<test>"
-        )
-
-
-def test_a_curated_row_violating_a_constraint_is_rejected_not_dropped() -> None:
-    """Hand-picked rows are authored, so a violation is a bug -- silently dropping it would
-    shrink the graded space without saying so."""
-    with pytest.raises(ValueError, match="violates constraint"):
-        BenchSpec.from_dict(
-            raw_manifest(
-                parameters={"S": {"N": 16}},
-                config=[{"okvan": False, "okpaw": False}, {"okvan": False, "okpaw": True}],
-                constraints=["okpaw <= okvan"],
-            ),
-            SITE,
-            source="<test>",
-        )
-
-
 def test_a_curated_config_pins_a_representative_into_every_preset() -> None:
     """A plain ``-p M`` run still has a concrete value for every knob."""
     spec = BenchSpec.from_dict(
@@ -210,39 +186,26 @@ def test_a_curated_config_pins_a_representative_into_every_preset() -> None:
     assert _dimensions(spec) == {"S": {"N": 16}, "M": {"N": 32}}
 
 
-def test_fuzz_configs_is_rejected_with_a_pointer_to_the_new_block() -> None:
-    """``fuzz.configs`` reads as 'only the fuzzed preset explores configs'; two homes for one space
-    is how a kernel gets graded on a space it did not declare."""
-    with pytest.raises(ValueError, match=re.escape("fuzz.configs")):
-        BenchSpec.from_dict(
-            raw_manifest(parameters={"S": {"N": 16}}, fuzz={"configs": {"valid": [{"a": 1}]}}), SITE, source="<test>"
-        )
-
-
-def test_a_pinned_knob_is_a_compile_time_constant_a_fuzzed_one_is_not() -> None:
+@pytest.mark.parametrize(
+    ("config", "pinned", "merged"),
+    [
+        ({"max_iter": {"value": 100}, "mode": {"domain": [0, 1]}}, {"max_iter": 100}, {"max_iter": 100, "mode": 0}),
+        # A curated list is a SPACE the harness picks a row from, so no member is a constant -- even though each
+        # row states one value, the next row states a different one.
+        ([{"mode": 0, "tile": 32}, {"mode": 1, "tile": 64}], {}, {}),
+    ],
+    ids=["value-pins-domain-does-not", "curated-list-pins-nothing"],
+)
+def test_a_pinned_knob_is_a_compile_time_constant_a_fuzzed_one_is_not(
+    config: object, pinned: dict[str, int], merged: dict[str, int]
+) -> None:
     """``pinned_config`` is what the native emitters declare as ``constexpr`` / ``parameter``.
 
     A knob with one ``value:`` has that value for every preset and every fuzz draw, so passing it
     across the ABI spells a compile-time constant as a runtime argument -- and the compiler cannot
     unroll a loop whose trip count it is only handed at run time. A knob with a ``domain:`` is a
     real axis the harness varies, so it stays a parameter."""
-    spec = BenchSpec.from_dict(
-        raw_manifest(parameters={"S": {"N": 16}}, config={"max_iter": {"value": 100}, "mode": {"domain": [0, 1]}}),
-        SITE,
-        source="<test>",
-    )
-    assert spec.pinned_config == {"max_iter": 100}
-    # Both still reach every existing consumer through the merged parameters view.
-    assert spec.parameters["S"]["max_iter"] == 100
-    assert spec.parameters["S"]["mode"] == 0
-
-
-def test_a_curated_config_list_pins_nothing() -> None:
-    """A curated list is a SPACE the harness picks a row from, so no member is a constant --
-    even though each row states one value, the next row states a different one."""
-    spec = BenchSpec.from_dict(
-        raw_manifest(parameters={"S": {"N": 16}}, config=[{"mode": 0, "tile": 32}, {"mode": 1, "tile": 64}]),
-        SITE,
-        source="<test>",
-    )
-    assert spec.pinned_config == {}
+    spec = BenchSpec.from_dict(raw_manifest(parameters={"S": {"N": 16}}, config=config), SITE, source="<test>")
+    assert spec.pinned_config == pinned
+    # Every knob still reaches every existing consumer through the merged parameters view.
+    assert merged.items() <= spec.parameters["S"].items()

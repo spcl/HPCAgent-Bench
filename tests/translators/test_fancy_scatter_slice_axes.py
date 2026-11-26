@@ -68,52 +68,39 @@ def ok_(res: dict[str, str]) -> None:
 
 
 @pytest.mark.parametrize(
-    "body",
+    ("rank", "body"),
     [
-        "    out[ia, :] = src[ia, :] * 2.0\n",
+        pytest.param(2, "    out[ia, :] = src[ia, :] * 2.0\n", id="2d-trailing_slice"),
         # A spelling that must not emit invalid pointer arithmetic instead of declining.
-        "    out[ia, :] = src[ia - 1, :] * 2.0\n",
+        pytest.param(2, "    out[ia, :] = src[ia - 1, :] * 2.0\n", id="2d-index_expression_and_slice"),
         # numpy's buffered fancy assignment resolves a repeated index by last write, and the
         # per-element loop must agree rather than writing both.
-        "    ia[1] = 1\n    out[ia, :] = src[ia, :] * 2.0\n",
+        pytest.param(
+            2, "    ia[1] = 1\n    out[ia, :] = src[ia, :] * 2.0\n", id="2d-duplicate_index_is_last_write_wins"
+        ),
         # ``out[:, ia]`` puts the index array BEHIND a ``:``, which numpy answers by moving that
         # axis to the FRONT of the result. Filling the loop iters in SUBSCRIPT order there writes the
         # wrong axes -- a silently wrong answer. The iters are emitted in result order, so the
         # right-hand side (right-aligned against them by the shared scalarizer) pairs element for
         # element whatever axis it carries its own index array on.
-        "    out[:, ia] = src[:, ia] * 2.0\n",
-        "    out[:, ia] = src[:, ia - 1] * 2.0\n",
-    ],
-    ids=[
-        "trailing_slice",
-        "index_expression_and_slice",
-        "duplicate_index_is_last_write_wins",
-        "index_behind_a_slice",
-        "index_behind_a_slice_with_an_index_expression",
-    ],
-)
-def test_two_d_scatter_beside_a_slice_matches_numpy(body: str) -> None:
-    ok_(run2(body))
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
+        pytest.param(2, "    out[:, ia] = src[:, ia] * 2.0\n", id="2d-index_behind_a_slice"),
+        pytest.param(
+            2, "    out[:, ia] = src[:, ia - 1] * 2.0\n", id="2d-index_behind_a_slice_with_an_index_expression"
+        ),
         # fv3's own shape: one index axis, two whole axes behind it.
-        "    out[ia, :, :] = src[ia - 1, :, :] * 2.0\n",
+        pytest.param(3, "    out[ia, :, :] = src[ia - 1, :, :] * 2.0\n", id="3d-two_trailing_slices"),
         # A scalar axis contributes NO result axis; opening a loop iter for it would put the
         # iters out of step with the RHS.
-        "    out[ia, 0, :] = src[ia, 1, :] * 2.0\n",
+        pytest.param(3, "    out[ia, 0, :] = src[ia, 1, :] * 2.0\n", id="3d-scalar_axis_between_index_and_slice"),
         # fv3_dycore's y-direction edge fixup: ``al[:, ja, :nk]``.
-        "    out[:, ia, :] = src[:, ia - 1, :] * 2.0\n",
+        pytest.param(3, "    out[:, ia, :] = src[:, ia - 1, :] * 2.0\n", id="3d-index_between_two_slices"),
         # A bounded ``a:b`` axis is a loop over the slice EXTENT offset by its lower bound; both
         # sides carry their own offset, so the iters stay 0-based and agree.
-        "    out[ia, :, 0:2] = src[ia - 1, :, 1:3] * 2.0\n",
+        pytest.param(3, "    out[ia, :, 0:2] = src[ia - 1, :, 1:3] * 2.0\n", id="3d-bounded_slices"),
     ],
-    ids=["two_trailing_slices", "scalar_axis_between_index_and_slice", "index_between_two_slices", "bounded_slices"],
 )
-def test_three_d_scatter_beside_slices_matches_numpy(body: str) -> None:
-    ok_(run3(body))
+def test_two_d_scatter_beside_a_slice_matches_numpy(rank: int, body: str) -> None:
+    ok_(run2(body) if rank == 2 else run3(body))
 
 
 def test_a_strided_slice_beside_the_index_is_still_declined() -> None:

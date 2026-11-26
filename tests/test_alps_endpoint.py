@@ -152,10 +152,35 @@ def test_a_live_endpoint_exports_its_url_model_and_key_and_the_key_reaches_neith
     assert KEY not in done.stdout + done.stderr
 
 
-def test_a_wrong_key_exports_nothing_and_names_the_401(tmp_path: pathlib.Path, server: FakeSglang) -> None:
-    done = source(tmp_path, server.url, key="0" * 64)
+@pytest.mark.parametrize(
+    ("fault", "message", "requested"),
+    [
+        pytest.param("wrong-key", "answered 401", None, id="a-wrong-key-names-the-401"),
+        pytest.param("other-model", f"want 200 listing {MODEL}", ["/v1/models"], id="an-unlisted-served-model"),
+        pytest.param(
+            "no-choice", "chat/completions answered 200, want 200 with a choice", None, id="a-chat-with-no-choice"
+        ),
+        pytest.param("unreachable", "answered 000", None, id="an-unreachable-endpoint"),
+    ],
+)
+def test_a_wrong_key_exports_nothing_and_names_the_401(
+    tmp_path: pathlib.Path, server: FakeSglang, fault: str, message: str, requested: list[str] | None
+) -> None:
+    key = KEY
+    url = server.url
+    if fault == "wrong-key":
+        key = "0" * 64
+    elif fault == "other-model":
+        server.listed_model = "some-other-model"
+    elif fault == "no-choice":
+        server.chat_choices = []
+    else:
+        url = closed_port_url()
+    done = source(tmp_path, url, key=key)
     assert done.stdout.splitlines()[-2:] == ["key=absent", "url= model= rc=1"]
-    assert "answered 401" in done.stderr
+    assert message in done.stderr
+    if requested is not None:
+        assert [path for unused, path, unused in server.requests] == requested
 
 
 @pytest.mark.parametrize("mode", [0o644, 0o640, 0o400])
@@ -166,29 +191,6 @@ def test_a_key_file_that_is_not_mode_600_is_refused_before_any_request(
     assert done.stdout.splitlines()[-2:] == ["key=absent", "url= model= rc=2"]
     assert "must exist, be owned by you and be mode 600" in done.stderr
     assert server.requests == []
-
-
-def test_an_endpoint_that_does_not_list_the_served_model_exports_nothing(
-    tmp_path: pathlib.Path, server: FakeSglang
-) -> None:
-    server.listed_model = "some-other-model"
-    done = source(tmp_path, server.url)
-    assert done.stdout.splitlines()[-2:] == ["key=absent", "url= model= rc=1"]
-    assert f"want 200 listing {MODEL}" in done.stderr
-    assert [path for _, path, _ in server.requests] == ["/v1/models"]
-
-
-def test_an_endpoint_whose_chat_returns_no_choice_exports_nothing(tmp_path: pathlib.Path, server: FakeSglang) -> None:
-    server.chat_choices = []
-    done = source(tmp_path, server.url)
-    assert done.stdout.splitlines()[-2:] == ["key=absent", "url= model= rc=1"]
-    assert "chat/completions answered 200, want 200 with a choice" in done.stderr
-
-
-def test_an_unreachable_endpoint_exports_nothing(tmp_path: pathlib.Path) -> None:
-    done = source(tmp_path, closed_port_url())
-    assert done.stdout.splitlines()[-2:] == ["key=absent", "url= model= rc=1"]
-    assert "answered 000" in done.stderr
 
 
 def test_a_missing_endpoint_file_says_the_serving_job_may_have_ended(tmp_path: pathlib.Path) -> None:

@@ -66,6 +66,12 @@ def test_an_unresolvable_read_is_reported_and_left_alone() -> None:
     fn = fn_("def f(x, out):\n out[:] = q.shape[0]\n")
     assert resolve_shape_reads(fn, env(x="(n,)", out="(1,)")) == ["q.shape[0]"]
     assert "q.shape[0]" in ast.unparse(fn)
+    # ``()`` is a resolver out of evidence, not a rank-0 array. Folded, the ``[k]`` beside the read
+    # becomes ``()[k]`` -- an index off the end of a tuple that no emitter has a form for and no
+    # reader can trace back to the array it came from.
+    fn = fn_("def f(x, out):\n s = x[0].shape\n out[:] = s[0]\n")
+    assert resolve_shape_reads(fn, env(x="(n,)", out="(1,)")) != []
+    assert "()" not in ast.unparse(fn)
 
 
 def test_a_rebound_scalar_is_not_folded() -> None:
@@ -89,34 +95,30 @@ def test_a_name_read_inside_a_store_target_is_not_a_rebinding() -> None:
     assert "out[:] = n" in src
 
 
-def test_a_bounded_or_strided_slice_is_sized_not_passed_through() -> None:
+@pytest.mark.parametrize(
+    ("dims", "expr", "axes"),
+    [
+        (("M",), "a[0:3 * npeaks:3]", ["((3 * npeaks) + 2) // 3"]),
+        (("M",), "a[:npeaks]", ["npeaks"]),
+        (("M",), "a[2:7]", ["(7) - (2)"]),
+        (("M",), "a[::2]", ["((M) + 1) // 2"]),
+        (("M",), "a[:-1]", ["(M) - 1"]),
+        # A whole-axis slice is the one case where the source extent IS the answer, and it stays the very object it
+        # was handed -- callers pass AST exprs through this untouched.
+        (("M", "N"), "a[:, :]", ["M", "N"]),
+        # A symbolic or reversed step has no ceiling form here, and answering with the source extent would be a
+        # wrong number presented as a resolved one. Empty == the callers' "unresolved".
+        (("M",), "a[::k]", []),
+        (("M",), "a[::-1]", []),
+        # One unsizable axis takes the whole shape with it -- a partially-right shape is not a shape.
+        (("M", "N"), "a[::k, :]", []),
+    ],
+)
+def test_a_bounded_or_strided_slice_is_sized_not_passed_through(
+    dims: tuple[str, ...], expr: str, axes: list[str]
+) -> None:
     # A slice axis keeps the SOURCE extent only for a whole-axis slice. raman_fitting reads
     # ``centres.shape[0]`` off ``p[0:3 * npeaks:3]``; the full ``3 * npeaks + 1`` there would allocate
     # the jacobian three times over and stride it against a count it does not have -- wrong numbers,
     # and nothing downstream reports it.
-    assert axes_(("M",), "a[0:3 * npeaks:3]") == ["((3 * npeaks) + 2) // 3"]
-    assert axes_(("M",), "a[:npeaks]") == ["npeaks"]
-    assert axes_(("M",), "a[2:7]") == ["(7) - (2)"]
-    assert axes_(("M",), "a[::2]") == ["((M) + 1) // 2"]
-    assert axes_(("M",), "a[:-1]") == ["(M) - 1"]
-    # A whole-axis slice is the one case where the source extent IS the answer, and it stays the
-    # very object it was handed -- callers pass AST exprs through this untouched.
-    assert axes_(("M", "N"), "a[:, :]") == ["M", "N"]
-
-
-def test_a_step_this_cannot_size_refuses_the_whole_shape() -> None:
-    # A symbolic or reversed step has no ceiling form here, and answering with the source extent
-    # would be a wrong number presented as a resolved one. Empty == the callers' "unresolved".
-    assert axes_(("M",), "a[::k]") == []
-    assert axes_(("M",), "a[::-1]") == []
-    # One unsizable axis takes the whole shape with it -- a partially-right shape is not a shape.
-    assert axes_(("M", "N"), "a[::k, :]") == []
-
-
-def test_a_rank_zero_shape_read_is_reported_not_folded_to_an_empty_tuple() -> None:
-    # ``()`` is a resolver out of evidence, not a rank-0 array. Folded, the ``[k]`` beside the read
-    # becomes ``()[k]`` -- an index off the end of a tuple that no emitter has a form for and no
-    # reader can trace back to the array it came from.
-    fn = fn_("def f(x, out):\n s = x[0].shape\n out[:] = s[0]\n")
-    assert resolve_shape_reads(fn, env(x="(n,)", out="(1,)")) != []
-    assert "()" not in ast.unparse(fn)
+    assert axes_(dims, expr) == axes

@@ -172,24 +172,16 @@ def docker_excluded(path: str) -> bool:
     return excluded
 
 
-@pytest.mark.parametrize("path", GIT_IGNORED)
-def test_generated_path_is_gitignored(path: str) -> None:
-    assert git_ignored(path), f"{path} is tool output but git would offer to commit it"
+@pytest.mark.parametrize(("path", "ignored"), [(p, True) for p in GIT_IGNORED] + [(p, False) for p in GIT_KEPT])
+def test_generated_path_is_gitignored(path: str, ignored: bool) -> None:
+    """A generated path is ignored (git would otherwise offer to commit tool output); a source is never hidden."""
+    assert git_ignored(path) is ignored, f"{path} is {'tool output' if ignored else 'a source'} with the wrong rule"
 
 
-@pytest.mark.parametrize("path", GIT_KEPT)
-def test_source_path_is_not_gitignored(path: str) -> None:
-    assert not git_ignored(path), f"{path} is a source but an ignore rule hides it from git add"
-
-
-@pytest.mark.parametrize("path", DOCKER_EXCLUDED)
-def test_path_is_kept_out_of_image_contexts(path: str) -> None:
-    assert docker_excluded(path), f"{path} would be sent to an image build context"
-
-
-@pytest.mark.parametrize("path", DOCKER_KEPT)
-def test_copied_source_reaches_image_contexts(path: str) -> None:
-    assert not docker_excluded(path), f"{path} is COPYed by a Dockerfile but .dockerignore drops it"
+@pytest.mark.parametrize(("path", "excluded"), [(p, True) for p in DOCKER_EXCLUDED] + [(p, False) for p in DOCKER_KEPT])
+def test_path_is_kept_out_of_image_contexts(path: str, excluded: bool) -> None:
+    """An excluded path never reaches an image build context; a source a Dockerfile COPYs is never dropped."""
+    assert docker_excluded(path) is excluded, f"{path}: .dockerignore disagrees with the Dockerfiles"
 
 
 def test_the_docker_matcher_follows_the_last_matching_rule() -> None:

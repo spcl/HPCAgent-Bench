@@ -88,29 +88,24 @@ def site(corpus: pathlib.Path, stem: str) -> lint.Site:
     return lint.site_of(corpus / "scientific_computing" / "structured_grids" / stem / f"{stem}.yaml", corpus)
 
 
+@pytest.mark.parametrize(
+    ("copy", "body"),
+    [("jacobi_old", JACOBI), ("three_point", JACOBI_RENAMED)],
+    ids=["renamed-entry", "renamed-arguments-and-locals"],
+)
 def test_renamed_copy_fingerprints_equal_and_fails_the_check(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], copy: str, body: str
 ) -> None:
-    """jacobi_1d copied under a new name: equal computation fingerprint, one refused duplicate pair."""
+    """jacobi_1d copied under a new name, or with its arguments and loop variables renamed and a docstring
+    added: equal computation fingerprint, one refused duplicate pair."""
     write_kernel(tmp_path, "jacobi_1d", JACOBI)
-    write_kernel(tmp_path, "jacobi_old", JACOBI, entry="jacobi_old")
+    write_kernel(tmp_path, copy, body)
     assert lint.computation_fingerprint(site(tmp_path, "jacobi_1d")) == lint.computation_fingerprint(
-        site(tmp_path, "jacobi_old")
+        site(tmp_path, copy)
     )
     code, out = run(tmp_path, capsys=capsys)
     assert code == 1
-    assert "DUPLICATE jacobi_1d = jacobi_old" in out
-
-
-def test_copy_with_renamed_arguments_and_locals_is_still_a_duplicate(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Renaming the arguments and loop variables (and adding a docstring) does not hide a copy."""
-    write_kernel(tmp_path, "jacobi_1d", JACOBI)
-    write_kernel(tmp_path, "three_point", JACOBI_RENAMED)
-    code, out = run(tmp_path, capsys=capsys)
-    assert code == 1
-    assert "DUPLICATE jacobi_1d = three_point" in out
+    assert f"DUPLICATE jacobi_1d = {copy}" in out
 
 
 def test_a_genuinely_different_kernel_is_not_a_duplicate(
@@ -137,39 +132,41 @@ def test_a_shared_module_variant_fingerprints_equal(tmp_path: pathlib.Path, caps
     assert lint.main(["--corpus", str(tmp_path), "--allowlist", str(allow)]) == 0
 
 
-def test_application_prefix_rule() -> None:
-    """An application-derived kernel without its app prefix is flagged; prefixed, app-named, suite-routed
-    and suite-upstream kernels pass."""
-    assert lint.naming_problems("velocity_tendencies", "icon")[0][0] == "prefix"
-    assert "icon_" in lint.naming_problems("velocity_tendencies", "icon")[0][1]
-    assert lint.naming_problems("icon_gather", "icon") == []
-    assert lint.naming_problems("cegterg", "qe")[0][0] == "prefix"
-    assert lint.naming_problems("qe_cegterg", "qe") == []
-    assert lint.naming_problems("lda_xc_potential", "ls3df")[0][0] == "prefix"
-    assert lint.naming_problems("fv3_xppm", "pyfv3") == []
-    assert lint.naming_problems("cp2k_grid_integrate", "cp2k_grid") == []
-    assert lint.naming_problems("covariance", "polybench") == []
-    # The app itself is a valid name for the app's own kernel.
-    assert lint.naming_problems("cloudsc", "cloudsc") == []
-    assert lint.naming_problems("lulesh", "lulesh") == []
-    # A kernel a suite carries keeps the suite's name.
-    assert lint.naming_problems("contour_integral", "quatrex", ("npbench",)) == []
-
-
-def test_suffix_rule() -> None:
-    """Bare version suffixes and a test-style name are flagged; a designation-free sibling is not."""
-    assert [rule for rule, _ in lint.naming_problems("cholesky2", "polybench")] == ["suffix"]
-    assert [rule for rule, _ in lint.naming_problems("eigh_test", "")] == ["suffix"]
-    assert [rule for rule, _ in lint.naming_problems("mandelbrot1", "jfp_blog")] == ["suffix"]
-    assert lint.naming_problems("covariance", "polybench") == []
-    assert lint.naming_problems("kernel_tmp", "polybench")[0][0] == "suffix"
-
-
-def test_snake_case_rule() -> None:
-    assert [rule for rule, _ in lint.naming_problems("HotSpot", "")] == ["case"]
-    assert [rule for rule, _ in lint.naming_problems("hot-spot", "")] == ["case"]
-    assert [rule for rule, _ in lint.naming_problems("1st_kernel", "")] == ["case"]
-    assert lint.naming_problems("hotspot_3d", "") == []
+@pytest.mark.parametrize(
+    ("name", "group", "suites", "rules", "hint"),
+    [
+        # An application-derived kernel without its app prefix is flagged; prefixed, app-named, suite-routed
+        # and suite-upstream kernels pass.
+        ("velocity_tendencies", "icon", (), ["prefix"], "icon_"),
+        ("icon_gather", "icon", (), [], ""),
+        ("cegterg", "qe", (), ["prefix"], "qe_"),
+        ("qe_cegterg", "qe", (), [], ""),
+        ("lda_xc_potential", "ls3df", (), ["prefix"], "ls3df_"),
+        ("fv3_xppm", "pyfv3", (), [], ""),
+        ("cp2k_grid_integrate", "cp2k_grid", (), [], ""),
+        ("covariance", "polybench", (), [], ""),
+        # The app itself is a valid name for the app's own kernel.
+        ("cloudsc", "cloudsc", (), [], ""),
+        ("lulesh", "lulesh", (), [], ""),
+        # A kernel a suite carries keeps the suite's name.
+        ("contour_integral", "quatrex", ("npbench",), [], ""),
+        # Bare version suffixes and a test-style name are flagged; a designation-free sibling is not.
+        ("cholesky2", "polybench", (), ["suffix"], ""),
+        ("eigh_test", "", (), ["suffix"], ""),
+        ("mandelbrot1", "jfp_blog", (), ["suffix"], ""),
+        ("kernel_tmp", "polybench", (), ["suffix"], ""),
+        # Names outside snake case.
+        ("HotSpot", "", (), ["case"], ""),
+        ("hot-spot", "", (), ["case"], ""),
+        ("1st_kernel", "", (), ["case"], ""),
+        ("hotspot_3d", "", (), [], ""),
+    ],
+)
+def test_naming_rules(name: str, group: str, suites: tuple[str, ...], rules: list[str], hint: str) -> None:
+    """The prefix, suffix and snake-case rules each flag exactly their violations."""
+    problems = lint.naming_problems(name, group, suites)
+    assert [rule for rule, unused in problems] == rules
+    assert all(hint in message for unused, message in problems)
 
 
 def test_provenance_parse_and_site_errors(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:

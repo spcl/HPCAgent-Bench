@@ -82,24 +82,6 @@ FI_PROVIDER = "cxi"
 """
 
 
-def test_the_shared_mount_lands_in_a_copy_that_is_still_valid_toml(tmp_path: pathlib.Path) -> None:
-    edf_dir = tmp_path / "edf"
-    write_edf(edf_dir, "bench", MULTILINE_EDF)
-
-    proc, shared_dir = run_derived_edf(tmp_path, "bench", edf_dir)
-
-    assert proc.returncode == 0, proc.stderr
-    derived = pathlib.Path(proc.stdout)
-    assert derived == tmp_path / "run/edf/bench.judge.toml"
-    parsed = tomllib.loads(derived.read_text())
-    assert f"{shared_dir}:/shared" in parsed["mounts"]
-    assert f"{tmp_path}/run/{GENERATED_MOUNT}" in parsed["mounts"]
-    assert AGENT_MOUNT not in parsed["mounts"], "the judge is not an agent"
-    assert parsed["image"] == "docker://example/hpcagent-bench:latest"
-    assert parsed["env"] == {"FI_PROVIDER": "cxi"}
-    assert (edf_dir / "bench.toml").read_text() == MULTILINE_EDF, "the registered EDF must not be rewritten"
-
-
 def test_two_roles_get_two_files(tmp_path: pathlib.Path) -> None:
     """The reason the role is in the path at all. Judge and agent are launched from the same
     AMD_CE_ENV, and role_srun backgrounds the judge's srun before the agent's rewrite starts -- so a
@@ -128,9 +110,7 @@ def test_a_missing_edf_exits_2(tmp_path: pathlib.Path) -> None:
     assert "bench.toml" in proc.stderr
     assert "not found" in proc.stderr
 
-
-def test_a_single_line_mounts_block_exits_2(tmp_path: pathlib.Path) -> None:
-    edf_dir = tmp_path / "edf"
+    # A single-line mounts block is refused too.
     write_edf(edf_dir, "bench", 'image = "docker://example/hpcagent-bench:latest"\nmounts = ["/scratch:/scratch"]\n')
 
     proc, _ = run_derived_edf(tmp_path, "bench", edf_dir)
@@ -165,6 +145,20 @@ def test_the_mounts_already_in_the_edf_are_replaced_not_inherited(tmp_path: path
     assert AGENT_MOUNT not in judge_mounts
     assert AGENT_MOUNT in agent_mounts
     assert not [m for m in agent_mounts if m.endswith(GENERATED_MOUNT)], "the cache is a judge mount"
+
+    # The shared mount lands in a copy that is still valid TOML, and the registered EDF stays as it was.
+    write_edf(edf_dir, "multi", MULTILINE_EDF)
+    proc, shared_dir = run_derived_edf(tmp_path, "multi", edf_dir)
+    assert proc.returncode == 0, proc.stderr
+    derived = pathlib.Path(proc.stdout)
+    assert derived == tmp_path / "run/edf/multi.judge.toml"
+    parsed = tomllib.loads(derived.read_text())
+    assert f"{shared_dir}:/shared" in parsed["mounts"]
+    assert f"{tmp_path}/run/{GENERATED_MOUNT}" in parsed["mounts"]
+    assert AGENT_MOUNT not in parsed["mounts"], "the judge is not an agent"
+    assert parsed["image"] == "docker://example/hpcagent-bench:latest"
+    assert parsed["env"] == {"FI_PROVIDER": "cxi"}
+    assert (edf_dir / "multi.toml").read_text() == MULTILINE_EDF, "the registered EDF must not be rewritten"
 
 
 @pytest.mark.parametrize(

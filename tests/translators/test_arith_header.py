@@ -71,16 +71,12 @@ def check(result: CompletedProcess[str]) -> None:
         assert float(g) == float(e), (got, exp)
 
 
-@have_gcc
-def test_c_header_compiles_standalone_and_floors_toward_negative_infinity() -> None:
-    src = arith_header_source("c")
-    check(build_run_c_include(ARITH_HEADER_NAME["c"], src, driver(ARITH_HEADER_NAME["c"])))
-
-
-@have_gpp
-def test_cpp_header_compiles_standalone_and_floors_toward_negative_infinity() -> None:
-    src = arith_header_source("cpp")
-    check(build_run_c_include(ARITH_HEADER_NAME["cpp"], src, driver(ARITH_HEADER_NAME["cpp"]), cpp=True))
+@pytest.mark.parametrize(
+    "lang", [pytest.param("c", marks=have_gcc), pytest.param("cpp", marks=have_gpp)], ids=["c", "cpp"]
+)
+def test_c_header_compiles_standalone_and_floors_toward_negative_infinity(lang: str) -> None:
+    src = arith_header_source(lang)
+    check(build_run_c_include(ARITH_HEADER_NAME[lang], src, driver(ARITH_HEADER_NAME[lang]), cpp=lang == "cpp"))
 
 
 @pytest.mark.parametrize(("lang", "inlined"), [("c", C_HEADER), ("cpp", CPP_ARITH)])

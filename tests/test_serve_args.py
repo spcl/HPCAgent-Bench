@@ -23,21 +23,22 @@ def test_apply_replaces_in_place_appends_and_drops_with_the_value() -> None:
     assert changed == '"--trust-remote-code --mem-fraction-static 0.48 --enable-metrics --ep-size 4 --enable-hicache"'
     assert serve_args.apply("--a 1 --b", {}, []) == "--a 1 --b", "an unquoted value stays unquoted"
     assert serve_args.parse(ARGS)["--trust-remote-code"] == ""
-
-
-def test_apply_keeps_a_shell_reference_verbatim() -> None:
+    # a shell reference stays verbatim
     value = '"--chat-template ${HPCAGENT_BENCH_REPO}/containers/inference/t.jinja --x 1"'
     assert "${HPCAGENT_BENCH_REPO}/containers/inference/t.jinja" in serve_args.apply(value, {"--x": "2"}, [])
 
 
-@pytest.mark.parametrize("bad", ["positional --a", "--a 1 --a 2"])
-def test_a_string_that_is_not_a_flag_list_is_refused(bad: str) -> None:
+@pytest.mark.parametrize(
+    ("bad", "via_refusal"),
+    [("positional --a", False), ("--a 1 --a 2", False), ("--a 1 --a 2", True)],
+    ids=["positional", "repeated", "refused-not-raised"],
+)
+def test_a_string_that_is_not_a_flag_list_is_refused(bad: str, via_refusal: bool) -> None:
+    if via_refusal:
+        assert "not a list of --flags" in serve_args.refusal({"SGLANG_EXTRA_ARGS": f'"{bad}"'})
+        return
     with pytest.raises(ValueError, match="not a --flag|twice"):
         serve_args.parse(bad)
-
-
-def test_an_argument_string_that_is_not_a_flag_list_is_refused_not_raised() -> None:
-    assert "not a list of --flags" in serve_args.refusal({"SGLANG_EXTRA_ARGS": '"--a 1 --a 2"'})
 
 
 @pytest.mark.parametrize(

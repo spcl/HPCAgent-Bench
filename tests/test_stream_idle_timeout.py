@@ -54,13 +54,9 @@ def test_qwen38s_own_perf_playbook_config_already_needs_the_full_ceiling(module:
     pre_clamp_s = 262144 / (module.MEASURED_NODE_PROMPT_TOK_S / 40) * module.SAFETY_MARGIN
     assert pre_clamp_s * 1000 > module.CEILING_MS
     assert module.derive_ms(262144, 40) == module.CEILING_MS
-
-
-def test_a_small_low_concurrency_setup_derives_under_the_ceiling(module: types.ModuleType) -> None:
-    """git-scicomp's qwen38 setups cap AGENTS_PER_NODE at 30, not 40 -- still not enough headroom at
-    the full served context, but a SHORT context on a lightly-loaded node derives well under the
-    ceiling, which is the case this module exists to speed up: a dead stream on that setup is
-    caught in less than a blanket 30 minutes."""
+    # git-scicomp's qwen38 setups cap AGENTS_PER_NODE at 30, not 40 -- still not enough headroom at the full served
+    # context, but a SHORT context on a lightly-loaded node derives well under the ceiling, which is the case this
+    # module exists to speed up: a dead stream on that setup is caught in less than a blanket 30 minutes.
     assert module.FLOOR_MS < module.derive_ms(8192, 4) < module.CEILING_MS
 
 
@@ -74,9 +70,7 @@ def test_the_launcher_reads_the_same_value_off_the_environment(module: types.Mod
         check=True,
     )
     assert int(done.stdout.strip()) == module.derive_ms(262144, 40)
-
-
-def test_a_blank_or_garbage_env_value_is_zero_not_a_crash(module: types.ModuleType) -> None:
+    # a blank or garbage env value is zero, not a crash
     assert module.positive_int("") == 0
     assert module.positive_int("not-a-number") == 0
     assert module.positive_int("-5") == 0

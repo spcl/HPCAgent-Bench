@@ -22,15 +22,25 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def test_scratch_or_repo_prefers_scratch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SCRATCH", "/scratch/user")
-    monkeypatch.setenv("HPCAGENT_BENCH_REPO", "/some/checkout")
-    assert paths.scratch_or_repo() == pathlib.Path("/scratch/user")
-
-
-def test_scratch_or_repo_falls_back_to_repo_root_without_scratch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_REPO", "/some/checkout")
-    assert paths.scratch_or_repo() == pathlib.Path("/some/checkout")
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [
+        pytest.param(
+            {"SCRATCH": "/scratch/user", "HPCAGENT_BENCH_REPO": "/some/checkout"},
+            pathlib.Path("/scratch/user"),
+            id="prefers-scratch",
+        ),
+        pytest.param(
+            {"HPCAGENT_BENCH_REPO": "/some/checkout"}, pathlib.Path("/some/checkout"), id="repo-without-scratch"
+        ),
+    ],
+)
+def test_scratch_or_repo_prefers_scratch(
+    monkeypatch: pytest.MonkeyPatch, environ: dict[str, str], expected: pathlib.Path
+) -> None:
+    for name, value in environ.items():
+        monkeypatch.setenv(name, value)
+    assert paths.scratch_or_repo() == expected
 
 
 def test_scratch_root_lands_under_scratch_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,14 +48,20 @@ def test_scratch_root_lands_under_scratch_when_set(monkeypatch: pytest.MonkeyPat
     assert paths.scratch_root("hpcagent_sizing") == pathlib.Path("/scratch/user/hpcagent_sizing")
 
 
-def test_scratch_root_falls_back_to_repo_cache_without_scratch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A container or CI box with no $SCRATCH lands under the checkout it is actually running from,
-    not a guess at the invoking user's home (~/.cache/<name>)."""
-    monkeypatch.setenv("HPCAGENT_BENCH_REPO", "/some/checkout")
-    assert paths.scratch_root("hpcagent_sizing") == pathlib.Path("/some/checkout/.cache/hpcagent_sizing")
-
-
-def test_scratch_root_with_neither_var_set_matches_repo_root_directly() -> None:
-    """No env var configured at all (a bare `pytest tests/` with no cluster session sourced) is
-    still the ROOT-relative default, not an error and not a guess at $HOME."""
-    assert paths.scratch_root("hpcagent_sizing") == paths.ROOT / ".cache" / "hpcagent_sizing"
+@pytest.mark.parametrize(
+    ("repo", "expected"),
+    [
+        # A container or CI box with no $SCRATCH lands under the checkout it is actually running from, not a guess at
+        # the invoking user's home (~/.cache/<name>).
+        pytest.param("/some/checkout", pathlib.Path("/some/checkout/.cache/hpcagent_sizing"), id="a-resolved-checkout"),
+        # No env var configured at all (a bare `pytest tests/` with no cluster session sourced) is still the
+        # ROOT-relative default, not an error and not a guess at $HOME.
+        pytest.param(None, paths.ROOT / ".cache" / "hpcagent_sizing", id="neither-variable-set"),
+    ],
+)
+def test_scratch_root_falls_back_to_repo_cache_without_scratch(
+    monkeypatch: pytest.MonkeyPatch, repo: str | None, expected: pathlib.Path
+) -> None:
+    if repo is not None:
+        monkeypatch.setenv("HPCAGENT_BENCH_REPO", repo)
+    assert paths.scratch_root("hpcagent_sizing") == expected

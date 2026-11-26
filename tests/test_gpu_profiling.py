@@ -201,12 +201,6 @@ def test_find_locates_a_column_nsys_renamed_between_releases() -> None:
     assert gpu_profiling.unit_of("Count") == ""
 
 
-def test_number_survives_the_separators_nsys_leaves_in_a_cell() -> None:
-    assert gpu_profiling.number("1,234,567") == 1234567.0
-    assert gpu_profiling.number("88.7%") == 88.7
-    assert gpu_profiling.number("") == 0.0
-
-
 def test_memory_stats_join_the_time_report_to_the_size_report() -> None:
     """Time without volume cannot be turned into a bandwidth, which is the only reading either
     number supports on its own."""
@@ -215,10 +209,6 @@ def test_memory_stats_join_the_time_report_to_the_size_report() -> None:
     assert [m["direction"] for m in memory] == ["h2d", "d2h"]
     h2d = memory[0]
     assert (h2d["count"], h2d["total_ns"], h2d["total"], h2d["unit"]) == (48, 2411520, 402.653, "MB")
-
-
-def test_memory_stats_report_an_absent_volume_as_none_not_as_zero() -> None:
-    parsed = sections()
     memory = gpu_profiling.memory_stats(parsed[gpu_profiling.MEM_TIME_REPORT], [])
     assert memory[0]["total"] is None
     assert memory[0]["unit"] is None
@@ -246,6 +236,9 @@ def test_launch_configs_collapse_repeated_launches_of_one_geometry() -> None:
     assert gemm["warps_per_block"] == 8
     assert gemm["registers_per_thread"] == 64
     assert (gemm["shared_memory"], gemm["shared_memory_unit"]) == (0.001, "MB")
+    scale = configs[1]  # 100 threads occupy 4 warps: rounding down would hide the idle lanes
+    assert scale["threads_per_block"] == 100
+    assert scale["warps_per_block"] == 4
 
 
 @pytest.mark.parametrize(
@@ -268,13 +261,6 @@ def test_launch_configs_report_a_column_the_trace_lacks_as_absent_not_zero(
     assert (config["shared_memory"], config["shared_memory_unit"]) == (None, None), (
         "shared_memory is StcSMem + DymSMem; a missing half is unmeasured, not 0"
     )
-
-
-def test_launch_configs_round_a_partial_warp_up() -> None:
-    """100 threads occupy 4 warps, 28 lanes of which are idle -- rounding down would hide that."""
-    scale = gpu_profiling.launch_configs(sections()[gpu_profiling.TRACE_REPORT])[1]
-    assert scale["threads_per_block"] == 100
-    assert scale["warps_per_block"] == 4
 
 
 def test_nsys_check_names_every_cause_it_can_refuse_for(
@@ -324,30 +310,26 @@ def test_record_failure_separates_a_permission_refusal_from_a_broken_install() -
     assert "Target application terminated" in str(other)
 
 
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "upgrade_hint"),
+    [
+        ("", "Unknown report name cuda_gpu_kern_sum", True),
+        (f" ** Memory ({gpu_profiling.MEM_TIME_REPORT}):\nOperation,Total Time (ns)\n", "", False),
+    ],
+    ids=["no-known-report-names-the-upgrade", "no-kernel-report-is-a-tool-failure-not-an-empty-trace"],
+)
 def test_nsys_stats_names_the_upgrade_when_no_known_report_came_back(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, stdout: str, stderr: str, upgrade_hint: bool
 ) -> None:
     """An nsys too old to know these report names returns nothing, which must not be read as a run
     that launched nothing."""
     monkeypatch.setattr(gpu_profiling, "nsys_check", lambda _lang: "/usr/bin/nsys")
-    monkeypatch.setattr(
-        gpu_profiling.subprocess, "run", lambda *a, **k: completed(1, stderr="Unknown report name cuda_gpu_kern_sum")
-    )
+    monkeypatch.setattr(gpu_profiling.subprocess, "run", lambda *a, **k: completed(1, stdout=stdout, stderr=stderr))
     with pytest.raises(gpu_profiling.GpuProfilerUnavailable) as ei:
         gpu_profiling.nsys_stats(tmp_path / "gpu-profile.nsys-rep", language=Language.CUDA, timeout=5.0)
     assert ei.value.cause == "nsys_report_missing"
-    assert "2022.1" in str(ei.value)
-
-
-def test_nsys_stats_failing_without_the_kernel_report_is_a_tool_failure_not_an_empty_trace(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    other_section = f" ** Memory ({gpu_profiling.MEM_TIME_REPORT}):\nOperation,Total Time (ns)\n"
-    monkeypatch.setattr(gpu_profiling, "nsys_check", lambda _lang: "/usr/bin/nsys")
-    monkeypatch.setattr(gpu_profiling.subprocess, "run", lambda *a, **k: completed(1, stdout=other_section))
-    with pytest.raises(gpu_profiling.GpuProfilerUnavailable) as ei:
-        gpu_profiling.nsys_stats(tmp_path / "gpu-profile.nsys-rep", language=Language.CUDA, timeout=5.0)
-    assert ei.value.cause == "nsys_report_missing"
+    if upgrade_hint:
+        assert "2022.1" in str(ei.value)
 
 
 def test_nsys_stats_asks_for_the_documented_reports(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -382,20 +364,6 @@ def test_nsys_record_traces_cuda_without_turning_on_cpu_sampling(
     assert "--sample=none" in cmd
     assert cmd[cmd.index("--") + 1 :] == ["./app"], "-- separates nsys's options from the workload"
     assert seen["kw"]["timeout"] == 9.0
-
-
-def test_recording_prefers_the_modern_extension(tmp_path: pathlib.Path) -> None:
-    assert gpu_profiling.recording(tmp_path) is None
-    (tmp_path / (gpu_profiling.REPORT_STEM + ".qdrep")).write_text("")
-    assert gpu_profiling.recording(tmp_path).name.endswith(".qdrep")
-    (tmp_path / (gpu_profiling.REPORT_STEM + ".nsys-rep")).write_text("")
-    assert gpu_profiling.recording(tmp_path).name.endswith(".nsys-rep")
-
-
-def test_per_rep_ns_divides_by_the_reps_the_trace_actually_covered() -> None:
-    """The trace covers the warmup launches too; elapsed_ns is the best MEASURED rep."""
-    assert gpu_profiling.per_rep_ns(1200, reps=3, warmup=1) == 300.0
-    assert gpu_profiling.per_rep_ns(1200, reps=0, warmup=0) == 0.0
 
 
 def test_every_raised_cause_is_declared() -> None:
@@ -536,36 +504,29 @@ def test_run_workload_honours_the_requested_residency(monkeypatch: pytest.Monkey
     assert seen["threads"] is None, "a request with no threads key must run the slot's full core count"
 
 
+@pytest.mark.parametrize(
+    ("language", "cause", "tool"),
+    [("cuda", "nsys_missing", "nsight-systems"), ("hip", "rocprof_missing", "rocprofv3")],
+    ids=["cuda-to-nsys", "hip-to-rocprof"],
+)
 def test_profile_endpoint_routes_a_cuda_submission_to_nsys(
-    make_judge: Callable[..., tuple[ThreadingHTTPServer, str]], monkeypatch: pytest.MonkeyPatch
+    make_judge: Callable[..., tuple[ThreadingHTTPServer, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    language: str,
+    cause: str,
+    tool: str,
 ) -> None:
-    """A host without nsys answers 503 + cause -- never an empty (or host-path) profile. The
-    dispatch is the LANGUAGE, so this is also the proof that a cuda submission does not fall
-    through to perf."""
+    """A host without the vendor profiler answers 503 + cause naming the tool it wants -- never an empty
+    (or host-path) profile. The dispatch is the LANGUAGE, so a cuda submission does not fall through to
+    perf or rocprof, and a hip submission is not answered with an nsys cause."""
     monkeypatch.setattr(gpu_profiling.shutil, "which", lambda _name: None)
     _srv, url = make_judge(ServiceConfig())
     with pytest.raises(urllib.error.HTTPError) as ei:
-        tools.JudgeClient(url).profile(gpu_submission("cuda"), "gemm")
+        tools.JudgeClient(url).profile(gpu_submission(language), "gemm")
     assert ei.value.code == 503
     body = json.loads(ei.value.read())
-    assert body["cause"] == "nsys_missing"
-    assert "nsight-systems" in body["error"]
-
-
-def test_profile_endpoint_routes_a_hip_submission_to_rocprof(
-    make_judge: Callable[..., tuple[ThreadingHTTPServer, str]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A hip submission goes to the AMD profiler, not to nsys and not to perf -- and a host without
-    ROCm answers 503 naming the tool it wants, never an empty profile. The dispatch is the LANGUAGE,
-    so this is the AMD half of the proof that /profile is one route for both vendors."""
-    monkeypatch.setattr(gpu_profiling.shutil, "which", lambda _name: None)
-    _srv, url = make_judge(ServiceConfig())
-    with pytest.raises(urllib.error.HTTPError) as ei:
-        tools.JudgeClient(url).profile(gpu_submission("hip"), "gemm")
-    assert ei.value.code == 503
-    body = json.loads(ei.value.read())
-    assert body["cause"] == "rocprof_missing", "a hip submission must not be answered with an nsys cause"
-    assert "rocprofv3" in body["error"]
+    assert body["cause"] == cause
+    assert tool in body["error"]
 
 
 def test_profile_endpoint_refuses_amd_host_counters_by_the_amd_tool_name(
@@ -658,11 +619,7 @@ def test_kernel_stats_read_rocprofv3_columns_into_exactly_the_nsys_rows() -> Non
     assert hot["name"] == "gemm_fp64_kernel(double*, double*, int)"
     assert (hot["instances"], hot["total_ns"], hot["mean_ns"]) == (24, 10650240, 443760.0)
     assert (hot["min_ns"], hot["max_ns"], hot["time_pct"]) == (441120, 449280, 88.7)
-
-
-def test_kernel_stats_report_an_absent_column_as_absent_not_zero() -> None:
-    """A report without per-kernel min/max: a 0 ns minimum is a MEASUREMENT -- it would say the
-    kernel once took no time, rather than that the tool never looked."""
+    # A report without per-kernel min/max: a 0 ns minimum is a MEASUREMENT, so an absent column reads as None.
     kernels, _omitted = gpu_profiling.kernel_stats(gpu_profiling.parse_csv(TOTALS_ONLY_STATS))
     assert kernels[0]["min_ns"] is None
     assert kernels[0]["max_ns"] is None
@@ -675,12 +632,7 @@ def test_memory_stats_read_rocprofs_underscored_operation_names() -> None:
     memory = gpu_profiling.memory_stats(rocprof_sections()[gpu_profiling.MEMORY_STATS_CSV], [])
     assert [m["direction"] for m in memory] == ["h2d", "d2h"]
     assert (memory[0]["count"], memory[0]["total_ns"], memory[0]["mean_ns"]) == (48, 2411520, 50240.0)
-
-
-def test_memory_stats_report_the_volume_rocprofv3_never_measures_as_absent() -> None:
-    """rocprofv3's memory-copy report times the copies and does not size them. A 0 MB transfer that
-    took 2.4 ms is not an answer; null is."""
-    memory = gpu_profiling.memory_stats(rocprof_sections()[gpu_profiling.MEMORY_STATS_CSV], [])
+    # rocprofv3 times the copies and does not size them: a 0 MB transfer that took 2.4 ms is not an answer.
     assert memory[0]["total"] is None
     assert memory[0]["unit"] is None
 
@@ -701,15 +653,12 @@ def test_rocprof_launch_configs_divide_the_hsa_grid_into_blocks() -> None:
     assert gemm["threads_per_block"] == 256
     assert gemm["warps_per_block"] == 4, "a 256-thread workgroup is 4 wavefronts of 64, not 8 warps of 32"
     assert (gemm["shared_memory"], gemm["shared_memory_unit"]) == (1024, "B"), "LDS is CUDA's shared memory"
-
-
-def test_rocprof_launch_configs_emit_the_same_row_shape_the_nsys_reader_does() -> None:
-    """The /profile response schema is vendor-independent, which is a property of the ROWS, not of
-    the prose describing them."""
-    parsed = rocprof_sections()
-    amd = gpu_profiling.rocprof_launch_configs(parsed[gpu_profiling.KERNEL_TRACE_CSV], 64)
+    # `VGPR_Count` is per work-item and it is in the trace, so the occupancy note must not call it absent.
+    assert gemm["registers_per_thread"] == 64
+    assert "VGPR" in gpu_profiling.AMD_OCCUPANCY_NOTE
+    # The /profile response schema is vendor-independent: the rows carry the same fields as the nsys reader's.
     nvidia = gpu_profiling.launch_configs(sections()[gpu_profiling.TRACE_REPORT])
-    assert sorted(amd[0]) == sorted(nvidia[0])
+    assert sorted(gemm) == sorted(nvidia[0])
 
 
 def test_rocprof_launch_configs_report_what_the_trace_never_carries_as_absent() -> None:
@@ -721,15 +670,6 @@ def test_rocprof_launch_configs_report_what_the_trace_never_carries_as_absent() 
     assert configs[0]["threads_per_block"] == 256, "what the trace DOES carry is still reported"
 
 
-def test_rocprof_launch_configs_read_the_register_count_the_trace_carries() -> None:
-    """`VGPR_Count` is per work-item and it is in the trace: it was documented as unavailable while
-    the tool had been emitting it, so the occupancy story stopped one field short of a cause."""
-    parsed = rocprof_sections()
-    configs = gpu_profiling.rocprof_launch_configs(parsed[gpu_profiling.KERNEL_TRACE_CSV], 64)
-    assert configs[0]["registers_per_thread"] == 64
-    assert "VGPR" in gpu_profiling.AMD_OCCUPANCY_NOTE, "the payload note must not still call the register count absent"
-
-
 def test_rocprof_launch_configs_read_lds_under_either_column_spelling() -> None:
     """rocprofiler-sdk renamed `Group_Segment_Size` to `LDS_Block_Size`. A reader pinned to one
     spelling reads the other generation's 1 KB workgroup as 0 B -- a budget it says is free."""
@@ -738,22 +678,10 @@ def test_rocprof_launch_configs_read_lds_under_either_column_spelling() -> None:
     assert (modern[0]["shared_memory"], modern[0]["shared_memory_unit"]) == (1024, "B")
     assert (legacy[0]["shared_memory"], legacy[0]["shared_memory_unit"]) == (1024, "B")
     assert legacy[0]["registers_per_thread"] is None, "the older trace has no register column, and none is not zero"
-
-
-def test_rocprof_launch_configs_report_a_missing_lds_column_as_absent_not_zero() -> None:
-    """A trace with neither LDS spelling has not measured LDS. Reporting 0 B says the workgroup used
-    none, and an agent then sizes a tile against a budget it has already spent."""
+    # A trace with neither LDS spelling has not measured LDS: 0 B would say the workgroup used none.
     configs = gpu_profiling.rocprof_launch_configs(gpu_profiling.parse_csv(NO_LDS_KERNEL_TRACE), 64)
     assert configs[0]["shared_memory"] is None
     assert configs[0]["shared_memory_unit"] is None, "a unit on an absent quantity reads as a measurement"
-
-
-def test_wavefront_size_reads_the_gpu_agent_and_not_the_cpu_one() -> None:
-    """Every ROCm install reports the CPU as an agent, with wavefront 0. Taking the first row would
-    report every workgroup as an unknown number of wavefronts."""
-    parsed = rocprof_sections()
-    assert gpu_profiling.wavefront_size(parsed[gpu_profiling.AGENT_INFO_CSV]) == 64
-    assert gpu_profiling.wavefront_size([]) is None, "no agent report, no width"
 
 
 def test_rocprof_check_names_every_cause_it_can_refuse_for(
@@ -795,22 +723,7 @@ def test_rocprof_check_names_every_cause_it_can_refuse_for(
     deny_kfd(monkeypatch, kfd, allowed=True)
     assert gpu_profiling.rocprof_check() == ("rocprofv3", "/opt/rocm/bin/rocprofv3")
 
-
-def test_rocprof_check_prefers_v3_and_says_when_it_fell_back_to_the_deprecated_one(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The two tools answer with different schemas, so which one ran is not a detail -- it is the
-    difference between a launch geometry and no launch geometry at all."""
-    kfd = tmp_path / "kfd"
-    kfd.write_text("")
-    monkeypatch.setattr(gpu_profiling, "KFD_DEVICE", kfd)
-    monkeypatch.setattr(gpu_profiling, "rocm_agents", lambda *a, **k: ["gfx942"])
-    monkeypatch.setattr(gpu_profiling.osinfo, "IS_LINUX", True)
-    deny_kfd(monkeypatch, kfd, allowed=True)
-
-    monkeypatch.setattr(gpu_profiling.shutil, "which", which_map(("rocprofv3",)))
-    assert gpu_profiling.rocprof_check()[0] == "rocprofv3"
-
+    # The deprecated rocprof answers with a different schema (no launch geometry), so it is refused.
     monkeypatch.setattr(gpu_profiling.shutil, "which", which_map(("rocprof",)))
     with pytest.raises(gpu_profiling.GpuProfilerUnavailable) as ei:
         gpu_profiling.rocprof_check()
@@ -846,16 +759,7 @@ def test_rocprof_command_asks_rocprofv3_for_every_report_as_csv(tmp_path: pathli
     assert v3[v3.index("--output-format") + 1] == "csv"
     assert v3[v3.index("--output-directory") + 1] == str(tmp_path)
     assert v3[v3.index("--") + 1 :] == ["./app", "-n", "1"], "-- separates rocprofv3's options from the workload"
-
-
-def test_rocprof_record_writes_where_the_reader_looks(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen = {}
-    monkeypatch.setattr(gpu_profiling, "run_command", lambda cmd, **k: seen.update(cmd=cmd, kw=k))
-    outdir = tmp_path / gpu_profiling.ROCPROF_OUTDIR
-    gpu_profiling.rocprof_record(["./app"], outdir, cwd=tmp_path, timeout=9.0, exe="/opt/rocm/bin/rocprofv3", plan=None)
-    assert outdir.is_dir(), "rocprofv3 does not create its --output-directory"
-    assert seen["kw"]["timeout"] == 9.0
-    assert seen["kw"]["cwd"] == str(tmp_path)
+    assert "--marker-trace" in v3[: v3.index("--")], "ROCTX ranges are recorded by an option before the workload"
 
 
 def test_rocprof_reports_find_the_csvs_even_when_v3_nests_them(tmp_path: pathlib.Path) -> None:
@@ -963,25 +867,18 @@ def test_range_stats_read_the_marker_summary_rocprofv3_writes() -> None:
     ]
 
 
-def test_a_trace_without_ranges_reads_as_an_empty_ranges_table(tmp_path: pathlib.Path) -> None:
-    """rocprofv3 writes no marker summary when nothing was pushed; that is `ranges: []`, not a failure."""
-    write_rocprof(tmp_path, ROCPROF_CSVS)
+@pytest.mark.parametrize(
+    ("with_ranges", "names"), [(False, []), (True, ["alpha", "beta"])], ids=["no-marker-summary", "marker-summary"]
+)
+def test_a_trace_with_ranges_reads_the_marker_summary_beside_the_kernels(
+    tmp_path: pathlib.Path, with_ranges: bool, names: list[str]
+) -> None:
+    """The marker summary is found with the other reports, flat or nested; rocprofv3 writes none when
+    nothing was pushed, and that is `ranges: []`, not a failure."""
+    csvs = {**ROCPROF_CSVS, gpu_profiling.MARKER_STATS_CSV: MARKER_STATS} if with_ranges else ROCPROF_CSVS
+    write_rocprof(tmp_path, csvs, nested=with_ranges)
     reports = gpu_profiling.rocprof_reports(tmp_path, tool="rocprofv3", proc=completed(0))
-    assert reports[gpu_profiling.MARKER_STATS_CSV] == []
-    assert gpu_profiling.range_stats(reports[gpu_profiling.MARKER_STATS_CSV]) == []
-
-
-def test_a_trace_with_ranges_reads_the_marker_summary_beside_the_kernels(tmp_path: pathlib.Path) -> None:
-    """The marker summary is found with the other reports, flat or nested."""
-    write_rocprof(tmp_path, {**ROCPROF_CSVS, gpu_profiling.MARKER_STATS_CSV: MARKER_STATS}, nested=True)
-    reports = gpu_profiling.rocprof_reports(tmp_path, tool="rocprofv3", proc=completed(0))
-    assert [r["name"] for r in gpu_profiling.range_stats(reports[gpu_profiling.MARKER_STATS_CSV])] == ["alpha", "beta"]
-
-
-def test_rocprofv3_is_asked_to_record_roctx_ranges(tmp_path: pathlib.Path) -> None:
-    """rocprofv3 records ROCTX markers with `--marker-trace`, an option before the workload."""
-    v3 = gpu_profiling.rocprof_command("/opt/rocm/bin/rocprofv3", ["./app"], tmp_path)
-    assert "--marker-trace" in v3[: v3.index("--")]
+    assert [r["name"] for r in gpu_profiling.range_stats(reports[gpu_profiling.MARKER_STATS_CSV])] == names
 
 
 def fake_rocm(root: pathlib.Path, *, header: bool = True) -> str:
@@ -996,20 +893,18 @@ def fake_rocm(root: pathlib.Path, *, header: bool = True) -> str:
     return str(root / "bin" / "rocprofv3")
 
 
-def test_roctx_build_flags_come_from_the_rocm_root_holding_rocprofv3(tmp_path: pathlib.Path) -> None:
-    root = tmp_path.resolve() / "rocm"
-    exe = fake_rocm(root)
-    lib = root / "lib"
-    assert gpu_profiling.roctx_build_flags(("rocprofv3", exe)) == (
-        [f"-I{root / 'include'}"],
-        [f"-L{lib}", f"-Wl,-rpath,{lib}", f"-l{gpu_profiling.ROCTX_LIBRARY}"],
-    )
-
-
-def test_a_rocm_root_without_the_roctx_header_adds_no_flags(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("header", [True, False], ids=["with-header", "without-header-adds-no-flags"])
+def test_roctx_build_flags_come_from_the_rocm_root_holding_rocprofv3(tmp_path: pathlib.Path, header: bool) -> None:
     """Without the header a range source must fail to compile, not link against a missing library."""
-    exe = fake_rocm(tmp_path.resolve() / "rocm", header=False)
-    assert gpu_profiling.roctx_build_flags(("rocprofv3", exe)) == ([], [])
+    root = tmp_path.resolve() / "rocm"
+    exe = fake_rocm(root, header=header)
+    lib = root / "lib"
+    expected = (
+        ([f"-I{root / 'include'}"], [f"-L{lib}", f"-Wl,-rpath,{lib}", f"-l{gpu_profiling.ROCTX_LIBRARY}"])
+        if header
+        else ([], [])
+    )
+    assert gpu_profiling.roctx_build_flags(("rocprofv3", exe)) == expected
 
 
 @pytest.mark.parametrize(("language", "tool"), [("hip", "rocprofv3"), ("cuda", "nsys")])

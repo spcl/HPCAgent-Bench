@@ -5,6 +5,7 @@ stale SDFG is never served under a new key."""
 
 import pathlib
 import subprocess
+from collections.abc import Callable
 
 import dace
 import numpy as np
@@ -55,15 +56,27 @@ def test_the_canonical_key_moves_with_the_program_the_commit_the_precision_and_t
     assert cpf_canonical.canonical_key(program(tmp_path, text), commit, precision, target) != base
 
 
-def test_a_dace_record_with_no_commit_names_none(tmp_path: pathlib.Path) -> None:
-    """Every key holds the dace commit; an install that names none cannot name the dace it rendered with."""
-    assert cpf_canonical.commit_of({"url": "https://pypi.org/x.whl", "archive_info": {}}) == ""
-    assert cpf_canonical.commit_of({"url": tmp_path.as_uri(), "dir_info": {"editable": True}}) == ""
-
-
-def test_a_git_install_is_keyed_on_the_commit_uv_recorded() -> None:
-    record = {"url": "https://github.com/spcl/dace.git", "vcs_info": {"vcs": "git", "commit_id": "3cec0d9"}}
-    assert cpf_canonical.commit_of(record) == "3cec0d9"
+@pytest.mark.parametrize(
+    ("record", "commit"),
+    [
+        (lambda root: {"url": "https://pypi.org/x.whl", "archive_info": {}}, ""),
+        (lambda root: {"url": root.as_uri(), "dir_info": {"editable": True}}, ""),
+        (
+            lambda root: {
+                "url": "https://github.com/spcl/dace.git",
+                "vcs_info": {"vcs": "git", "commit_id": "3cec0d9"},
+            },
+            "3cec0d9",
+        ),
+    ],
+    ids=["wheel", "editable-without-git", "git-install"],
+)
+def test_a_dace_record_with_no_commit_names_none(
+    tmp_path: pathlib.Path, record: Callable[[pathlib.Path], dict[str, object]], commit: str
+) -> None:
+    """Every key holds the dace commit; an install that names none cannot name the dace it rendered with, and a git
+    install is keyed on the commit uv recorded."""
+    assert cpf_canonical.commit_of(record(tmp_path)) == commit
 
 
 def test_an_editable_checkout_is_keyed_on_its_head(tmp_path: pathlib.Path) -> None:

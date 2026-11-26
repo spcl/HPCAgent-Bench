@@ -74,10 +74,7 @@ def test_a_tail_exit_helper_emits_no_return_at_all() -> None:
     assert not valueless_returns(src), f"a bare return survived into the dace module:\n{src}"
     # The closing write is still there -- the return went, the assignment did not.
     assert "__hret_0[:] = out" in src, src
-
-
-def test_a_return_inside_a_loop_is_left_alone() -> None:
-    """The trim is exact, not a sweep: a return this cannot structure away stays visible."""
+    # The trim is exact, not a sweep: a return this cannot structure away stays visible.
     body = ast.parse("for i in range(4):\n    if i > 2:\n        return\nx = 1\nreturn\n").body
     kept = without_valueless_returns(body)
     assert [type(s).__name__ for s in kept] == ["For", "Assign"], ast.unparse(ast.Module(kept, []))

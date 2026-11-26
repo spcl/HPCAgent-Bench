@@ -17,12 +17,11 @@ negative cases below matter as much as the positive ones.
 
 import re
 
-import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import native, parse_source, run_op
+from tests.translators.op_oracle import parse_source
 
 
 def emit_c_for(
@@ -43,31 +42,6 @@ def decl_of(text: str, name: str) -> str:
     hits = re.findall(rf"^\s*(\w[\w ]*?)\s+{name}\[", text, re.MULTILINE)
     assert hits, f"no declaration of {name!r} in:\n{text}"
     return hits[0]
-
-
-def test_symbolic_index_vector_runs() -> None:
-    """The fv3 form end to end: elements are arithmetic over scalars, and the array is only
-    ever a subscript index."""
-    native()
-    src = (
-        "import numpy as np\n"
-        "def pick(src, out):\n"
-        "    N = src.shape[0]\n"
-        "    ia = np.array([1, N - 2])\n"
-        "    out[ia, :] = src[ia - 1, :] * 2.0\n"
-    )
-    rng = np.random.default_rng(0)
-    res = run_op(
-        src,
-        "pick",
-        {"src": rng.standard_normal((8, 4))},
-        {"out": (8, 4)},
-        {"N": 8, "M": 4},
-        shapes={"src": "(N, M)", "out": "(N, M)"},
-        backends=("c", "fortran"),
-    )
-    assert set(res) == {"c", "fortran"}, res
-    assert all(v == "ok" for v in res.values()), res
 
 
 def test_float_literal_list_is_a_float_buffer() -> None:
@@ -97,29 +71,29 @@ def test_elements_stored_in_order() -> None:
     assert re.search(r"ia\[2\] = 3;", text), text
 
 
-def test_symbolic_elements_not_read_as_an_index_still_refuse() -> None:
-    """Nothing in the AST types ``lo``/``hi``, and the array is read as a VALUE here, not as a
-    subscript. Guessing double would be a miscompile; the refusal is the correct answer."""
-    src = (
-        "import numpy as np\n"
-        "def pick(src, out):\n"
-        "    lo = src[0, 0]\n"
-        "    hi = src[0, 1]\n"
-        "    v = np.array([lo, hi])\n"
-        "    out[0, :] = src[0, :] * v[0] + v[1]\n"
-    )
-    with pytest.raises(NotImplementedError):
-        emit_c_for(src, "pick")
-
-
-def test_nested_literal_still_refuses() -> None:
-    """``np.array([[...], [...]])`` builds a 2-D array; this rewriter claims the flat literal
-    only, and a partial claim on the nested one would size the buffer wrong."""
-    src = (
-        "import numpy as np\n"
-        "def pick(src, out):\n"
-        "    m = np.array([[1.0, 2.0], [3.0, 4.0]])\n"
-        "    out[0, :] = src[0, :] * m[0, 0]\n"
-    )
+@pytest.mark.parametrize(
+    "src",
+    [
+        pytest.param(
+            "import numpy as np\n"
+            "def pick(src, out):\n"
+            "    lo = src[0, 0]\n"
+            "    hi = src[0, 1]\n"
+            "    v = np.array([lo, hi])\n"
+            "    out[0, :] = src[0, :] * v[0] + v[1]\n",
+            id="symbolic-elements",
+        ),
+        pytest.param(
+            "import numpy as np\n"
+            "def pick(src, out):\n"
+            "    m = np.array([[1.0, 2.0], [3.0, 4.0]])\n"
+            "    out[0, :] = src[0, :] * m[0, 0]\n",
+            id="nested",
+        ),
+    ],
+)
+def test_an_unsupported_array_literal_still_refuses(src: str) -> None:
+    """Untyped symbolic elements would be guessed as double (a miscompile); a nested literal is 2-D and a
+    partial claim would size the buffer wrong."""
     with pytest.raises(NotImplementedError):
         emit_c_for(src, "pick")

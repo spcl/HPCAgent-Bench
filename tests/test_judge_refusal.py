@@ -34,12 +34,9 @@ def test_the_refusal_carries_the_judges_reason_reads_back_whole_and_leaves_nothi
     assert json.loads(refusal.read())["error"].startswith("min_percent")
     assert original.closed
     assert refusal.closed
-
-
-def test_the_refusal_keeps_the_status_and_stays_an_http_error() -> None:
-    refusal = error_with_body(raw_refusal(503))
+    # It keeps the status and stays an HTTP error.
     assert isinstance(refusal, urllib.error.HTTPError)
-    assert refusal.code == 503
+    assert error_with_body(raw_refusal(503)).code == 503
 
 
 @pytest.mark.parametrize(("amt", "expected"), [(None, BODY), (-1, BODY), (0, b""), (5, BODY[:5])])

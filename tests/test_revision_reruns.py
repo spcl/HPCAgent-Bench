@@ -114,9 +114,13 @@ def test_every_slot_is_classified_from_the_regrade_and_its_own_limits(tmp_path: 
     the agent's own failure = unsolved (never owed), a planted-match kernel without a passing regrade = owed; a slot
     under larger limits is owed when its usage went past its setup's own or is not recorded, else classified as any
     other."""
-    slots, unrecorded = revision_reruns.classify(paper_db(tmp_path), SINCE_MS)
+    db = paper_db(tmp_path)
+    slots, unrecorded = revision_reruns.classify(db, SINCE_MS)
     assert {one.kernel: (one.klass, one.reason) for one in slots} == EXPECTED
     assert unrecorded == 0
+    # A final grade before the regrade decides nothing.
+    later, unused = revision_reruns.classify(db, REGRADED_MS + 1)
+    assert {one.kernel: one.klass for one in later}["jacobi_2d"] == "pending"
 
 
 def test_a_slot_whose_kernel_sizes_moved_since_its_episode_ran_is_owed_whatever_its_regrade(
@@ -146,12 +150,6 @@ def test_a_slot_whose_kernel_sizes_moved_since_its_episode_ran_is_owed_whatever_
     }
     monkeypatch.setattr(spec, "sizes_fingerprint", lambda kernel: "sizes-after")  # every manifest resized since HEAD
     assert classes() == dict.fromkeys(("jacobi_2d", "gemm", "syr2k", "atax"), changed)
-
-
-def test_a_final_grade_before_the_regrade_decides_nothing(tmp_path: pathlib.Path) -> None:
-    db = paper_db(tmp_path)
-    slots, _ = revision_reruns.classify(db, REGRADED_MS + 1)
-    assert {one.kernel: one.klass for one in slots}["jacobi_2d"] == "pending"
 
 
 def test_the_owed_list_holds_only_owed_slots_under_the_setups_own_limits(tmp_path: pathlib.Path) -> None:

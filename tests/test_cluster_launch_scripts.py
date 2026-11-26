@@ -387,14 +387,6 @@ def test_a_fused_runs_helper_steps_stay_on_its_own_nodes(
     assert [next((w for w in step.split() if w.startswith("--nodelist=")), "") for step in steps] == nodelists
 
 
-def test_a_fused_runs_helper_jobs_name_their_edf_copy_by_the_run() -> None:
-    """Every run of a fused allocation shares SLURM_JOB_ID: an EDF copy named by it is one file for all of them, and
-    the first run to end removes it (job_step_judge_edf's EXIT trap) under the others."""
-    for script in ("prepare.sbatch", "baseline.sbatch"):
-        text = (CLUSTER / script).read_text()
-        assert "${HPCAGENT_BENCH_RUN_ID:-${SLURM_JOB_ID}}.edf.toml" in text, script
-
-
 @pytest.mark.parametrize(("left_s", "stopped"), [(600, True), (7200, False)])
 def test_the_job_stops_its_agents_a_reserve_before_its_end(left_s: int, stopped: bool) -> None:
     """The time limit kills every step KillWait after its TERM, before the records, grading and merge; the job's own

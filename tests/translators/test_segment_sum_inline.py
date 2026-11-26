@@ -57,23 +57,22 @@ def emitted(tmp_path: pathlib.Path, source: str = SPMV) -> str:
     return emit_dace(parse_kernel(tmp_path / "k_numpy.py", tmp_path / "k.json", open_mesh_grids=False))
 
 
-@pytest.mark.parametrize("source", SOURCES)
+@pytest.mark.parametrize("source", [*SOURCES, "operand_changes"])
 def test_the_row_sums_are_one_loop_over_the_rows_reading_the_entries_in_place(
     tmp_path: pathlib.Path, source: str
 ) -> None:
-    """The elementwise weights are summed where they are read, not written to an nnz-long temporary first."""
+    """The elementwise weights are summed where they are read, not written to an nnz-long temporary first. Weights
+    whose operand changes before the bincount stay a temporary: ``contrib`` read at the bincount after ``x`` is
+    overwritten would sum the new ``x``, so it stays bound first."""
+    if source == "operand_changes":
+        module = emitted(tmp_path, SPMV.replace("    y[:] = np.bincount", "    x[:] = 0.0\n    y[:] = np.bincount"))
+        assert "bincount" not in module, module
+        assert module.index("contrib = values * x[cols]") < module.index("x[:] = 0.0"), module
+        return
     module = emitted(tmp_path, SOURCES[source])
     assert "repeat" not in module and "bincount" not in module, module
     assert "_pos" not in module, "a carried fill position survived"
     assert "contrib" not in module and "_w =" not in module, module
-
-
-def test_weights_whose_operand_changes_before_the_bincount_stay_a_temporary(tmp_path: pathlib.Path) -> None:
-    """``contrib`` read at the bincount after ``x`` is overwritten would sum the new ``x``: it stays bound first."""
-    source = SPMV.replace("    y[:] = np.bincount", "    x[:] = 0.0\n    y[:] = np.bincount")
-    module = emitted(tmp_path, source)
-    assert "bincount" not in module, module
-    assert module.index("contrib = values * x[cols]") < module.index("x[:] = 0.0"), module
 
 
 @pytest.mark.dace_frontend

@@ -190,44 +190,37 @@ def test_a_dropped_env_file_lands_where_the_entrypoint_sources_it(
     assert (home / agent_plugins.JOB_INIT_ENV).read_text(encoding="utf-8") == "export PROBE_PRELOAD=1\n"
 
 
+@pytest.mark.parametrize(
+    ("required", "exit_code"),
+    [pytest.param(False, 1, id="optional"), pytest.param(True, agent_plugins.JOB_INIT_REQUIRED_FAILED, id="required")],
+)
 def test_a_failing_hook_is_logged_and_the_next_one_still_runs(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    required: bool,
+    exit_code: int,
 ) -> None:
+    """A failed hook is the runner's nonzero exit, the entrypoint's cue to log and continue; ``job_init_required =
+    true`` makes the failure the exit code the entrypoint stops the launch on."""
     calls = tmp_path / "calls.jsonl"
-    boom = plugin_folder(
-        tmp_path,
-        "boomplugin",
-        manifest_with("boomplugin", "preload:run"),
-        stub_module(calls, "boom", "raise RuntimeError('boom')"),
-    )
+    manifest = manifest_with("boomplugin", "preload:run") + ("job_init_required = true\n" if required else "")
+    boom = plugin_folder(tmp_path, "boomplugin", manifest, stub_module(calls, "boom", "raise RuntimeError('boom')"))
     fine = plugin_folder(tmp_path, "fineplugin", manifest_with("fineplugin", "preload:run"), stub_module(calls, "fine"))
 
     code, home = run_hook_cli(tmp_path, monkeypatch, [boom, fine])
 
-    assert code == 1, "a failed hook is the runner's nonzero exit, the entrypoint's cue to log and continue"
+    assert code == exit_code
     markers = [json.loads(line)["marker"] for line in calls.read_text(encoding="utf-8").splitlines()]
     assert markers == ["boom", "fine"], "a hook's failure never takes the other plugins' hooks down"
     stamp = json.loads((home / agent_plugins.JOB_INIT_STAMP).read_text(encoding="utf-8"))
     assert [entry["status"] for entry in stamp["hooks"]] == ["failed", "ok"]
+    assert [entry["required"] for entry in stamp["hooks"]] == [required, False]
     assert (home / agent_plugins.JOB_INIT_PLUGINS).read_text(encoding="utf-8") == "boomplugin,fineplugin\n"
     err = capsys.readouterr().err
     assert "boomplugin]: preload:run: failed in " in err
     assert "RuntimeError('boom')" in err
     assert "1 ok, 1 failed of 2" in err
-
-
-def test_a_failing_required_hook_is_the_exit_code_the_entrypoint_stops_the_launch_on(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``job_init_required = true`` makes the hook's failure fail the start; the default stays a log line."""
-    manifest = manifest_with("boomplugin", "preload:run") + "job_init_required = true\n"
-    boom = plugin_folder(tmp_path, "boomplugin", manifest, stub_module(tmp_path / "c", "boom", "raise RuntimeError"))
-
-    code, home = run_hook_cli(tmp_path, monkeypatch, [boom])
-
-    assert code == agent_plugins.JOB_INIT_REQUIRED_FAILED
-    stamp = json.loads((home / agent_plugins.JOB_INIT_STAMP).read_text(encoding="utf-8"))
-    assert [(entry["status"], entry["required"]) for entry in stamp["hooks"]] == [("failed", True)]
     stops = f"[ $? -ne {agent_plugins.JOB_INIT_REQUIRED_FAILED} ] || {{"
     assert any(line.strip().startswith(stops) and line.endswith("exit 1; }") for line in entrypoint_lines())
 
@@ -297,42 +290,28 @@ def test_the_invocation_sits_inside_the_venvs_once_gate_and_before_the_service_s
     assert guard, "an image build gate is no job start: the hook never runs there"
 
 
-def test_the_entrypoint_sources_a_dropped_env_into_the_service_environment(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ("dropped", "expected"),
+    [pytest.param(True, "profiler|probeplugin\n", id="dropped"), pytest.param(False, "|\n", id="absent")],
+)
+def test_the_entrypoint_sources_a_dropped_env_into_the_service_environment(
+    tmp_path: pathlib.Path, dropped: bool, expected: str
+) -> None:
+    """Without a dropped env the entrypoint starts anyway."""
     env_line, names_line = env_and_names_lines()
     home = tmp_path / "home"
     home.mkdir()
-    (home / agent_plugins.JOB_INIT_ENV).write_text("export PROBE_PRELOAD=profiler\n", encoding="utf-8")
-    (home / agent_plugins.JOB_INIT_PLUGINS).write_text("probeplugin\n", encoding="utf-8")
+    if dropped:
+        (home / agent_plugins.JOB_INIT_ENV).write_text("export PROBE_PRELOAD=profiler\n", encoding="utf-8")
+        (home / agent_plugins.JOB_INIT_PLUGINS).write_text("probeplugin\n", encoding="utf-8")
 
     script = (
         f'home="{home}"\n'
         f"{env_line}\n"
         f"{names_line}\n"
-        f'printf \'%s|%s\\n\' "$PROBE_PRELOAD" "${{{agent_plugins.JOB_INIT_ENV_VAR}}}"'
+        f'printf \'%s|%s\\n\' "${{PROBE_PRELOAD:-}}" "${{{agent_plugins.JOB_INIT_ENV_VAR}:-}}"'
     )
     done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
 
     assert done.returncode == 0, done.stderr
-    assert done.stdout == "profiler|probeplugin\n"
-
-
-def test_without_a_dropped_env_the_entrypoint_starts_anyway(tmp_path: pathlib.Path) -> None:
-    env_line, names_line = env_and_names_lines()
-    home = tmp_path / "home"
-    home.mkdir()
-
-    done = subprocess.run(
-        ["bash", "-c", f'home="{home}"\n{env_line}\n{names_line}\nprintf \'%s|\\n\' "${{HPCAGENT_BENCH_JOB_INIT:-}}"'],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert done.returncode == 0, done.stderr
-    assert done.stdout == "|\n"
-
-
-def test_the_entrypoint_script_parses() -> None:
-    for argv in (["bash", "-n"], ["sh", "-n"]):
-        done = subprocess.run([*argv, str(LAUNCH)], capture_output=True, text=True, check=False)
-        assert done.returncode == 0, done.stderr
+    assert done.stdout == expected

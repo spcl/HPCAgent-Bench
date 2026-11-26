@@ -29,30 +29,24 @@ def load_http_json() -> ModuleType:
     return module_at(path, "http_json_token_reads")
 
 
+@pytest.mark.parametrize(("exists", "read_ok"), [(False, False), (True, True)], ids=["missing", "empty_but_readable"])
 def test_a_missing_usage_file_is_flagged_unreadable_though_it_still_counts_zero(
-    capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], exists: bool, read_ok: bool
 ) -> None:
+    """A real, empty episode must not be confused with one whose file could not be opened at all: a missing file
+    is flagged and named on stderr; a readable file that names no tokens counts zero, stays flagged OK and prints
+    nothing."""
     tools = load_http_json()
-    missing = "/no/such/directory/usage.jsonl"
+    usage = tmp_path / "usage.jsonl" if exists else pathlib.Path("/no/such/directory/usage.jsonl")
+    if exists:
+        usage.write_text("", encoding="utf-8")
 
-    assert tools.usage_jsonl_tokens(missing) == 0
-    assert tools.TOKENS_READ_OK is False
-    assert missing in capsys.readouterr().err
-
-
-def test_a_readable_file_with_no_usable_usage_is_a_real_zero_not_a_read_failure(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A real, empty episode must not be confused with one whose file could not be opened at all:
-    the file IS there and readable, it simply names no tokens, so :data:`TOKENS_READ_OK` stays True
-    and nothing is printed."""
-    tools = load_http_json()
-    empty = tmp_path / "usage.jsonl"
-    empty.write_text("", encoding="utf-8")
-
-    assert tools.usage_jsonl_tokens(str(empty)) == 0
-    assert tools.TOKENS_READ_OK is True
-    assert capsys.readouterr().err == ""
+    assert tools.usage_jsonl_tokens(str(usage)) == 0
+    assert tools.TOKENS_READ_OK is read_ok
+    err = capsys.readouterr().err
+    assert (str(usage) in err) is (not read_ok)
+    assert read_ok or err
+    assert not read_ok or err == ""
 
 
 @pytest.mark.parametrize(

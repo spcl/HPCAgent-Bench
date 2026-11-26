@@ -74,30 +74,25 @@ def test_the_axis_and_keepdims_of_a_reduction_call_are_read_in_every_spelling(
 # B. Loop structure for axis=int                                              #
 
 
-def test_sum_axis_0_emits_two_loops_for_2d() -> None:
-    """``np.sum(arr, axis=0)`` with arr:(N, M) -> outer over M
-    (kept axis), inner over N (reduction axis)."""
-    args, kws = call_args("np.sum(arr, axis=0)")
-    stmts = expand_sum(target("out"), args, {"arr": ("N", "M")}, kws)
-    assert count_for_loops(stmts) == 2
-
-
-def test_sum_axis_1_emits_two_loops_for_3d() -> None:
-    args, kws = call_args("np.sum(arr, axis=1)")
-    stmts = expand_sum(target("out"), args, {"arr": ("N", "M", "K")}, kws)
-    # 3-D - 1 reduction axis = 2 outer + 1 inner = 3 loops.
-    assert count_for_loops(stmts) == 3
+@pytest.mark.parametrize(
+    ("call", "shape", "loops"),
+    [
+        # ``np.sum(arr, axis=0)`` with arr:(N, M) -> outer over M (kept axis), inner over N (reduction axis).
+        ("np.sum(arr, axis=0)", ("N", "M"), 2),
+        # 3-D - 1 reduction axis = 2 outer + 1 inner = 3 loops.
+        ("np.sum(arr, axis=1)", ("N", "M", "K"), 3),
+        # ``axis=(1, 2)`` on a 4-D array -> 2 outer kept axes + 2 inner reduction axes = 4 loops total.
+        ("np.sum(arr, axis=(1, 2))", ("N", "H", "W", "C"), 4),
+    ],
+    ids=["axis_0_of_2d", "axis_1_of_3d", "axis_tuple_of_4d"],
+)
+def test_sum_axis_0_emits_two_loops_for_2d(call: str, shape: tuple[str, ...], loops: int) -> None:
+    args, kws = call_args(call)
+    stmts = expand_sum(target("out"), args, {"arr": shape}, kws)
+    assert count_for_loops(stmts) == loops
 
 
 # C. Axis-tuple reductions                                                    #
-
-
-def test_sum_axis_tuple_2_of_4_emits_correct_loop_count() -> None:
-    """``np.sum(arr, axis=(1, 2))`` on a 4-D array -> 2 outer kept
-    axes + 2 inner reduction axes = 4 loops total."""
-    args, kws = call_args("np.sum(arr, axis=(1, 2))")
-    stmts = expand_sum(target("out"), args, {"arr": ("N", "H", "W", "C")}, kws)
-    assert count_for_loops(stmts) == 4
 
 
 def test_sum_axis_tuple_with_keepdims_writes_to_const_zero() -> None:
@@ -189,42 +184,28 @@ def test_squeeze_of_an_expression_reads_its_elements() -> None:
 # E. Full-reduction accumulation -- one chain in source order, no blocking.     #
 
 
-def full_sum_stmts(shape: tuple[str, ...]) -> list[ast.stmt]:
-    args, kws = call_args("np.sum(a)")
-    return expand_sum(target("s"), args, {"a": shape}, kwargs=kws, local_dtypes={})
-
-
-def test_full_float_sum_is_one_chain() -> None:
-    txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=full_sum_stmts(("N",)), type_ignores=[])))
-    # No block-index division: it is what pet reads as a data-dependent bound (POLYCC-008), and
-    # the block accumulator is the scop-external scalar pet then drops (POLYCC-009).
-    assert "range(N)" in txt, txt
-    assert "//" not in txt, txt
-    assert "128" not in txt, txt
-
-
-def test_full_sum_over_two_axes_is_a_plain_nest() -> None:
-    txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=full_sum_stmts(("M", "N")), type_ignores=[])))
-    assert "range(M)" in txt, txt
-    assert "range(N)" in txt, txt
-    assert "//" not in txt, txt
-
-
-def test_integer_sum_keeps_an_integer_seed() -> None:
-    args, kws = call_args("np.sum(a)")
-    stmts = expand_sum(target("s"), args, {"a": ("N",)}, kwargs=kws, local_dtypes={"a": "int64"})
+@pytest.mark.parametrize(
+    ("call", "shape", "dtypes", "present", "absent"),
+    [
+        # No block-index division: it is what pet reads as a data-dependent bound (POLYCC-008), and the block
+        # accumulator is the scop-external scalar pet then drops (POLYCC-009).
+        ("np.sum(a)", ("N",), {}, ["range(N)"], ["//", "128"]),
+        ("np.sum(a)", ("M", "N"), {}, ["range(M)", "range(N)"], ["//"]),
+        ("np.sum(a)", ("N",), {"a": "int64"}, ["range(N)", "s = 0\n"], []),
+        ("np.sum(a, axis=1)", ("M", "N"), {}, ["range(M)", "range(N)"], ["//"]),
+    ],
+    ids=["full_float_sum", "full_sum_over_two_axes", "integer_seed", "axis_sum_per_element_loop"],
+)
+def test_full_float_sum_is_one_chain(
+    call: str, shape: tuple[str, ...], dtypes: dict[str, str], present: list[str], absent: list[str]
+) -> None:
+    args, kws = call_args(call)
+    stmts = expand_sum(target("s"), args, {"a": shape}, kwargs=kws, local_dtypes=dtypes)
     txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
-    assert "s = 0\n" in txt + "\n", txt
-    assert "range(N)" in txt, txt
-
-
-def test_axis_sum_keeps_its_per_element_loop() -> None:
-    args, kws = call_args("np.sum(a, axis=1)")
-    stmts = expand_sum(target("s"), args, {"a": ("M", "N")}, kwargs=kws, local_dtypes={})
-    txt = ast.unparse(ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[])))
-    assert "range(M)" in txt, txt
-    assert "range(N)" in txt, txt
-    assert "//" not in txt, txt
+    for text in present:
+        assert text in txt + "\n", txt
+    for text in absent:
+        assert text not in txt, txt
 
 
 def test_sum_adds_initial_exactly_once() -> None:

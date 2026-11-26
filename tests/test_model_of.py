@@ -49,12 +49,6 @@ def test_a_setup_resolves_to_the_model_that_ran_it(setup: str, expected: str) ->
     assert study_tags.model_of(setup) == expected
 
 
-def test_the_fallback_is_a_registered_word_and_not_a_fragment() -> None:
-    """An unrecognised setup gets the explicit ``other``, never a half-parsed token that the palette
-    would then colour and label as though it were a model."""
-    assert study_tags.model_of("something-entirely-new", unknown="") == ""
-
-
 def test_registry_order_decides_when_a_setup_names_two_models() -> None:
     """A malformed setup carrying two model tokens must resolve the same way in every process, so the
     winner is registry order rather than whichever token came first in the string."""

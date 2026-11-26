@@ -25,23 +25,18 @@ def harvested(body: str, **seed: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
     return table
 
 
-@pytest.mark.parametrize(
-    "expression",
-    ["np.maximum(held + bias, 0.0)", "held + bias", "bias + held", "np.exp(held) * bias"],
-)
-def test_a_broadcast_over_an_alias_keeps_the_alias_rank(expression: str) -> None:
-    body = f"""
+def alias_body(expression: str) -> str:
+    return f"""
         def f(bias, out):
             acc = np.zeros((N, H, W, 6), dtype=np.float64)
             held = acc
             act = {expression}
             out[:] = act
         """
-    assert harvested(body, bias=("6",))["act"] == RANK_4
 
 
-def test_an_alias_of_an_alias_resolves_before_the_broadcast_reads_it() -> None:
-    body = """
+#: An alias of an alias resolves before the broadcast reads it.
+ALIAS_OF_ALIAS_BODY = """
         def f(bias, out):
             acc = np.zeros((N, H, W, 6), dtype=np.float64)
             first = acc
@@ -49,9 +44,22 @@ def test_an_alias_of_an_alias_resolves_before_the_broadcast_reads_it() -> None:
             act = second + bias
             out[:] = act
         """
+
+
+@pytest.mark.parametrize(
+    ("body", "ranked"),
+    [
+        pytest.param(alias_body("np.maximum(held + bias, 0.0)"), ("act",), id="maximum"),
+        pytest.param(alias_body("held + bias"), ("act",), id="alias-first"),
+        pytest.param(alias_body("bias + held"), ("act",), id="alias-second"),
+        pytest.param(alias_body("np.exp(held) * bias"), ("act",), id="exp"),
+        pytest.param(ALIAS_OF_ALIAS_BODY, ("second", "act"), id="alias-of-alias"),
+    ],
+)
+def test_a_broadcast_over_an_alias_keeps_the_alias_rank(body: str, ranked: tuple[str, ...]) -> None:
     table = harvested(body, bias=("6",))
-    assert table["second"] == RANK_4
-    assert table["act"] == RANK_4
+    for name in ranked:
+        assert table[name] == RANK_4
 
 
 def test_an_alias_whose_source_never_resolves_still_sizes_the_broadcast() -> None:

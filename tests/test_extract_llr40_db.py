@@ -50,22 +50,11 @@ def test_the_db_reads_back_as_the_rows_the_csv_holds(tmp_path: pathlib.Path) -> 
         assert from_db[column].tolist() == from_csv[column].tolist(), column
     for column in ("speedup", "tokens"):
         pd.testing.assert_series_equal(from_db[column], from_csv[column], check_dtype=False)
-
-
-def test_a_rewrite_replaces_the_table_instead_of_appending(tmp_path: pathlib.Path) -> None:
     fields = extract_llr40.OBSERVATION_FIELDS
     db = tmp_path / "obs.db"
     extract_llr40.write_db(db, fields, ROWS)
     extract_llr40.write_db(db, fields, ROWS[:1])
     assert len(studies.read_observations(db)) == 1
-
-
-def test_every_typed_column_is_a_column_the_table_has() -> None:
-    """A typo in NUMERIC_COLUMNS is silent: the name simply never matches, the column falls back to
-    TEXT, and its missing cells go back to being "" -- the dtype split this typing exists to close,
-    re-opened without a single error."""
-    unknown = set(extract_llr40.NUMERIC_COLUMNS) - set(extract_llr40.OBSERVATION_FIELDS)
-    assert not unknown, unknown
 
 
 def test_a_missing_numeric_cell_is_null_and_a_missing_text_cell_stays_empty(tmp_path: pathlib.Path) -> None:

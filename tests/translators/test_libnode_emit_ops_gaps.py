@@ -24,6 +24,7 @@ auto-skips when gfortran is absent -- an accepted skip, not a failure.
 import shutil
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import run_op
 
@@ -54,48 +55,62 @@ def ok_(res: dict[str, str]) -> tuple[bool, dict[str, str]]:
 # np.sort / np.argsort
 
 
-def test_sort_1d() -> None:
-    """``out[:] = np.sort(a)`` on a random unsorted 1-D array (ascending)."""
-    rng = np.random.default_rng(0)
-    a = rng.standard_normal(9)
-    src = "import numpy as np\ndef f(a, out):\n    out[:] = np.sort(a)\n"
-    res = run_op(src, "f", {"a": a}, {"out": (9,)}, {"N": 9}, shapes={"a": "(N,)", "out": "(N,)"}, backends=NATIVE)
-    ok, r = ok_(res)
-    assert ok, r
-
-
-def test_sort_argsort_last_axis() -> None:
-    """``np.sort`` / stable ``np.argsort`` of each row of a 2-D array, through expression operands: a NaN sorts last
-    and repeated keys keep their index order."""
+def sort_cases() -> list[object]:
+    """``(src, inputs, outputs, symbols, shapes, dtypes)`` of each sort case, as pytest params."""
     rng = np.random.default_rng(3)
-    a = rng.standard_normal((4, 7))
-    a[1, 3] = np.nan
-    a[2, [1, 4, 5]] = 0.5
-    src = (
-        "import numpy as np\ndef f(a, out, idx):\n    out[:] = -np.sort(-a, axis=1)\n"
-        "    idx[:] = np.argsort(a * 2.0, axis=-1, kind='stable') * 1.0\n"
-    )
-    shapes = {"a": "(M, N)", "out": "(M, N)", "idx": "(M, N)"}
-    res = run_op(src, "f", {"a": a}, {"out": (4, 7), "idx": (4, 7)}, {"M": 4, "N": 7}, shapes=shapes, backends=NATIVE)
-    ok, r = ok_(res)
-    assert ok, r
+    ranked = rng.standard_normal((4, 7))
+    ranked[1, 3] = np.nan
+    ranked[2, [1, 4, 5]] = 0.5
+    matrix = {"a": "(M, N)", "out": "(M, N)", "idx": "(M, N)"}
+    return [
+        # ``out[:] = np.sort(a)`` on a random unsorted 1-D array (ascending)
+        pytest.param(
+            "import numpy as np\ndef f(a, out):\n    out[:] = np.sort(a)\n",
+            np.random.default_rng(0).standard_normal(9),
+            {"out": (9,)},
+            {"N": 9},
+            {"a": "(N,)", "out": "(N,)"},
+            None,
+            id="1d",
+        ),
+        # ``np.sort`` / stable ``np.argsort`` of each row of a 2-D array, through expression operands: a NaN sorts
+        # last and repeated keys keep their index order
+        pytest.param(
+            "import numpy as np\ndef f(a, out, idx):\n    out[:] = -np.sort(-a, axis=1)\n"
+            "    idx[:] = np.argsort(a * 2.0, axis=-1, kind='stable') * 1.0\n",
+            ranked,
+            {"out": (4, 7), "idx": (4, 7)},
+            {"M": 4, "N": 7},
+            matrix,
+            None,
+            id="last_axis",
+        ),
+        # int64 keys with repeats: an integer key has no NaN test (C's ``isnan`` and Fortran's ``ieee_is_nan``
+        # refuse one), and the long integer helper names stay inside Fortran's 132 columns
+        pytest.param(
+            "import numpy as np\ndef f(a, out, idx):\n    out[:] = np.sort(a, axis=1)\n"
+            "    idx[:] = np.argsort(a, axis=1, kind='stable')\n",
+            np.array([[5, 1, 3, 1, 9, 3], [2, 2, 0, 7, 0, 4]], dtype=np.int64),
+            {"out": (2, 6), "idx": (2, 6)},
+            {"M": 2, "N": 6},
+            matrix,
+            {"a": "int64", "out": "int64", "idx": "int64"},
+            id="integer_keys",
+        ),
+    ]
 
 
-def test_sort_argsort_integer_keys() -> None:
-    """``np.sort`` / ``np.argsort`` of int64 keys with repeats: an integer key has no NaN test (C's ``isnan`` and
-    Fortran's ``ieee_is_nan`` refuse one), and the long integer helper names stay inside Fortran's 132 columns."""
-    a = np.array([[5, 1, 3, 1, 9, 3], [2, 2, 0, 7, 0, 4]], dtype=np.int64)
-    src = (
-        "import numpy as np\ndef f(a, out, idx):\n    out[:] = np.sort(a, axis=1)\n"
-        "    idx[:] = np.argsort(a, axis=1, kind='stable')\n"
-    )
-    shapes = {"a": "(M, N)", "out": "(M, N)", "idx": "(M, N)"}
-    dtypes = {"a": "int64", "out": "int64", "idx": "int64"}
-    res = run_op(
-        src, "f", {"a": a}, {"out": (2, 6), "idx": (2, 6)}, {"M": 2, "N": 6},
-        shapes=shapes, dtypes=dtypes, backends=NATIVE,
-    )  # fmt: skip
-    if shutil.which("gfortran"):
+@pytest.mark.parametrize(("src", "a", "outputs", "symbols", "shapes", "dtypes"), sort_cases())
+def test_sort_1d(
+    src: str,
+    a: np.ndarray,
+    outputs: dict[str, tuple[int, ...]],
+    symbols: dict[str, int],
+    shapes: dict[str, str],
+    dtypes: dict[str, str] | None,
+) -> None:
+    res = run_op(src, "f", {"a": a}, outputs, symbols, shapes=shapes, dtypes=dtypes, backends=NATIVE)
+    if dtypes is not None and shutil.which("gfortran"):
         assert res.get("fortran") == "ok", res
     ok, r = ok_(res)
     assert ok, r
@@ -159,43 +174,18 @@ def test_ufunc_reduce() -> None:
 # 'ortho' both by sqrt(N). a nest extractor emits ``np.fft.ifft(x, norm='forward')``.
 
 
-def test_fft_ifft_norm() -> None:
-    """``np.fft.ifft(x, norm='forward')`` (a nest extractor's form) and the
-    ``'forward'``-scaled forward transform -- both use a plain ``/ N`` and work on
-    every native backend."""
+@pytest.mark.parametrize("norm", ["forward", "ortho"])
+def test_fft_ifft_norm(norm: str) -> None:
+    """``np.fft.ifft(x, norm='forward')`` (a nest extractor's form) and the ``'forward'``-scaled forward transform
+    use a plain ``/ N``; ``norm='ortho'`` scales both directions by ``1/sqrt(N)``. All native backends.
+
+    Regression guard: ``expand_dftn`` builds the ortho denominator as ``sqrt(prod(N_t))`` where the extents are
+    INTEGER shape symbols. C / C++ promote the int to double, but gfortran rejects ``sqrt`` of an integer
+    (``must be REAL or COMPLEX``). The emitter coerces the product to real via a ``* 1.0`` (rendered at the real
+    kind on the Fortran side), so ``sqrt`` is valid on all three native backends and the scaling is bit-exact."""
     rng = np.random.default_rng(3)
     x = (rng.standard_normal(6) + 1j * rng.standard_normal(6)).astype(np.complex128)
-    for spec in (
-        "np.fft.ifft(x, norm='forward')",
-        "np.fft.fft(x, norm='forward')",
-    ):
-        src = f"import numpy as np\ndef f(x, out):\n    out[:] = {spec}\n"
-        res = run_op(
-            src,
-            "f",
-            {"x": x},
-            {"out": (6,)},
-            {"N": 6},
-            shapes={"x": "(N,)", "out": "(N,)"},
-            dtypes={"x": "complex128", "out": "complex128"},
-            backends=NATIVE,
-        )
-        ok, r = ok_(res)
-        assert ok, (spec, r)
-
-
-def test_fft_ifft_norm_ortho() -> None:
-    """``norm='ortho'`` (both directions scaled by ``1/sqrt(N)``), all native backends.
-
-    Regression guard: ``expand_dftn`` builds the ortho denominator as
-    ``sqrt(prod(N_t))`` where the extents are INTEGER shape symbols. C / C++
-    promote the int to double, but gfortran rejects ``sqrt`` of an integer
-    (``must be REAL or COMPLEX``). The emitter coerces the product to real via a
-    ``* 1.0`` (rendered at the real kind on the Fortran side), so ``sqrt`` is
-    valid on all three native backends and the scaling is bit-exact."""
-    rng = np.random.default_rng(4)
-    x = (rng.standard_normal(6) + 1j * rng.standard_normal(6)).astype(np.complex128)
-    for spec in ("np.fft.ifft(x, norm='ortho')", "np.fft.fft(x, norm='ortho')"):
+    for spec in (f"np.fft.ifft(x, norm='{norm}')", f"np.fft.fft(x, norm='{norm}')"):
         src = f"import numpy as np\ndef f(x, out):\n    out[:] = {spec}\n"
         res = run_op(
             src,

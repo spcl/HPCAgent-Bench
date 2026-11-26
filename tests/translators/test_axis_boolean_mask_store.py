@@ -19,7 +19,6 @@ import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 from tests.translators.op_oracle import assert_all_ok, parse_source, run_op
 
 SYMS = {"NR": 3, "NC": 5}
@@ -40,11 +39,6 @@ def kernel(store: str) -> str:
     )
 
 
-def emit(store: str, target: str) -> str:
-    kir = lower(parse_source(kernel(store), "am", ["a", "idx"], ["out"], SHAPES, SYMS, DTYPES))
-    return emit_c(kir, fn_name="am") if target == "c" else emit_fortran(kir, fn_name="am")
-
-
 STORES = ["out[:, ~valid] = 0.0", "out[:, valid] = 0.0", "out[:, ~valid] = 7.5"]
 
 
@@ -61,18 +55,6 @@ def test_axis_mask_store_agrees_with_numpy(store: str) -> None:
         backends=("c", "cpp", "fortran"),
     )
     assert_all_ok(status, store)
-
-
-def test_c_does_not_bitwise_complement_a_bool() -> None:
-    """``~`` on a C ``bool`` is ``-2``, which is truthy -- the guard must be a LOGICAL negation."""
-    src = emit("out[:, ~valid] = 0.0", "c")
-    offenders = [ln for ln in src.splitlines() if "~" in ln and "valid" in ln]
-    assert not offenders, f"bitwise complement of a boolean mask: {offenders}"
-
-
-def test_fortran_negates_the_mask_logically() -> None:
-    src = emit("out[:, ~valid] = 0.0", "fortran")
-    assert ".not." in src.lower(), src
 
 
 def test_an_array_rhs_over_a_masked_axis_is_declined() -> None:

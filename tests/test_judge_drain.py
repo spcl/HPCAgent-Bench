@@ -75,9 +75,7 @@ def test_a_router_error_is_not_drained(rank: Rank) -> None:
     rank.raw = (502, json.dumps(JudgeError(error="upstream judge did not answer").to_json()).encode())
     assert merge_results.in_flight(rank.url) is None
     assert not merge_results.drain([rank.url], time.time(), poll=0.1)
-
-
-def test_a_malformed_body_is_not_drained(rank: Rank) -> None:
+    # A malformed body says nothing about grades in flight either.
     for body in (b"<html>busy</html>", b"{}", b'{"in_flight": 0}', b'{"submits_in_flight": "x"}'):
         rank.raw = (200, body)
         assert merge_results.in_flight(rank.url) is None, body

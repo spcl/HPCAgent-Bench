@@ -89,9 +89,7 @@ def test_a_file_with_no_scop_scalar_is_returned_byte_identical() -> None:
     assert pluto_normalize.normalize_scop_input(src) == src
 
 
-def test_a_literal_stride_loop_runs_over_a_unit_counter() -> None:
-    """``i += 2`` becomes ``++i_pn`` with ``(1 + (2) * i_pn)`` in the condition and every use."""
-    src = """void q_fp64(int64_t LEN_1D, const double *restrict a, double *restrict out) {
+STRIDED_POSITIVE = """void q_fp64(int64_t LEN_1D, const double *restrict a, double *restrict out) {
         #pragma scop
         out[0] = 0.0;
         for (int64_t i = 1; i < LEN_1D; i += 2) {
@@ -100,15 +98,7 @@ def test_a_literal_stride_loop_runs_over_a_unit_counter() -> None:
         #pragma endscop
 }
 """
-    out = pluto_normalize.normalize_strided_loops(src)
-
-    assert "for (int64_t i_pn = 0; (1 + (2) * i_pn) < LEN_1D; ++i_pn) {" in out
-    assert "out[0] = (out[0] + a[(1 + (2) * i_pn)]);" in out
-    assert "i +=" not in out
-
-
-def test_a_negative_stride_keeps_its_direction() -> None:
-    src = """void r_fp64(int64_t N, double *restrict a) {
+STRIDED_NEGATIVE = """void r_fp64(int64_t N, double *restrict a) {
         #pragma scop
         for (int64_t i = N - 1; i > 0; i += -3) {
           a[i] = 0.0;
@@ -116,10 +106,57 @@ def test_a_negative_stride_keeps_its_direction() -> None:
         #pragma endscop
 }
 """
+REVERSE_UNIT = """void s_fp64(int64_t LEN_1D, double *restrict a, const double *restrict b) {
+        #pragma scop
+        for (int64_t i = (LEN_1D - 1); i > -1; --i) {
+          a[i] = (b[i] + 1.0);
+        }
+        #pragma endscop
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("src", "present", "absent"),
+    [
+        # ``i += 2`` becomes ``++i_pn`` with ``(1 + (2) * i_pn)`` in the condition and every use.
+        pytest.param(
+            STRIDED_POSITIVE,
+            [
+                "for (int64_t i_pn = 0; (1 + (2) * i_pn) < LEN_1D; ++i_pn) {",
+                "out[0] = (out[0] + a[(1 + (2) * i_pn)]);",
+            ],
+            ["i +="],
+            id="positive-stride",
+        ),
+        pytest.param(
+            STRIDED_NEGATIVE,
+            [
+                "for (int64_t i_pn = 0; (N - 1 + (-3) * i_pn) > 0; ++i_pn) {",
+                "a[(N - 1 + (-3) * i_pn)] = 0.0;",
+            ],
+            [],
+            id="negative-stride-keeps-its-direction",
+        ),
+        # ``--i`` is dropped the same way (tsvc_2_s1112 ran forward over the wrong range).
+        pytest.param(
+            REVERSE_UNIT,
+            [
+                "for (int64_t i_pn = 0; ((LEN_1D - 1) + (-1) * i_pn) > -1; ++i_pn) {",
+                "a[((LEN_1D - 1) + (-1) * i_pn)] = (b[((LEN_1D - 1) + (-1) * i_pn)] + 1.0);",
+            ],
+            [],
+            id="reverse-unit-loop",
+        ),
+    ],
+)
+def test_a_literal_stride_loop_runs_over_a_unit_counter(src: str, present: list[str], absent: list[str]) -> None:
     out = pluto_normalize.normalize_strided_loops(src)
 
-    assert "for (int64_t i_pn = 0; (N - 1 + (-3) * i_pn) > 0; ++i_pn) {" in out
-    assert "a[(N - 1 + (-3) * i_pn)] = 0.0;" in out
+    for text in present:
+        assert text in out
+    for text in absent:
+        assert text not in out
 
 
 def test_run_polycc_hands_polycc_the_normalized_copy_and_leaves_the_input_alone(
@@ -152,22 +189,6 @@ def test_run_polycc_hands_polycc_the_normalized_copy_and_leaves_the_input_alone(
     assert seen["path"] != str(scop)
     assert seen["text"] == pluto_normalize.normalize_scop_input(S316)
     assert scop.read_text() == S316
-
-
-def test_a_reverse_unit_loop_runs_forward_over_a_counter() -> None:
-    """``--i`` is dropped the same way (tsvc_2_s1112 ran forward over the wrong range)."""
-    src = """void s_fp64(int64_t LEN_1D, double *restrict a, const double *restrict b) {
-        #pragma scop
-        for (int64_t i = (LEN_1D - 1); i > -1; --i) {
-          a[i] = (b[i] + 1.0);
-        }
-        #pragma endscop
-}
-"""
-    out = pluto_normalize.normalize_strided_loops(src)
-
-    assert "for (int64_t i_pn = 0; ((LEN_1D - 1) + (-1) * i_pn) > -1; ++i_pn) {" in out
-    assert "a[((LEN_1D - 1) + (-1) * i_pn)] = (b[((LEN_1D - 1) + (-1) * i_pn)] + 1.0);" in out
 
 
 @needs_polycc
@@ -219,9 +240,7 @@ void c_fp64(int64_t N, const double *restrict a, double *restrict out) {
     assert "(a[i] > (1))" in out
 
 
-def test_a_single_assignment_index_scalar_is_forward_substituted() -> None:
-    """POLYCC-017: ``j = floord(i, 2); c[j]`` reads as indirection until ``j`` is its expression."""
-    src = """void s4117_fp64(int64_t LEN_1D, double *restrict a, const double *restrict c) {
+FORWARD_SUBSTITUTED = """void s4117_fp64(int64_t LEN_1D, double *restrict a, const double *restrict c) {
         int64_t j;
         #pragma scop
         for (int64_t i = 0; i < LEN_1D; ++i) {
@@ -231,15 +250,7 @@ def test_a_single_assignment_index_scalar_is_forward_substituted() -> None:
         #pragma endscop
 }
 """
-    out = pluto_normalize.forward_substitute_scalars(src)
-
-    assert "int64_t j;" not in out
-    assert "j = " not in out
-    assert "a[i] = c[(floord(i, 2))];" in out
-
-
-def test_a_scalar_assigned_twice_or_used_after_its_block_is_not_substituted() -> None:
-    src = """void t_fp64(int64_t N, double *restrict a, double *restrict r) {
+ASSIGNED_TWICE = """void t_fp64(int64_t N, double *restrict a, double *restrict r) {
         int64_t k;
         #pragma scop
         k = 0;
@@ -250,7 +261,34 @@ def test_a_scalar_assigned_twice_or_used_after_its_block_is_not_substituted() ->
         #pragma endscop
 }
 """
-    assert pluto_normalize.forward_substitute_scalars(src) == src
+
+
+@pytest.mark.parametrize(
+    ("src", "present", "absent"),
+    [
+        # POLYCC-017: ``j = floord(i, 2); c[j]`` reads as indirection until ``j`` is its expression.
+        pytest.param(
+            FORWARD_SUBSTITUTED,
+            ["a[i] = c[(floord(i, 2))];"],
+            ["int64_t j;", "j = "],
+            id="single-assignment-index-scalar",
+        ),
+        # A scalar assigned twice or used after its block is not substituted: the source is returned as it came.
+        pytest.param(ASSIGNED_TWICE, None, [], id="assigned-twice-is-left-alone"),
+    ],
+)
+def test_a_single_assignment_index_scalar_is_forward_substituted(
+    src: str, present: list[str] | None, absent: list[str]
+) -> None:
+    out = pluto_normalize.forward_substitute_scalars(src)
+
+    if present is None:
+        assert out == src
+        return
+    for text in present:
+        assert text in out
+    for text in absent:
+        assert text not in out
 
 
 def test_a_literal_tile_width_becomes_a_literal_stride() -> None:
@@ -274,9 +312,7 @@ def test_a_literal_tile_width_becomes_a_literal_stride() -> None:
     assert "W" not in out.split("{", 1)[1]
 
 
-def test_literal_induction_scalars_become_closed_forms_of_the_counter() -> None:
-    """tsvc_2_s128: ``k = j + 1; ... j = k + 1`` from ``j = -1`` is ``k = 2i`` at every read."""
-    src = """void s128_fp64(int64_t LEN_1D, double *restrict a, double *restrict b, const double *restrict d) {
+S128 = """void s128_fp64(int64_t LEN_1D, double *restrict a, double *restrict b, const double *restrict d) {
         int64_t j;
         int64_t k;
         #pragma scop
@@ -290,20 +326,7 @@ def test_literal_induction_scalars_become_closed_forms_of_the_counter() -> None:
         #pragma endscop
 }
 """
-    out = pluto_normalize.substitute_induction_scalars(src)
-
-    k = "(-1 + (2) * (i - (0)) + (1))"
-    assert f"a[i] = (b[{k}] - d[i]);" in out
-    assert f"b[{k}] = a[i];" in out
-    assert "j = " not in out
-    assert "k = " not in out
-    assert "int64_t j;" not in out
-    assert "int64_t k;" not in out
-
-
-def test_a_conditional_advance_is_not_an_induction_scalar() -> None:
-    """tsvc_2_s341's packing index moves only where the data says so: it stays data-dependent."""
-    src = """void s341_fp64(int64_t LEN_1D, double *restrict a, const double *restrict b) {
+S341 = """void s341_fp64(int64_t LEN_1D, double *restrict a, const double *restrict b) {
         int64_t j;
         #pragma scop
         j = -1;
@@ -314,7 +337,35 @@ def test_a_conditional_advance_is_not_an_induction_scalar() -> None:
         #pragma endscop
 }
 """
-    assert pluto_normalize.substitute_induction_scalars(src) == src
+INDUCTION_K = "(-1 + (2) * (i - (0)) + (1))"
+
+
+@pytest.mark.parametrize(
+    ("src", "present", "absent"),
+    [
+        # tsvc_2_s128: ``k = j + 1; ... j = k + 1`` from ``j = -1`` is ``k = 2i`` at every read.
+        pytest.param(
+            S128,
+            [f"a[i] = (b[{INDUCTION_K}] - d[i]);", f"b[{INDUCTION_K}] = a[i];"],
+            ["j = ", "k = ", "int64_t j;", "int64_t k;"],
+            id="literal-induction-scalars",
+        ),
+        # tsvc_2_s341's packing index moves only where the data says so: it stays data-dependent.
+        pytest.param(S341, None, [], id="a-conditional-advance-is-not-an-induction-scalar"),
+    ],
+)
+def test_literal_induction_scalars_become_closed_forms_of_the_counter(
+    src: str, present: list[str] | None, absent: list[str]
+) -> None:
+    out = pluto_normalize.substitute_induction_scalars(src)
+
+    if present is None:
+        assert out == src
+        return
+    for text in present:
+        assert text in out
+    for text in absent:
+        assert text not in out
 
 
 def test_floord_in_a_subscript_is_spelled_as_the_quasi_affine_ternary() -> None:

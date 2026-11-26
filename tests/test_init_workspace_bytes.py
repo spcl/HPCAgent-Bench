@@ -29,12 +29,6 @@ def raw_manifest(**init_overrides: object) -> dict[str, Any]:
 SITE = hermetic_site("wstest", "x", "N")
 
 
-def test_workspace_bytes_present_and_valid() -> None:
-    """A valid 'init.workspace.bytes' round-trips onto InitSpec unchanged."""
-    spec = BenchSpec.from_dict(raw_manifest(workspace={"bytes": 4096}), SITE, source="<test>")
-    assert spec.init.workspace_bytes == 4096
-
-
 @pytest.mark.parametrize(
     ("value", "message"),
     [

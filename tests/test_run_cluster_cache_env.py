@@ -36,21 +36,20 @@ def run(script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["bash", "-c", script], env=full_env, capture_output=True, text=True, check=False)
 
 
-def test_cache_root_fails_loudly_without_jit_cache_root(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("jit_root_set", [True, False], ids=["jit_cache_root_set", "jit_cache_root_missing"])
+def test_cache_root_is_jit_cache_root(tmp_path: pathlib.Path, jit_root_set: bool) -> None:
     """An inference node without JIT_CACHE_ROOT refuses to pick a cache root, even with SCRATCH set, rather
     than deriving one that could disagree with cache_env.sh's."""
     expr = _assignment("cache_root")
-    proc = run(f'cache_root="{expr}"; echo "$cache_root"', {"SCRATCH": str(tmp_path)})
-    assert proc.returncode != 0, proc.stdout
-    assert "cache_env.sh exports it" in proc.stderr, proc.stderr
-
-
-def test_cache_root_is_jit_cache_root(tmp_path: pathlib.Path) -> None:
-    expr = _assignment("cache_root")
     root = tmp_path / "jit"
-    proc = run(f'cache_root="{expr}"; echo "$cache_root"', {"JIT_CACHE_ROOT": str(root)})
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == str(root)
+    env = {"JIT_CACHE_ROOT": str(root)} if jit_root_set else {"SCRATCH": str(tmp_path)}
+    proc = run(f'cache_root="{expr}"; echo "$cache_root"', env)
+    if jit_root_set:
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == str(root)
+    else:
+        assert proc.returncode != 0, proc.stdout
+        assert "cache_env.sh exports it" in proc.stderr, proc.stderr
 
 
 @pytest.mark.parametrize(

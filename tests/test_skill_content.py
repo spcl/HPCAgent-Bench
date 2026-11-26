@@ -108,7 +108,10 @@ ROCPROF_CAUSES = (
 
 
 def test_every_shipped_skill_parses_and_is_indexable() -> None:
-    """A skill with no description is invisible in the index the agent reads to choose one."""
+    """A skill with no description is invisible in the index the agent reads to choose one.
+
+    The DIRECTORY is a skill's identity (that is what a user root overrides); frontmatter that
+    disagrees makes an override silently miss."""
     others = load_skills()
     for skill in others:
         assert skill.body.strip(), f"{skill.name}: empty body"
@@ -117,11 +120,6 @@ def test_every_shipped_skill_parses_and_is_indexable() -> None:
             f"{skill.name}: no `when:` trigger. The trigger IS the page's only appearance in the "
             f"prompt -- a page without one is text nothing points at"
         )
-
-
-def test_a_skill_directory_name_is_its_frontmatter_name() -> None:
-    """The DIRECTORY is a skill's identity (that is what a user root overrides); frontmatter that
-    disagrees makes an override silently miss."""
     for path in skill_files():
         skill = parse_skill(path.read_text(), path)
         assert skill.name == path.parent.name, f"{path}: frontmatter says {skill.name!r}"
@@ -142,7 +140,17 @@ def test_skills_are_ascii_and_have_no_trailing_whitespace() -> None:
 def test_the_profiling_skill_names_every_metric_the_wrapper_reports() -> None:
     """The skill teaches a metric table; the code owns the metric table. Neither may add or drop
     one without the other, or an agent asks for a metric that does not exist -- or never learns
-    about one that does."""
+    about one that does.
+
+    The skill quotes the sampler's constants as facts about the rows it returns. If PERF_EVENT /
+    PERF_FREQUENCY / PERF_CALL_GRAPH change, the page is describing a recording nobody took.
+
+    The group is what an agent actually types (`counter_group`). A group the skill never
+    names is one nobody asks for; a group the skill names and the code dropped is a 400.
+
+    The formulas are the deliverable of the counter half: an agent that computes 'miss rate'
+    with the wrong denominator reaches the wrong bottleneck. Prose may be reworded; a formula
+    that no longer matches the code is a wrong instruction."""
     body = skill_bodies()[PROFILING]
     named = {m for m in papi.METRICS if m in body}
     assert named == set(papi.METRICS), (
@@ -150,14 +158,14 @@ def test_the_profiling_skill_names_every_metric_the_wrapper_reports() -> None:
         "a metric the code reports but the skill never mentions is one an agent "
         "will not know to read"
     )
-
-
-def test_the_profiling_skill_quotes_the_perf_constants_it_teaches() -> None:
-    """The skill quotes the sampler's constants as facts about the rows it returns. If PERF_EVENT /
-    PERF_FREQUENCY / PERF_CALL_GRAPH change, the page is describing a recording nobody took."""
-    body = skill_bodies()[PROFILING]
     for constant in (perf_reports.PERF_EVENT, str(perf_reports.PERF_FREQUENCY), perf_reports.PERF_CALL_GRAPH):
         assert constant in body, f"the profiling skill no longer quotes {constant!r}"
+    assert "counter_group" in body, "the skill must name the knob, not just the idea"
+    for group in papi.GROUPS:
+        assert f"`{group}`" in body, f"the profiling skill does not name the {group!r} counter group"
+    for name, ratio in papi.RATIOS.items():
+        assert f"`{name}`" in body, f"the profiling skill does not name the ratio {name!r}"
+        assert ratio.formula in body, f"the skill no longer states {name}'s formula ({ratio.formula!r})"
 
 
 def test_the_profiling_skill_and_the_build_flags_agree_about_frame_pointers() -> None:
@@ -242,7 +250,10 @@ def test_no_instrument_page_hands_the_reader_an_invocation() -> None:
     the submission at all.
 
     So these pages carry interpretation and no recipes. Naming an off-route tool is required, not
-    forbidden: what is forbidden is the line that runs it."""
+    forbidden: what is forbidden is the line that runs it.
+
+    The weaker, mechanical half of the rule above, because an invocation list only catches the
+    invocations somebody thought of. A fenced shell block in a page IS an instruction to run it."""
     bodies = skill_bodies()
     for page in (PROFILING, NSYS, ROCPROF, DIVIDE):
         body = bodies[page]
@@ -255,11 +266,6 @@ def test_no_instrument_page_hands_the_reader_an_invocation() -> None:
         assert "`profile`" in body or "/profile" in body, (
             f"the {page!r} skill never names the route the reader is supposed to ask"
         )
-
-
-def test_the_instrument_pages_keep_no_shell_block_to_paste() -> None:
-    """The weaker, mechanical half of the rule above, because an invocation list only catches the
-    invocations somebody thought of. A fenced shell block in a page IS an instruction to run it."""
     for page in (PROFILING, NSYS, ROCPROF, DIVIDE):
         for line in skill_bodies()[page].splitlines():
             assert not re.match(r"^```(sh|bash|shell|console)", line.strip()), (
@@ -286,28 +292,17 @@ def test_the_cpu_profiling_skill_leaves_the_device_to_the_gpu_skills() -> None:
         )
 
 
-def test_the_profiling_skill_names_every_counter_group() -> None:
-    """The group is what an agent actually types (`counter_group`). A group the skill never
-    names is one nobody asks for; a group the skill names and the code dropped is a 400."""
-    body = skill_bodies()[PROFILING]
-    assert "counter_group" in body, "the skill must name the knob, not just the idea"
-    for group in papi.GROUPS:
-        assert f"`{group}`" in body, f"the profiling skill does not name the {group!r} counter group"
-
-
-def test_the_profiling_skill_quotes_every_derived_formula() -> None:
-    """The formulas are the deliverable of the counter half: an agent that computes 'miss rate'
-    with the wrong denominator reaches the wrong bottleneck. Prose may be reworded; a formula
-    that no longer matches the code is a wrong instruction."""
-    body = skill_bodies()[PROFILING]
-    for name, ratio in papi.RATIOS.items():
-        assert f"`{name}`" in body, f"the profiling skill does not name the ratio {name!r}"
-        assert ratio.formula in body, f"the skill no longer states {name}'s formula ({ratio.formula!r})"
-
-
 def test_the_opt_report_skill_quotes_every_report_flag_the_harness_can_pass() -> None:
     """The skill prints the flags an agent is meant to type. A flag that changes in ``flags.py`` and
-    not here leaves the reader running a command that produces a different report, or none."""
+    not here leaves the reader running a command that produces a different report, or none.
+
+    The flags come from ONE table; a page quoting other flags describes a build the judge never ran.
+
+    A hip or offload build runs ROCm's clang, not the block's cc; a reader who cannot find that
+    driver on the page cannot tell which flag family applies.
+
+    Honest degradation, applied to documentation: a compiler the harness passes no report flag to
+    must be named as one, or its silence reads as 'nothing was vectorized'."""
     body = skill_bodies()[OPT_REPORTS]
     wired = {languages.report_flags(block.lang, compiler=name) for name, block in compiler_blocks().items()}
     for flag_string in sorted(f for f in wired if f):
@@ -315,12 +310,13 @@ def test_the_opt_report_skill_quotes_every_report_flag_the_harness_can_pass() ->
     # Pinned directly too: a compilers.yaml that lost every report_ref would satisfy the loop above.
     assert flags.GCC_OPT_REPORT in body, "the opt-report skill must carry the GCC report flags"
     assert flags.CLANG_OPT_REPORT in body, "the opt-report skill must carry the clang report flags"
-
-
-def test_the_opt_report_skill_names_the_compilers_with_no_report_channel() -> None:
-    """Honest degradation, applied to documentation: a compiler the harness passes no report flag to
-    must be named as one, or its silence reads as 'nothing was vectorized'."""
-    body = skill_bodies()[OPT_REPORTS]
+    for family in languages.REPORT_REFS:
+        assert languages.family_report_flags(family) in body, f"the opt-report skill lost {family}'s flags"
+    offload = {
+        name for (unused_family, vendor, unused_lang), name in languages.OFFLOAD_BUILD_DRIVER.items() if vendor == "amd"
+    }
+    for driver in sorted(offload | set(languages.DEVICE_DRIVER_FAMILY)):
+        assert f"`{driver}`" in body, f"the opt-report skill does not name {driver!r}"
     for name, block in sorted(compiler_blocks().items()):
         if block.mpi or languages.report_flags(block.lang, compiler=name):
             continue
@@ -338,22 +334,6 @@ def test_the_opt_report_skill_quotes_the_judge_tool_that_returns_a_report() -> N
     assert f'`tool: "{service.OPT_REPORT_TOOL}"`' in body, "the opt-report skill does not show the request"
     for field in ("family", "compiler", "driver", "version", "report_flags", "report", "truncated"):
         assert f"`{field}`" in body, f"the opt-report skill does not name the answer's {field!r}"
-
-
-def test_the_opt_report_skill_quotes_every_familys_report_flags() -> None:
-    """The flags come from ONE table; a page quoting other flags describes a build the judge never ran."""
-    body = skill_bodies()[OPT_REPORTS]
-    for family in languages.REPORT_REFS:
-        assert languages.family_report_flags(family) in body, f"the opt-report skill lost {family}'s flags"
-
-
-def test_the_opt_report_skill_names_every_amd_device_driver() -> None:
-    """A hip or offload build runs ROCm's clang, not the block's cc; a reader who cannot find that
-    driver on the page cannot tell which flag family applies."""
-    body = skill_bodies()[OPT_REPORTS]
-    offload = {name for (_family, vendor, _lang), name in languages.OFFLOAD_BUILD_DRIVER.items() if vendor == "amd"}
-    for driver in sorted(offload | set(languages.DEVICE_DRIVER_FAMILY)):
-        assert f"`{driver}`" in body, f"the opt-report skill does not name {driver!r}"
 
 
 RANGES_HEADING = "## Ranges: counters around part of ONE run"
@@ -400,7 +380,14 @@ def test_the_profiling_skill_teaches_the_range_header_the_none_build_includes() 
 def test_the_nsys_skill_prints_the_invocation_the_harness_really_runs() -> None:
     """The skill teaches a command line. If NSYS_TRACE or NSYS_SAMPLE change, the line it prints
     reproduces a different measurement than the one the payload came from -- and the reader has no
-    way to see the difference, because both produce a profile."""
+    way to see the difference, because both produce a profile.
+
+    Every one of these is a field the reader does arithmetic on. A renamed key leaves the skill
+    describing a payload that no longer exists.
+
+    The failure that looks least like itself: an empty profile. The reader greps for the gate,
+    so the skill must carry the spelling their driver actually publishes -- and the harness must
+    still recognise the marker the skill tells them to look for."""
     body = skill_bodies()[NSYS]
     assert f"--trace={gpu_profiling.NSYS_TRACE}" in body, "the skill no longer quotes the traced domains"
     assert f"--sample={gpu_profiling.NSYS_SAMPLE}" in body, (
@@ -408,6 +395,25 @@ def test_the_nsys_skill_prints_the_invocation_the_harness_really_runs() -> None:
     )
     for report in gpu_profiling.REPORTS:
         assert report in body, f"the nsys skill does not name the {report!r} report the module reads"
+    source = pathlib.Path(gpu_profiling.__file__).read_text()
+    for field in (
+        "device_pct",
+        "device_ns_per_rep",
+        "elapsed_ns",
+        "launch_count",
+        "kernels_omitted",
+        "min_percent",
+        "mean_ns",
+        "total_ns",
+    ):
+        assert f'"{field}"' in source, f"{field!r} is no longer a GPU profile payload key"
+        assert f"`{field}`" in body, f"the nsys skill does not name the {field!r} field"
+    for spelling in ("NVreg_RestrictProfilingToAdminUsers", "RmProfilingAdminOnly"):
+        assert spelling in body, f"the nsys skill does not name the {spelling!r} gate"
+    assert "ERR_NVGPUCTRPERM" in body
+    assert any(marker in "ERR_NVGPUCTRPERM".lower() for marker in gpu_profiling.PERMISSION_MARKERS), (
+        "the skill teaches a token the record-failure classifier does not recognise"
+    )
 
 
 @pytest.mark.parametrize(
@@ -442,25 +448,6 @@ def test_each_device_skill_names_every_cause_its_compute_profiler_refuses_with(
         assert f"`{cause}`" in body, f"the {page} skill never names the compute refusal {cause!r}"
 
 
-def test_the_nsys_skill_names_the_payload_fields_it_teaches_a_reader_to_divide() -> None:
-    """Every one of these is a field the reader does arithmetic on. A renamed key leaves the skill
-    describing a payload that no longer exists."""
-    body = skill_bodies()[NSYS]
-    source = pathlib.Path(gpu_profiling.__file__).read_text()
-    for field in (
-        "device_pct",
-        "device_ns_per_rep",
-        "elapsed_ns",
-        "launch_count",
-        "kernels_omitted",
-        "min_percent",
-        "mean_ns",
-        "total_ns",
-    ):
-        assert f'"{field}"' in source, f"{field!r} is no longer a GPU profile payload key"
-        assert f"`{field}`" in body, f"the nsys skill does not name the {field!r} field"
-
-
 def test_the_nsys_skill_does_not_promise_device_counters_through_the_judge() -> None:
     """``profile_gpu_submission`` refuses ``counters=True`` with ``counters_unsupported`` ("PAPI counts host
     CPU events, which say nothing about a device kernel") and takes no ``counter_group``, so the page may
@@ -475,19 +462,6 @@ def test_the_nsys_skill_does_not_promise_device_counters_through_the_judge() -> 
     assert "counter_group" not in body, (
         "the nsys skill offers a counter_group; profile_gpu_submission takes none and refuses "
         "counters=True, so that is an instruction to ask for a 503"
-    )
-
-
-def test_the_nsys_skill_teaches_both_spellings_of_the_profiling_gate() -> None:
-    """The failure that looks least like itself: an empty profile. The reader greps for the gate,
-    so the skill must carry the spelling their driver actually publishes -- and the harness must
-    still recognise the marker the skill tells them to look for."""
-    body = skill_bodies()[NSYS]
-    for spelling in ("NVreg_RestrictProfilingToAdminUsers", "RmProfilingAdminOnly"):
-        assert spelling in body, f"the nsys skill does not name the {spelling!r} gate"
-    assert "ERR_NVGPUCTRPERM" in body
-    assert any(marker in "ERR_NVGPUCTRPERM".lower() for marker in gpu_profiling.PERMISSION_MARKERS), (
-        "the skill teaches a token the record-failure classifier does not recognise"
     )
 
 
@@ -530,7 +504,10 @@ def test_the_rocprof_skill_teaches_roctx_ranges_after_the_whole_kernel_rows() ->
 def test_the_rocprof_skill_names_every_field_the_amd_readers_fill_and_leave_null() -> None:
     """The rows are the deliverable, and four of their fields are absent on AMD. Driven through the
     real readers on the real fixture, so 'comes back null' is checked against the code rather than
-    asserted in prose -- and every field the reader DOES fill has to be named too."""
+    asserted in prose -- and every field the reader DOES fill has to be named too.
+
+    The part geometry the skill teaches an agent to read (XCDs, CUs, waves per SIMD) has to be
+    columns rocprofv3 actually writes -- a header invented here is a reader grepping for nothing."""
     body = skill_bodies()[ROCPROF]
     rows = {suffix: gpu_profiling.parse_csv(text) for suffix, text in ROCPROF_CSVS.items()}
     kernels, _omitted = gpu_profiling.kernel_stats(rows[gpu_profiling.KERNEL_STATS_CSV])
@@ -546,12 +523,6 @@ def test_the_rocprof_skill_names_every_field_the_amd_readers_fill_and_leave_null
         assert f"`{field}`" in body, f"the rocprof skill does not name the {field!r} row field"
     for field in absent:
         assert f"`{field}`" in body, f"{field!r} comes back null on AMD and the skill never says so"
-
-
-def test_the_rocprof_skill_only_names_agent_columns_the_report_really_has() -> None:
-    """The part geometry the skill teaches an agent to read (XCDs, CUs, waves per SIMD) has to be
-    columns rocprofv3 actually writes -- a header invented here is a reader grepping for nothing."""
-    body = skill_bodies()[ROCPROF]
     header = ROCPROF_CSVS[gpu_profiling.AGENT_INFO_CSV].splitlines()[0]
     for column in (
         "Wave_Front_Size",

@@ -62,47 +62,29 @@ CASES = [
 #: so they pin where the exact-multiple requirement actually sits.
 
 
-@pytest.mark.parametrize(("expr", "expected"), CASES)
+#: Tokens the fold returns byte-identical: one with nothing to gather (the fold is not a reformat), and one that is
+#: not a Python expression -- shape tokens are strings from several producers, folding is an optimisation and not
+#: a validation, so that one comes back as-is rather than raising.
+UNCHANGED = [(expr, expr) for expr in ("h", "arr.shape[0]", "n * m", "(h - 1) // 2 + 1", "n +")]
+
+
+@pytest.mark.parametrize(("expr", "expected"), [*CASES, *UNCHANGED])
 def test_folds_to_expected(expr: str, expected: str) -> None:
     assert fold_shape_expr(expr) == expected
 
 
+# ``//`` rounds toward -inf, so a rewrite can agree on every positive input and still be wrong. The
+# exact-multiple rule is stated over ALL integers, and the folder sees a subtraction already folded in
+# mid-expression, so the negative range is the one it has to be checked on too.
+@pytest.mark.parametrize("values", [range(1, 12), range(-9, 3)], ids=["positive", "negative"])
 @pytest.mark.parametrize(("expr", "expected"), CASES)
-def test_folding_preserves_value(expr: str, expected: str) -> None:
+def test_folding_preserves_value_over_the_integer_range(expr: str, expected: str, values: range) -> None:
     """The folded form must agree with the original on every input, not just on a lucky one."""
     names = sorted({n.id for n in ast.walk(ast.parse(expr, mode="eval")) if isinstance(n, ast.Name)})
     folded = fold_shape_expr(expr)
-    for combo in itertools.product(range(1, 12), repeat=len(names)):
+    for combo in itertools.product(values, repeat=len(names)):
         env = dict(zip(names, combo, strict=False))
         assert evaluate(folded, env) == evaluate(expr, env), (expr, folded, env)
-
-
-@pytest.mark.parametrize(("expr", "expected"), CASES)
-def test_folding_preserves_value_for_negative_operands_too(expr: str, expected: str) -> None:
-    """``//`` rounds toward -inf, so a rewrite can agree on every positive input and still be wrong.
-
-    The extents this folder sees are sizes, but it is asked about them mid-expression, where a
-    subtraction has already been folded in -- and the exact-multiple rule is stated over ALL
-    integers, so this is the range it has to be checked on. A rule that only held for positives
-    would pass the test above and fail here.
-    """
-    names = sorted({n.id for n in ast.walk(ast.parse(expr, mode="eval")) if isinstance(n, ast.Name)})
-    folded = fold_shape_expr(expr)
-    for combo in itertools.product(range(-9, 3), repeat=len(names)):
-        env = dict(zip(names, combo, strict=False))
-        assert evaluate(folded, env) == evaluate(expr, env), (expr, folded, env)
-
-
-@pytest.mark.parametrize("expr", ["h", "arr.shape[0]", "n * m", "(h - 1) // 2 + 1"])
-def test_already_minimal_is_left_alone(expr: str) -> None:
-    """A token with nothing to gather must come back byte-identical -- the fold is not a reformat."""
-    assert fold_shape_expr(expr) == expr
-
-
-def test_unparseable_token_passes_through() -> None:
-    """Shape tokens are strings from several producers; one that is not a Python expression is
-    returned as-is rather than raising, since folding is an optimisation and not a validation."""
-    assert fold_shape_expr("n +") == "n +"
 
 
 @pytest.mark.parametrize("expr", ["(h + 2) // 2", "(h - 1) // 2 + 1", "h // 2 * 2", "(h + 3) % 4"])

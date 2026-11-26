@@ -98,17 +98,17 @@ def lowered(directory: pathlib.Path, src: str, arrays: list[str]) -> KernelIR:
 def test_locals_and_a_helper_spelled_like_libc_or_a_keyword_compute_the_reference_values(
     tmp_path: pathlib.Path, emit: Callable[..., str], cpp: bool
 ) -> None:
-    kernel_source = emit(lowered(tmp_path, LOCALS_SRC, ["x", "out"]), fn_name="f")
-    assert build_run_c(kernel_source, LOCALS_DRIVER, cpp=cpp).returncode == 0
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize(("emit", "cpp"), COMPILED_EMITTERS)
-def test_a_parameter_spelled_like_libc_receives_the_argument_of_its_abi_slot(
-    tmp_path: pathlib.Path, emit: Callable[..., str], cpp: bool
-) -> None:
-    kernel_source = emit(lowered(tmp_path, PARAMS_SRC, ["y1", "exp", "out"]), fn_name="f")
-    assert build_run_c(kernel_source, PARAMS_DRIVER, cpp=cpp).returncode == 0
+    """Locals and a helper spelled like libc or a keyword compute the reference values, and a parameter spelled like
+    libc receives the argument of its ABI slot."""
+    cases = [
+        ("locals", LOCALS_SRC, ["x", "out"], LOCALS_DRIVER),
+        ("params", PARAMS_SRC, ["y1", "exp", "out"], PARAMS_DRIVER),
+    ]
+    for label, src, arrays, driver in cases:
+        directory = tmp_path / label
+        directory.mkdir()
+        kernel_source = emit(lowered(directory, src, arrays), fn_name="f")
+        assert build_run_c(kernel_source, driver, cpp=cpp).returncode == 0, label
 
 
 def test_a_respelling_that_would_reorder_the_abi_is_refused(tmp_path: pathlib.Path) -> None:

@@ -9,6 +9,7 @@ import pathlib
 import shutil
 import subprocess
 import textwrap
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -176,40 +177,47 @@ def test_device_resident_host_leaves_a_braceless_if_a_statement_to_guard() -> No
         assert lines[i + 1].strip() == ";", rewritten
 
 
-def test_device_resident_host_declines_a_source_with_no_mirror_to_strip() -> None:
-    """A ppcg host that does not match the mirror shape (e.g. already hand-edited, or a future
-    ppcg version with a different codegen) must fail LOUD, not silently emit ppcg's own text back
-    out as if it had been made device-resident."""
-    with pytest.raises(ValueError, match="dev_"):
-        device_resident_host("void kernel(float *A) { A[0] = 1.0f; }\n", "kernel")
+@pytest.mark.parametrize(
+    ("make_source", "match"),
+    [
+        # A ppcg host that does not match the mirror shape (e.g. already hand-edited, or a future ppcg version with
+        # a different codegen) must fail LOUD, not silently emit ppcg's own text back out as if it had been made
+        # device-resident.
+        (lambda: "void kernel(float *A) { A[0] = 1.0f; }\n", "dev_"),
+        # A mirror that belongs to no parameter is not the shape this rewrite exists for.
+        (lambda: "void kernel(int n) {\n  double *t = 0;\n  double *dev_t;\n  hipFree(dev_t);\n}\n", "dev_"),
+        # Re-running the rewrite on already-rewritten code must decline (there is nothing left to strip) rather
+        # than aliasing an alias.
+        (lambda: device_resident_host(PPCG_HIPIFIED_HOST, "kernel"), ""),
+    ],
+    ids=["no_mirror_to_strip", "only_a_local_is_mirrored", "idempotent_on_its_own_output"],
+)
+def test_device_resident_host_declines_a_source_with_no_mirror_to_strip(
+    make_source: Callable[[], str], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        device_resident_host(make_source(), "kernel")
 
 
-def test_device_resident_host_declines_when_only_a_local_is_mirrored() -> None:
-    """A mirror that belongs to no parameter is not the shape this rewrite exists for."""
-    host = "void kernel(int n) {\n  double *t = 0;\n  double *dev_t;\n  hipFree(dev_t);\n}\n"
-    with pytest.raises(ValueError, match="dev_"):
-        device_resident_host(host, "kernel")
+MM_HOST = 'f(1);\nextern "C" void mm_fp64(int64_t N, double (*restrict A)[N], double (*restrict C)[N]) {\n}\n'
 
 
-def test_device_resident_host_is_idempotent_on_its_own_output() -> None:
-    """Re-running the rewrite on already-rewritten code must decline (there is nothing left to
-    strip) rather than aliasing an alias."""
-    once = device_resident_host(PPCG_HIPIFIED_HOST, "kernel")
-    with pytest.raises(ValueError):
-        device_resident_host(once, "kernel")
-
-
-def test_entry_params_reads_vla_and_restrict_parameters() -> None:
-    assert ppcg_transform.entry_params(PPCG_VLA_TRANSIENT_HOST, "s_fp64") == ["N", "a", "aa"]
-    assert ppcg_transform.entry_params(PPCG_VLA_TRANSIENT_HOST, "other") == []
-
-
-def test_entry_params_reads_pointer_to_row_parameters_past_their_own_parenthesis() -> None:
-    """The emitted scop passes a rank-2 array as a pointer to a VLA row; its ``(*restrict A)`` closes a
-    parenthesis inside the list, which must not end it -- else no mirror is found and the ppcg_hip
-    column refuses every rank-2 kernel."""
-    host = 'f(1);\nextern "C" void mm_fp64(int64_t N, double (*restrict A)[N], double (*restrict C)[N]) {\n}\n'
-    assert ppcg_transform.entry_params(host, "mm_fp64") == ["N", "A", "C"]
+@pytest.mark.parametrize(
+    ("host", "name", "expected"),
+    [
+        (PPCG_VLA_TRANSIENT_HOST, "s_fp64", ["N", "a", "aa"]),
+        (PPCG_VLA_TRANSIENT_HOST, "other", []),
+        # The emitted scop passes a rank-2 array as a pointer to a VLA row; its ``(*restrict A)`` closes a
+        # parenthesis inside the list, which must not end it -- else no mirror is found and the ppcg_hip column
+        # refuses every rank-2 kernel.
+        (MM_HOST, "mm_fp64", ["N", "A", "C"]),
+    ],
+    ids=["vla_and_restrict", "unknown_entry", "pointer_to_row_past_its_own_parenthesis"],
+)
+def test_entry_params_reads_pointer_to_row_parameters_past_their_own_parenthesis(
+    host: str, name: str, expected: list[str]
+) -> None:
+    assert ppcg_transform.entry_params(host, name) == expected
 
 
 def test_a_passthrough_is_published_and_declined_not_crashed_on(
@@ -378,17 +386,19 @@ def test_ppcg_hip_copy_func_stages_to_device(monkeypatch: pytest.MonkeyPatch) ->
     assert "stream-sync" in log
 
 
-def test_every_other_pluto_flavor_keeps_the_host_copy() -> None:
+@pytest.mark.parametrize("fname", ["pluto", "ppcg", "ppcg_cuda"])
+def test_every_other_pluto_flavor_keeps_the_host_copy(fname: str) -> None:
     """``ppcg_cuda``/bare ``ppcg`` cannot be exercised on this AMD-only host (ppcg has no AMD
     target of its own for them) and ``pluto`` is a CPU column entirely -- none of the three is
     changed by this fix."""
-    for fname in ("pluto", "ppcg", "ppcg_cuda"):
-        fw = make_pluto(fname)
-        copy = fw.copy_func()
-        arr = np.array([1.0, 2.0])
-        out = copy(arr)
-        assert isinstance(out, np.ndarray)
-        assert out is not arr  # still a COPY, just a host one
+    fw = make_pluto(fname)
+    copy = fw.copy_func()
+    arr = np.array([1.0, 2.0])
+    out = copy(arr)
+    assert isinstance(out, np.ndarray)
+    assert out is not arr  # still a COPY, just a host one
+    if fname == "pluto":
+        assert fw.create_timer(program=None).state is None  # a CPU column keeps the host clock
 
 
 def test_ppcg_hip_timer_uses_device_events(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -407,13 +417,6 @@ def test_ppcg_hip_timer_uses_device_events(monkeypatch: pytest.MonkeyPatch) -> N
     assert result.python >= 0.0
     assert any(e.startswith("record:") for e in log)
     assert any(e.startswith("sync:") for e in log)
-
-
-def test_a_cpu_pluto_column_keeps_the_host_clock() -> None:
-    fw = make_pluto("pluto")
-
-    timer = fw.create_timer(program=None)
-    assert timer.state is None
 
 
 # end-to-end (real hipcc + cupy)

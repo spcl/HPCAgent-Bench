@@ -17,21 +17,20 @@ from tests.translators.op_oracle import parse_source
 SRC = "import numpy as np\ndef f(x, out):\n for i in range(N):\n  out[i] = x[i] // 2\n"
 
 
-def emitted(dtype: str) -> str:
-    kir = parse_source(SRC, "f", ["x"], ["out"], {"x": "(N,)", "out": "(N,)"}, {"N": 8}, {"x": dtype, "out": dtype})
+LOCAL_SRC = "import numpy as np\ndef f(x, out):\n for i in range(N):\n  out[i] = np.uint64(x[i]) // 2\n"
+
+
+def emitted(dtype: str, src: str = SRC) -> str:
+    kir = parse_source(src, "f", ["x"], ["out"], {"x": "(N,)", "out": "(N,)"}, {"N": 8}, {"x": dtype, "out": dtype})
     return emit_fortran(lower(kir, native_call=renders_natively), fn_name="f")
 
 
-def test_a_uint64_kernel_is_refused() -> None:
+@pytest.mark.parametrize(
+    ("src", "dtype"), [(SRC, "uint64"), (LOCAL_SRC, "int64")], ids=["uint64-arrays", "uint64-local"]
+)
+def test_a_uint64_kernel_is_refused(src: str, dtype: str) -> None:
     with pytest.raises(NotImplementedError, match="uint64"):
-        emitted("uint64")
-
-
-def test_a_uint64_local_is_refused() -> None:
-    src = "import numpy as np\ndef f(x, out):\n for i in range(N):\n  out[i] = np.uint64(x[i]) // 2\n"
-    kir = parse_source(src, "f", ["x"], ["out"], {"x": "(N,)", "out": "(N,)"}, {"N": 8}, {"x": "int64", "out": "int64"})
-    with pytest.raises(NotImplementedError, match="uint64"):
-        emit_fortran(lower(kir, native_call=renders_natively), fn_name="f")
+        emitted(dtype, src)
 
 
 @pytest.mark.parametrize("dtype", ["uint8", "uint16", "uint32"])

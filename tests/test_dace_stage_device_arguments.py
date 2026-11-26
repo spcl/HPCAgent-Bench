@@ -43,21 +43,20 @@ def staging(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("staging")
-def test_a_host_buffer_for_a_device_descriptor_is_staged() -> None:
+@pytest.mark.parametrize("staged", [True, False], ids=["host-buffer", "left-alone"])
+def test_a_host_buffer_for_a_device_descriptor_is_staged(staged: bool) -> None:
+    """A host buffer for a device descriptor is staged; host-storage arrays, scalars and already staged arrays are
+    left alone."""
     host = np.arange(8.0)
-    kwargs = {"A_data": host}
-    dace_framework.stage_device_arguments(device_signature(), kwargs, cupy=None)
-    assert isinstance(kwargs["A_data"], StagedArray)
-    assert kwargs["A_data"].host is host
-
-
-@pytest.mark.usefixtures("staging")
-def test_host_storage_scalars_and_staged_arrays_are_left_alone() -> None:
     already = StagedArray(np.zeros(8))
     table = np.ones(8)
-    kwargs = {"x": already, "table": table, "alpha": 2.0, "N": 8}
+    kwargs = {"A_data": host} if staged else {"x": already, "table": table, "alpha": 2.0, "N": 8}
     dace_framework.stage_device_arguments(device_signature(), kwargs, cupy=None)
-    assert kwargs == {"x": already, "table": table, "alpha": 2.0, "N": 8}
+    if staged:
+        assert isinstance(kwargs["A_data"], StagedArray)
+        assert kwargs["A_data"].host is host
+    else:
+        assert kwargs == {"x": already, "table": table, "alpha": 2.0, "N": 8}
 
 
 class FakeSpec:

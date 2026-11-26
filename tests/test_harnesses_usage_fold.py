@@ -34,6 +34,21 @@ def harnesses_fixture() -> ModuleType:
         ({"input": "lots", "output": 7}, 7),
         ({"input": True, "output": 7}, 7),  # bool is an int subclass; count() excludes it explicitly
         ({"model": "qwen38"}, None),
+        # The four fields (uncached prompt, cached prompt, completion, reasoning) are declared disjoint (harnesses.py's
+        # module docstring): a call that carries all four is charged their sum. A field the contract does not name
+        # (a future ``retries`` or ``latency_ms``) is not swept into the count just because it is numeric.
+        ({"input": 1000, "cached_input": 20000, "output": 300, "reasoning": 150}, 1000 + 20000 + 300 + 150),
+        ({"input": 100, "output": 50, "latency_ms": 900, "retries": 3}, 150),
+    ],
+    ids=[
+        "none",
+        "output-only",
+        "input-and-output",
+        "junk-string",
+        "bool-field",
+        "no-token-field",
+        "all-four",
+        "extra-numeric-fields",
     ],
 )
 def test_call_tokens_treats_missing_and_junk_fields_as_absent_not_zero(
@@ -47,39 +62,11 @@ def test_call_tokens_treats_missing_and_junk_fields_as_absent_not_zero(
     assert harnesses.call_tokens(record) == expected
 
 
-@pytest.mark.parametrize(
-    ("record", "expected"),
-    [
-        pytest.param(
-            {"input": 1000, "cached_input": 20000, "output": 300, "reasoning": 150},
-            1000 + 20000 + 300 + 150,
-            id="all-four",
-        ),
-        pytest.param({"input": 100, "output": 50, "latency_ms": 900, "retries": 3}, 150, id="extra-numeric-fields"),
-    ],
-)
-def test_call_tokens_charges_the_sum_of_the_four_declared_fields_only(
-    harnesses: ModuleType, record: dict, expected: int
-) -> None:
-    """The four fields (uncached prompt, cached prompt, completion, reasoning) are declared disjoint
-    (harnesses.py's module docstring); a call that carries all four is charged their sum, not just
-    the ones a caller might expect to matter (output alone, say). A field this contract does not name
-    (e.g. a future ``retries`` or ``latency_ms``) must not be swept into the count just because it
-    happens to be numeric -- only CONSUMED_FIELDS are tokens."""
-    assert harnesses.call_tokens(record) == expected
-
-
 # accumulate_usage_tokens: the running total over usage.jsonl lines
 
 
 def line(record: dict) -> str:
     return json.dumps(record)
-
-
-def test_accumulate_usage_tokens_sums_every_call_line(harnesses: ModuleType) -> None:
-    total_by_call: dict[str, int] = {}
-    lines = [line({"input": 100, "output": 20}), line({"input": 200, "cached_input": 50, "output": 30})]
-    assert harnesses.accumulate_usage_tokens(lines, total_by_call) == 120 + 280
 
 
 def test_accumulate_usage_tokens_keys_calls_by_position_not_by_content(harnesses: ModuleType) -> None:
@@ -99,6 +86,8 @@ def test_accumulate_usage_tokens_running_total_survives_across_polls(harnesses: 
     """The watcher polls ``usage.jsonl`` repeatedly as it grows (agent_driver.watch_token_budget),
     handing this fold only the NEW lines each time but the SAME ``total_by_call`` dict, so the
     running total must accumulate across calls rather than resetting to just the latest batch."""
+    lines = [line({"input": 100, "output": 20}), line({"input": 200, "cached_input": 50, "output": 30})]
+    assert harnesses.accumulate_usage_tokens(lines, {}) == 120 + 280
     total_by_call: dict[str, int] = {}
     first_total = harnesses.accumulate_usage_tokens([line({"input": 1000, "output": 100})], total_by_call)
     assert first_total == 1100
@@ -118,16 +107,8 @@ def test_accumulate_usage_tokens_skips_non_object_and_malformed_lines(harnesses:
         "not json at all",
         '{"input": 100, "outpu',  # truncated tail
         json.dumps([1, 2, 3]),  # valid JSON, not an object
+        line({"model": "qwen38"}),  # none of the four fields: not recorded as a zero-cost call
         line({"input": 400, "output": 40}),
     ]
     assert harnesses.accumulate_usage_tokens(lines, total_by_call) == 440
     assert len(total_by_call) == 1, "only the one well-formed call line counted"
-
-
-def test_a_line_with_none_of_the_four_fields_is_not_recorded_as_a_zero_cost_call(harnesses: ModuleType) -> None:
-    """``call_tokens`` returning ``None`` for a field-less line must not enter ``total_by_call`` at
-    all: a recorded 0 there is indistinguishable from a call that legitimately cost nothing, and
-    ``len(total_by_call)`` is what other tests here use to check how many calls were actually seen."""
-    total_by_call: dict[str, int] = {}
-    harnesses.accumulate_usage_tokens([line({"model": "qwen38"})], total_by_call)
-    assert total_by_call == {}

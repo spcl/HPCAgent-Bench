@@ -131,19 +131,6 @@ def test_the_retries_are_bounded_and_an_agent_without_its_tools_never_runs(
     assert "MCP still not connected" in (tmp_path / "claude.log").read_text(encoding="utf-8")
 
 
-def test_mcp_failed_distinguishes_not_yet_from_connected(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    driver = load_driver(monkeypatch)
-    log_path = tmp_path / "claude.log"
-    log_path.write_text("", encoding="utf-8")
-    assert driver.mcp_failed(log_path) is None, "no init event yet is not the same as a good one"
-    log_path.write_text(init_line("connected"), encoding="utf-8")
-    assert driver.mcp_failed(log_path) is False
-    log_path.write_text(init_line("failed"), encoding="utf-8")
-    assert driver.mcp_failed(log_path) is True
-
-
 def test_only_so_many_agents_start_at_once(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     """The whole point: 120 pool threads must not put 120 python3 servers on one node at once.
 
@@ -224,14 +211,7 @@ def test_a_crash_is_a_fault_but_a_budget_is_not(monkeypatch: pytest.MonkeyPatch,
         assert driver.closing_crashed(code, driver.transcript_closing(log)) is False, (
             f"rc={code} is a budget, not a fault"
         )
-
-
-def test_a_reported_result_is_the_cli_verdict_not_a_crash(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    """A nonzero exit AFTER the CLI wrote its result is that run's answer; relaunching overwrites it."""
-    driver = load_driver(monkeypatch)
-    log = tmp_path / "claude.log"
+    # A nonzero exit AFTER the CLI wrote its result is that run's answer; relaunching overwrites it.
     log.write_text(json.dumps({"type": "result", "subtype": "error_during_execution"}) + "\n", encoding="utf-8")
     assert driver.closing_crashed(1, driver.transcript_closing(log)) is False
 

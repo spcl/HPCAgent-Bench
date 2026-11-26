@@ -80,19 +80,19 @@ def test_every_profiler_the_amd_images_ship_is_run_not_just_found(verify: Module
     }
 
 
-@pytest.mark.parametrize("profile", ["judge-agent-cpu", "judge-cpu", "judge-agent-cuda", "judge-cuda"])
-def test_a_non_amd_image_runs_the_host_profilers_and_nothing_rocm(verify: ModuleType, profile: str) -> None:
-    assert runs(verify, profile) == {"perf-stat": True, "perf-record": True, "papi-ranges": True}
+HOST_PROFILERS = {"perf-stat": True, "perf-record": True, "papi-ranges": True}
 
 
-@pytest.mark.parametrize("profile", ["vllm", "sglang", "vllm-cuda"])
-def test_a_serving_image_is_held_to_no_profiler(verify: ModuleType, profile: str) -> None:
-    assert runs(verify, profile) == {}
-
-
-def test_every_run_target_has_a_probe(verify: ModuleType) -> None:
-    targets = {target for profile in verify.PLATFORM for target in runs(verify, profile)}
-    assert targets == set(verify.PROFILER_RUNS), targets ^ set(verify.PROFILER_RUNS)
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    [(profile, HOST_PROFILERS) for profile in ("judge-agent-cpu", "judge-cpu", "judge-agent-cuda", "judge-cuda")]
+    + [(profile, {}) for profile in ("vllm", "sglang", "vllm-cuda")],
+)
+def test_a_non_amd_image_runs_the_host_profilers_and_nothing_rocm(
+    verify: ModuleType, profile: str, expected: dict[str, bool]
+) -> None:
+    """A serving image (vllm, sglang) is held to no profiler at all."""
+    assert runs(verify, profile) == expected
 
 
 def test_perf_stat_csv_is_read_for_the_event_asked_and_nothing_else(verify: ModuleType) -> None:
@@ -107,9 +107,7 @@ def test_a_perf_event_perf_could_not_count_is_no_count_rather_than_zero(verify: 
 
 def test_papi_ranges_lines_are_read_per_pool_thread(verify: ModuleType) -> None:
     assert verify.papi_range_counts(PAPI_RANGES_OUT) == {0: (8123456, 16234567), 1: (7999999, 15999999)}
-
-
-def test_a_papi_ranges_error_line_counts_no_thread(verify: ModuleType) -> None:
+    # an error line counts no thread
     out = "papi_range error name=(init) call=PAPI_library_init rc=-7 msg=Event does not exist\n"
     assert verify.papi_range_counts(out) == {}
 

@@ -45,17 +45,6 @@ def old_rows() -> pd.DataFrame:
     return frame.assign(timing_reduction="mw4x5-final-v2")
 
 
-def test_episode_id_takes_the_folded_setup() -> None:
-    assert migrate.episode_id_of("a-c-clean.n0.p3.w1", "a-c") == "a-c.n0.p3.w1"
-
-
-def test_final_status_only_on_answers() -> None:
-    assert migrate.final_status_of("attempt", "unsolved") == "unsolved"
-    assert migrate.final_status_of("submission", "override") == "graded"
-    assert migrate.final_status_of("submission", "live-fallback") == ""
-    assert migrate.final_status_of("call", "graded") == ""
-
-
 def test_live_pooled_answer_is_credited_unless_final_only() -> None:
     final, v2 = migrate.ANSWER_SETS["final-only"], migrate.ANSWER_SETS["final-v2-only"]
     assert migrate.credited_stamp("submission", "mwd-v2") == timing.FINAL_GRADE_REDUCTION
@@ -76,6 +65,12 @@ def test_rows_map_one_to_one_with_derived_launches() -> None:
     assert out.tokens_crashed.isna().all()
     assert out.denominator.tolist()[1] != ""
     assert out.denominator.tolist()[0] == ""
+    # the helpers migrate() applies to every row: the folded setup names the episode, only answers carry a status
+    assert migrate.episode_id_of("a-c-clean.n0.p3.w1", "a-c") == "a-c.n0.p3.w1"
+    assert migrate.final_status_of("attempt", "unsolved") == "unsolved"
+    assert migrate.final_status_of("submission", "override") == "graded"
+    assert migrate.final_status_of("submission", "live-fallback") == ""
+    assert migrate.final_status_of("call", "graded") == ""
 
 
 def test_repeats_make_each_episode_a_slot_and_latest_keeps_the_newest() -> None:

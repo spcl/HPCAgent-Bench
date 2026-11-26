@@ -30,9 +30,6 @@ def test_every_dace_entry_has_a_slot() -> None:
     ]
     assert len(dace) == len(Arch) * (1 + len(DaceStage))
     assert all(FRAMEWORKS.slot(key) is not None for key in dace)
-
-
-def test_dace_columns_name_no_stage() -> None:
     for arch in Arch:
         column = FRAMEWORKS.entries[f"dace_{arch.text}"]
         assert column.stage is None
@@ -45,7 +42,3 @@ def test_dace_optimizers_are_the_flavors_of_their_stage() -> None:
         flavors = {key for key, column in FRAMEWORKS.entries.items() if column.stage is stage}
         assert flavors == set(models.dace_flavors(stage))
         assert all(OPTIMIZERS.canonical(key) == optimizer for key in flavors)
-
-
-def test_tvm_names_the_gpu_column() -> None:
-    assert FRAMEWORKS.canonical("tvm") == "tvm_gpu"

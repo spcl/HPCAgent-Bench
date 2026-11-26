@@ -122,6 +122,11 @@ def test_array_bytes_on_the_wire_is_each_ranks_tile_bytes() -> None:
     )
     # 10 over 4 is 3, 3, 2, 2 rows of x and of y, 8 bytes each.
     assert parsed.workspace_bytes == [2 * 8 * n + 1 for n in (3, 3, 2, 2)]
+    # The ML track's plan resolved ARRAY_BYTES to 0 too. It is the bytes a rank's tiles are ALLOCATED with: A's 10
+    # rows over 4 ranks (3, 3, 2, 2) padded to 3 rows of 6 on every rank, out (6) and x (6) float64.
+    plan = atax_plan("ARRAY_BYTES")
+    assert [rank["workspace_bytes"] for rank in plan["ranks"]] == [8 * (3 * 6 + 6 + 6)] * 4
+    assert [rank["shapes"]["A"] for rank in plan["ranks"]] == [[3, 6], [3, 6], [2, 6], [2, 6]]
 
 
 ATAX_ROWS = {"grid": [4], "arrays": {"A": {"axes": [{"grid_dim": 0, "scheme": "block"}, {"grid_dim": None}]}}}
@@ -151,14 +156,6 @@ def atax_plan(workspace_bytes: str | None) -> dict:
         is_python=False,
         workspace_bytes=workspace_bytes,
     )
-
-
-def test_array_bytes_in_the_sharded_plan_is_each_ranks_tile_bytes() -> None:
-    """The ML track's plan resolved ARRAY_BYTES to 0 too. It is the bytes a rank's tiles are ALLOCATED with: A's 10
-    rows over 4 ranks (3, 3, 2, 2) padded to 3 rows of 6 on every rank, out (6) and x (6) float64."""
-    plan = atax_plan("ARRAY_BYTES")
-    assert [rank["workspace_bytes"] for rank in plan["ranks"]] == [8 * (3 * 6 + 6 + 6)] * 4
-    assert [rank["shapes"]["A"] for rank in plan["ranks"]] == [[3, 6], [3, 6], [2, 6], [2, 6]]
 
 
 # Scalars: a float64 scalar reaches a python kernel_mpi as a float

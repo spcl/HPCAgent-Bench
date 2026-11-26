@@ -45,21 +45,15 @@ def test_the_shim_keeps_the_scop_signature_and_strides_each_array_by_its_trailin
     assert "{(int64_t)(J) * (int64_t)(3), (int64_t)(3), 1}" in shim
     assert "_mlir_ciface_k_fp32_polygeist(I, J, &d_u, alpha);" in shim
 
-
-def test_the_shim_prototypes_its_callee_so_an_fp32_scalar_is_not_promoted() -> None:
-    """An unprototyped declaration would pass ``alpha`` as a double into an f32 parameter."""
-    shim = polygeist_transform.shim_source(
+    # the callee is prototyped: an unprototyped declaration would pass ``alpha`` as a double into an f32 parameter
+    scalar_shim = polygeist_transform.shim_source(
         "k_fp32", [BindingArg(name="x", kind="ptr_float", shape=["N"]), BindingArg(name="alpha", kind="float")]
     )
+    assert "void _mlir_ciface_k_fp32_polygeist(void *, float);" in scalar_shim
 
-    assert "void _mlir_ciface_k_fp32_polygeist(void *, float);" in shim
-
-
-def test_the_shim_includes_no_header_that_defines_a_size_symbol() -> None:
-    """``<complex.h>`` defines ``I``, which hdiff's binding uses as an extent."""
-    shim = polygeist_transform.shim_source("k_fp32", [BindingArg(name="I", kind="int64")])
-
-    assert "complex.h" not in shim
+    # no header is included that defines a size symbol: ``<complex.h>`` defines ``I``, which hdiff's binding uses
+    size_shim = polygeist_transform.shim_source("k_fp32", [BindingArg(name="I", kind="int64")])
+    assert "complex.h" not in size_shim
 
 
 def test_only_the_kernel_is_renamed_and_given_a_c_interface() -> None:

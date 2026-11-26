@@ -171,8 +171,11 @@ def test_a_kernel_without_a_numpy_named_reference_still_finds_its_reference(
     assert (shared / staged).is_file()
 
 
-def test_a_repeated_kernel_and_a_relaunch_copy_once(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
-    """The smoke variant repeats ONE kernel per agent, and a relaunch re-enters the same RUN_DIR."""
+def test_a_repeated_kernel_and_a_relaunch_copy_once(
+    tmp_path: pathlib.Path, repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The smoke variant repeats ONE kernel per agent, and a relaunch re-enters the same RUN_DIR. An unknown kernel
+    warns instead of failing the launch, and $KERNELS is the fallback source of names."""
     shared = tmp_path / "shared"
     proc = materialize(repo, shared, problems_file(tmp_path / "problems.jsonl", [KERNEL] * 10))
     assert "1 kernel folders" in proc.stdout
@@ -183,42 +186,39 @@ def test_a_repeated_kernel_and_a_relaunch_copy_once(tmp_path: pathlib.Path, repo
     assert "0 kernel folders" in proc.stdout
     assert edited.read_text() == "marker\n"
 
-
-def test_kernels_env_is_the_fallback_source_of_names(
-    tmp_path: pathlib.Path, repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    shared = tmp_path / "shared"
-    monkeypatch.setenv("KERNELS", f"{KERNEL},scientific_computing/dwarf/xsbench/xsbench")
-    materialize(repo, shared)
-    assert (shared / "tasks/argmax_value/argmax_value_numpy.py").is_file()
-    assert (shared / "tasks/xsbench/xsbench.py").is_file()
-
-
-def test_an_unknown_kernel_warns_instead_of_failing_the_launch(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
-    shared = tmp_path / "shared"
-    named = problems_file(tmp_path / "problems.jsonl", [KERNEL, "loop_level_reasoning/nope/nope"])
-    proc = materialize(repo, shared, named)
+    unknown = tmp_path / "unknown"
+    named = problems_file(tmp_path / "unknown.jsonl", [KERNEL, "loop_level_reasoning/nope/nope"])
+    proc = materialize(repo, unknown, named)
     assert "no benchmark directory" in proc.stderr
-    assert not (shared / "tasks/nope").exists()
+    assert not (unknown / "tasks/nope").exists()
+
+    from_env = tmp_path / "from-env"
+    monkeypatch.setenv("KERNELS", f"{KERNEL},scientific_computing/dwarf/xsbench/xsbench")
+    materialize(repo, from_env)
+    assert (from_env / "tasks/argmax_value/argmax_value_numpy.py").is_file()
+    assert (from_env / "tasks/xsbench/xsbench.py").is_file()
 
 
-@pytest.mark.parametrize("line", ['{"kernel": "loop_level_reasoning/nope/nope"}\n', "SETUP=not-a-problems-file\n"])
+@pytest.mark.parametrize(
+    ("line", "complaint"),
+    [
+        ('{"kernel": "loop_level_reasoning/nope/nope"}\n', ""),
+        ("SETUP=not-a-problems-file\n", ""),
+        # A non-CE runtime that did not mount the problems file would otherwise stage nothing and exit 0.
+        (None, "cannot read"),
+    ],
+    ids=["unknown-kernel", "not-a-problems-file", "unmounted-file"],
+)
 def test_a_problems_file_that_stages_nothing_stops_the_launch(
-    tmp_path: pathlib.Path, repo: pathlib.Path, line: str
+    tmp_path: pathlib.Path, repo: pathlib.Path, line: str | None, complaint: str
 ) -> None:
-    named = tmp_path / "problems.jsonl"
-    named.write_text(line)
+    named = tmp_path / "problems.jsonl" if line is not None else tmp_path / "unmounted" / "problems.jsonl"
+    if line is not None:
+        named.write_text(line)
     with pytest.raises(subprocess.CalledProcessError) as refused:
         materialize(repo, tmp_path / "shared", named)
     assert refused.value.returncode == 2
-
-
-def test_a_problems_file_the_container_cannot_see_stops_the_launch(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
-    """A non-CE runtime that did not mount the problems file would otherwise stage nothing and exit 0."""
-    with pytest.raises(subprocess.CalledProcessError) as refused:
-        materialize(repo, tmp_path / "shared", str(tmp_path / "unmounted" / "problems.jsonl"))
-    assert refused.value.returncode == 2
-    assert "cannot read" in refused.value.stderr
+    assert complaint in refused.value.stderr
 
 
 def test_a_failed_signature_leaves_no_folder_a_relaunch_would_skip(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
@@ -241,7 +241,12 @@ def test_the_prompt_template_is_recorded(tmp_path: pathlib.Path, repo: pathlib.P
 def test_the_setups_resolved_prompt_is_staged_from_its_overlays(
     tmp_path: pathlib.Path, repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The driver renders the staged ``prompt.md``: the repo's with the setup's overlays (here a user's YAML file)."""
+    """The driver renders the staged ``prompt.md``: the repo's with the setup's overlays (here a user's YAML file).
+    The control setup, with no overlay, reads what is byte-identical to the repo file."""
+    monkeypatch.delenv("HPCAGENT_BENCH_PROMPT_OVERLAYS", raising=False)
+    control = tmp_path / "control"
+    materialize(repo, control)
+    assert (control / "prompt.md").read_text() == (repo / "agent/prompt.md").read_text()
     overlay = tmp_path / "mine.yaml"
     overlay.write_text("agent:\n  set:\n    rules: {text: 'my rules'}\n")
     (repo / "agent" / "prompt.md").write_text("@@section rules@@\nbase rules\n\n@@section task@@\n{{TASK}}\n")
@@ -262,13 +267,6 @@ def test_an_overlay_that_does_not_resolve_stops_the_launch(
     )
     assert done.returncode != 0
     assert "no-such-overlay" in done.stderr
-
-
-def test_the_base_prompt_is_untouched_by_the_repo_variant(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
-    """The kernel setup is the control: what it reads must be byte-identical to the repo file."""
-    shared = tmp_path / "shared"
-    materialize(repo, shared)
-    assert (shared / "prompt.md").read_text() == (repo / "agent/prompt.md").read_text()
 
 
 def empty_view(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -327,16 +325,33 @@ SOURCE_SUFFIXES = frozenset({".c", ".cpp", ".cc", ".cxx", ".hip", ".cu", ".f90",
 
 
 @pytest.mark.parametrize(
-    ("language", "dialect", "target"),
-    [("c", "c", Target.CPU), ("cpp", "c++", Target.CPU), ("hip", "hip", Target.GPU), ("cuda", "cuda", Target.GPU)],
+    ("language", "dialect", "target", "treated"),
+    [
+        ("c", "c", Target.CPU, True),
+        ("cpp", "c++", Target.CPU, True),
+        ("hip", "hip", Target.GPU, True),
+        ("cuda", "cuda", Target.GPU, True),
+        # The control: a rendered view on disk must not reach a setup whose env does not name it.
+        ("c", "c", Target.CPU, False),
+    ],
+    ids=["c", "cpp", "hip", "cuda", "control"],
 )
 def test_a_cpf_src_setup_stages_the_dropin_as_the_only_kernel_source(
-    tmp_path: pathlib.Path, repo: pathlib.Path, language: str, dialect: str, target: Target
+    tmp_path: pathlib.Path, repo: pathlib.Path, language: str, dialect: str, target: Target, treated: bool
 ) -> None:
     """The CPF REPLACES the hand-written source: the task folder holds the drop-in (on gpu its host
     ``.cpp`` and device ``.hip`` or ``.cu``, the two units a GPU submission is) and no other kernel source, under
     the plain setup's reference name, with the cache's bytes. Every vendored ``_reference.*`` is
-    dropped, in any language; the NumPy spec stays."""
+    dropped, in any language; the NumPy spec stays. A control setup with the treatment's source in its task folder
+    is not a control, so a setup whose env does not name the view stages none of it."""
+    if not treated:
+        cache_with(tmp_path, "argmax_value")
+        shared = tmp_path / "shared"
+        materialize_setup(repo, shared, problems_file(tmp_path / "problems.jsonl", [KERNEL]))
+        names = sorted(path.name for path in (shared / "tasks/argmax_value").iterdir())
+        assert "argmax_value_numpy.py" in names, names
+        assert not [name for name in names if name.split(".", 1)[0] == "argmax_value"], names
+        return
     kernel_dir = repo / "hpcagent_bench/benchmarks/loop_level_reasoning/argmax_value"
     for ext in ("c", "hip", "f90"):
         (kernel_dir / f"argmax_value_reference.{ext}").write_text("// naive baseline\n")
@@ -374,17 +389,6 @@ def test_a_cpf_src_dropin_takes_the_module_name_like_the_reference_it_replaces(
         CPF_DROPIN_DIR=str(view),
     )
     assert (shared / "tasks/gemm_tall_skinny/gemm_reference.c").is_file()
-
-
-def test_a_control_setup_stages_no_dropin(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
-    """A rendered view on disk must not reach a setup whose env does not name it: a control with the
-    treatment's source in its task folder is not a control."""
-    cache_with(tmp_path, "argmax_value")
-    shared = tmp_path / "shared"
-    materialize_setup(repo, shared, problems_file(tmp_path / "problems.jsonl", [KERNEL]))
-    staged = sorted(path.name for path in (shared / "tasks/argmax_value").iterdir())
-    assert "argmax_value_numpy.py" in staged, staged
-    assert not [name for name in staged if name.split(".", 1)[0] == "argmax_value"], staged
 
 
 def test_the_launcher_materializes_before_it_starts_any_role() -> None:
@@ -429,10 +433,7 @@ def test_the_task_line_names_the_folder_and_the_kernels_file_name() -> None:
     assert "argmax_value.<ext>" in note  # the basename the judge name-checks
     assert "/shared/tasks" not in note, "the material is in the folder"
     assert "argmax_value/argmax_value" not in note, "the short key only: the tools name the kernel"
-
-
-def test_the_identity_names_the_assigned_kernel_by_its_short_key() -> None:
-    """Every judge call names the episode's kernel from here ($HPCAGENT_BENCH_KERNEL), so the agent never types it."""
+    # Every judge call names the episode's kernel from $HPCAGENT_BENCH_KERNEL, so the agent never types it.
     identity = agent_driver().identity_env(3, 0, None, KERNEL)
     assert identity["HPCAGENT_BENCH_KERNEL"] == "argmax_value"
     assert "HPCAGENT_BENCH_KERNEL" not in agent_driver().identity_env(3, 0)
@@ -469,7 +470,8 @@ def test_the_setup_falls_back_to_the_problems_file_stem_but_never_to_a_blank(mon
 def test_no_submitter_can_pass_an_account() -> None:
     """No submitter sets or passes an account of its own: an experiment billed half to one project and
     half to another cannot be repaired afterwards. The account reaches every job through Slurm's own
-    SBATCH_ACCOUNT, from the site layer (test_the_account_is_supplied_centrally)."""
+    SBATCH_ACCOUNT, from the site layer, which supplies it through Slurm's own input variables: no #SBATCH
+    directive names one, and no layer hardcodes one, because an account is site- and person-specific."""
     for path in sorted(EXAMPLE.glob("submit*.sh")):
         code = "\n".join(ln for ln in path.read_text().splitlines() if not ln.lstrip().startswith("#"))
         assert not re.search(r"\b\w*ACCOUNT\w*=", code), f"{path.name} sets an account"
@@ -479,11 +481,6 @@ def test_no_submitter_can_pass_an_account() -> None:
                 assert not re.search(r"(^|\s)(-A\s|--account\b)", line), (
                     f"{path.name} passes an account: {line.strip()}"
                 )
-
-
-def test_the_account_is_supplied_centrally() -> None:
-    """The site layer supplies the account through Slurm's own input variables, so no #SBATCH
-    directive names one, and no layer hardcodes one: an account is site- and person-specific."""
     text = (REPO / "helpers" / "scripts" / "site_env.sh").read_text()
     for var in ("SLURM_ACCOUNT", "SALLOC_ACCOUNT"):
         assert f"{var}=" in text, f"{var} is never exported"
@@ -525,61 +522,52 @@ def test_the_driver_hands_each_agent_its_identity_in_the_environment(
     assert "HPCAGENT_BENCH_OPTIMIZER=hpcagent-bench-vllm" in log
 
 
+@pytest.mark.parametrize("mode", ["absolute", "bare", "missing"])
 def test_absolute_problems_file_wins_over_the_bare_name_fallback(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
-    problems = tmp_path / "data" / "problems.jsonl"
-    problems.parent.mkdir()
-    problems.write_text(json.dumps({"id": 0, "task": "opt"}) + "\n")
+    """An absolute PROBLEMS_FILE must not consult the CWD. A bare name falls back to the launch directory
+    (SCRIPT_DIR), which holds the staged problems file: run_cluster.sh resolves the bare name only locally for
+    materialize_shared.sh and never re-exports it, so the raw env var reaches a process whose CWD is not SCRIPT_DIR.
+    A name that resolves nowhere errors clearly."""
+    row = {"id": 0, "task": "opt"}
     elsewhere = tmp_path / "cwd"
     elsewhere.mkdir()
-    monkeypatch.chdir(elsewhere)  # unrelated CWD: an absolute PROBLEMS_FILE must not consult it
-    monkeypatch.setenv("PROBLEMS_FILE", str(problems))
-    assert agent_driver().load_problems() == [{"id": 0, "task": "opt"}]
+    monkeypatch.chdir(elsewhere)  # unrelated CWD: neither an absolute nor a bare name resolves here
+    if mode == "missing":
+        monkeypatch.setenv("PROBLEMS_FILE", "nonexistent-problems.jsonl")
+        with pytest.raises(FileNotFoundError, match=re.escape("nonexistent-problems.jsonl")):
+            agent_driver().load_problems()
+        return
+    if mode == "absolute":
+        problems = tmp_path / "data" / "problems.jsonl"
+        problems.parent.mkdir()
+        problems.write_text(json.dumps(row) + "\n")
+        monkeypatch.setenv("PROBLEMS_FILE", str(problems))
+    else:
+        script_dir = tmp_path / "script"
+        script_dir.mkdir()
+        monkeypatch.setenv("SCRIPT_DIR", str(script_dir))
+        (script_dir / "problems.jsonl").write_text(json.dumps(row) + "\n")
+        monkeypatch.setenv("PROBLEMS_FILE", "problems.jsonl")
+    assert agent_driver().load_problems() == [row]
 
 
-def test_a_bare_problems_file_falls_back_to_the_launch_directory(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The launch directory (SCRIPT_DIR) holds the staged problems file, but run_cluster.sh resolves the
-    bare name only locally for materialize_shared.sh and never re-exports it -- the raw env var still
-    reaches this process, whose CWD is not SCRIPT_DIR."""
-    script_dir = tmp_path / "script"
-    script_dir.mkdir()
-    monkeypatch.setenv("SCRIPT_DIR", str(script_dir))
-    (script_dir / "problems.jsonl").write_text(json.dumps({"id": 0, "task": "opt"}) + "\n")
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    monkeypatch.chdir(elsewhere)  # the bare name does not resolve here
-    monkeypatch.setenv("PROBLEMS_FILE", "problems.jsonl")
-    assert agent_driver().load_problems() == [{"id": 0, "task": "opt"}]
-
-
-def test_a_missing_problems_file_still_errors_clearly(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("PROBLEMS_FILE", "nonexistent-problems.jsonl")
-    with pytest.raises(FileNotFoundError, match=re.escape("nonexistent-problems.jsonl")):
-        agent_driver().load_problems()
-
-
-def test_repo_layout_is_off_unless_asked_for(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
-    """A setup that does not opt in must see exactly what it saw before the repo layout existed."""
-    shared = tmp_path / "shared"
-    materialize(repo, shared, problems_file(tmp_path / "problems.jsonl", [KERNEL]))
-    assert not (shared / "tasks/argmax_value/repo").exists()
-
-
+@pytest.mark.parametrize("layout", [False, True], ids=["off", "on"])
 def test_repo_layout_stages_one_pristine_repo_per_kernel(
-    tmp_path: pathlib.Path, repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch, layout: bool
 ) -> None:
-    """With REPO_LAYOUT=1 the kernel folder also carries a mock git repo.
+    """A setup that does not opt in must see exactly what it saw before the repo layout existed. With REPO_LAYOUT=1
+    the kernel folder also carries a mock git repo.
 
     The fixture repo has no real translator behind it, so the stager is expected to DECLINE rather
     than to invent a seed -- the property under test is that declining is survivable (the run still
     materializes its other material) and that nothing half-built is left behind.
     """
     shared = tmp_path / "shared"
-    env = dict(os.environ, REPO_LAYOUT="1")
+    env = {name: value for name, value in os.environ.items() if name != "REPO_LAYOUT"}
+    if layout:
+        env["REPO_LAYOUT"] = "1"
     proc = subprocess.run(
         [str(SCRIPT), str(repo), str(shared), str(problems_file(tmp_path / "problems.jsonl", [KERNEL]))],
         capture_output=True,
@@ -589,7 +577,9 @@ def test_repo_layout_stages_one_pristine_repo_per_kernel(
     )
     assert "1 kernel folders" in proc.stdout
     staged = shared / "tasks/argmax_value/repo"
-    if staged.exists():
+    if not layout:
+        assert not staged.exists()
+    elif staged.exists():
         assert (staged / ".git").is_dir(), "a staged repo must carry its seed history"
         assert (staged / "ISSUE.md").is_file()
     else:

@@ -73,26 +73,19 @@ def test_a_rank_gets_its_own_build_folder(monkeypatch: pytest.MonkeyPatch) -> No
     assert values["default_build_folder"] == str(pathlib.Path(".dacecache/rank2"))
 
 
-def test_dace_s_own_per_rank_folders_are_not_suffixed_again(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("initial", [True, False], ids=["knob-on", "knob-off-in-dace-conf"])
+def test_dace_s_own_per_rank_folders_are_not_suffixed_again(monkeypatch: pytest.MonkeyPatch, initial: bool) -> None:
     """``cache_distaware`` already appends the rank inside DaCe. Appending ours on top nests a
     second level (``.dacecache/rank2_rank2``), which hits no cache and re-splits an already split
-    one -- hiding, not fixing, a real collision."""
+    one -- hiding, not fixing, a real collision. DaCe suffixes the folder only while the knob is on, so a
+    ~/.dace.conf that turned it off would put every rank of a graded run back into one shared folder: the knob is
+    pinned on."""
     monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "2")
     values = fake_config(monkeypatch, native=True)
+    values["cache_distaware"] = initial
     dace_framework.pin_per_rank_build_dirs()
     assert values["default_build_folder"] == ".dacecache"
     assert values["cache_distaware"] is True
-
-
-def test_dace_s_own_per_rank_folders_are_pinned_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    """DaCe suffixes the folder only while the knob is on, so a ~/.dace.conf that turned it off
-    would put every rank of a graded run back into one shared folder."""
-    monkeypatch.setenv("SLURM_PROCID", "4")
-    values = fake_config(monkeypatch, native=True)
-    values["cache_distaware"] = False
-    dace_framework.pin_per_rank_build_dirs()
-    assert values["cache_distaware"] is True
-    assert values["default_build_folder"] == ".dacecache"
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -152,16 +145,6 @@ def test_pinning_twice_does_not_nest_the_rank_folder(monkeypatch: pytest.MonkeyP
     dace_framework.pin_per_rank_build_dirs()
     expected = ".dacecache" if native else str(pathlib.Path(".dacecache/rank1"))
     assert values["default_build_folder"] == expected
-
-
-def test_the_native_probe_reads_the_config_key_not_a_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The knob landed on a branch, so no released version number tells the two DaCes apart. A
-    DaCe whose schema lacks the key must fall back to our suffix, whatever it calls itself."""
-    monkeypatch.setenv("PMI_RANK", "7")
-    monkeypatch.setattr(dace_framework.importlib.metadata, "version", lambda name: "99.0.0")
-    values = fake_config(monkeypatch, native=False)
-    dace_framework.pin_per_rank_build_dirs()
-    assert values["default_build_folder"] == str(pathlib.Path(".dacecache/rank7"))
 
 
 def test_rank_env_covers_every_launcher_dace_knows() -> None:

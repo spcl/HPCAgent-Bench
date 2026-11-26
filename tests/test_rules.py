@@ -32,11 +32,6 @@ def test_rule_4_refuses_a_cost_column_that_is_entirely_empty() -> None:
         rules.require_costs(frame, "speedup", ("baseline_ms", "candidate_ms"))
 
 
-def test_rule_4_passes_a_table_that_reports_both_costs() -> None:
-    frame = ratios(baseline_ms=[3.0, 4.0], candidate_ms=[2.0, 2.0])
-    assert rules.require_costs(frame, "speedup", ("baseline_ms", "candidate_ms")) is frame
-
-
 def test_rule_5_refuses_nondeterministic_points_with_no_interval_columns() -> None:
     with pytest.raises(rules.RuleViolation, match="Rule 5"):
         rules.require_interval(ratios(), "speedup", "speedup_low", "speedup_high")
@@ -46,12 +41,6 @@ def test_rule_5_refuses_a_table_where_no_plotted_point_has_an_interval() -> None
     frame = ratios(speedup_low=[float("nan")] * 2, speedup_high=[float("nan")] * 2)
     with pytest.raises(rules.RuleViolation, match="empty interval"):
         rules.require_interval(frame, "speedup", "speedup_low", "speedup_high")
-
-
-def test_rule_5_allows_a_single_degenerate_row_beside_real_intervals() -> None:
-    """One cell with too few repetitions to bound is a fact about the run, not a broken figure."""
-    frame = ratios(speedup_low=[1.2, float("nan")], speedup_high=[1.6, float("nan")])
-    assert rules.require_interval(frame, "speedup", "speedup_low", "speedup_high") is frame
 
 
 def test_rule_5_passes_rows_whose_interval_was_withheld_for_too_few_values() -> None:

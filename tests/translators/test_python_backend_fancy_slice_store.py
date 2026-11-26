@@ -55,12 +55,8 @@ def test_the_store_becomes_a_loop_over_the_index_array() -> None:
     assert body.startswith(f"out[ia[{it}], :, :] = "), body
     # numba reads the value as numpy broadcasts it: at the iterator, or at 0 along a size-1 axis.
     assert body.endswith(f"[{it} if {it.removesuffix('_i')}_v.shape[0] != 1 else 0]"), body
-
-
-def test_the_gather_beside_it_is_left_alone() -> None:
-    """The read form is correct in pythran; hoisting it into a point-wise gather loop would
-    allocate a rank-1 temp for a rank-3 result and store a plane into a scalar slot."""
-    out = desugared()
+    # The read form is correct in pythran; hoisting it into a point-wise gather loop would allocate a rank-1 temp for
+    # a rank-3 result and store a plane into a scalar slot.
     assert "src[ia - 1, :, :]" in out, out
     assert "__gather" not in out, out
 
