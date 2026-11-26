@@ -27,9 +27,10 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 from collections.abc import Sequence
 
-from hpcagent_bench import config, core_dumps
+from hpcagent_bench import config, core_dumps, framework_cache, phase_clock
 from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework, ToolMissing
 from hpcagent_bench.polyhedral.pluto_affine import has_scop, scop_nonaffine_reason
@@ -62,6 +63,7 @@ __all__ = [
     "pet_parse_env",
     "polycc_exe",
     "publish_text",
+    "reuse",
     "run_bounded",
     "run_polycc",
     "run_polycc_once",
@@ -267,9 +269,20 @@ def is_fresh(outputs: Sequence[pathlib.Path], key: str) -> bool:
     return all(p.is_file() for p in outputs) and sidecar.is_file() and sidecar.read_text() == key
 
 
-def mark_fresh(outputs: Sequence[pathlib.Path], key: str) -> None:
-    """Record ``key`` for ``outputs``, after they were published."""
+def mark_fresh(outputs: Sequence[pathlib.Path], key: str, seconds: float) -> None:
+    """Record ``key`` for ``outputs``, after they were published, and the ``seconds`` producing them took
+    (:func:`reuse` credits them)."""
+    write_atomic(framework_cache.seconds_path(outputs[0]), f"{seconds:.6f}".encode())
     write_atomic(key_path(outputs[0]), key.encode())
+
+
+def reuse(outputs: Sequence[pathlib.Path], key: str) -> bool:
+    """Whether ``outputs`` are fresh under ``key`` (:func:`is_fresh`); a reuse is credited the seconds producing them
+    took, as the tool's optimize time (:attr:`~hpcagent_bench.phase_clock.Phase.TRANSFORM`)."""
+    if not is_fresh(outputs, key):
+        return False
+    framework_cache.credit_production(outputs[0], phase_clock.Phase.TRANSFORM)
+    return True
 
 
 def override_scop_inputs(cpp_backend: pathlib.Path, override: pathlib.Path, base: str) -> list[pathlib.Path]:
@@ -567,7 +580,8 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str) -> list[pathlib.Pa
         assert_affine(scop, base)
         dst = transformed_path(scop)
         key = transform_key(scop, [exe, *POLYCC_ARGS])
-        if not is_fresh([dst], key):
+        if not reuse([dst], key):
+            started = time.perf_counter()
             try:
                 _, proc = run_polycc(scop, dst, timeout=config.current().oracle.polycc_timeout(base))
             except subprocess.TimeoutExpired:
@@ -578,6 +592,6 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str) -> list[pathlib.Pa
                 raise NotSupportedByFramework(
                     FRAMEWORK, base, f"polycc rejected {scop.name}: {proc.stderr.strip()[-500:]}"
                 )
-            mark_fresh([dst], key)
+            mark_fresh([dst], key, time.perf_counter() - started)
         out.append(dst)
     return out

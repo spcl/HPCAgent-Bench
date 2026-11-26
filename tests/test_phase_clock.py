@@ -34,6 +34,17 @@ def test_unmarked_time_is_transform_and_marked_time_is_its_phase() -> None:
     assert times["codegen_time"] == 0.0
 
 
+def test_an_unmeasured_host_check_is_in_no_phase() -> None:
+    """A toolchain probe a process pays once (Polly's autopar check, 16 s on MI300A) is no part of a kernel's build:
+    counted as the span's rest it would be that kernel's optimize time."""
+    with phase_clock.measuring() as clock:
+        with phase_clock.unmeasured():
+            time.sleep(0.2)
+        time.sleep(0.02)
+    assert 0.02 <= clock.seconds[Phase.TRANSFORM] < 0.15
+    assert sum(clock.seconds.values()) < 0.15
+
+
 def test_a_nested_phase_takes_its_own_seconds_from_the_outer_one() -> None:
     with phase_clock.measuring() as clock, phase_clock.phase(Phase.CODEGEN), phase_clock.phase(Phase.COMPILE):
         time.sleep(0.05)

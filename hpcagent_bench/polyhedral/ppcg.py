@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 
 from hpcagent_bench import config
@@ -20,8 +21,8 @@ from hpcagent_bench.polyhedral.pluto import (
     OVERRIDE_INPUT_SUFFIX,
     POLYCC_MEMORY_LIMIT,
     assert_affine,
-    is_fresh,
     mark_fresh,
+    reuse,
     run_bounded,
     scop_inputs,
     transform_key,
@@ -469,7 +470,8 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Language 
         assert_affine(scop, base)
         produced = transformed_paths(scop, vendor)
         key = ppcg_key(scop, vendor)
-        if not is_fresh(produced, key):
+        if not reuse(produced, key):
+            started = time.perf_counter()
             try:
                 argv, proc = run_ppcg(scop, vendor, timeout=config.current().oracle.polycc_timeout(base))
             except ValueError as exc:  # a pet respelling or a host rewrite that cannot read ppcg's output
@@ -478,7 +480,7 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Language 
                 raise NotSupportedByFramework(
                     FRAMEWORK, base, f"ppcg rejected {scop.name}: {proc.stderr.strip()[-500:]}"
                 )
-            mark_fresh(produced, key)
+            mark_fresh(produced, key, time.perf_counter() - started)
         # Re-read: a fresh passthrough published by an EARLIER call must still be declined.
         if not offloaded(produced[1].read_text()):
             raise NotSupportedByFramework(

@@ -17,7 +17,7 @@ from collections.abc import Iterator
 
 from hpcagent_agent.coded import Coded
 
-__all__ = ["MARKS", "PHASES", "RUNNING", "Clock", "Mark", "Phase", "credit", "measuring", "phase", "shift"]
+__all__ = ["MARKS", "PHASES", "RUNNING", "Clock", "Mark", "Phase", "credit", "measuring", "phase", "shift", "unmeasured"]
 
 
 class Phase(Coded):
@@ -90,6 +90,22 @@ def phase(name: Phase) -> Iterator[None]:
         for clock in RUNNING.get():
             clock.seconds[name] += own
             clock.marked_wall += own
+        outer = MARKS.get()
+        if outer:
+            outer[-1].nested += elapsed
+
+
+@contextlib.contextmanager
+def unmeasured() -> Iterator[None]:
+    """Leave the enclosed block out of every phase: a check of the host's toolchain (is the compiler installed, does
+    it parallelize at all), which a process pays once and which is no part of building the kernel."""
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - started
+        for clock in RUNNING.get():
+            clock.marked_wall += elapsed
         outer = MARKS.get()
         if outer:
             outer[-1].nested += elapsed

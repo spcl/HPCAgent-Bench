@@ -45,6 +45,7 @@ __all__ = [
     "finish",
     "hip_device",
     "is_device_column",
+    "jit_cache",
     "kernel_limits",
     "rank_environment",
     "read_kernels_file",
@@ -278,6 +279,11 @@ def positive_knob(environ: Mapping[str, str], name: str, default: int) -> int:
     return int(value)
 
 
+def jit_cache(sweep: Sweep, tool: str) -> pathlib.Path:
+    """The column's ``tool`` JIT cache (``triton``, ``numba``) in this sweep's work directory."""
+    return sweep.out_root / f"{tool}cache-{sweep.column}"
+
+
 def rank_environment(sweep: Sweep, rank: jobs.Rank, cpus: set[int]) -> dict[str, str]:
     """The environment of this rank's kernels: the cache roots, DaCe's two caches keyed by column and commit, the
     graded thread count (one per core of ``cpus``, the rank's slot), a device, and the build label every row
@@ -299,6 +305,10 @@ def rank_environment(sweep: Sweep, rank: jobs.Rank, cpus: set[int]) -> dict[str,
     build = sweep.out_root / f"dacecache-{sweep.column}"
     env["DACE_default_build_folder"] = str(build)
     build.mkdir(parents=True, exist_ok=True)
+    # Triton's and numba's JIT caches start empty in every sweep: one kept across sweeps would make the build
+    # phases a cache load, and neither records what the cached build took.
+    env["TRITON_CACHE_DIR"] = str(jit_cache(sweep, "triton"))
+    env["NUMBA_CACHE_DIR"] = str(jit_cache(sweep, "numba"))
     device = hip_device(env, rank.index)
     if device is None:
         print(f"canon {sweep.column} rank {rank.index}: no device list inherited, leaving the step's binding alone")
@@ -394,6 +404,8 @@ def finish(sweep: Sweep) -> int:
     for build in (
         sweep.out_root / f"dacecache-{sweep.column}",
         *sweep.out_root.glob(f"dacecache-{sweep.column}_rank*"),
+        jit_cache(sweep, "triton"),
+        jit_cache(sweep, "numba"),
     ):
         shutil.rmtree(build, ignore_errors=True)
     print(f"canon {sweep.column}: {len(rows)} row(s) in {sweep.canon()}; cleared its build tree + shard DB")

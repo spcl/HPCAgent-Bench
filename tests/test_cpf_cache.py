@@ -177,6 +177,21 @@ def test_a_canonical_entry_serves_its_sdfg_until_the_file_is_modified(tmp_path: 
     assert cpf_cache.read_entry(cache, key) is None
 
 
+def test_a_forms_render_time_is_its_canonical_optimize_and_its_own_codegen(tmp_path: pathlib.Path) -> None:
+    """The optimize time a CPF baseline reports is parse + canonicalize; the form adds only its code generation. A
+    form rendered before forms recorded that time has no render time rather than a zero one."""
+    cache = tmp_path / "cache"
+    canonical = cpf_cache.cache_key("canonical", "program", "commit", {"target": "cpu"})
+    sdfg = [(Role.SDFG, cpf_cache.CANONICAL_SDFG_NAME, b"sdfg")]
+    cpf_cache.publish(cache, canonical, {"verdict": RenderVerdict.OK, "seconds": 9.0}, sdfg)
+    inputs = {"canonical": canonical, "dace_commit": "commit", "options": OPTIONS}
+    cpf_cache.publish(cache, PINNED_KEY, {**OK, "inputs": inputs, "seconds": 0.7}, FORM_FILES)
+    assert cpf_cache.render_times(cache, PINNED_KEY) == (9.0, 0.7)
+    older = cpf_cache.cache_key("form", "sdfg", "dace", {**OPTIONS, "kernel": "older"})
+    cpf_cache.publish(cache, older, {**OK, "inputs": inputs}, FORM_FILES)
+    assert cpf_cache.render_times(cache, older) is None
+
+
 def test_a_failure_is_an_entry_with_no_files(tmp_path: pathlib.Path) -> None:
     cache = tmp_path / "cache"
     cpf_cache.publish(cache, PINNED_KEY, {"verdict": RenderVerdict.FAIL, "error": "ValueError: cannot lift"})

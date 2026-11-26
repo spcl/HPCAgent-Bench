@@ -937,6 +937,7 @@ def prerender_sdfg(
             if isinstance(sdfg, cpf_canonical.RenderFailure):
                 failed = sdfg
             else:
+                started = time.perf_counter()
                 try:
                     with phase_clock.phase(phase_clock.Phase.CODEGEN):
                         form = render_canonical(spec, short, sdfg, language, precision, target, hints)
@@ -946,6 +947,7 @@ def prerender_sdfg(
                     inputs = {"canonical": keys.canonical, "dace_commit": dace_commit, "options": options}
                     form_fields = {
                         **fields,
+                        "seconds": time.perf_counter() - started,
                         "verdict": RenderVerdict.OK,
                         "inputs": inputs,
                         "entry": form.entry,

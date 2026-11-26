@@ -177,8 +177,9 @@ class Entry(pydantic.BaseModel):
     kernel: str = ""
     precision: str = ""
     target: Target | None = None
-    #: A canonical entry: the generated program, and the wall seconds parse + canonicalize took (credited to
-    #: ``transform`` on a hit, :mod:`hpcagent_bench.phase_clock`).
+    #: A canonical entry: the generated program, and the wall seconds parse + canonicalize took, its optimize time
+    #: (credited to ``transform`` on a hit, :mod:`hpcagent_bench.phase_clock`). A form: the seconds its code
+    #: generation took (``codegen``); :func:`render_times` pairs the two.
     program: str = ""
     seconds: float = 0.0
     #: A form: the symbol it defines, its inputs, the catalog libraries it calls (``requests.startup.load``) and
@@ -297,6 +298,24 @@ def publish(
     (staging / MANIFEST_NAME).write_text(manifest)
     install(staging, final, lambda: read_entry(cache_root, key) is not None)
     return True
+
+
+def render_times(cache_root: pathlib.Path, key: str) -> tuple[float, float] | None:
+    """Form ``key``'s render cost as ``(optimize, codegen)`` seconds: its canonical entry's parse + canonicalize and
+    its own code generation (docs/scoring.md, build phases; the agent's compile is the agent's). ``None`` without an
+    ok form, or for a form rendered before forms recorded their codegen time."""
+    form = read_entry(cache_root, key)
+    if (
+        form is None
+        or form.verdict is not RenderVerdict.OK
+        or form.inputs is None
+        or "seconds" not in form.model_fields_set
+    ):
+        return None
+    canonical = read_entry(cache_root, form.inputs.canonical)
+    if canonical is None:
+        return None
+    return canonical.seconds, form.seconds
 
 
 def write_json(path: pathlib.Path, record: pydantic.BaseModel) -> None:

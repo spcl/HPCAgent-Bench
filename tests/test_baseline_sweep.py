@@ -360,6 +360,28 @@ def test_finish_clears_the_build_tree_and_shard_db_and_keeps_the_rows(
     assert {name: row["validated"] for name, row in canon_rows(sweep).items()} == {"fakekernel": 1}
 
 
+JIT_CACHE_CLI = (
+    WRITING_CLI
+    + """
+for name in ("TRITON_CACHE_DIR", "NUMBA_CACHE_DIR"):
+    pathlib.Path(os.environ[name]).mkdir(parents=True, exist_ok=True)
+    (pathlib.Path(os.environ[name]) / "entry").touch()
+"""
+)
+
+
+def test_the_jit_caches_start_empty_in_the_sweep_and_go_with_its_build_tree(tmp_path: pathlib.Path) -> None:
+    """Triton's and numba's caches live in the column's work dir: a cache kept across sweeps would make the timed
+    build a cache load whose original cost neither tool records."""
+    opt = stub_checkout(tmp_path, JIT_CACHE_CLI)
+    sweep = sweep_of(tmp_path, opt, ("fakekernel",))
+    assert baseline.run(sweep, jobs.Rank(0, 1)) == 0
+    caches = [baseline.jit_cache(sweep, tool) for tool in ("triton", "numba")]
+    assert all((cache / "entry").is_file() and cache.parent == sweep.out_root for cache in caches)
+    assert baseline.finish(sweep) == 0
+    assert not any(cache.exists() for cache in caches)
+
+
 def test_a_column_that_recorded_no_row_still_finishes(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
