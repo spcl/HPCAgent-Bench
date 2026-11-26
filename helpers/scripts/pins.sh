@@ -4,8 +4,7 @@
 # The released DaCe extended (dace-extended) and relayout (dace-relayout) this checkout runs: pip and uv install the
 # same PyPI releases, pyproject.toml holds each lower bound and uv.lock the exact version.
 #   pins.sh [dace|relayout]  print the version uv.lock holds (dace: dace-extended, the default)
-#   pins.sh --bump           raise both lower bounds to the newest PyPI versions and relock them, and move the user
-#                            plugins to their newest PyPI releases (user_plugins.py bump)
+#   pins.sh --bump           raise both lower bounds to the newest PyPI versions and relock them
 set -euo pipefail
 ulimit -c 0
 root="$(dirname -- "${BASH_SOURCE[0]}")/../.."
@@ -26,20 +25,17 @@ EOF
 }
 
 bump() {
-    local name version before plugins_before
-    # A failed step puts both files back, so pyproject.toml never disagrees with uv.lock beside it.
+    local name version before
+    # A failed step puts pyproject.toml back, so it never disagrees with uv.lock beside it.
     before="$(cat "${root}/pyproject.toml"; echo x)"
-    plugins_before="$(cat "${root}/.github/user-plugins.toml"; echo x)"
     restore() {
         printf '%s' "${before%x}" >"${root}/pyproject.toml"
-        printf '%s' "${plugins_before%x}" >"${root}/.github/user-plugins.toml"
-        echo "pins.sh: the bump failed; pyproject.toml and user-plugins.toml keep the previous pins" >&2
+        echo "pins.sh: the bump failed; pyproject.toml keeps the previous pins" >&2
         exit 1
     }
     # uv finds the newest releases (PyPI's JSON pages lag an upload; the index uv reads is what installs), and
     # each lower bound then rises to the version it locked, so pip never resolves an older release than uv.
-    (cd "${root}" && uv run --frozen --no-sync python helpers/scripts/user_plugins.py bump &&
-        uv lock -q --refresh-package dace-extended --refresh-package dace-relayout \
+    (cd "${root}" && uv lock -q --refresh-package dace-extended --refresh-package dace-relayout \
             --upgrade-package dace-extended --upgrade-package dace-relayout) || restore
     for name in "${distribution[@]}"; do
         version="$(locked "${name}")"
