@@ -5,9 +5,8 @@
 # A plugin with no PyPI release yet is pinned to a commit of its repository until its first release.
 
 [plugins.tactics]
-package = "tactics"
-repository = "https://github.com/spcl/tactics.git"
-commit = "1664b6879f5af3bd1fcc1722a343a9c07653a10b"
+package = "dace-tactics"
+version = "0.1.2"
 folder = "plugin/tactics"
 
 [plugins.alloy]
