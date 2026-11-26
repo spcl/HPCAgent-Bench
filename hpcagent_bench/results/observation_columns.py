@@ -37,6 +37,7 @@ class RowKind(Coded):
 OBSERVATION_FIELDS: tuple[str, ...] = (
     # identity
     "run_root",
+    "run_uid",
     "job",
     "judge_db",
     "row_kind",

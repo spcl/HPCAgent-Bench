@@ -668,12 +668,22 @@ def results_database(path: pathlib.Path, agent_file: bool = False) -> bool:
         return False
 
 
+def run_uid_of(row: Mapping[str, Any]) -> str:
+    """The ``run_uid`` of a grade or episode row; '0' (not known) for a row whose query selects none (a scaling
+    point). A :class:`sqlite3.Row` raises IndexError for a name it lacks, a dict KeyError; ``in`` on a Row tests values."""
+    try:
+        return str(row["run_uid"])
+    except (KeyError, IndexError):
+        return results_db.UNKNOWN_RUN_UID
+
+
 def identity_row(db: Database, row: Mapping[str, Any], record: RowKind) -> dict[str, Any]:
     """The columns every row of one episode carries."""
     episode_id = str(row["label"])
     setup = str(row["setup"])
     return {
         "run_root": db.run_root,
+        "run_uid": run_uid_of(row),
         "job": job_of(row["episode_job"]),
         "judge_db": str(db.path),
         "row_kind": record.text,
