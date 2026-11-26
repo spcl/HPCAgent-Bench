@@ -1,3 +1,4 @@
+# The sample plugin's prompt overlay: one bullet asking the agent to call its tool.
 agent:
   insert:
     - {after: intro, block: {id: sample, text: "Call sample_echo once."}}

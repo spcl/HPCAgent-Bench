@@ -11,6 +11,9 @@
 # job_guard_deadline [margin]   seconds left before the job's end minus margin (default 600), at least 60; prints
 #                               nothing outside a job or when Slurm does not say.
 
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 job_guard_local_dirs() {
     [[ -n "${SLURM_JOB_ID:-}" ]] || return 0
     export TMPDIR="${TMPDIR:-/tmp}"

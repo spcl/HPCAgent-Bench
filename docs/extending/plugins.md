@@ -571,7 +571,7 @@ plugin's `tools/` imports (`hpcagent_agent.tools.registry`, `http_json`, `coded`
 sample plugin (`tests/sample_plugin`) that must install, check, serve its tool and answer a call on its own MCP
 server. A name that is removed or changes
 signature moves `API_VERSION` (and a plugin's `api` with it); a new optional manifest field or a new exported name
-does not, and is recorded with `python -m tests.test_plugin_stability --update`. A removed or renamed manifest field,
+does not, and is recorded with `python -c "from tests.test_plugin_stability import write_snapshots; write_snapshots()"`. A removed or renamed manifest field,
 a field made required or a narrowed type moves the `Literal` of `Manifest.api`.
 
 ## Pinning a plugin for a study

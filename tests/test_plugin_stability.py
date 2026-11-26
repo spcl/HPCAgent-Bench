@@ -3,7 +3,7 @@
 """The user-plugin surface stays stable: a plugin written against one release works on the next without any edit to
 this repository. Three pins: the names a plugin imports (``hpcagent_bench.plugin_api`` and the agent-side tool API),
 the ``plugin.toml`` schema (additive only) and a sample plugin that installs, checks and serves a tool.
-Regenerate the snapshots after a deliberate, additive change with ``python -m tests.test_plugin_stability --update``."""
+Regenerate the snapshots after a deliberate, additive change with ``python -c "from tests.test_plugin_stability import write_snapshots; write_snapshots()"``."""
 
 import dataclasses
 import enum
@@ -26,7 +26,7 @@ TESTS = pathlib.Path(__file__).parent
 SURFACE_SNAPSHOT = TESTS / "plugin_surface.json"
 MANIFEST_SNAPSHOT = TESTS / "plugin_manifest_schema.json"
 SAMPLE = TESTS / "sample_plugin"
-UPDATE = "python -m tests.test_plugin_stability --update"
+UPDATE = 'python -c "from tests.test_plugin_stability import write_snapshots; write_snapshots()"'
 #: The modules a plugin imports from, and the names of each that count as the pinned surface (``None``: its ``__all__``).
 PINNED: dict[str, tuple[str, ...] | None] = {
     "hpcagent_bench.plugin_api": None,
@@ -321,16 +321,3 @@ async def main():
 
 anyio.run(main)
 """
-
-
-if __name__ == "__main__":
-    if "--update" in sys.argv[1:]:
-        write_snapshots()
-    else:
-        test_the_names_a_plugin_imports_keep_their_signatures()
-        test_the_manifest_schema_only_grows()
-        test_the_manifest_comparison_tells_growth_from_breakage()
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as folder:
-            test_a_sample_plugin_installs_checks_and_serves_its_tool(pathlib.Path(folder))
