@@ -162,3 +162,18 @@ def test_renders_render_each_kernel_and_each_cpf_target_and_grade_nothing(
     assert prepare.main([*argv, "--rank", "0", "--ranks", "2"]) == 0
     assert rendered == [("k1", "numba"), ("k1", "c"), ("k3", "numba"), ("k3", "c"), ("k3", "fortran")]
     assert targets == ["cpu", "gpu"]
+
+
+def test_in_a_job_tasks_take_the_next_unclaimed_kernel_instead_of_a_static_share(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One kernel's golden prep costs 100x another's: a task takes the next kernel no task claimed, so a task whose
+    kernels were cheap goes on with the kernels a static ``kernels[rank::ranks]`` would have left to the slow one."""
+    monkeypatch.setenv("SLURM_JOB_ID", "7")
+    monkeypatch.delenv("HPCAGENT_BENCH_RUN_ID", raising=False)
+    kernels = ["a", "b", "c", "d"]
+    slow = prepare.kernel_share(kernels, 0, 2, "golden", tmp_path)
+    assert next(slow) == "a"  # task 0 still works on "a" (its claim held) while task 1 takes everything else
+    assert list(prepare.kernel_share(kernels, 1, 2, "golden", tmp_path)) == ["b", "c", "d"]
+    assert list(slow) == []
+    assert list(prepare.kernel_share(kernels, 1, 2, "golden", None)) == ["b", "d"]  # no CLAIMS_ENV: static share

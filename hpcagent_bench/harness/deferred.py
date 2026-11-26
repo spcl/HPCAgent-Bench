@@ -6,7 +6,9 @@ A single- or blind-submission ``/submit`` that passed every request check is app
 (:func:`queue_path`) and answered as spent; the episode ends. After the run, :func:`replay` posts each queued body
 to a judge's ``/submit`` again with its original time (:data:`~hpcagent_bench.fused.REPLAY_TS_HEADER`), so the grade
 runs through the same handler and its row reads as if graded inline. A replayed entry is listed in the queue's
-``.done`` file, so a replay resumes where an earlier one stopped. A queued body is self-contained: its sources are
+``.done`` file, so a replay resumes where an earlier one stopped. Replays on several judge nodes given the same
+queues and a shared claims directory each take the next entry no node holds (:class:`~hpcagent_bench.harness.claims.ClaimQueue`),
+so one rank's long queue no longer waits on one node while the others sit idle. A queued body is self-contained: its sources are
 inline and a prebuilt library is a judge-owned copy in the queue's spool (:func:`spool`), never an agent's file."""
 
 import contextlib
@@ -26,6 +28,7 @@ import httpx
 
 from hpcagent_bench import fused
 from hpcagent_bench.cache_files import append_line, replacing
+from hpcagent_bench.harness import claims
 
 __all__ = [
     "DONE_SUFFIX",
@@ -200,16 +203,37 @@ def replayed_ts_ms(header: str) -> int | None:
     return int(text) if text.isdigit() else None
 
 
-def replay(queues: Sequence[pathlib.Path], judge_url: str, workers: int) -> ReplayReport:
-    """Grade every pending entry of ``queues`` on the judge at ``judge_url``, ``workers`` at a time.
+def replay(
+    queues: Sequence[pathlib.Path], judge_url: str, workers: int, claims_dir: pathlib.Path | None = None
+) -> ReplayReport:
+    """Grade every pending entry of ``queues`` on the judge at ``judge_url``, ``workers`` at a time; with
+    ``claims_dir``, only the entries this replay claims there first (other nodes' replays share it).
 
     A 200 is a recorded grade and marks the entry done; anything else leaves it pending for the next replay."""
     lock = threading.Lock()
     work = [(queue, entry) for queue in queues for entry in pending(queue)]
     skipped = sum(len(read(queue)) for queue in queues) - len(work)
     failed: list[str] = []
+    shared = None if claims_dir is None else claims.ClaimQueue(claims_dir, claims.job_tag())
 
     def grade(item: tuple[pathlib.Path, DeferredSubmit]) -> bool:
+        if shared is None:
+            return post(item)
+        key = claims.item_key(item[0].resolve(), item[1].request_id)
+        claim = shared.take(key)
+        if claim is None:
+            return False  # another node grades it, or graded it
+        with claims.heartbeat(claim):
+            ok = post(item)
+        if ok:
+            shared.finish(key, claim)
+        else:
+            # Left for the replay after the job: another node retrying it now would most likely fail the same way.
+            claims.create_exclusive(shared.closed(key))
+            claim.unlink()
+        return ok
+
+    def post(item: tuple[pathlib.Path, DeferredSubmit]) -> bool:
         queue, entry = item
         headers = {"Content-Type": "application/json", fused.REPLAY_TS_HEADER: str(entry.ts_ms)}
         if entry.setup:

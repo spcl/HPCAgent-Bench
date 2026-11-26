@@ -410,6 +410,35 @@ def test_a_torn_done_mark_never_swallows_the_next_one(tmp_path: pathlib.Path, mo
     assert deferred.pending(queue) == []
 
 
+def test_replays_on_two_nodes_share_the_queues_and_grade_each_entry_once(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every judge node replays every rank's queue through one claims directory: an entry another node holds is
+    left to it, so a long queue spreads over the nodes and no /submit is graded twice."""
+    queues = [tmp_path / f"rank-{rank}" / f"hpcagent_bench{rank}{deferred.QUEUE_SUFFIX}" for rank in (0, 1)]
+    for rank, queue in enumerate(queues):
+        queue.parent.mkdir()
+        for n in range(3):
+            deferred.append(queue, deferred.DeferredSubmit(ts_ms=n, setup="", request_id=f"r{rank}-{n}", body="{}"))
+    monkeypatch.setenv("SLURM_JOB_ID", "9")
+    monkeypatch.delenv("HPCAGENT_BENCH_RUN_ID", raising=False)
+    posted: list[str] = []
+    second: list[deferred.ReplayReport] = []
+
+    def post(url: str, **kwargs: object) -> deferred.httpx.Response:
+        del url
+        posted.append(str(kwargs["headers"]))
+        if len(posted) == 1:  # the other node's replay runs while this node grades its first entry
+            second.append(deferred.replay(queues, "http://node-b", workers=1, claims_dir=tmp_path / "claims"))
+        return deferred.httpx.Response(200)
+
+    monkeypatch.setattr(deferred.httpx, "post", post)
+    first = deferred.replay(queues, "http://node-a", workers=1, claims_dir=tmp_path / "claims")
+    assert (first.graded, second[0].graded) == (1, 5)
+    assert len(posted) == 6
+    assert all(deferred.pending(queue) == [] for queue in queues)
+
+
 def test_a_deferred_library_is_replayed_from_the_judges_own_copy(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

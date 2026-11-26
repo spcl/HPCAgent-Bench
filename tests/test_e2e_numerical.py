@@ -27,6 +27,7 @@ from hpcagent_bench.numerical_oracle import (
 )
 from hpcagent_bench.spec import KERNELS, BenchSpec
 from hpcagent_bench.translators.numpyto_common.emit_io import is_override
+from tests import per_push
 from tests.translators.bench_yaml import COVERAGE_SET_FILE, coverage_set
 
 #: Backends fed DIRECTLY by the static translators' native emit, so a MISSING_EMIT_FEATURE entry
@@ -277,7 +278,8 @@ def level_3_stems() -> set[str]:
     (gromacs_nbnxm, hdiff, floyd_warshall, needleman_wunsch, lenet, pagerank, ...), each one
     displaced by some cheaper kernel that happened to touch the same lines. An application is
     exactly where a translator bug has room to hide -- helper chains, several call sites per
-    helper, locals rebound across layers -- so they are kept wholesale rather than by coverage.
+    helper, locals rebound across layers -- so they are swept by rotation rather than dropped by
+    coverage: every push one of them (:func:`subset_stems`), the native backends and a dispatched run all of them.
     """
     out = set()
     for stem in _gated_stems():
@@ -290,7 +292,10 @@ def level_3_stems() -> set[str]:
 
 
 def subset_stems() -> list[str]:
-    """The per-push slice: the measured coverage set, every pinned witness, every level-3 app.
+    """The per-push slice: the measured coverage set, every pinned witness, every pair :data:`REQUIRE_OK` holds off
+    the native backends, and the level-3 apps none of those covers in rotation (:mod:`tests.per_push`: one per push,
+    picked by the commit). Those apps were a numba leg's 10 minutes (ls3df_scf 182 s, warpx_esirkepov 175 s, lulesh
+    159 s, ...); the native backends still sweep every one of them on every push, and a dispatched run all of them.
 
     Equal emit coverage is NOT equal behaviour, and the difference is not hypothetical -- two
     kernels that fail today (squeezenet, resnet101) cover no line another kernel misses,
@@ -303,7 +308,9 @@ def subset_stems() -> list[str]:
     BENCHMARKS driving identical translation.
     """
     gated = set(_gated_stems())
-    return sorted(((coverage_set() | set(PINNED_KERNELS)) & gated) | level_3_stems())
+    required = {stem for stem, backend in REQUIRE_OK if backend not in NATIVE_EMIT_BACKENDS}
+    kept = ((coverage_set() | set(PINNED_KERNELS)) & gated) | (required & gated)
+    return sorted(kept | set(per_push.rotation(level_3_stems() - kept, per_push.commit())))
 
 
 def declares(stem: str, precision: str) -> bool:
