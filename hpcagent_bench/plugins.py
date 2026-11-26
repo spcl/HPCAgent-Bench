@@ -540,7 +540,9 @@ def harness_failure(key: str, packet: PacketDef, known: tuple[str, ...]) -> str:
 def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
     """Every name ``plugin``'s manifest gives that nothing answers to: packet tools, skill pages, composed packets and
     overlays, the harness a packet runs on, its harnesses' runners, flavor optimizers, ``[ci]`` optimizers, the routes
-    its ``[overrides.<tool>]`` build from, its ``[gates]`` and, under ``api``, its routes' imports."""
+    its ``[overrides.<tool>]`` build from and its ``[judge_mcp]`` serves on, its ``[gates]`` and, under ``api``, its
+    routes' imports. A packet tool no module registers passes under ``[judge_mcp]``: the judge lists those at run
+    time, and a name it does not list is refused there."""
     from hpcagent_agent.tools import registry  # deferred: only the check reads the tools
 
     from hpcagent_bench import prompt_build  # noqa: PLC0415 -- prompt_build loads plugins at its own import
@@ -556,7 +558,8 @@ def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
     for key in plugin.manifest.packets:
         packet = PACKETS[key]
         failures.append(harness_failure(key, packet, known))
-        failures += [f"packet {key!r}: no tool {name!r}" for name in packet.tools if name not in registry.REGISTRY]
+        if plugin.manifest.judge_mcp is None:
+            failures += [f"packet {key!r}: no tool {name!r}" for name in packet.tools if name not in registry.REGISTRY]
         failures += [
             f"packet {key!r}: no skill page {name!r}" for name in packet.skills if name not in {*pages, "lang", "*"}
         ]
@@ -577,6 +580,9 @@ def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
         for name, block in plugin.manifest.overrides.items()
         if (route := block.build.partition("?")[0].partition("/")[0]) not in ROUTES
     ]
+    served_on = plugin.manifest.judge_mcp
+    if served_on is not None and (route := served_on.route.partition("/")[0]) not in ROUTES:
+        failures.append(f"[judge_mcp]: no route {route!r}")
     failures += [gate_failure(key, symbol) for key, symbol in plugin.manifest.gates.items()]
     failures.append(api_failure(plugin))
     if plugin.manifest.ci is not None:

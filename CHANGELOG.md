@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.4 (unreleased)
+
+### Plugins
+
+- A plugin may serve its tools as an MCP server on a judge route of its own (`[judge_mcp]`, #275). The agent's MCP
+  server lists the route's tools and forwards each call with the caller's identity in `params._meta`, so the plugin
+  writes no agent-side wrappers (docs/extending/plugins.md, "An MCP server in the judge").
+
 ## 1.0.3 (unreleased)
 
 ### Grading and anti-cheat

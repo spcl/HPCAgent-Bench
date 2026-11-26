@@ -131,10 +131,11 @@ class Hints:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Spec:
     """What a tool shows the model: its description, its input model, its prompt bullet (``""``: none) and its MCP
-    annotations."""
+    annotations. ``input`` may instead be a JSON schema: the tool's server validates the call itself (a plugin's
+    judge MCP tool, :mod:`hpcagent_agent.judge_mcp`)."""
 
     description: str
-    input: type[pydantic.BaseModel]
+    input: type[pydantic.BaseModel] | dict[str, Any]
     prompt: str = ""
     hints: Hints = Hints()
 
@@ -269,6 +270,7 @@ def override(name: str, build: str, description: str) -> None:
 
     def spec(setup: Setup) -> Spec:
         replaced = core.spec_for(setup)
+        assert isinstance(replaced.input, type), "a core tool declares a pydantic input"
         fields: dict[str, Any] = {
             key: (field.annotation, field) for key, field in replaced.input.model_fields.items() if key not in code
         }
@@ -328,7 +330,12 @@ def served(setup: Setup, order: tuple[str, ...] = ()) -> dict[str, Served]:
         if not offered(entry, setup) or reaches_outside(entry, setup):
             continue
         spec = entry.spec_for(setup)
-        tools[name] = Served(
-            name, spec.description, schema_of(spec.input), spec.prompt, validated(spec.input, entry.run), spec.hints
-        )
+        if isinstance(spec.input, dict):
+            tools[name] = Served(
+                name, spec.description, wire_form({"required": [], **spec.input}), spec.prompt, entry.run, spec.hints
+            )
+        else:
+            tools[name] = Served(
+                name, spec.description, schema_of(spec.input), spec.prompt, validated(spec.input, entry.run), spec.hints
+            )
     return tools
