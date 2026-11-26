@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.3 (unreleased)
+## 1.0.3 (2026-11-26)
 
 ### Grading and anti-cheat
 
