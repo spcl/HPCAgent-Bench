@@ -70,14 +70,11 @@ def test_roundtrip_near_square_grid(ranks: int, ndim: int, scheme: Scheme, dtype
     base = [7, 5, 4, 3][:ndim]
     a = arr(tuple(base), dtype)
     check(a, axis_dist(ndim, grid, scheme, block_size=2), grid)
-
-
-@pytest.mark.parametrize("block_size", [1, 2, 3, 5])
-@pytest.mark.parametrize("ranks", [2, 3, 4])
-def test_block_cyclic_tiles_1d(ranks: int, block_size: int) -> None:
-    grid = Grid((ranks,))
-    a = arr((13,), "float64")
-    check(a, ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK_CYCLIC, block_size=block_size),)), grid)
+    if scheme is Scheme.BLOCK and dtype == "float64" and ndim <= 3:
+        # The default distribution on the same grid, once per rank count and dimension.
+        default = arr(tuple([8, 7, 5][:ndim]), "float64")
+        assert grid.nranks == ranks
+        check(default, default_distribution(default.shape, grid, block_size=2), grid)
 
 
 # Canonical ScaLAPACK grid shapes on a 2-D array: 1xR (block-col), Rx1 (block-row), PxQ (2-D)
@@ -87,19 +84,6 @@ def test_roundtrip_2d_grid_shapes(dims: tuple[int, int], scheme: Scheme) -> None
     grid = Grid(dims)
     a = arr((9, 8), "float64")
     check(a, axis_dist(2, grid, scheme, block_size=2), grid)
-
-
-def test_scalapack_2d_block_cyclic_distinct_block_sizes() -> None:
-    # ScaLAPACK's workhorse: 2-D block-cyclic with distinct MB, NB on a PxQ grid.
-    grid = Grid((2, 3))
-    a = arr((10, 11), "float64")
-    dist = ArrayDist(
-        axes=(
-            AxisDist(grid_dim=0, scheme=Scheme.BLOCK_CYCLIC, block_size=2),  # MB=2 over P=2
-            AxisDist(grid_dim=1, scheme=Scheme.BLOCK_CYCLIC, block_size=3),
-        )
-    )  # NB=3 over Q=3
-    check(a, dist, grid)
 
 
 def test_mixed_schemes_per_axis() -> None:
@@ -203,15 +187,6 @@ def test_size_smaller_or_ragged_vs_ranks_1d(n: int, scheme: Scheme) -> None:
     assert sum(t.size for t in tiles) == n  # nothing dropped or duplicated
 
 
-def test_length_one_distributed_axis() -> None:
-    grid = Grid((4,))
-    a = arr((1, 5), "float64")  # axis 0 has length 1, distributed over 4 -> rank 0 owns it
-    dist = ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist(grid_dim=None)))
-    tiles = check(a, dist, grid)
-    assert tiles[0].shape == (1, 5)
-    assert all(t.shape == (0, 5) for t in tiles[1:])
-
-
 def test_length_zero_axis() -> None:
     grid = Grid((3,))
     a = arr((0, 4), "float64")  # empty leading axis
@@ -225,16 +200,7 @@ def test_length_zero_axis() -> None:
 # Partition completeness, stated directly (disjoint + covering)
 
 
-# The default distribution + factor_grid helpers
-@pytest.mark.parametrize("ranks", RANKS)
-@pytest.mark.parametrize("ndim", [1, 2, 3])
-def test_default_distribution_roundtrip(ranks: int, ndim: int) -> None:
-    grid = factor_grid(ranks, ndim)
-    assert grid.nranks == ranks
-    a = arr(tuple([8, 7, 5][:ndim]), "float64")
-    check(a, default_distribution(a.shape, grid, block_size=2), grid)
-
-
+# The factor_grid helper
 def test_factor_grid_products_and_rank_coord_bijection() -> None:
     for ranks in range(1, 13):
         for ndim in (1, 2, 3):

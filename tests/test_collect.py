@@ -178,14 +178,12 @@ def test_verify_reports_tampering(sources: pathlib.Path, tmp_path: pathlib.Path)
         "not in SHA256SUMS: extra.txt",
     ]
 
-
-def test_verify_reports_a_malformed_sums_line(sources: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """A cut checksum line is a problem to report: verify is what a damaged copy is checked with."""
-    out = tmp_path / "data"
-    collect.copy(roots(sources), out)
-    sums = out / collect.SUMS
+    # A cut checksum line is one more damage to report.
+    cut = tmp_path / "cut"
+    collect.copy(roots(sources), cut)
+    sums = cut / collect.SUMS
     sums.write_text(sums.read_text() + "truncated\n")
-    assert collect.verify(out) == ["malformed SHA256SUMS line: truncated"]
+    assert collect.verify(cut) == ["malformed SHA256SUMS line: truncated"]
 
 
 @pytest.mark.parametrize("inside", ["runs/data", "regrades/data", "."])
@@ -205,16 +203,14 @@ def test_copy_refuses_a_non_empty_output(sources: pathlib.Path, tmp_path: pathli
     with pytest.raises(SystemExit, match="not empty"):
         collect.copy(roots(sources), out)
 
-
-def test_copy_refuses_two_roots_with_one_destination(sources: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """Two roots named alike under one kind would overwrite each other's files."""
+    # Two roots named alike under one kind would overwrite each other's files.
     (tmp_path / "other" / "runs").mkdir(parents=True)
     twins = [
         collect.Root(kind=DataSource.RUNS, path=sources / "runs"),
         collect.Root(kind=DataSource.RUNS, path=tmp_path / "other" / "runs"),
     ]
     with pytest.raises(SystemExit, match="both land on"):
-        collect.copy(twins, tmp_path / "data")
+        collect.copy(twins, tmp_path / "twin")
 
 
 @pytest.mark.smoke
@@ -407,29 +403,19 @@ def test_a_pre_release_shard_verifies_only_with_every_stored_source(
     ]
     assert collect.main(["archive", str(out)]) == 1
 
-
-def test_a_pre_release_shard_whose_sources_are_elsewhere_verifies_once_converted(
-    sources: pathlib.Path, tmp_path: pathlib.Path
-) -> None:
-    """A pre-release shard whose store lost a text is refused, and the same collection with the shard converted
-    (``convert_v0`` finding the text by sha256 where it survives) into a collected DB verifies: the copy holds every
-    graded source by its hash."""
-    shard = v0_shard(sources)
+    # With the text kept elsewhere the copy is refused as well, and verifies once the shard is converted
+    # (``convert_v0`` finds the text by sha256 where it survives) into a collected DB.
     elsewhere = tmp_path / "kept"
-    with contextlib.closing(sqlite3.connect(shard)) as conn, conn:
-        conn.execute("DELETE FROM sources WHERE path = '00/lost.txt'")
-        digest, path = conn.execute("SELECT hash, path FROM sources ORDER BY id").fetchone()
     elsewhere.mkdir()
     shutil.move(convert_v0.store_dir(shard) / path, elsewhere / "host.txt")
     collect.copy(roots(sources), tmp_path / "refused")
     assert collect.verify(tmp_path / "refused") == [
         f"pre-release source {digest} of {shard_rel(shard, sources)}: not in the copy with sha256 {digest}"
     ]
-
     convert_v0.convert(shard, sources / "regrades" / "converted" / "640146.db", convert_v0.index_texts([elsewhere]))
-    out = tmp_path / "data"
-    collect.copy(roots(sources), out)
-    assert collect.verify(out) == []
+    converted = tmp_path / "converted"
+    collect.copy(roots(sources), converted)
+    assert collect.verify(converted) == []
 
 
 def test_archive_removes_the_sources_only_through_remove_sources_after_every_check(

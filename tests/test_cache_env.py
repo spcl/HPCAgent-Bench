@@ -60,53 +60,48 @@ def test_hf_home_lives_under_fast_scratch_not_under_the_jit_cache_root(tmp_path:
     assert not resolved.is_relative_to(scratch), f"HF_HOME={resolved} leaked under SCRATCH={scratch}"
 
 
-def test_missing_scratch_fails_loudly_instead_of_silently_writing_home_or_tmp(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    "env",
+    [{}, {"JIT_CACHE_ROOT": ""}],
+    ids=["unset", "explicitly-empty-override"],
+)
+def test_missing_scratch_fails_loudly_instead_of_silently_writing_home_or_tmp(
+    tmp_path: pathlib.Path, env: dict[str, str]
+) -> None:
     """JIT_CACHE_ROOT has no FAST_SCRATCH-style unconditional default: an unset SCRATCH must abort
-    sourcing the file, not quietly resolve under $HOME or /tmp where a later job would never find it."""
+    sourcing the file, not quietly resolve under $HOME or /tmp where a later job would never find it. An
+    explicitly EMPTY override is still a missing setting (the account resolver's "absent, not defaulted"
+    rule), not "no override, fall back silently"."""
     home = tmp_path / "home"
     home.mkdir()
-    proc = run('echo "should not print: $JIT_CACHE_ROOT"', {"HOME": str(home)})
+    proc = run('echo "should not print: $JIT_CACHE_ROOT"', {"HOME": str(home), "USER": "tester", **env})
     assert proc.returncode != 0, proc.stdout
     assert "set SCRATCH" in proc.stderr, proc.stderr
     assert "should not print" not in proc.stdout
     assert not any(home.iterdir()), "cache_env.sh wrote into $HOME despite SCRATCH being unset"
 
 
-def test_missing_scratch_still_fails_loudly_even_when_jit_cache_root_is_explicitly_overridden_absent(
-    tmp_path: pathlib.Path,
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        # A container/CI/laptop run with no SCRATCH but a resolved HPCAGENT_BENCH_REPO lands under the checkout.
+        ({"HPCAGENT_BENCH_REPO": "{tmp}/repo"}, "{tmp}/repo/.cache/jit"),
+        # SCRATCH is the intended cluster root; a repo fallback must never shadow it.
+        ({"SCRATCH": "{tmp}/scratch", "HPCAGENT_BENCH_REPO": "{tmp}/repo"}, "{tmp}/scratch/.hpcagentbench-cache"),
+        # A caller that already resolved its own root can override, like the account resolver's escape hatch.
+        ({"JIT_CACHE_ROOT": "{tmp}/frozen-cache"}, "{tmp}/frozen-cache"),
+    ],
+    ids=["repo-fallback", "scratch-wins-over-repo", "explicit-override-without-scratch"],
+)
+def test_falls_back_to_hpcagent_bench_repo_when_scratch_is_unset(
+    tmp_path: pathlib.Path, env: dict[str, str], expected: str
 ) -> None:
-    """An explicitly EMPTY override is still a missing setting (see the account resolver's own
-    "absent, not defaulted" rule): it must not be treated as "no override, fall back silently"."""
-    proc = run('echo "$JIT_CACHE_ROOT"', {"JIT_CACHE_ROOT": "", "USER": "tester"})
-    assert proc.returncode != 0, proc.stdout
-    assert "set SCRATCH" in proc.stderr, proc.stderr
-
-
-def test_falls_back_to_hpcagent_bench_repo_when_scratch_is_unset(tmp_path: pathlib.Path) -> None:
-    """A container/CI/laptop run with no SCRATCH but a resolved HPCAGENT_BENCH_REPO (every real
-    caller has one -- hpcagent_bench/cluster/env.sh exports it before sourcing this file) lands the JIT cache
-    under the checkout instead of aborting: this is the fallback a suite inside a container relies on."""
-    repo = tmp_path / "repo"
-    proc = run('echo "$JIT_CACHE_ROOT"', {"HPCAGENT_BENCH_REPO": str(repo), "USER": "tester"})
+    """JIT_CACHE_ROOT resolution order: explicit override, SCRATCH, then the HPCAGENT_BENCH_REPO checkout
+    (every real caller has one -- hpcagent_bench/cluster/env.sh exports it before sourcing this file)."""
+    resolved_env = {key: value.format(tmp=tmp_path) for key, value in env.items()}
+    proc = run('echo "$JIT_CACHE_ROOT"', {"USER": "tester", **resolved_env})
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == str(repo / ".cache" / "jit")
-
-
-def test_scratch_still_wins_over_hpcagent_bench_repo_when_both_are_set(tmp_path: pathlib.Path) -> None:
-    """SCRATCH is the intended cluster root; a repo fallback must never shadow it."""
-    scratch, repo = tmp_path / "scratch", tmp_path / "repo"
-    proc = run('echo "$JIT_CACHE_ROOT"', {"SCRATCH": str(scratch), "HPCAGENT_BENCH_REPO": str(repo), "USER": "tester"})
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == str(scratch / ".hpcagentbench-cache")
-
-
-def test_an_explicit_jit_cache_root_override_is_honoured_without_scratch(tmp_path: pathlib.Path) -> None:
-    """A caller that already resolved its own root (tests, a rerun pinned to a frozen cache) must
-    still be able to override, exactly like the account resolver's HPCAGENT_BENCH_ACCOUNT escape hatch."""
-    override = tmp_path / "frozen-cache"
-    proc = run('echo "$JIT_CACHE_ROOT"', {"JIT_CACHE_ROOT": str(override), "USER": "tester"})
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == str(override)
+    assert proc.stdout.strip() == expected.format(tmp=tmp_path)
 
 
 def _documented_default(var_pattern: str) -> str:

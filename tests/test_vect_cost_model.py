@@ -35,33 +35,33 @@ FORTRAN = "subroutine s\nend\n"
 MODULUS_LOOP = "k.c:6:3"
 
 
-@pytest.mark.parametrize(("family", "report"), [("gcc", flags.GCC_OPT_REPORT), ("llvm", flags.CLANG_OPT_REPORT)])
-def test_the_default_cost_model_leaves_the_report_flags_as_they_were(
-    monkeypatch: pytest.MonkeyPatch, family: str, report: str
-) -> None:
-    monkeypatch.delenv(KNOB, raising=False)
-    assert languages.family_report_flags(family) == report
-
-
 @pytest.mark.parametrize(
-    ("family", "want"),
+    ("knob", "family", "want"),
     [
-        ("gcc", f"{flags.GCC_OPT_REPORT} {flags.GCC_VECT_UNLIMITED}"),
-        ("llvm", f"{flags.CLANG_OPT_REPORT} {flags.CLANG_VECT_UNLIMITED}"),
-        ("nvhpc", flags.NVHPC_OPT_REPORT),
+        pytest.param(None, "gcc", flags.GCC_OPT_REPORT, id="default-gcc"),
+        pytest.param(None, "llvm", flags.CLANG_OPT_REPORT, id="default-llvm"),
+        pytest.param("unlimited", "gcc", f"{flags.GCC_OPT_REPORT} {flags.GCC_VECT_UNLIMITED}", id="unlimited-gcc"),
+        pytest.param(
+            "unlimited", "llvm", f"{flags.CLANG_OPT_REPORT} {flags.CLANG_VECT_UNLIMITED}", id="unlimited-llvm"
+        ),
+        pytest.param("unlimited", "nvhpc", flags.NVHPC_OPT_REPORT, id="unlimited-without-a-switch"),
+        pytest.param("cheap", "gcc", None, id="unknown-model-refused-by-name"),
     ],
 )
-def test_unlimited_appends_the_familys_own_switch_and_nothing_for_a_family_without_one(
-    monkeypatch: pytest.MonkeyPatch, family: str, want: str
+def test_the_default_cost_model_leaves_the_report_flags_as_they_were(
+    monkeypatch: pytest.MonkeyPatch, knob: str | None, family: str, want: str | None
 ) -> None:
-    monkeypatch.setenv(KNOB, "unlimited")
+    """The default leaves the report flags as they were; ``unlimited`` appends the family's own switch and nothing
+    for a family without one; an unknown model is refused by name."""
+    if knob is None:
+        monkeypatch.delenv(KNOB, raising=False)
+    else:
+        monkeypatch.setenv(KNOB, knob)
+    if want is None:
+        with pytest.raises(ValueError, match=str(knob)):
+            languages.family_report_flags(family)
+        return
     assert languages.family_report_flags(family) == want
-
-
-def test_an_unknown_cost_model_is_refused_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(KNOB, "cheap")
-    with pytest.raises(ValueError, match="cheap"):
-        languages.family_report_flags("gcc")
 
 
 def report_of(tmp_path: pathlib.Path, driver: str, family: str, march: str, source: str = "k.c") -> str:
@@ -94,24 +94,20 @@ def test_every_family_driver_accepts_the_unlimited_report_flags(
     report_of(tmp_path, driver, family, "znver3", source)
 
 
+@pytest.mark.parametrize(("driver", "family"), [("gcc", "gcc"), ("clang", "llvm")])
 def test_gcc_with_the_cost_model_off_vectorizes_what_it_declined_as_unprofitable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, driver: str, family: str
 ) -> None:
+    """gcc vectorizes more loops with the model off; clang vectorizes the loop it declined as not beneficial."""
     monkeypatch.delenv(KNOB, raising=False)
-    default = report_of(tmp_path, "gcc", "gcc", "znver3").count("loop vectorized")
+    default = report_of(tmp_path, driver, family, "znver3")
     monkeypatch.setenv(KNOB, "unlimited")
-    unlimited = report_of(tmp_path, "gcc", "gcc", "znver3").count("loop vectorized")
-    assert unlimited > default, (default, unlimited)
-
-
-def test_clang_with_the_cost_model_off_vectorizes_a_loop_it_declined_as_not_beneficial(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    monkeypatch.delenv(KNOB, raising=False)
-    default = report_of(tmp_path, "clang", "llvm", "znver3")
+    unlimited = report_of(tmp_path, driver, family, "znver3")
+    if driver == "gcc":
+        assert unlimited.count("loop vectorized") > default.count("loop vectorized"), (default, unlimited)
+        return
     assert f"{MODULUS_LOOP}: remark: the cost-model indicates that vectorization is not beneficial" in default
-    monkeypatch.setenv(KNOB, "unlimited")
-    assert f"{MODULUS_LOOP}: remark: vectorized loop" in report_of(tmp_path, "clang", "llvm", "znver3")
+    assert f"{MODULUS_LOOP}: remark: vectorized loop" in unlimited
 
 
 @pytest.mark.parametrize(("march", "width"), [("znver3", 4), ("znver4", 8)])

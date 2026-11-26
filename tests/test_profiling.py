@@ -55,13 +55,10 @@ def test_fold_splits_self_and_total() -> None:
     # Hottest branch first, and the leaf carries the self time.
     assert [c["symbol"] for c in work["children"]] == ["hot", "cold"]
     assert work["children"][0]["self_pct"] == 50.0
-
-
-def test_to_json_prunes_below_min_percent() -> None:
-    root, samples = perf_reports.fold(STACKS)
-    main = root.to_json(samples, min_percent=30.0)["children"][0]["children"][0]
-    assert [c["symbol"] for c in main["children"]] == ["work"]  # idle is 25% -> pruned
-    assert [c["symbol"] for c in main["children"][0]["children"]] == ["hot"]  # cold is 25% -> pruned
+    # Pruning below min_percent drops the cold branches.
+    pruned = root.to_json(samples, min_percent=30.0)["children"][0]["children"][0]
+    assert [c["symbol"] for c in pruned["children"]] == ["work"]  # idle is 25% -> pruned
+    assert [c["symbol"] for c in pruned["children"][0]["children"]] == ["hot"]  # cold is 25% -> pruned
 
 
 def test_hotspots_rank_by_self_and_do_not_double_count_recursion() -> None:
@@ -153,21 +150,19 @@ def test_tail_keeps_the_end_and_admits_the_cut() -> None:
     assert profiling.tail("abcdef", 4) == ("cdef", True)
 
 
-def test_thread_sweep_clamps_to_available_cores(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(profiling, "grading_cpus", lambda _slot: set())  # unreadable topology: the node's cores
+def test_thread_sweep_clamps_to_the_slot_not_the_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A judge slot holds 24 of the node's cores; a 32-thread run there fails the grading-width check (HTTP 500)."""
+    monkeypatch.setattr(profiling, "grading_cpus", lambda unused_slot: set(range(24)))
+    monkeypatch.setattr(profiling.flags, "ncores", lambda: 96)
+    assert profiling.thread_sweep([1, 8, 16, 32, 64, 128]) == [1, 8, 16, 24]
+    # With an unreadable topology the node's cores bound the sweep.
+    monkeypatch.setattr(profiling, "grading_cpus", lambda unused: set())
     monkeypatch.setattr(profiling.flags, "ncores", lambda: 2)
     assert profiling.thread_sweep() == [1, 2]
     assert profiling.thread_sweep([1, 2, 4, 8]) == [1, 2]
     assert profiling.thread_sweep([16]) == [2], "an unrunnable request must still profile something"
     monkeypatch.setattr(profiling.flags, "ncores", lambda: 8)
     assert profiling.thread_sweep([4, 4, 1]) == [1, 4]
-
-
-def test_thread_sweep_clamps_to_the_slot_not_the_node(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A judge slot holds 24 of the node's cores; a 32-thread run there fails the grading-width check (HTTP 500)."""
-    monkeypatch.setattr(profiling, "grading_cpus", lambda _slot: set(range(24)))
-    monkeypatch.setattr(profiling.flags, "ncores", lambda: 96)
-    assert profiling.thread_sweep([1, 8, 16, 32, 64, 128]) == [1, 8, 16, 24]
 
 
 #: One `perf script -F comm,ip,sym,dso` block per sample: a header line naming the comm, then one
@@ -212,9 +207,7 @@ def test_stacks_are_root_first_keep_unwound_failures_visible_and_end_without_a_b
     assert recorded[2] == [("python", "python"), (perf_reports.UNKNOWN, perf_reports.UNKNOWN)]
     # The last sample is emitted although no blank line follows it.
     assert recorded[3][-1] == ("gemm_fp64", "libgemm.so")
-
-
-def test_stacks_surfaces_a_failed_perf_script(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A failed `perf script` is surfaced with its stderr, not read as an empty recording.
     fake_perf(monkeypatch, "", returncode=1)
     with pytest.raises(perf_reports.PerfUnavailable) as ei:
         perf_reports.stacks(tmp_path / "perf.data")
@@ -285,27 +278,22 @@ def test_rising_hotspots_reports_only_the_share_that_grew() -> None:
     assert [r["symbol"] for r in rising] == ["serial"]
     assert (rising[0]["self_pct_low"], rising[0]["self_pct_high"], rising[0]["delta_pct"]) == (5.0, 40.0, 35.0)
 
+    # A 0.01% -> 0.04% move is sampling noise dressed as a finding.
+    tiny_low = run(1, 100, [spot("tiny", 0.01)])
+    tiny_high = run(4, 40, [spot("tiny", 0.04)])
+    assert profiling.rising_hotspots([tiny_low, tiny_high], 1.0) == []
+    assert [r["symbol"] for r in profiling.rising_hotspots([tiny_low, tiny_high], 0.001)] == ["tiny"]
 
-def test_rising_hotspots_ignores_noise_below_the_threshold() -> None:
-    """A 0.01% -> 0.04% move is sampling noise dressed as a finding."""
-    low = run(1, 100, [spot("tiny", 0.01)])
-    high = run(4, 40, [spot("tiny", 0.04)])
-    assert profiling.rising_hotspots([low, high], 1.0) == []
-    assert [r["symbol"] for r in profiling.rising_hotspots([low, high], 0.001)] == ["tiny"]
+    # A symbol absent at the low count is zero there.
+    appeared = profiling.rising_hotspots([run(1, 100, []), run(4, 40, [spot("new", 12.0)])], 1.0)
+    assert appeared[0]["self_pct_low"] == 0.0
+    assert appeared[0]["delta_pct"] == 12.0
 
-
-def test_rising_hotspots_counts_a_symbol_absent_at_the_low_count_as_zero() -> None:
-    high = run(4, 40, [spot("new", 12.0)])
-    rising = profiling.rising_hotspots([run(1, 100, []), high], 1.0)
-    assert rising[0]["self_pct_low"] == 0.0
-    assert rising[0]["delta_pct"] == 12.0
-
-
-def test_rising_hotspots_ranks_by_growth_and_breaks_ties_by_name() -> None:
-    low = run(1, 100, [])
-    high = run(4, 40, [spot("b", 30.0), spot("a", 30.0), spot("c", 50.0)])
-    assert [r["symbol"] for r in profiling.rising_hotspots([low, high], 1.0)] == ["c", "a", "b"]
-    assert len(profiling.rising_hotspots([low, high], 1.0, limit=2)) == 2
+    # Ranked by growth, ties broken by name.
+    empty = run(1, 100, [])
+    grown = run(4, 40, [spot("b", 30.0), spot("a", 30.0), spot("c", 50.0)])
+    assert [r["symbol"] for r in profiling.rising_hotspots([empty, grown], 1.0)] == ["c", "a", "b"]
+    assert len(profiling.rising_hotspots([empty, grown], 1.0, limit=2)) == 2
 
 
 def test_render_report_shows_the_scaling_table_and_every_config() -> None:
@@ -336,12 +324,6 @@ def test_render_report_shows_the_scaling_table_and_every_config() -> None:
     assert "call graph @ 1 thread(s)" in text
     assert "TREE-4" in text
     assert "hardware counters" not in text, "counters were not asked for, so nothing may be implied"
-
-
-def test_kernel_share_matches_the_fortran_mangled_symbol() -> None:
-    spots = [{"symbol": "gemm_fp64_", "dso": "libgemm.so", "self_pct": 90.0, "total_pct": 91.0}]
-    assert profiling.kernel_share(spots, "gemm_fp64") == 91.0
-    assert profiling.kernel_share(spots, "other") == 0.0
 
 
 @pytest.mark.perf
@@ -628,6 +610,11 @@ def test_kernel_share_counts_the_work_openmp_outlined_out_of_the_symbol() -> Non
         profiling.kernel_share([{"symbol": "f_._omp_fn.0", "dso": "k", "self_pct": 12.5, "total_pct": 12.5}], "f")
         == 12.5
     )
+
+    # Fortran mangles the exported name with a trailing underscore.
+    fortran = [{"symbol": "gemm_fp64_", "dso": "libgemm.so", "self_pct": 90.0, "total_pct": 91.0}]
+    assert profiling.kernel_share(fortran, "gemm_fp64") == 91.0
+    assert profiling.kernel_share(fortran, "other") == 0.0
 
     # A serial kernel keeps the CUMULATIVE share: time in a library it calls is time it chose.
     serial = [{"symbol": "mykernel", "dso": "k", "self_pct": 10.0, "total_pct": 90.0}]

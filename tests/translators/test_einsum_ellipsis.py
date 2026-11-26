@@ -34,45 +34,44 @@ def test_expand_einsum_ellipsis_rejects_bad_forms() -> None:
         expand_einsum_ellipsis("...ij,...jk->...ik", [4, 3])
 
 
-def test_einsum_ellipsis_batched_transpose_e2e() -> None:
-    rng = np.random.default_rng(0)
-    src = "import numpy as np\ndef f(a, out):\n    out[:] = np.einsum('...ij->...ji', a)\n"
-    a = rng.random((2, 3, 4))
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
-            {"a": a},
-            {"out": (2, 4, 3)},
-            {"B": 2, "M": 3, "N": 4},
-            shapes={"a": "(B, M, N)", "out": "(B, N, M)"},
-            backends=NATIVE,
-        ),
-        "einsum-ellipsis-transpose",
-    )
-
-
-def test_einsum_ellipsis_batched_matmul_e2e() -> None:
-    # Ellipsis WITH a contraction: '...ij,...jk->...ik' expands to 'Aij,Ajk->Aik'
-    # (a batched GEMM). c/cpp only: the batched-einsum FORTRAN emit
-    # non-deterministically types a size symbol REAL (~40% flaky, hash/order
-    # dependent, reproduces on the EXPLICIT 'Bij,Bjk->Bik' too -- NOT the ellipsis
-    # expansion). Root is the emit's size-symbol integer
-    # classification, separate from the np.int64-in-constants hardening.
-    rng = np.random.default_rng(0)
-    src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.einsum('...ij,...jk->...ik', a, b)\n"
-    a, b = rng.random((2, 3, 4)), rng.random((2, 4, 5))
-    assert_all_ok(
-        run_op(
-            src,
-            "f",
-            {"a": a, "b": b},
-            {"out": (2, 3, 5)},
+@pytest.mark.parametrize(
+    ("spec", "symbolic", "sizes", "backends"),
+    [
+        ("...ij->...ji", {"a": "(B, M, N)", "out": "(B, N, M)"}, {"B": 2, "M": 3, "N": 4}, NATIVE),
+        # Ellipsis WITH a contraction: '...ij,...jk->...ik' expands to 'Aij,Ajk->Aik' (a batched GEMM). c/cpp only:
+        # the batched-einsum FORTRAN emit non-deterministically types a size symbol REAL (~40% flaky, hash/order
+        # dependent, reproduces on the EXPLICIT 'Bij,Bjk->Bik' too -- NOT the ellipsis expansion). Root is the emit's
+        # size-symbol integer classification, separate from the np.int64-in-constants hardening.
+        (
+            "...ij,...jk->...ik",
+            {"a": "(B, M, K)", "b": "(B, K, N)", "out": "(B, M, N)"},
             {"B": 2, "M": 3, "K": 4, "N": 5},
-            shapes={"a": "(B, M, K)", "b": "(B, K, N)", "out": "(B, M, N)"},
-            backends=("c", "cpp"),
+            ("c", "cpp"),
         ),
-        "einsum-ellipsis-matmul",
+    ],
+    ids=["batched_transpose", "batched_matmul"],
+)
+def test_einsum_ellipsis_batched_matmul_e2e(
+    spec: str, symbolic: dict[str, str], sizes: dict[str, int], backends: tuple[str, ...]
+) -> None:
+    rng = np.random.default_rng(0)
+    shapes = {name: tuple(sizes[dim.strip()] for dim in text.strip("()").split(",")) for name, text in symbolic.items()}
+    operands = [name for name in shapes if name != "out"]
+    src = (
+        f"import numpy as np\ndef f({', '.join([*operands, 'out'])}):\n"
+        f"    out[:] = np.einsum('{spec}', {', '.join(operands)})\n"
+    )
+    assert_all_ok(
+        run_op(
+            src,
+            "f",
+            {name: rng.random(shapes[name]) for name in operands},
+            {"out": shapes["out"]},
+            sizes,
+            shapes=symbolic,
+            backends=backends,
+        ),
+        f"einsum-ellipsis-{len(operands)}",
     )
 
 

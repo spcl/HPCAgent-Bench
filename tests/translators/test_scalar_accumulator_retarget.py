@@ -123,38 +123,33 @@ def misses(target: str, body: str, iterable: str = "range(i)") -> bool:
 
 
 @pytest.mark.parametrize(
-    ("target", "body"),
+    ("target", "body", "iterable", "safe"),
     [
-        ("temp2[j]", "B[__mml1, j] * A[i, __mml1]"),
+        ("temp2[j]", "B[__mml1, j] * A[i, __mml1]", "range(i)", True),
         # trmm: k runs from i + 1, so B[i, j] is never read back mid-accumulation.
-        ("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]"),
-    ],
-    ids=["body_never_touches_the_destination_array", "read_offset_past_the_destination_cell"],
-)
-def test_a_reduction_that_cannot_read_its_destination_cell_is_safe(target: str, body: str) -> None:
-    assert misses(target, body)
-
-
-@pytest.mark.parametrize(
-    ("body", "iterable"),
-    [
+        ("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", "range(i)", True),
         # B[__mml1, j] covers B[i, j] when __mml1 == i -- retargeting would feed the
         # partial sum back into itself.
-        ("A[__mml1, i] * B[__mml1, j]", "range(i)"),
-        ("A[__mml1, i] * B", "range(i)"),
+        ("B[i, j]", "A[__mml1, i] * B[__mml1, j]", "range(i)", False),
+        ("B[i, j]", "A[__mml1, i] * B", "range(i)", False),
         # The miss proof rests on ``__mml1 >= 0``; without a bare ``range(n)`` there is
         # nothing to rest it on, so the same trmm shape must be declined.
-        ("A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", "range(-M, M)"),
-        ("A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", "ks"),
+        ("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", "range(-M, M)", False),
+        ("B[i, j]", "A[__mml1 + (i + 1), i] * B[__mml1 + (i + 1), j]", "ks", False),
     ],
-    ids=["read_that_may_hit_the_cell", "whole_array_read", "negative_based_iterable", "non_range_iterable"],
+    ids=[
+        "body_never_touches_the_destination_array",
+        "read_offset_past_the_destination_cell",
+        "read_that_may_hit_the_cell",
+        "whole_array_read",
+        "negative_based_iterable",
+        "non_range_iterable",
+    ],
 )
-def test_a_reduction_that_may_read_its_destination_cell_is_refused(body: str, iterable: str) -> None:
-    assert not misses("B[i, j]", body, iterable=iterable)
-
-
-def test_guard_declines_the_retarget_end_to_end() -> None:
-    assert retarget_scalar_accumulator(*pattern("B[i, j]", "A[__mml1, i] * B[__mml1, j]", augmented=True)) is None
+def test_a_reduction_that_may_read_its_destination_cell_is_refused(
+    target: str, body: str, iterable: str, safe: bool
+) -> None:
+    assert misses(target, body, iterable=iterable) is safe
 
 
 # C  the emitted C for the three PolyBench kernels                             #

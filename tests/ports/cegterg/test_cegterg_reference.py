@@ -80,7 +80,7 @@ def shard(configs: list[dict[str, int | bool]]) -> list[dict[str, int | bool]]:
     Round-robin, not a contiguous block, because the order is the four npol=1 configurations then
     the two npol=2 ones; a contiguous split can still hand one container a disproportionate share
     of the expensive cases. Dealing alternates them, so every shard carries the same mix,
-    which ``test_every_shard_carries_both_cost_classes`` asserts rather than assumes.
+    which ``test_the_shards_partition_the_configurations_rather_than_sampling_them`` asserts rather than assumes.
     """
     if not SHARD:
         return configs
@@ -278,24 +278,15 @@ def test_the_shards_partition_the_configurations_rather_than_sampling_them() -> 
     for index in range(count):
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(sys.modules[__name__], "SHARD", f"{index}/{count}")
-            seen.extend(shard(ALL_CONFIGS))
+            dealt = shard(ALL_CONFIGS)
+        # npol=2 is a more expensive cost class, so a shard holding only npol=2 can blow the budget: the deal has
+        # to alternate, which is what makes the per-container projection hold.
+        npols = {cfg["npol"] for cfg in dealt}
+        assert npols == {1, 2}, f"shard {index}/{count} runs only npol {sorted(npols)}"
+        seen.extend(dealt)
     assert len(seen) == len(ALL_CONFIGS), f"{count} shards run {len(seen)} of {len(ALL_CONFIGS)} configurations"
     assert all(cfg in seen for cfg in ALL_CONFIGS), "a configuration is in no shard"
-
-
-def test_every_shard_carries_both_cost_classes() -> None:
-    """npol=2 is a more expensive cost class, so a shard holding only npol=2 can blow the budget.
-    The deal has to alternate, which is what makes the per-container projection hold."""
-    count = ci_shards()[1]
-    for index in range(count):
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(sys.modules[__name__], "SHARD", f"{index}/{count}")
-            npols = {cfg["npol"] for cfg in shard(ALL_CONFIGS)}
-        assert npols == {1, 2}, f"shard {index}/{count} runs only npol {sorted(npols)}"
-
-
-def test_an_unsharded_run_still_runs_every_configuration() -> None:
-    """The variable unset is a local run, and a local run grades the whole matrix."""
+    # The variable unset is a local run, and a local run grades the whole matrix.
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(sys.modules[__name__], "SHARD", "")
         assert shard(ALL_CONFIGS) == ALL_CONFIGS

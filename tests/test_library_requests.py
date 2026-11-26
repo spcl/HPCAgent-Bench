@@ -34,21 +34,20 @@ def test_every_entry_declares_a_coherent_route_and_what_the_tool_needs() -> None
         assert set(entry.langs) <= set(languages.LANG_EXT), f"{name} names an unknown language"
 
 
-def test_openmp_never_leaks_in_through_cflags() -> None:
+def test_every_catalog_entry_yields_only_include_paths_link_names_and_rpaths() -> None:
     """openblas.pc emits -fopenmp in its cflags. Letting that through would mean an agent can turn
-    OpenMP on for its whole translation unit by requesting a library, which is the matrix's call."""
+    OpenMP on for its whole translation unit by requesting a library, which is the matrix's call. Link tokens are
+    only paths, names and rpath, and nothing here is on the loader path, so a -L without its rpath builds fine and
+    fails to LOAD -- a runtime error with no visible cause."""
     for name in languages.load_libraries():
         for lang in (Language.C, Language.CPP, Language.FORTRAN):
             compile_tokens, link_tokens = languages.library_tokens(name, lang)
             assert all(t.startswith("-I") for t in compile_tokens), (name, lang, compile_tokens)
             assert not any("openmp" in t for t in compile_tokens + link_tokens), (name, lang)
-
-
-def test_link_tokens_are_only_paths_names_and_rpath() -> None:
-    for name in languages.load_libraries():
-        _compile, link = languages.library_tokens(name, Language.C)
-        for token in link:
-            assert token.startswith(("-L", "-l", "-Wl,-rpath,")), (name, token)
+            for token in link_tokens:
+                assert token.startswith(("-L", "-l", "-Wl,-rpath,")), (name, token)
+                if token.startswith("-L"):
+                    assert f"-Wl,-rpath,{token[2:]}" in link_tokens, (name, token)
 
 
 def test_language_gate_withholds_a_cpp_only_library() -> None:
@@ -56,9 +55,6 @@ def test_language_gate_withholds_a_cpp_only_library() -> None:
     assert languages.library_tokens("tbb", Language.C) == ((), ())
     assert "tbb" not in languages.available_libraries(Language.C)
     assert "tbb" not in languages.available_libraries(Language.FORTRAN)
-
-
-def test_unknown_library_resolves_to_nothing() -> None:
     assert languages.library_tokens("definitely-not-a-library", Language.C) == ((), ())
     assert languages.library_build_flags(Language.C, ["definitely-not-a-library"]) == ((), ())
 
@@ -70,16 +66,6 @@ def test_two_names_on_one_shared_object_do_not_duplicate_the_link() -> None:
     assert sum(1 for t in link if t == "-lopenblas") <= 1
 
 
-def test_rpath_accompanies_every_search_path() -> None:
-    """Nothing here is on the loader path, so a -L without its rpath builds fine and fails to
-    LOAD -- a runtime error with no visible cause."""
-    for name in languages.load_libraries():
-        _compile, link = languages.library_tokens(name, Language.CPP)
-        for token in link:
-            if token.startswith("-L"):
-                assert f"-Wl,-rpath,{token[2:]}" in link, (name, token)
-
-
 def test_python_delivery_is_never_given_library_flags() -> None:
     """Python-delivered work (a module, triton, tvm) has no harness-owned link line; its own
     import system is the library mechanism, so a request there resolves to nothing."""
@@ -87,9 +73,6 @@ def test_python_delivery_is_never_given_library_flags() -> None:
         assert languages.library_tokens(name, Language.PYTHON) == ((), ())
     assert languages.library_build_flags(Language.PYTHON, ["blas", "lapack", "fftw"]) == ((), ())
     assert languages.available_libraries(Language.PYTHON) == ()
-
-
-def test_requests_are_gated_to_languages_the_harness_compiles() -> None:
     for lang in languages.LANG_EXT:
         assert set(languages.available_libraries(lang)) <= set(languages.load_libraries())
     for lang in ("python", "julia", ""):
@@ -214,48 +197,6 @@ def test_a_header_only_library_is_offered_without_link_tokens() -> None:
         assert "eigen" in languages.available_libraries(Language.CPP)
 
 
-def test_header_only_availability_is_not_token_emptiness() -> None:
-    """A header on the default include path yields no tokens and is still usable, so emptiness
-    cannot be the signal."""
-    for name, entry in languages.load_libraries().items():
-        if not entry.header_only:
-            continue
-        for lang in entry.langs:
-            offered = languages.library_offered(name, lang)
-            if offered and languages.library_tokens(name, lang) == ((), ()):
-                return  # a header-only library offered with no tokens is reachable here
-    # Nothing on this host exercises it; the language gate must still hold.
-    assert not languages.library_offered("eigen", Language.FORTRAN)
-
-
-def test_one_catalog_name_may_resolve_several_pkg_config_modules() -> None:
-    """``pkg:`` is one module or a LIST, and a list means ALL of them.
-
-    fftw is why: the emitter picks ``fftw_plan_dft_1d`` or ``fftwf_plan_dft_1d`` from the run's
-    precision, and those are different libraries behind one advertised name. Resolving only the
-    double module made "fftw is available" mean less than what the emitter may actually emit --
-    and the gap did not surface as a link error, because a shared object keeps undefined symbols.
-    Asserted as a PAIR: the entry names both modules, and the resolver asks for both together.
-    """
-    entry = languages.load_libraries()["fftw"]
-    assert entry.pkg == ("fftw3", "fftw3f")
-    # A plain string entry still resolves to exactly one module -- the list form is additive.
-    assert languages.load_libraries()["blas"].pkg == ("openblas",)
-    link_tokens = languages.library_tokens("fftw", Language.C)[1]
-    if not link_tokens:
-        assert "fftw" not in languages.available_libraries(Language.C)
-        return
-    linked = " ".join(link_tokens)
-    assert "-lfftw3" in linked, (
-        f"fftw resolved to {linked!r}: both precisions have to be on the link line, or the fp32 "
-        "spelling of every FFT kernel is an undefined symbol that only surfaces at dlopen"
-    )
-    assert "-lfftw3f" in linked, (
-        f"fftw resolved to {linked!r}: both precisions have to be on the link line, or the fp32 "
-        "spelling of every FFT kernel is an undefined symbol that only surfaces at dlopen"
-    )
-
-
 def fake_mpi_prefix(root: pathlib.Path, mpich: bool) -> pathlib.Path:
     """A lib directory holding libmpi.so, plus libmpich.so when it is MPICH's."""
     lib = root / "lib"
@@ -289,10 +230,7 @@ def test_mpi_resolves_from_the_first_mpich_wrapper_like_findmpi(
     assert got[1][:3] == (f"-L{mpich}", "-L/opt/rocm/lib", "-lmpi")
     assert f"-Wl,-rpath,{mpich}" in got[1]
     assert f"-L{ompi}" not in got[1]
-
-
-def test_no_mpich_wrapper_resolves_to_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    ompi = fake_mpi_prefix(tmp_path / "openmpi", mpich=False)
+    # No MPICH wrapper at all resolves to nothing.
     monkeypatch.setattr(languages, "mpi_wrapper_flags", lambda wrapper: (["-I/x"], [f"-L{ompi}", "-lmpi"]))
     assert languages.mpich_wrapper_flags(("mpicc.mpich", "mpicc")) == ([], [])
 

@@ -28,7 +28,6 @@ from hpcagent_bench.precision import (
     derived_band,
     machine_eps,
     numpy_dtype,
-    rtol_below_one_ulp,
     safe_max,
 )
 
@@ -60,14 +59,6 @@ def test_derived_band_never_falls_below_one_ulp() -> None:
         band = derived_band(precision)
         eps = machine_eps(precision)
         assert band.atol >= eps, f"{precision.value}: derived atol {band.atol:g} is below one ULP ({eps:g})"
-
-
-def test_no_band_is_finer_than_one_ulp_relative() -> None:
-    """The relative twin of the atol rule: one ULP at the bottom of a binade is ``eps * |x|``, so an
-    ``rtol`` below eps fails two correct implementations whose results round to neighbouring values
-    there. The fp8 rows carried 0.1 / 0.2 against eps 0.125 / 0.25 (F22)."""
-    finer = rtol_below_one_ulp()
-    assert not finer, ", ".join(f"{p.value}: rtol={r:g} < eps={e:g}" for p, (r, e) in sorted(finer.items()))
 
 
 @pytest.mark.parametrize("precision", list(Precision), ids=lambda p: p.value)

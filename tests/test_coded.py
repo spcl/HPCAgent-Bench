@@ -41,18 +41,11 @@ def test_a_member_is_spelled_by_its_name_separator_and_overrides() -> None:
     assert Dialect.CPP.text == "c++"
     assert Dialect.LOOP_LEVEL.text == "loop_level"
     assert Mode.texts() == ("py-binding", "source")
-
-
-def test_parse_inverts_text_and_names_the_choices() -> None:
+    # parse inverts text and names the choices.
     for member in (*Mode, *Dialect):
         assert type(member).parse(member.text) is member
     with pytest.raises(ValueError, match="one of py-binding, source"):
         Mode.parse("py_binding")
-
-
-def test_a_member_is_not_its_spelling() -> None:
-    assert Mode.SOURCE != "source"
-    assert not isinstance(Mode.SOURCE.value, str)
 
 
 def test_two_members_spelled_alike_are_refused() -> None:

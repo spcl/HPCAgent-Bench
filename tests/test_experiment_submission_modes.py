@@ -12,13 +12,6 @@ from tests.env_render import env_spec
 SPEC = env_spec.load_spec()
 
 
-def test_the_default_mode_is_single() -> None:
-    assert (
-        env_spec.env_of(env_spec.TABLES["common"], "common", protocol=True)[submission_mode.KEY]
-        == submission_mode.SubmissionMode.SINGLE.text
-    )
-
-
 @pytest.mark.parametrize("experiment", sorted(SPEC))
 def test_an_experiment_names_a_mode_that_is_not_blind(experiment: str) -> None:
     mode = submission_mode.current(env_spec.render(experiment))

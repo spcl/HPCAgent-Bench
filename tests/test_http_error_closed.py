@@ -10,7 +10,7 @@ silent, so these assert the closed state of the error each client chains, not th
 import http.server
 import threading
 import urllib.error
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
@@ -41,17 +41,19 @@ def refusing_url_fixture() -> Iterator[str]:
     server.server_close()
 
 
-def test_the_web_search_client_closes_the_refusal_it_reports(refusing_url: str) -> None:
-    with pytest.raises(RuntimeError, match="HTTP 400") as raised:
-        judge_web_search.post_json(refusing_url, {}, 5.0)
-    cause = raised.value.__cause__
-    assert isinstance(cause, urllib.error.HTTPError)
-    assert cause.closed
-
-
-def test_the_chat_client_closes_the_refusal_it_reports(refusing_url: str) -> None:
-    with pytest.raises(RuntimeError, match="unreachable") as raised:
-        http_chat_json(refusing_url, {}, {}, 5.0, "service unreachable")
+@pytest.mark.parametrize(
+    ("client", "message"),
+    [
+        (lambda url: judge_web_search.post_json(url, {}, 5.0), "HTTP 400"),
+        (lambda url: http_chat_json(url, {}, {}, 5.0, "service unreachable"), "unreachable"),
+    ],
+    ids=["web-search", "chat"],
+)
+def test_the_web_search_client_closes_the_refusal_it_reports(
+    refusing_url: str, client: Callable[[str], object], message: str
+) -> None:
+    with pytest.raises(RuntimeError, match=message) as raised:
+        client(refusing_url)
     cause = raised.value.__cause__
     assert isinstance(cause, urllib.error.HTTPError)
     assert cause.closed

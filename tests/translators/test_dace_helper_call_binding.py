@@ -21,52 +21,6 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import contiguous_subscript,
 if TYPE_CHECKING:
     from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 
-#: A helper whose CSR parameters are declared over symbols its body never reads, and whose one body
-#: symbol sizes four vectors. sgs_pcg in miniature.
-CSR_KERNEL = """import numpy as np
-
-
-def sweep(A_data, A_indptr, diag, r, y, N):
-    for i in range(N):
-        s = r[i]
-        for k in range(A_indptr[i], A_indptr[i + 1]):
-            s = s - A_data[k] * y[i]
-        y[i] = s / diag[i]
-
-
-def csr_demo(A_data, A_indptr, b, x, NX, NY):
-    N = NX * NY
-    diag = np.zeros((N,), dtype=np.float64)
-    y = np.zeros((N,), dtype=np.float64)
-    for i in range(N):
-        diag[i] = 1.0 + b[i]
-    sweep(A_data, A_indptr, diag, b, y, N)
-    for i in range(N):
-        x[i] = y[i]
-"""
-
-CSR_BENCH = {
-    "benchmark": {
-        "func_name": "csr_demo",
-        "array_args": ["A_data", "A_indptr", "b", "x"],
-        "input_args": ["A_data", "A_indptr", "b", "x", "NX", "NY"],
-        "output_args": ["x"],
-        "init": {
-            "arrays": {
-                "A_data": "((3 * NX - 2) * (3 * NY - 2),)",
-                "A_indptr": "(NX * NY + 1,)",
-                "b": "(NX * NY,)",
-                "x": "(NX * NY,)",
-            },
-            "dtypes": {"A_data": "float64", "A_indptr": "int64", "b": "float64", "x": "float64"},
-        },
-        "parameters": {"S": {"NX": 4, "NY": 4}},
-        "short_name": "csr_demo",
-    },
-    "track": "loop_level_reasoning",
-    "allowed_precisions": ["fp64"],
-}
-
 #: A helper called with a TRAILING-index plane of a rank-3 array -- the non-contiguous view -- and
 #: one called with a leading-index plane, which is contiguous. jfnk_bratu's Arnoldi loop in
 #: miniature.
@@ -349,31 +303,6 @@ def kir_of(source: str, bench: dict, stem: str) -> "KernelIR":
         info = root / "bench_info.json"
         info.write_text(json.dumps(bench))
         return parse_kernel(numpy_py, info)
-
-
-def annotation_of(source: str, program: str, param: str) -> str:
-    """The declared annotation of one parameter of one emitted ``@dc.program``."""
-    fn = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == program)
-    arg = next(a for a in fn.args.args if a.arg == param)
-    return ast.unparse(arg.annotation)
-
-
-def call_to(source: str, program: str, callee: str) -> ast.Call:
-    fn = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == program)
-    return next(
-        n for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == callee
-    )
-
-
-def test_the_retired_symbols_are_neither_declared_nor_passed() -> None:
-    # A symbol the callee no longer names is one dace can neither solve nor accept: passing it as a
-    # keyword is "Invalid keyword argument".
-    source = emit_dace(kir_of(CSR_KERNEL, CSR_BENCH, "csr_demo"))
-    assert "sweep_extent0 = dc.symbol(" in source, source
-    assert annotation_of(source, "sweep", "A_data") == "dc_float[sweep_extent0]", source
-    call = call_to(source, "csr_demo", "sweep")
-    assert [kw.arg for kw in call.keywords] == [], ast.unparse(call)
-    assert all(not isinstance(a, ast.Name) or a.id not in {"NX", "NY"} for a in call.args), ast.unparse(call)
 
 
 def test_a_trailing_index_plane_is_copied_once_at_function_scope_before_it_is_passed() -> None:

@@ -110,27 +110,28 @@ def test_no_gpu_tool_keeps_the_old_8_column_header(tmp_path: Path) -> None:
     assert row[5:8] == ["", "", ""]  # gpu_pct, vram_used_mib, vram_total_mib all blank
 
 
-def test_rocm_smi_appends_one_column_per_card_after_the_fixed_8(tmp_path: Path) -> None:
-    rocm_bin = fake_smi(tmp_path, "rocm-smi", f"echo '{ROCM_JSON}'")
-    text = run_monitor(tmp_path, [rocm_bin, restricted_bin(tmp_path)])
+@pytest.mark.parametrize(
+    ("tool", "payload", "per_card", "gpu_pct", "vram"),
+    [
+        pytest.param("rocm-smi", ROCM_JSON, ["10", "90"], "50.0", None, id="rocm-smi"),
+        pytest.param("amd-smi", AMDSMI_JSON, ["15", "55", "35"], None, ["", ""], id="amd-smi"),
+    ],
+)
+def test_rocm_smi_appends_one_column_per_card_after_the_fixed_8(
+    tmp_path: Path, tool: str, payload: str, per_card: list[str], gpu_pct: str | None, vram: list[str] | None
+) -> None:
+    smi_bin = fake_smi(tmp_path, tool, f"echo '{payload}'")
+    text = run_monitor(tmp_path, [smi_bin, restricted_bin(tmp_path)])
     lines = text.strip().splitlines()
     header = lines[0].split(",")
-    assert header == [*OLD_HEADER.split(","), "gpu0_pct", "gpu1_pct"]
+    assert header == [*OLD_HEADER.split(","), *(f"gpu{index}_pct" for index in range(len(per_card)))]
     row = lines[1].split(",")
     assert len(row) == len(header)
-    assert row[5] == "50.0"  # gpu_pct: cross-GPU average of 10 and 90
-    assert row[8:10] == ["10", "90"]  # gpu0_pct, gpu1_pct: per-card, positional order preserved
-
-
-def test_amd_smi_fallback_also_appends_per_gpu_columns(tmp_path: Path) -> None:
-    amdsmi_bin = fake_smi(tmp_path, "amd-smi", f"echo '{AMDSMI_JSON}'")
-    text = run_monitor(tmp_path, [amdsmi_bin, restricted_bin(tmp_path)])
-    lines = text.strip().splitlines()
-    header = lines[0].split(",")
-    assert header == [*OLD_HEADER.split(","), "gpu0_pct", "gpu1_pct", "gpu2_pct"]
-    row = lines[1].split(",")
-    assert row[8:11] == ["15", "55", "35"]
-    assert row[6:8] == ["", ""]  # amd-smi metric -u carries no vram fields, same as before
+    assert row[8 : 8 + len(per_card)] == per_card  # per-card, positional order preserved
+    if gpu_pct is not None:
+        assert row[5] == gpu_pct  # gpu_pct: cross-GPU average of 10 and 90
+    if vram is not None:
+        assert row[6:8] == vram  # amd-smi metric -u carries no vram fields, same as before
 
 
 def test_a_wedged_smi_tool_costs_blank_samples_and_never_stalls_the_loop(
@@ -193,9 +194,10 @@ def write_csv(path: Path, header: str, rows: list[str]) -> None:
     path.write_text(header + "\n" + "\n".join(rows) + "\n")
 
 
-def test_old_8_column_files_still_report_gpu_mean_and_no_balance_section(
+def test_extended_format_reports_per_gpu_mean_and_imbalance_spread(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # An old 8-column file still reports the gpu mean and no balance section.
     write_csv(
         tmp_path / "agent-nid001.csv",
         OLD_HEADER,
@@ -211,11 +213,6 @@ def test_old_8_column_files_still_report_gpu_mean_and_no_balance_section(
     assert node.gpu_imbalance is None
     mod.print_gpu_balance([node])
     assert capsys.readouterr().out == ""  # nothing printed: old format carries no per-GPU columns
-
-
-def test_extended_format_reports_per_gpu_mean_and_imbalance_spread(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
     header = OLD_HEADER + ",gpu0_pct,gpu1_pct,gpu2_pct,gpu3_pct"
     write_csv(
         tmp_path / "judge-nid002.csv",
@@ -225,7 +222,6 @@ def test_extended_format_reports_per_gpu_mean_and_imbalance_spread(
             "2026-01-01T00:00:05Z,25.0,1.1,10500,20000,60.0,1000,10000,20.0,100.0,60.0,60.0",
         ],
     )
-    mod = monitor_report()
     node = mod.compute_node_stats(tmp_path / "judge-nid002.csv")
     assert node.per_gpu_mean == {
         "gpu0_pct": pytest.approx(15.0),

@@ -26,16 +26,6 @@ MPI_KERNEL = "stencil_3d"
 DISTRIBUTE = {"action": "distribute", "array": "A", "grid_dim": 0, "dim": 0, "scheme": "block"}
 
 
-def test_an_explicit_null_reads_as_the_default() -> None:
-    """``{"episode_id": null}`` is recorded under the ad-hoc episode, and ``{"language": null}`` takes the
-    default language, never the text ``"None"``."""
-    body = service.RequestBody.parse(b'{"episode_id": null, "language": null}')
-    assert body.text("episode_id", recording.ADHOC_EPISODE_ID) == recording.ADHOC_EPISODE_ID
-    assert body.text("language", "c") == "c"
-    assert body.text("language") == ""
-    assert service.RequestBody.parse(b'{"language": "cpp"}').text("language", "c") == "cpp"
-
-
 def test_a_refusal_after_the_task_grid_records_the_granted_request(monkeypatch: pytest.MonkeyPatch) -> None:
     """Under ``requests.grid`` ``task`` the judge injects the task's ``startup.grid``. A call refused after that
     records the request with the grid, the same request its grade would have recorded, so a grid row of a
@@ -85,3 +75,11 @@ def test_a_refusal_after_the_task_grid_records_the_granted_request(monkeypatch: 
     assert isinstance(granted, Submission)
     assert recorded == [granted.requests.recorded_json()]
     assert json.loads(str(recorded[0]))["startup"]["grid"], "the refusal recorded the agent's ungridded body"
+
+    # ``{"episode_id": null}`` is recorded under the ad-hoc episode, and ``{"language": null}`` takes the default
+    # language, never the text ``"None"``.
+    body = service.RequestBody.parse(b'{"episode_id": null, "language": null}')
+    assert body.text("episode_id", recording.ADHOC_EPISODE_ID) == recording.ADHOC_EPISODE_ID
+    assert body.text("language", "c") == "c"
+    assert body.text("language") == ""
+    assert service.RequestBody.parse(b'{"language": "cpp"}').text("language", "c") == "cpp"

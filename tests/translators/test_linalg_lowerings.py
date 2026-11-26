@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.translators.numpyto_common import lib_nodes as ln
 from tests.translators.source_module import run_source
@@ -68,21 +69,30 @@ def solve_(
     return scope["y"], A, b, fla
 
 
-def test_lstsq_square_bare_name_b() -> None:
-    y, A, b, unused = solve_(6, lambda: ast.Name(id="b", ctx=ast.Load()), {})
-    assert np.allclose(y, np.linalg.solve(A, b))
+def bare_b() -> ast.expr:
+    return ast.Name(id="b", ctx=ast.Load())
 
 
-def test_lstsq_square_binop_b_materialized() -> None:
+def scaled_b() -> ast.expr:
+    return ast.BinOp(left=ast.Name(id="beta", ctx=ast.Load()), op=ast.Mult(), right=ast.Name(id="b", ctx=ast.Load()))
+
+
+@pytest.mark.parametrize(
+    ("b_node", "scope_extra", "scale", "temp"),
+    [
+        pytest.param(bare_b, {}, 1.0, None, id="bare-name-b"),
+        pytest.param(scaled_b, {"beta": 2.5, "__lq_b": np.zeros(6)}, 2.5, "__lq_b", id="binop-b-materialized"),
+    ],
+)
+def test_lstsq_square_binop_b_materialized(
+    b_node: Callable[[], ast.expr], scope_extra: dict[str, object], scale: float, temp: str | None
+) -> None:
     """gmres passes ``beta * e1[:m]`` -- a BinOp b is materialized to a
-    fresh temp vector (registered in fresh_local_allocs) before the solve."""
-    beta = 2.5
-    bnode = lambda: ast.BinOp(
-        left=ast.Name(id="beta", ctx=ast.Load()), op=ast.Mult(), right=ast.Name(id="b", ctx=ast.Load())
-    )
-    y, A, b, fla = solve_(6, bnode, {"beta": beta, "__lq_b": np.zeros(6)})
-    assert np.allclose(y, np.linalg.solve(A, beta * b))
-    assert "__lq_b" in fla  # temp vector was registered for alloc
+    fresh temp vector (registered in fresh_local_allocs) before the solve; a bare name b is solved as it is."""
+    y, A, b, fla = solve_(6, b_node, scope_extra)
+    assert np.allclose(y, np.linalg.solve(A, scale * b))
+    if temp is not None:
+        assert temp in fla  # temp vector was registered for alloc
 
 
 def det_(M: int) -> tuple[float, np.ndarray, dict[str, tuple[str, ...]]]:

@@ -36,18 +36,26 @@ def canon_fixture() -> pd.DataFrame:
     )  # fmt: skip
 
 
-def test_two_device_variants_of_one_optimizer_get_distinct_row_labels(canon: pd.DataFrame) -> None:
+@pytest.mark.parametrize(
+    ("variants", "want_labels"),
+    [
+        # the registry aliases both DaCe device variants to one optimizer: drawn together they get distinct labels
+        pytest.param(("dace_cpu_canon", "dace_gpu_canon"), None, id="two-variants"),
+        # the fallback fires only on a collision; a figure drawing one variant is unchanged
+        pytest.param(("dace_cpu_canon",), ["DaCe+CPF"], id="one-variant"),
+    ],
+)
+def test_two_device_variants_of_one_optimizer_get_distinct_row_labels(
+    canon: pd.DataFrame, variants: tuple[str, ...], want_labels: list[str] | None
+) -> None:
     """The compiler per-kernel figure labels a canon row by its optimizer, and the registry aliases
     both DaCe device variants to one. Drawn together they printed one name twice in the legend."""
-    rows = kernel_speedups.kernel_rows(canon, None, TAG_KERNELS, ("dace_cpu_canon", "dace_gpu_canon"))
+    rows = kernel_speedups.kernel_rows(canon, None, TAG_KERNELS, variants)
     labels = [row.label for row in rows]
-    assert len(set(labels)) == 2, labels
-
-
-def test_one_device_variant_keeps_its_optimizer_name(canon: pd.DataFrame) -> None:
-    """The fallback fires only on a collision; a figure drawing one variant is unchanged."""
-    (row,) = kernel_speedups.kernel_rows(canon, None, TAG_KERNELS, ("dace_cpu_canon",))
-    assert row.label == "DaCe+CPF"
+    if want_labels is None:
+        assert len(set(labels)) == 2, labels
+    else:
+        assert labels == want_labels
 
 
 def test_an_undelivered_placeholder_is_drawn_hollow() -> None:

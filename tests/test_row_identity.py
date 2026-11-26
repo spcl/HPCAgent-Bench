@@ -103,41 +103,30 @@ def test_the_identity_lives_on_setups_and_nowhere_else(tmp_path: pathlib.Path) -
         conn.close()
 
 
-def test_a_verified_submission_is_tagged(tmp_path: pathlib.Path, tagged: tuple[str, ...]) -> None:
+@pytest.mark.parametrize("route", ["verified", "rejected", "served"])
+def test_a_verified_submission_is_tagged(tmp_path: pathlib.Path, tagged: tuple[str, ...], route: str) -> None:
+    """Every recording route -- a verified submission, a rejected attempt, a served grade -- carries the identity."""
     db = str(tmp_path / "r.db")
+    task = Task(KERNEL, SourceMode.RESTRICTED, Language.C)
+    submission = Submission(language=Language.C, source="/* x */", build=[])
+    if route == "served":
+        recording.record_call(_score(), task, status=RunStatus.OK, route="submit", path=db)
+        assert _joined(db, "calls") == [tagged]
+        return
+    if route == "verified":
+        table, *unused = recording.record(_score(), submission, task, judgement=Judgement(), path=db)
+        assert table == "submission"
+        assert _joined(db, "submissions") == [tagged]
+        return
+    judgement = Judgement((Finding("independent_verify", Effect.REJECT, "fresh-seed-mismatch"),))
     table, *_ = recording.record(
-        _score(),
-        Submission(language=Language.C, source="/* x */", build=[]),
-        Task(KERNEL, SourceMode.RESTRICTED, Language.C),
-        judgement=Judgement(),
-        path=db,
-    )
-    assert table == "submission"
-    assert _joined(db, "submissions") == [tagged]
-
-
-def test_a_rejected_attempt_is_tagged(tmp_path: pathlib.Path, tagged: tuple[str, ...]) -> None:
-    db = str(tmp_path / "r.db")
-    table, *_ = recording.record(
-        _score(correct=False, hidden_correct=False),
-        Submission(language=Language.C, source="/* x */", build=[]),
-        Task(KERNEL, SourceMode.RESTRICTED, Language.C),
-        judgement=Judgement((Finding("independent_verify", Effect.REJECT, "fresh-seed-mismatch"),)),
-        path=db,
+        _score(correct=False, hidden_correct=False), submission, task, judgement=judgement, path=db
     )
     assert table == "attempts"
     assert _joined(db, "attempts") == [tagged]
 
 
-def test_a_served_grade_is_tagged(tmp_path: pathlib.Path, tagged: tuple[str, ...]) -> None:
-    db = str(tmp_path / "r.db")
-    recording.record_call(
-        _score(), Task(KERNEL, SourceMode.RESTRICTED, Language.C), status=RunStatus.OK, route="submit", path=db
-    )
-    assert _joined(db, "calls") == [tagged]
-
-
-def test_the_recorded_packet_is_the_packet_column_whatever_the_language_says() -> None:
+def test_the_recorded_packet_is_the_packet_column_whatever_the_language_says(tmp_path: pathlib.Path) -> None:
     """A setup's own recorded packet is the packet column; the language never contributes one."""
     config.set_override("record.language", "hip-perf-playbook-amd")
     config.set_override("record.packet", "lang-skills")
@@ -146,11 +135,8 @@ def test_the_recorded_packet_is_the_packet_column_whatever_the_language_says() -
     finally:
         config.clear_override("record.language")
         config.clear_override("record.packet")
-
-
-def test_the_base_setup_records_an_empty_packet_not_null(tmp_path: pathlib.Path) -> None:
-    """No packet is a CONDITION, not a missing value: it is the control every treatment is read
-    against, so it has to group rather than drop out of a GROUP BY."""
+    # No packet is a CONDITION, not a missing value: it is the control every treatment is read against, so it has
+    # to group rather than drop out of a GROUP BY.
     db = str(tmp_path / "r.db")
     recording.record_call(
         _score(), Task(KERNEL, SourceMode.RESTRICTED, Language.C), status=RunStatus.OK, route="score", path=db
@@ -164,10 +150,7 @@ def test_device_defaults_to_cpu(tmp_path: pathlib.Path) -> None:
         _score(), Task(KERNEL, SourceMode.RESTRICTED, Language.C), status=RunStatus.OK, route="score", path=db
     )
     assert _runs(db, ("device",)) == [("cpu",)]
-
-
-def test_an_unknown_device_is_refused(tmp_path: pathlib.Path) -> None:
-    """A typo must not become a silent fifth device that no figure plots."""
+    # A typo must not become a silent fifth device that no figure plots.
     with pytest.raises(ValueError, match="apu"):
         config.set_override("record.device", "apu")
 
@@ -230,10 +213,8 @@ def test_the_setup_language_is_the_identity_not_the_bodys_claim(
         path=db,
     )
     assert _runs(db, ("language",)) == [("fortran",)]
-
-
-def test_a_submission_records_both_languages(tmp_path: pathlib.Path, tagged: tuple[str, ...]) -> None:
-    db = str(tmp_path / "r.db")
+    # A submission in another language records the setup's language too.
+    db = str(tmp_path / "submission.db")
     recording.record(
         _score(),
         Submission(language=Language.PYTHON, source="# x", build=[]),
@@ -356,13 +337,9 @@ def test_the_harness_comes_from_the_launcher_env(tmp_path: pathlib.Path, monkeyp
     )
     assert _runs(db, ("harness",)) == [("miniswe",)]
 
-
-def test_the_submitting_commit_comes_from_the_launcher_env(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Inside the container the tree has no repository, so git cannot answer and every run recorded a
-    NULL commit; the commit record_identity.sh stamps is the only record of which code ran."""
-    db = str(tmp_path / "r.db")
+    # Inside the container the tree has no repository, so git cannot answer and every run recorded a NULL commit;
+    # the commit record_identity.sh stamps is the only record of which code ran.
+    db = str(tmp_path / "commit.db")
     monkeypatch.delenv(recording.SNAPSHOT_COMMIT_ENV, raising=False)
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_COMMIT", "c4227a166")
     recording.record_call(
@@ -370,22 +347,17 @@ def test_the_submitting_commit_comes_from_the_launcher_env(
     )
     assert commits_of(db) == [("c4227a166",)]
 
-
-def test_the_job_commit_wins_over_the_planned_one(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A queued job runs the checkout as it stands when the job STARTS (its HEAD, run_cluster.sh), so
-    the setup env's stamp names the commit it was planned at and the snapshot names the code that ran. The snapshot is read raw: an all-digit short sha must not come back as an int."""
-    db = str(tmp_path / "r.db")
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_COMMIT", "c4227a166")
+    # A queued job runs the checkout as it stands when the job STARTS (its HEAD, run_cluster.sh), so the setup env's
+    # stamp names the commit it was planned at and the snapshot names the code that ran. The snapshot is read raw:
+    # an all-digit short sha must not come back as an int.
+    db = str(tmp_path / "job-commit.db")
     monkeypatch.setenv(recording.SNAPSHOT_COMMIT_ENV, "012345678")
     recording.record_call(
         _score(), Task(KERNEL, SourceMode.RESTRICTED, Language.C), status=RunStatus.OK, route="score", path=db
     )
     assert commits_of(db) == [("012345678",)]
 
-
-def test_an_empty_snapshot_commit_falls_back_to_the_planned_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A checkout with no git HEAD exports an EMPTY snapshot commit."""
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_COMMIT", "c4227a166")
+    # A checkout with no git HEAD exports an EMPTY snapshot commit, and the planned one stands.
     monkeypatch.setenv(recording.SNAPSHOT_COMMIT_ENV, " ")
     assert recording.snapshot_commit() is None
     assert recording.commit_tag() == "c4227a166"

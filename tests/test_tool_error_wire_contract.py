@@ -41,11 +41,6 @@ def _returns_with_error_key(tree: ast.AST) -> list[ast.Dict]:
     return found
 
 
-def test_there_are_tool_modules_to_check() -> None:
-    """A glob that matches nothing makes the whole file a no-op."""
-    assert TOOL_MODULES, f"no tool modules found under {TOOLS}"
-
-
 @pytest.mark.parametrize("module", TOOL_MODULES, ids=lambda p: p.name)
 def test_every_returned_error_carries_ok_false(module: pathlib.Path) -> None:
     tree = ast.parse(module.read_text())

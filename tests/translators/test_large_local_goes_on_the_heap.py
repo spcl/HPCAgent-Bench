@@ -17,6 +17,7 @@ today's stack proves nothing about the rule.
 import re
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import parse_source, run_op
 
@@ -54,17 +55,17 @@ def declaration(src: str, name: str) -> str:
     return hits[0]
 
 
-def test_the_small_local_stays_on_the_stack_and_the_heap_local_is_freed() -> None:
-    """The budget must not push every temporary to the heap -- that would cost every kernel."""
-    src = emit_("c")
+@pytest.mark.parametrize("target", ["c", "cpp"])
+def test_the_small_local_stays_on_the_stack_and_the_heap_local_is_freed(target: str) -> None:
+    """The budget must not push every temporary to the heap -- that would cost every kernel -- and the C and
+    C++ emitters apply the same budget."""
+    src = emit_(target)
     decl = declaration(src, "small")
     assert "malloc" not in decl, decl
-    assert "free(big)" in src, src
-
-
-def test_cpp_applies_the_same_budget() -> None:
-    decl = declaration(emit_("cpp"), "big")
-    assert "malloc" in decl, decl
+    big = declaration(src, "big")
+    assert "malloc" in big, big
+    if target == "c":
+        assert "free(big)" in src, src
 
 
 def test_a_kernel_with_an_oversized_local_still_matches_numpy() -> None:

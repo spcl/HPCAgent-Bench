@@ -27,19 +27,28 @@ def effort_fixture() -> types.ModuleType:
 
 
 @pytest.mark.parametrize(
-    ("declared", "rung"),
+    ("declared", "client_spells_literal", "rung"),
     [
-        ("low medium xhigh", "xhigh"),  # qwen38: its template accepts no `high` at all
-        ("low medium high", "high"),  # oss120b: the ladder stops below xhigh
-        ("", ""),  # kimi27sglang, glm53: no ladder, so no field
-        ("xhigh", "xhigh"),
-        ("  low   medium   xhigh  ", "xhigh"),
+        ("low medium xhigh", False, "xhigh"),  # qwen38: its template accepts no `high` at all
+        ("low medium high", False, "high"),  # oss120b: the ladder stops below xhigh
+        ("", False, ""),  # kimi27sglang, glm53: no ladder, so no field
+        ("xhigh", False, "xhigh"),
+        ("  low   medium   xhigh  ", False, "xhigh"),
+        # A client that types the field as a Literal fails validation on a rung outside it, and the episode never
+        # starts. The clamp is recorded in harness-end.json because it is a real difference between that setup
+        # and the same setup under another harness.
+        ("low medium high", True, "high"),  # oss120b: the whole ladder is spellable
+        ("low medium xhigh", True, "xhigh"),  # qwen38: the SDK Literal spells xhigh (llm.py:548)
+        ("max", True, ""),  # nothing of the ladder is spellable, so no field
     ],
 )
 def test_the_policy_takes_xhigh_where_a_ladder_has_it_and_its_top_rung_otherwise(
-    effort: types.ModuleType, declared: str, rung: str
+    effort: types.ModuleType, declared: str, client_spells_literal: bool, rung: str
 ) -> None:
-    assert effort.resolve(declared) == rung
+    if client_spells_literal:
+        assert effort.for_client(declared, LITERAL_RUNGS) == rung
+    else:
+        assert effort.resolve(declared) == rung
 
 
 def test_a_model_with_no_ladder_is_sent_no_field_rather_than_a_guessed_rung(effort: types.ModuleType) -> None:
@@ -47,23 +56,6 @@ def test_a_model_with_no_ladder_is_sent_no_field_rather_than_a_guessed_rung(effo
     none is not ignored -- it is a 400 on every request until the agent gives up."""
     assert effort.resolve("") == ""
     assert effort.for_client("", LITERAL_RUNGS) == ""
-
-
-@pytest.mark.parametrize(
-    ("declared", "rung"),
-    [
-        ("low medium high", "high"),  # oss120b: the whole ladder is spellable
-        ("low medium xhigh", "xhigh"),  # qwen38: the SDK Literal spells xhigh (llm.py:548)
-        ("max", ""),  # nothing of the ladder is spellable, so no field
-    ],
-)
-def test_a_client_that_spells_fewer_rungs_gets_the_top_of_what_it_can_spell(
-    effort: types.ModuleType, declared: str, rung: str
-) -> None:
-    """A client that types the field as a Literal fails validation on a rung outside it, and the episode
-    never starts. The clamp is recorded in harness-end.json because it is a real difference between
-    that setup and the same setup under another harness."""
-    assert effort.for_client(declared, LITERAL_RUNGS) == rung
 
 
 def test_an_unknown_policy_refuses_instead_of_falling_back_to_a_rung(effort: types.ModuleType) -> None:

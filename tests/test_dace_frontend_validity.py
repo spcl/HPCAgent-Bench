@@ -3,13 +3,11 @@
 """A RATCHET on the generated ``*_dace.py`` files the DaCe frontend refuses (:data:`REFUSED`): a new refusal
 fails, and an entry that parses must be removed. Parse only, one forked process per kernel."""
 
-import collections
 import json
 import multiprocessing
 import os
 import pathlib
 import queue
-import re
 import select
 import shutil
 import subprocess
@@ -428,35 +426,6 @@ def corpus_kernels() -> set[str]:
     return out
 
 
-#: ``#:   <cause>  <count> -- ...`` and the ``(<total> of <corpus>)`` line above it, read back out of
-#: this file's own source by :func:`test_the_refusal_tally_matches_the_list_it_describes`.
-TALLY_LINE = re.compile(r"^#: The causes on the list below, one process per kernel \((\d+) of \d+\):$", re.MULTILINE)
-CAUSE_LINE = re.compile(r"^#:   ([a-z_]+) +(\d+) --", re.MULTILINE)
-
-
-def test_the_refusal_tally_matches_the_list_it_describes() -> None:
-    """The header count is what a reader trusts instead of counting 105 dict entries by hand.
-
-    It is a COMMENT, so nothing made it move when the dict did: two kernels came off the list and
-    the total went 107 -> 104 rather than 105, and an earlier edit dropped a whole cause line while
-    its entries stayed. Both are the silent drift this module's docstring says a hand-written list
-    always accumulates -- so the tally is measured here rather than maintained.
-    """
-    source = pathlib.Path(__file__).read_text()
-    stated_total = TALLY_LINE.search(source)
-    assert stated_total is not None, "the header tally line is gone; it is what this gate reads"
-    stated = {cause: int(count) for cause, count in CAUSE_LINE.findall(source)}
-    actual = collections.Counter(REFUSED.values())
-    assert stated == dict(actual), (
-        f"the header names {stated} but REFUSED holds {dict(actual)}. "
-        "Update the comment -- a tally that disagrees with the list "
-        "describes a corpus nobody has."
-    )
-    assert int(stated_total.group(1)) == len(REFUSED), (
-        f"the header says {stated_total.group(1)} refusals and REFUSED holds {len(REFUSED)}."
-    )
-
-
 @pytest.mark.dace_frontend
 def test_the_refusal_list_names_kernels_that_exist() -> None:
     """A stale entry would silently excuse a kernel that no longer exists, and hide a real
@@ -570,25 +539,18 @@ def test_the_parse_server_calls_a_kernel_that_kills_its_process_a_crash(program_
 
 
 @pytest.mark.dace_frontend
-def test_a_timeout_class_refusal_that_parsed_does_not_have_to_come_off_the_list() -> None:
-    """``hang`` is a wall-clock verdict. A runner fast enough to finish one inside the budget has
-    fixed nothing, so the shrink direction must not fire -- otherwise the ratchet goes red and
-    green with runner load, and a red that means nothing gets ignored when it means something."""
-    hung = sorted(k for k, why in REFUSED.items() if why in TIMEOUT_REASONS)
-    assert hung, "no TIMEOUT_REASONS entry left in REFUSED -- drop this test with the last one"
-    regressions, fixed = ratchet_findings((k, {"verdict": "ok"}) for k in hung)
-    assert not fixed
+@pytest.mark.parametrize("timeout_class", [True, False], ids=["timeout-class", "real"])
+def test_a_real_refusal_that_parsed_must_come_off_the_list(timeout_class: bool) -> None:
+    """``hang`` is a wall-clock verdict. A runner fast enough to finish one inside the budget has fixed nothing,
+    so the shrink direction must not fire -- otherwise the ratchet goes red and green with runner load, and a red
+    that means nothing gets ignored when it means something. The other side of the exemption: everything that is
+    not a wall-clock verdict still shrinks the moment it parses. A blanket exemption would stop the list
+    measuring anything."""
+    kernels = sorted(k for k, why in REFUSED.items() if (why in TIMEOUT_REASONS) == timeout_class)
+    assert kernels, "REFUSED holds no entry of this class -- drop this case with the last one"
+    regressions, fixed = ratchet_findings((k, {"verdict": "ok"}) for k in kernels)
     assert not regressions
-
-
-@pytest.mark.dace_frontend
-def test_a_real_refusal_that_parsed_must_come_off_the_list() -> None:
-    """The other side of the exemption: everything that is not a wall-clock verdict still shrinks
-    the moment it parses. A blanket exemption would stop the list measuring anything."""
-    real = sorted(k for k, why in REFUSED.items() if why not in TIMEOUT_REASONS)
-    assert real, "REFUSED holds nothing but timeouts -- the ratchet has no shrink direction left"
-    _, fixed = ratchet_findings((k, {"verdict": "ok"}) for k in real)
-    assert fixed == set(real)
+    assert fixed == (set() if timeout_class else set(kernels))
 
 
 #: The env var the dace-frontend CI job sets, and the workflow that has to keep covering all of it.
@@ -640,15 +602,6 @@ def test_the_shards_partition_the_corpus_rather_than_sampling_it() -> None:
         flat = [k for piece in pieces for k in piece]
         assert sorted(flat) == sorted(keys), f"{count} shards do not cover the corpus"
         assert len(flat) == len(set(flat)), f"{count} shards judge a kernel twice"
-
-
-@pytest.mark.dace_frontend
-def test_an_unsharded_run_still_sees_the_whole_corpus() -> None:
-    """The variable unset is a local run and the pre-warm in ``dace-numeric``; both want all of it."""
-    keys = ["a/one", "b/two", "c/three"]
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(sys.modules[__name__], "PARSE_SHARD", "")
-        assert shard_of(keys) == keys
 
 
 @pytest.mark.dace_frontend

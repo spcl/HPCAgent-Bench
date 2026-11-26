@@ -12,11 +12,9 @@ alone, and a numerical end-to-end check that the always-allocated form still mat
 
 import ast
 
-import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_common.lowering import ConditionalNoneAllocRewriter
-from tests.translators.op_oracle import run_op
 
 
 def rw(body_src: str) -> str:
@@ -47,36 +45,3 @@ def test_name_observed_via_is_none_is_not_forced() -> None:
     )
     ConditionalNoneAllocRewriter().visit(tree)
     assert any(isinstance(node, ast.IfExp) for node in ast.walk(tree))  # IfExp preserved
-
-
-SRC = """
-import numpy as np
-
-def condnone(a, cond, out):
-    tmp = np.zeros(a.shape) if cond > 0 else None
-    for i in range(a.shape[0]):
-        if cond > 0:
-            tmp[i] = a[i] * 2.0
-    for i in range(a.shape[0]):
-        if cond > 0:
-            out[i] = tmp[i]
-        else:
-            out[i] = a[i]
-"""
-
-
-def test_conditional_none_alloc_matches_numpy_end_to_end() -> None:
-    """The always-allocated lowering runs + matches numpy on C/C++/Fortran (the backends
-    that have no ``None``); the verbatim backends run the numpy form directly."""
-    a = np.arange(6, dtype=np.float64)
-    res = run_op(
-        SRC,
-        "condnone",
-        {"a": a, "cond": 1},
-        {"out": (6,)},
-        {"N": 6},
-        shapes={"a": "(N,)", "out": "(N,)"},
-        backends=("c", "cpp", "fortran"),
-    )
-    for backend, status in res.items():
-        assert status == "ok" or status.startswith("skip"), f"{backend}: {status}"

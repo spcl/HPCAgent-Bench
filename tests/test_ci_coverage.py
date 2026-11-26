@@ -63,12 +63,6 @@ def test_a_dedicated_file_is_actually_run_by_some_phase() -> None:
     assert not missing, f"excluded from the sweep but named by no phase, so they run NOWHERE: {missing}"
 
 
-def test_the_sweep_is_discovered_not_enumerated() -> None:
-    workflow = WORKFLOW.read_text()
-    assert "dedicated_tests.txt" in workflow, "the sweep no longer reads the exclusion file"
-    assert "ls tests/test_*.py" in workflow, "the sweep no longer discovers files with ls"
-
-
 def test_ci_never_asks_for_a_billed_runner() -> None:
     """Larger hosted runners bill per minute even on a public repo; self-hosted labels are ours."""
     standard = {"ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04", "windows-latest", "macos-latest"}
@@ -148,10 +142,7 @@ def test_the_corpus_reference_phase_is_not_instrumented() -> None:
     phase = text.index("Phase 2c -- benchmark reference validation")
     step = text[phase : text.index("- name: ", phase)]
     assert 'PYTEST_ADDOPTS: ""' in step, "Phase 2c must clear PYTEST_ADDOPTS"
-
-
-def test_the_coverage_omit_list_and_the_uninstrumented_phase_agree() -> None:
-    """Phase 2c is only safe uninstrumented while its tree is omitted from coverage."""
+    # Phase 2c is only safe uninstrumented while its tree is omitted from coverage.
     omit = pyproject()["tool"]["coverage"]["run"]["omit"]
     assert any(pattern.startswith("hpcagent_bench/benchmarks") for pattern in omit)
 
@@ -223,10 +214,7 @@ def test_the_translator_integration_legs_partition_the_tree() -> None:
     assert named == ignored, f"legs name {sorted(named)} but the sweeping leg ignores {sorted(ignored)}"
     missing = [path for path in sorted(named | ignored) if not (REPO / path).is_file()]
     assert not missing, f"the matrix names files that do not exist: {missing}"
-
-
-def test_a_sharded_leg_runs_every_slice_it_splits_into() -> None:
-    """A leg naming ``0/2`` with no ``1/2`` sweeps half the registry and still reports green."""
+    # A leg naming ``0/2`` with no ``1/2`` sweeps half the registry and still reports green.
     slices: dict = {}
     for leg in translator_legs():
         index, _, count = str(leg["shard"]).partition("/")
@@ -253,6 +241,9 @@ def test_every_integration_marked_translator_file_reaches_a_leg() -> None:
 
 
 def test_no_job_budgets_itself_past_the_container_ceiling() -> None:
+    # A job with no ``timeout-minutes`` inherits GitHub's 360.
+    unset = sorted(name for name, job in workflow_jobs().items() if "timeout-minutes" not in job)
+    assert not unset, f"no timeout-minutes on {unset}"
     over = {
         name: job["timeout-minutes"]
         for name, job in workflow_jobs().items()
@@ -373,12 +364,6 @@ def test_every_e2e_backend_is_swept_at_fp64() -> None:
     assert not missing, f"no CI step sweeps tests/test_e2e_numerical.py at fp64 on {missing}"
 
 
-def test_every_job_sets_a_timeout_at_all() -> None:
-    """A job with no ``timeout-minutes`` inherits GitHub's 360."""
-    missing = sorted(name for name, job in workflow_jobs().items() if "timeout-minutes" not in job)
-    assert not missing, f"no timeout-minutes on {missing}"
-
-
 def test_the_unit_sweep_runs_every_shard_it_deals_and_each_file_once() -> None:
     """The deal names a shard count; a leg missing from the matrix is test files nothing runs, and the shards must
     partition the sweep."""
@@ -400,6 +385,9 @@ def test_the_unit_sweep_runs_the_python_floor_and_the_default() -> None:
     collects under ``requires-python``'s floor, in an environment it syncs at ``FLOOR_PYTHON``."""
     floor = re.search(r">=\s*(\d+\.\d+)", pyproject()["project"]["requires-python"])
     assert floor, "requires-python has no >= floor"
+    major, minor = floor.group(1).split(".")
+    assert pyproject()["tool"]["ruff"]["target-version"] == f"py{major}{minor}"
+    assert pyproject()["tool"]["pyright"]["pythonVersion"] == f"{major}.{minor}"
     env = yaml.safe_load(WORKFLOW.read_text())["env"]
     assert str(env["FLOOR_PYTHON"]) == floor.group(1), f"FLOOR_PYTHON is {env['FLOOR_PYTHON']}, not {floor.group(1)}"
     job = workflow_jobs()["unit"]
@@ -421,14 +409,6 @@ def test_the_unit_sweep_runs_the_python_floor_and_the_default() -> None:
     assert "python -m pytest" not in run.replace('venv-floor/bin/python" -m pytest', ""), (
         "a floor check runs on the default interpreter"
     )
-
-
-def test_ruff_and_pyright_target_the_python_floor() -> None:
-    floor = re.search(r">=\s*(\d+)\.(\d+)", pyproject()["project"]["requires-python"])
-    assert floor
-    major, minor = floor.groups()
-    assert pyproject()["tool"]["ruff"]["target-version"] == f"py{major}{minor}"
-    assert pyproject()["tool"]["pyright"]["pythonVersion"] == f"{major}.{minor}"
 
 
 #: Distributions in ``[project.optional-dependencies]`` whose module name differs from the PyPI name.

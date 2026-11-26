@@ -142,9 +142,10 @@ def phased_overlays(packet: PacketDef) -> list[prompt_blocks.PromptOverlay]:
 
 
 def test_the_packet_changes_the_agent_prompt(tmp_path: pathlib.Path, packets: Kind[PacketDef]) -> None:
+    overlays = phased_overlays(registered(tmp_path, packets)["phased"])
     sut = prompt_blocks.parse((prompt_build.AGENT / "prompt.md").read_text(encoding="utf-8"))
 
-    for overlay in phased_overlays(registered(tmp_path, packets)["phased"]):
+    for overlay in overlays:
         sut = prompt_blocks.apply(sut, overlay.agent)
 
     blocks = {block.id: block for block in sut.blocks}
@@ -155,16 +156,12 @@ def test_the_packet_changes_the_agent_prompt(tmp_path: pathlib.Path, packets: Ki
     assert blocks["end_to_end"].text.startswith("## End to end\n\n1. Shape, then build.")
     assert "### 1. Shape (you)" in prompt_blocks.render(sut)
 
-
-def test_the_packet_changes_the_task_prompt(tmp_path: pathlib.Path, packets: Kind[PacketDef]) -> None:
-    overlays = phased_overlays(registered(tmp_path, packets)["phased"])
-
-    sut = prompt_sections.resolve([overlay.task for overlay in overlays])
-
-    assert not sut.on("build_flags")
-    assert sut.on("phased")
-    assert sut.on("phased_workflow")
-    assert "`{{ lib_name }}`" in sut.sources[prompt_sections.INLINE_PREFIX + "delivery"]
+    # The same overlays change the task prompt too.
+    task = prompt_sections.resolve([overlay.task for overlay in overlays])
+    assert not task.on("build_flags")
+    assert task.on("phased")
+    assert task.on("phased_workflow")
+    assert "`{{ lib_name }}`" in task.sources[prompt_sections.INLINE_PREFIX + "delivery"]
 
 
 @pytest.mark.parametrize(
@@ -174,6 +171,8 @@ def test_the_packet_changes_the_task_prompt(tmp_path: pathlib.Path, packets: Kin
         (('agent = ["shape", "build"]', 'agent = ["shape", "nope"]'), r"names phases \['nope'\]"),
         (('extends = "phased"', 'extends = "phased-full"'), "extends itself"),
         (('"phased:prompt/overlay.yaml"]', '"phased:prompt/missing.yaml"]'), "not a file of the plugin"),
+        (('text = "prompt/build.md"\n', ""), r"lets the agent run phases \['build'\], which have no text"),
+        (('text = "prompt/shape.md"', 'text = "../outside.md"'), "phase 'shape'"),
     ],
 )
 def test_a_malformed_packet_is_refused_and_adds_nothing(
@@ -194,20 +193,6 @@ def test_template_syntax_in_a_text_bound_for_the_agent_prompt_is_refused(
 
     with pytest.raises(ValueError, match=r"agent block 'end_to_end' holds Jinja syntax .* only \{\{UPPER\}\} slots"):
         prompt_build.load_overlay("phased:prompt/overlay.yaml")
-
-
-def test_a_phase_the_agent_runs_needs_a_text(tmp_path: pathlib.Path, packets: Kind[PacketDef]) -> None:
-    manifest = MANIFEST.replace('text = "prompt/build.md"\n', "")
-
-    with pytest.raises(ValueError, match=r"lets the agent run phases \['build'\], which have no text"):
-        registered(tmp_path, packets, manifest)
-
-
-def test_a_phase_text_outside_the_plugin_folder_is_refused(tmp_path: pathlib.Path, packets: Kind[PacketDef]) -> None:
-    manifest = MANIFEST.replace('text = "prompt/shape.md"', 'text = "../outside.md"')
-
-    with pytest.raises(ValueError, match="phase 'shape'"):
-        registered(tmp_path, packets, manifest)
 
 
 def test_a_shipped_packet_takes_no_phases(tmp_path: pathlib.Path) -> None:

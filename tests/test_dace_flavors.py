@@ -42,19 +42,17 @@ def test_a_flavor_scores_exactly_its_own_pipeline(flavor: str, scored: tuple[str
     assert DaceFramework(flavor).scored_pipelines() == scored
 
 
-def test_a_flavor_naming_two_pipelines_is_refused() -> None:
+@pytest.mark.parametrize("name", ["dace_cpu_parallel", "dace_cpu"], ids=["two-pipelines", "the-column-itself"])
+def test_a_flavor_naming_two_pipelines_is_refused(name: str) -> None:
     """Two pipelines under one column would be a search reporting its winner, which answers "how fast
-    is DaCe" rather than "how fast is THIS optimizer"; the flavor is refused before anything builds."""
-    framework = DaceFramework("dace_cpu_parallel")
-    framework.column = dataclasses.replace(framework.column, pipelines=("parallel_cpu", "canon_cpu"))
+    is DaCe" rather than "how fast is THIS optimizer"; the flavor is refused before anything builds.
+    ``dace_cpu`` is the DB column its flavors group under; a run of it names no optimizer, so it is
+    refused too."""
+    framework = DaceFramework(name)
+    if name == "dace_cpu_parallel":
+        framework.column = dataclasses.replace(framework.column, pipelines=("parallel_cpu", "canon_cpu"))
     with pytest.raises(ValueError, match="exactly one"):
         framework.scored_pipelines()
-
-
-def test_the_dace_column_itself_runs_nothing() -> None:
-    """``dace_cpu`` is the DB column its flavors group under; a run of it names no optimizer, so it is refused."""
-    with pytest.raises(ValueError, match="exactly one"):
-        DaceFramework("dace_cpu").scored_pipelines()
 
 
 def test_every_pipeline_is_scored_by_exactly_one_deterministic_flavor() -> None:

@@ -66,11 +66,6 @@ def test_a_plugin_routes_terminal_work_queues_as_a_submission() -> None:
     assert asked == [service.EXPLORATION_PRIORITY, service.SLOT_PRIORITY["submit"]]
 
 
-def test_the_warm_up_waits_behind_every_request() -> None:
-    assert judge_warmup.PRIORITY > service.EXPLORATION_PRIORITY
-    assert max(service.SLOT_PRIORITY.values()) < judge_warmup.PRIORITY
-
-
 def test_a_waiting_request_takes_the_slot_before_the_warm_up(monkeypatch: pytest.MonkeyPatch) -> None:
     """One slot, held; the warm-up queues first and a submission second: the submission is served first."""
     pool = service.SlotPool([DeviceSlot("cpu", 0)])

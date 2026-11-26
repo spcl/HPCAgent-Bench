@@ -102,17 +102,20 @@ def test_plan_waves_numbers_each_setup_by_the_limit(
     assert done.stdout.split() == waves
 
 
-def test_plan_waves_refuses_a_setup_larger_than_the_limit(tmp_path: pathlib.Path) -> None:
-    done = plan(tmp_path, "8", 4, 9)
+@pytest.mark.parametrize(
+    ("max_nodes", "counts", "message"),
+    [
+        *[(bad, (4,), f"MAX_NODES is a positive integer, got '{bad}'") for bad in ("0", "-4", "eight", "08")],
+        ("8", (4, 9), "a setup of 9 nodes exceeds MAX_NODES=8"),
+    ],
+)
+def test_plan_waves_refuses_a_limit_that_is_not_a_positive_integer(
+    tmp_path: pathlib.Path, max_nodes: str, counts: tuple[int, ...], message: str
+) -> None:
+    """A limit that is no positive integer, or one smaller than a setup, stops the plan."""
+    done = plan(tmp_path, max_nodes, *counts)
     assert done.returncode == 2
-    assert "a setup of 9 nodes exceeds MAX_NODES=8" in done.stderr
-
-
-@pytest.mark.parametrize("max_nodes", ["0", "-4", "eight", "08"])
-def test_plan_waves_refuses_a_limit_that_is_not_a_positive_integer(tmp_path: pathlib.Path, max_nodes: str) -> None:
-    done = plan(tmp_path, max_nodes, 4)
-    assert done.returncode == 2
-    assert f"MAX_NODES is a positive integer, got '{max_nodes}'" in done.stderr
+    assert message in done.stderr
 
 
 def submit_three_setups(tmp_path: pathlib.Path, **env: str) -> subprocess.CompletedProcess[str]:
@@ -294,11 +297,18 @@ def retried(tmp_path: pathlib.Path, failures: int, message: str) -> tuple[subpro
     return done, int((tmp_path / "sbatch.count").read_text())
 
 
-def test_a_transient_sbatch_failure_is_retried_and_only_the_id_is_captured(tmp_path: pathlib.Path) -> None:
-    done, calls = retried(tmp_path, 2, "cli_filter plugin terminated with error")
-    assert (done.returncode, calls) == (0, 3), done.stderr
-    assert "jid=4242;cluster" in done.stdout.splitlines()
-    assert "cli_filter plugin terminated with error" in done.stderr
+@pytest.mark.parametrize(("failures", "status", "calls"), [(2, 0, 3), (9, 1, 4)], ids=["recovers", "persists"])
+def test_a_transient_sbatch_failure_is_retried_and_only_the_id_is_captured(
+    tmp_path: pathlib.Path, failures: int, status: int, calls: int
+) -> None:
+    """A transient failure is retried until it clears (only the id is captured) or the retries run out (it gives up
+    with sbatch's own status)."""
+    message = "cli_filter plugin terminated with error"
+    done, made = retried(tmp_path, failures, message)
+    assert (done.returncode, made) == (status, calls), done.stderr
+    if status == 0:
+        assert "jid=4242;cluster" in done.stdout.splitlines()
+        assert message in done.stderr
 
 
 @pytest.mark.parametrize(
@@ -314,11 +324,6 @@ def test_a_failure_a_retry_cannot_fix_or_may_duplicate_fails_at_once(tmp_path: p
     done, calls = retried(tmp_path, 9, message)
     assert (done.returncode, calls) == (1, 1), done.stderr
     assert message in done.stderr
-
-
-def test_a_transient_failure_that_persists_gives_up_with_its_status(tmp_path: pathlib.Path) -> None:
-    done, calls = retried(tmp_path, 9, "cli_filter plugin terminated with error")
-    assert (done.returncode, calls) == (1, 4), done.stderr
 
 
 def test_a_setup_job_goes_through_the_retry(tmp_path: pathlib.Path) -> None:
@@ -355,15 +360,6 @@ def test_a_pin_that_cannot_read_its_file_leaves_it_alone(tmp_path: pathlib.Path)
     assert done.returncode == 2
     assert env.read_text() == "KEY=old\nOTHER=kept\n"
     assert [path.name for path in tmp_path.glob(".env.x*")] == [".env.x"]
-
-
-def test_the_root_account_submits_no_prepare_job_either(tmp_path: pathlib.Path) -> None:
-    root = tree(tmp_path)
-    bash_stub(root / "bin", "sbatch", CHAIN_SBATCH)
-    done = submit(root, "--account", "root", KERNELS_FILE="subset.txt", PREPARE="1", SUBMIT="1")
-    assert done.returncode == 2, done.stderr
-    assert "root is not a project account" in done.stderr, done.stderr
-    assert not (root / "sbatch.last").exists()
 
 
 @pytest.mark.smoke

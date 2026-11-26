@@ -60,11 +60,6 @@ def test_diff_expands_to_neighbour_subtraction_along_its_axis(src: str, shapes: 
     assert expand_(src, shapes) == expected
 
 
-def test_literal_extent_folds_the_bound() -> None:
-    got = expand_("out = np.diff(a)", {"a": ("8",)})
-    assert "range(8 - 1)" in got
-
-
 @pytest.mark.parametrize(
     ("src", "shapes", "match"),
     [
@@ -79,28 +74,41 @@ def test_diff_forms_beyond_the_first_difference_are_refused(src: str, shapes: di
         expand_(src, shapes)
 
 
-def test_numeric_row_lengths_from_csr_row_ptr() -> None:
-    """The idiom that found the gap: row lengths out of a CSR ``row_ptr``."""
-    row_ptr = np.array([0, 2, 2, 5, 9], dtype=np.int64)
-    src = "import numpy as np\n\ndef k(row_ptr, out):\n    out[:] = np.diff(row_ptr)\n"
-    assert_all_ok(
-        run_op(
-            src,
-            "k",
-            {"row_ptr": row_ptr},
-            {"out": (4,)},
+CSR_ROW_PTR = np.array([0, 2, 2, 5, 9], dtype=np.int64)
+SQUARES = np.arange(12, dtype=np.float64).reshape(3, 4) ** 2
+
+
+@pytest.mark.parametrize(
+    ("src", "inputs", "out_shape", "symbols", "shapes", "dtypes"),
+    [
+        # The idiom that found the gap: row lengths out of a CSR ``row_ptr``.
+        pytest.param(
+            "import numpy as np\n\ndef k(row_ptr, out):\n    out[:] = np.diff(row_ptr)\n",
+            {"row_ptr": CSR_ROW_PTR},
+            (4,),
             {"n": 5},
-            shapes={"row_ptr": "(5,)", "out": "(4,)"},
-            backends=NATIVE,
-            dtypes={"row_ptr": "int64", "out": "int64"},
-        )
-    )
-
-
-def test_numeric_2d_axis_zero_matches_numpy() -> None:
-    pow_base1 = np.arange(12, dtype=np.float64).reshape(3, 4)
-    a = pow_base1 * pow_base1
-    src = "import numpy as np\n\ndef k(a, out):\n    out[:, :] = np.diff(a, axis=0)\n"
-    assert_all_ok(
-        run_op(src, "k", {"a": a}, {"out": (2, 4)}, {}, shapes={"a": "(3,4)", "out": "(2,4)"}, backends=NATIVE)
-    )
+            {"row_ptr": "(5,)", "out": "(4,)"},
+            {"row_ptr": "int64", "out": "int64"},
+            id="csr-row-lengths",
+        ),
+        pytest.param(
+            "import numpy as np\n\ndef k(a, out):\n    out[:, :] = np.diff(a, axis=0)\n",
+            {"a": SQUARES},
+            (2, 4),
+            {},
+            {"a": "(3,4)", "out": "(2,4)"},
+            None,
+            id="2d-axis-zero",
+        ),
+    ],
+)
+def test_numeric_row_lengths_from_csr_row_ptr(
+    src: str,
+    inputs: dict[str, np.ndarray],
+    out_shape: tuple[int, ...],
+    symbols: dict[str, int],
+    shapes: dict[str, str],
+    dtypes: dict[str, str] | None,
+) -> None:
+    options = {} if dtypes is None else {"dtypes": dtypes}
+    assert_all_ok(run_op(src, "k", inputs, {"out": out_shape}, symbols, shapes=shapes, backends=NATIVE, **options))

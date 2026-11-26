@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Unit tests for the backend table: backend resolution, Harbor provider name, and the Apptainer installer."""
+"""Unit tests for the backend table: backend resolution, and the Apptainer installer."""
 
 import os
 import pathlib
@@ -42,10 +42,7 @@ def test_detect_backend_probes_path_rather_than_assuming(monkeypatch: pytest.Mon
     assert containers.detect_backend() == R.DOCKER
     monkeypatch.setattr(containers.shutil, "which", lambda name: None)
     assert containers.detect_backend() is None
-
-
-def test_a_site_with_only_singularity_has_the_sif_family(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Older sites ship singularity, not apptainer: the sif row runs either, so `sif` finds it there."""
+    # Older sites ship singularity, not apptainer: the sif row runs either, so `sif` finds it there.
     monkeypatch.setattr(containers.shutil, "which", lambda name: "/usr/bin/" + name if name == "singularity" else None)
     assert containers.detect_backend((R.APPTAINER,)) == R.APPTAINER
     monkeypatch.setattr(containers.shutil, "which", lambda name: None)
@@ -70,16 +67,6 @@ def test_the_config_rejects_an_unknown_backend() -> None:
     for dropped in ("singularity", "udocker", "shifter"):
         with pytest.raises(pydantic.ValidationError):
             config.set_override("runtime.backend", dropped)
-
-
-def test_harbor_provider_names_docker_podman_and_singularity() -> None:
-    """Harbor (>= 0.23) drives docker, podman and singularity. ce has no provider, so it must raise
-    rather than emit one Harbor would reject."""
-    assert containers.harbor_env_for(R.DOCKER) == "docker"
-    assert containers.harbor_env_for(R.PODMAN) == "podman"
-    assert containers.harbor_env_for(R.APPTAINER) == "singularity"
-    with pytest.raises(ValueError, match="Harbor"):
-        containers.harbor_env_for(R.CE)
 
 
 # install_apptainer retry: both fetches are live-network; subprocess/sleep stubbed, stays pure-unit
@@ -112,20 +99,32 @@ def stub_installer(
     return calls, sleeps
 
 
-def test_install_apptainer_retries_a_transient_mirror_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A mirror blip is retried in a FRESH process; upstream's own loop cannot recover from this."""
-    calls, sleeps = stub_installer(monkeypatch, bash_returncodes=[2, 2, 0])
-    assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=4) == 0
-    assert calls.count("bash") == 3, "each attempt must re-run the installer in a fresh process"
-    assert sleeps == [5, 10], "backoff must grow, and must NOT sleep after the attempt that succeeded"
-
-
-def test_install_apptainer_gives_up_and_reports_the_installer_returncode(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Exhausting the attempts still surfaces the real failure -- never a false success."""
-    calls, sleeps = stub_installer(monkeypatch, bash_returncodes=[2, 2, 2])
-    assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=3) == 2
-    assert calls.count("bash") == 3
-    assert sleeps == [5, 10], "no trailing sleep after the final attempt"
+@pytest.mark.parametrize(
+    ("bash_returncodes", "attempts", "expected", "bash_calls", "expected_sleeps"),
+    [
+        # A mirror blip is retried in a FRESH process; upstream's own loop cannot recover from this. Backoff grows
+        # and does NOT sleep after the attempt that succeeded.
+        ([2, 2, 0], 4, 0, 3, [5, 10]),
+        # Exhausting the attempts still surfaces the real failure -- never a false success -- with no trailing sleep.
+        ([2, 2, 2], 3, 2, 3, [5, 10]),
+        # The happy path must not pay any backoff (guards against an off-by-one in the loop).
+        ([0], None, 0, 1, []),
+    ],
+    ids=["retries-a-transient-failure", "gives-up-with-the-installer-returncode", "first-try-without-sleeping"],
+)
+def test_install_apptainer_retries_with_backoff_and_reports_the_installer_returncode(
+    monkeypatch: pytest.MonkeyPatch,
+    bash_returncodes: list[int],
+    attempts: int | None,
+    expected: int,
+    bash_calls: int,
+    expected_sleeps: list[int],
+) -> None:
+    calls, sleeps = stub_installer(monkeypatch, bash_returncodes=bash_returncodes)
+    extra = {} if attempts is None else {"attempts": attempts}
+    assert containers.install_apptainer("/tmp/apptainer-prefix", **extra) == expected
+    assert calls.count("bash") == bash_calls, "each attempt must re-run the installer in a fresh process"
+    assert sleeps == expected_sleeps
 
 
 def test_install_apptainer_retries_a_failed_installer_download(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,14 +132,6 @@ def test_install_apptainer_retries_a_failed_installer_download(monkeypatch: pyte
     calls, unused = stub_installer(monkeypatch, bash_returncodes=[0], curl_error=6)
     assert containers.install_apptainer("/tmp/apptainer-prefix", attempts=3) == 0
     assert calls.count("curl") == 2, "the failed download must be re-fetched, not raised to the caller"
-
-
-def test_install_apptainer_succeeds_first_try_without_sleeping(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The happy path must not pay any backoff (guards against an off-by-one in the loop)."""
-    calls, sleeps = stub_installer(monkeypatch, bash_returncodes=[0])
-    assert containers.install_apptainer("/tmp/apptainer-prefix") == 0
-    assert calls.count("bash") == 1
-    assert sleeps == []
 
 
 def test_install_apptainer_clears_a_partial_tree_between_attempts(
@@ -181,10 +172,7 @@ def test_clean_partial_install_never_touches_a_preexisting_path(tmp_path: pathli
 
     assert sorted(entry.name for entry in prefix.iterdir()) == ["share"]
     assert (prefix / "share" / "user_data.txt").read_text() == "do not delete me"
-
-
-def test_clean_partial_install_tolerates_a_missing_prefix(tmp_path: pathlib.Path) -> None:
-    """The very first attempt can fail before the prefix exists at all."""
+    # The very first attempt can fail before the prefix exists at all.
     containers.clean_partial_install(str(tmp_path / "never-created"), set())
 
 

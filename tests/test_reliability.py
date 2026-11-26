@@ -25,22 +25,21 @@ def settled_runs() -> pd.DataFrame:
         pytest.param(0, 20, 0.0, 0.168433, id="none-solved"),
         pytest.param(10, 20, 0.271958, 0.728042, id="half-solved"),
         pytest.param(20, 20, 0.831567, 1.0, id="all-solved"),
+        pytest.param(0, 0, math.nan, math.nan, id="no-runs"),  # no runs give no solve rate
     ],
 )
 def test_the_solve_rate_interval_is_the_exact_clopper_pearson_one(
     solved: int, runs: int, low: float, high: float
 ) -> None:
     rate = reliability.clopper_pearson(solved, runs)
+    if runs == 0:
+        assert math.isnan(rate.point)
+        assert math.isnan(rate.low)
+        assert math.isnan(rate.high)
+        return
     assert rate.point == solved / runs
     assert (rate.low, rate.high) == pytest.approx((low, high), abs=1e-6)
     assert (rate.method, rate.n) == ("clopper-pearson", runs)
-
-
-def test_no_runs_give_no_solve_rate() -> None:
-    rate = reliability.clopper_pearson(0, 0)
-    assert math.isnan(rate.point)
-    assert math.isnan(rate.low)
-    assert math.isnan(rate.high)
 
 
 @pytest.mark.parametrize(

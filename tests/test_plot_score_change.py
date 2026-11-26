@@ -211,40 +211,72 @@ def test_the_family_the_marks_are_corrected_over_is_every_test_the_figure_could_
 PACKET_ONLY = cost.resolve("effective")
 
 
-def test_skills_are_read_off_the_recorded_packet_not_the_setup_name(tmp_path: pathlib.Path) -> None:
-    """A setup whose name lacks the ``-skills`` suffix but which records ``lang-skills`` is the skilled side, and a
-    recorded packet beats a ``-skills`` name."""
-    path = tmp_path / "observations.csv"
-    pd.DataFrame(
-        [
-            {"setup": "renamed-qwen38-c", "packet": "lang-skills"},
-            {"setup": "qwen38-fortran-lang-skills", "packet": "cpf-tool"},
-        ]
-    ).to_csv(path, index=False)
+@pytest.mark.parametrize(
+    ("rows", "via_csv", "treatment", "want", "absent"),
+    [
+        # a setup whose name lacks the ``-skills`` suffix but which records ``lang-skills`` is the skilled side, and
+        # a recorded packet beats a ``-skills`` name
+        pytest.param(
+            [
+                {"setup": "renamed-qwen38-c", "packet": "lang-skills"},
+                {"setup": "qwen38-fortran-lang-skills", "packet": "cpf-tool"},
+            ],
+            True,
+            "lang-skills",
+            {"renamed-qwen38-c": True},
+            ["qwen38-fortran-lang-skills"],
+            id="recorded-packet-not-name",
+        ),
+        # ``llrsingle`` records ``lang-skills+no-score-tool``: the packet holds the ``lang-skills`` part, so it is
+        # the skilled side, which a whole-packet equality against ``lang-skills`` would miss
+        pytest.param(
+            [
+                {"setup": "llrsingle-qwen38-c-lang-skills", "packet": "lang-skills+no-score-tool"},
+                {"setup": "llrsingle-qwen38-c", "packet": "no-score-tool"},
+            ],
+            True,
+            "lang-skills",
+            {"llrsingle-qwen38-c-lang-skills": True},
+            ["llrsingle-qwen38-c"],
+            id="composite-packet",
+        ),
+        # the figure reads an on/off ``skills`` flag; ``treatment_frame`` builds it from the packet split
+        pytest.param(
+            [
+                {"setup": "a-control", "packet": "", "model": "qwen38", "language": "c"},
+                {"setup": "a-cpf-src", "packet": "cpf-src", "model": "qwen38", "language": "c"},
+                {"setup": "a-lang-skills", "packet": "lang-skills", "model": "qwen38", "language": "c"},
+            ],
+            False,
+            "cpf-src",
+            {"a-control": False, "a-cpf-src": True},
+            ["a-lang-skills"],
+            id="control-false-treatment-true",
+        ),
+    ],
+)
+def test_skills_are_read_off_the_recorded_packet_not_the_setup_name(
+    tmp_path: pathlib.Path,
+    rows: list[dict[str, str]],
+    via_csv: bool,
+    treatment: str,
+    want: dict[str, bool],
+    absent: list[str],
+) -> None:
+    """The skilled side of a pair is read from the packet a setup recorded, never from its name."""
+    if via_csv:
+        path = tmp_path / "observations.csv"
+        pd.DataFrame(rows).to_csv(path, index=False)
+        frame_all = studies.setup_rows(path, prefix="", card=PACKET_ONLY)
+    else:
+        frame_all = pd.DataFrame(rows)
 
-    frame = plot.treatment_frame(studies.setup_rows(path, prefix="", card=PACKET_ONLY), "lang-skills")
+    by_setup = plot.treatment_frame(frame_all, treatment).set_index("setup").skills
 
-    by_setup = frame.set_index("setup").skills
-    assert bool(by_setup["renamed-qwen38-c"]) is True
-    assert "qwen38-fortran-lang-skills" not in by_setup.index
-
-
-def test_a_composite_packet_counts_as_skilled(tmp_path: pathlib.Path) -> None:
-    """``llrsingle`` records ``lang-skills+no-score-tool``: the packet holds the ``lang-skills`` part, so
-    it is the skilled side, which a whole-packet equality against ``lang-skills`` would miss."""
-    path = tmp_path / "observations.csv"
-    pd.DataFrame(
-        [
-            {"setup": "llrsingle-qwen38-c-lang-skills", "packet": "lang-skills+no-score-tool"},
-            {"setup": "llrsingle-qwen38-c", "packet": "no-score-tool"},
-        ]
-    ).to_csv(path, index=False)
-
-    frame = plot.treatment_frame(studies.setup_rows(path, prefix="", card=PACKET_ONLY), "lang-skills")
-
-    by_setup = frame.set_index("setup").skills
-    assert bool(by_setup["llrsingle-qwen38-c-lang-skills"]) is True
-    assert "llrsingle-qwen38-c" not in by_setup.index
+    for setup, skilled in want.items():
+        assert bool(by_setup[setup]) is skilled
+    for setup in absent:
+        assert setup not in by_setup.index
 
 
 def test_control_rows_is_exactly_the_no_packet_setup(tmp_path: pathlib.Path) -> None:
@@ -264,40 +296,6 @@ def test_control_rows_is_exactly_the_no_packet_setup(tmp_path: pathlib.Path) -> 
     control = plot.control_rows(frame_all)
 
     assert set(control.setup) == {"llr40-qwen38-c"}  # read under its configuration name
-
-
-def test_a_perf_playbook_setup_never_enters_the_control_side(tmp_path: pathlib.Path) -> None:
-    """A setup recording a treatment ``control_rows`` does not name by string is never counted as part
-    of the no-packet control."""
-    path = tmp_path / "observations.csv"
-    pd.DataFrame(
-        [
-            {"setup": "llr40-qwen38-c-perf-playbook-cpu", "packet": "perf-playbook-cpu"},
-            {"setup": "llr40-qwen38-c", "packet": ""},
-        ]
-    ).to_csv(path, index=False)
-
-    frame_all = studies.setup_rows(path, prefix="", card=PACKET_ONLY)
-    control = plot.control_rows(frame_all)
-
-    assert "llr40-qwen38-c-perf-playbook-cpu" not in set(control.setup)
-    assert set(control.setup) == {"llr40-qwen38-c"}  # read under its configuration name
-
-
-def test_treatment_frame_tags_the_control_false_and_the_treatment_true() -> None:
-    """The figure reads an on/off ``skills`` flag; ``treatment_frame`` builds it from the packet split."""
-    frame_all = pd.DataFrame(
-        [
-            {"setup": "a-control", "packet": "", "model": "qwen38", "language": "c"},
-            {"setup": "a-cpf-src", "packet": "cpf-src", "model": "qwen38", "language": "c"},
-            {"setup": "a-lang-skills", "packet": "lang-skills", "model": "qwen38", "language": "c"},
-        ]
-    )
-    tagged = plot.treatment_frame(frame_all, "cpf-src")
-    by_setup = tagged.set_index("setup").skills
-    assert bool(by_setup["a-control"]) is False
-    assert bool(by_setup["a-cpf-src"]) is True
-    assert "a-lang-skills" not in by_setup.index
 
 
 def test_points_never_raises_a_bare_keyerror_when_the_two_sides_share_no_model_language() -> None:
@@ -361,36 +359,38 @@ def test_a_treatment_setup_pairs_against_its_control_by_model_and_language(
     assert (stats.iloc[0].model, stats.iloc[0].language) == ("oss120b", "c")
 
 
+@pytest.mark.parametrize(
+    ("include_incomplete", "treated_rows", "want_kept", "want_err"),
+    [
+        # a setup missing a tag kernel is dropped, not entered at any stand-in value, and named so the drop is
+        # auditable
+        pytest.param(
+            False,
+            (["good-cpf-tool"] * 3 + ["short-cpf-tool"], ["k0", "k1", "k2", "k0"]),
+            {"ctrl", "good-cpf-tool"},
+            "cpf-tool: dropping short-cpf-tool (1/3 tag kernels)",
+            id="drops-a-short-setup",
+        ),
+        # asked to include the incomplete, a short setup is kept and nothing is printed
+        pytest.param(True, (["short-cpf-tool"], ["k0"]), {"ctrl", "short-cpf-tool"}, "", id="keeps-a-short-setup"),
+    ],
+)
 def test_complete_side_setups_drops_a_setup_short_of_the_tag_and_names_it_on_stderr(
     capsys: pytest.CaptureFixture[str],
+    include_incomplete: bool,
+    treated_rows: tuple[list[str], list[str]],
+    want_kept: set[str],
+    want_err: str,
 ) -> None:
-    """A setup missing a tag kernel is dropped, not entered at any stand-in value, and named so
-    the drop is auditable."""
     tag_kernels = ["k0", "k1", "k2"]
     control = pd.DataFrame({"setup": ["ctrl"] * 3, "kernel": tag_kernels})
-    treated = pd.DataFrame(
-        {
-            "setup": ["good-cpf-tool", "good-cpf-tool", "good-cpf-tool", "short-cpf-tool"],
-            "kernel": ["k0", "k1", "k2", "k0"],
-        }
-    )
+    treated = pd.DataFrame({"setup": treated_rows[0], "kernel": treated_rows[1]})
 
-    kept = plot.complete_side_setups(control, treated, tag_kernels, "cpf-tool", include_incomplete=False)
+    kept = plot.complete_side_setups(control, treated, tag_kernels, "cpf-tool", include_incomplete=include_incomplete)
 
-    assert kept == {"ctrl", "good-cpf-tool"}
+    assert kept == want_kept
     err = capsys.readouterr().err
-    assert "cpf-tool: dropping short-cpf-tool (1/3 tag kernels)" in err
-
-
-def test_include_incomplete_keeps_a_short_setup_and_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
-    tag_kernels = ["k0", "k1", "k2"]
-    control = pd.DataFrame({"setup": ["ctrl"] * 3, "kernel": tag_kernels})
-    treated = pd.DataFrame({"setup": ["short-cpf-tool"], "kernel": ["k0"]})
-
-    kept = plot.complete_side_setups(control, treated, tag_kernels, "cpf-tool", include_incomplete=True)
-
-    assert kept == {"ctrl", "short-cpf-tool"}
-    assert capsys.readouterr().err == ""
+    assert want_err in err if want_err else err == ""
 
 
 # The paired interval, the stars, the tick budget, the left margin and the key.
@@ -472,14 +472,6 @@ def test_required_left_margin_grows_with_the_widest_tick_the_range_draws() -> No
     assert wide > narrow, (wide, narrow)
 
 
-def test_the_figure_key_carries_one_interval_note_per_axis() -> None:
-    """Both intervals reach the reader in the figure's ONE key."""
-    handles = efficacy_figures.legend_tail()
-    labels = [h.get_label() for h in handles]
-    assert efficacy_figures.interval_note("Speedup") in labels, labels
-    assert efficacy_figures.interval_note("Token Cost") in labels, labels
-
-
 @pytest.mark.parametrize(
     ("symbols", "wanted"),
     [
@@ -505,6 +497,9 @@ def test_the_key_explains_a_superscript_exactly_when_the_panel_drew_one(
         )
         if text in wanted
     ], explained
+    # whatever the symbols, the figure's ONE key carries one interval note per axis
+    assert efficacy_figures.interval_note("Speedup") in labels, labels
+    assert efficacy_figures.interval_note("Token Cost") in labels, labels
 
 
 def test_an_undelivered_kernel_still_counts_in_the_served_geomean() -> None:
@@ -623,11 +618,8 @@ def test_a_pairs_leg_names_the_language_and_every_packet_both_setups_carried() -
     assert plot.pair_leg_label(BLIND_PAIR, "no-score-tool") == "C +lang-skills"
     plain = ("llrblind-qwen38-fortran", "llr40-qwen38-fortran")
     assert plot.pair_leg_label(plain, "no-score-tool") == "Fortran"
-
-
-def test_a_pairs_leg_never_names_the_intervention_the_two_sides_differ_in() -> None:
-    """git-scicomp's two setups differ in `repo` against `kernel`; naming either on the label would
-    say on every row what the figure's own title says once."""
+    # git-scicomp's two setups differ in `repo` against `kernel`; naming either on the label would say on every
+    # row what the figure's own title says once
     label = plot.pair_leg_label(SCICOMP_PAIR, "repo")
     assert label == "C"
     assert "repo" not in label
@@ -646,6 +638,9 @@ def test_the_stars_come_off_the_family_csv_and_are_never_recomputed_here() -> No
     assert list(stats.cost_verdict) == [Finding.NOT_SIGNIFICANT.text]
     assert list(stats.kernels) == [40]
     assert plot.efficacy_figures.family_sizes(stats) == (1, 1)
+    # the family's own declared order of pairs, not a re-sort
+    ordered = family_csv([BLIND_PAIR, SCICOMP_PAIR], Finding.NOT_SIGNIFICANT.text, Finding.NOT_SIGNIFICANT.text)
+    assert plot.family_pairs(ordered) == [BLIND_PAIR, SCICOMP_PAIR]
 
 
 def test_a_family_csv_is_drawn_only_under_the_settings_its_sidecar_states(tmp_path: pathlib.Path) -> None:
@@ -664,12 +659,6 @@ def test_a_family_csv_is_drawn_only_under_the_settings_its_sidecar_states(tmp_pa
     plot.same_protocol(table, source)
     with bench_config.overridden("statistics.alpha", 0.01), pytest.raises(SystemExit, match="alpha"):
         plot.same_protocol(table, source)
-
-
-def test_the_family_csv_declares_the_pairs_in_the_order_it_wrote_them() -> None:
-    """The family's own declared order, not a re-sort."""
-    table = family_csv([BLIND_PAIR, SCICOMP_PAIR], Finding.NOT_SIGNIFICANT.text, Finding.NOT_SIGNIFICANT.text)
-    assert plot.family_pairs(table) == [BLIND_PAIR, SCICOMP_PAIR]
 
 
 def observation_rows(setup: str, speedup: float, tokens: float, kernels: int = KERNELS) -> list[dict[str, object]]:
@@ -726,13 +715,12 @@ def test_no_packet_is_ever_given_the_shape_the_control_wears(treatment: str) -> 
     figure is reduced to a column: it is a different OUTLINE. A packet handed
     that outline would put a filled circle beside a hollow one and undo the separation."""
     assert efficacy_figures.treatment_marker(treatment) != efficacy_figures.CONTROL_MARKER
-
-
-def test_a_difference_spec_reads_delivery_colon_model_pairs() -> None:
-    """``--difference`` is the one place the arrow grammar is decided."""
-    assert efficacy_figures.parse_differences("HIP:qwen38, Triton:kimi27sglang ") == frozenset(
-        {("qwen38", "HIP"), ("kimi27sglang", "Triton")}
-    )
+    # a comparator never wears a packet's shape or shares one
+    shapes = efficacy_figures.comparator_shapes(["ppcg_hip", "jax_gpu", "pluto", "jax_cpu"])
+    packets_worn = {palette.packet_marker(key) for key in palette.hue_order("packets")}
+    assert set(shapes) == {"pluto", "ppcg_hip", "jax"}  # jax_cpu and jax_gpu are one JAX
+    assert len(set(shapes.values())) == 3
+    assert not set(shapes.values()) & (packets_worn | {efficacy_figures.CONTROL_MARKER})
 
 
 @pytest.mark.parametrize(
@@ -810,6 +798,10 @@ def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
         "pairs": "x.csv",
         "control-label": "Bare Kernel",
     }  # fmt: skip
+    # ``--difference`` is the one place the arrow grammar is decided
+    assert efficacy_figures.parse_differences("HIP:qwen38, Triton:kimi27sglang ") == frozenset(
+        {("qwen38", "HIP"), ("kimi27sglang", "Triton")}
+    )
 
 
 # Ratio tick labels: a ratio below 1 is spelled as its reciprocal, never rounded to 0x.
@@ -958,35 +950,41 @@ def solved_and_failed_pair() -> tuple[pd.DataFrame, pd.DataFrame]:
     return tagged[~tagged.skills], tagged[tagged.skills]
 
 
-def test_by_default_a_wrong_answer_is_no_speedup_and_counts_against_the_success_rate() -> None:
-    """The speedup of both setups is over the kernels BOTH solved, so the control's wrong
-    k4 is not scored as its baseline and the treated setup's k4 win does not lift it either; the
-    failure is the success rate's to show."""
-    points = efficacy_figures.setup_points(*solved_and_failed_pair())
+@pytest.mark.parametrize(
+    ("over", "control_x", "treated_x", "kernels", "solved"),
+    [
+        # The speedup of both setups is over the kernels BOTH solved, so the control's wrong k4 is not scored as its
+        # baseline and the treated setup's k4 win does not lift it either; the failure is the success rate's to show.
+        pytest.param(None, 2.0, 4.0, 4, (4, 5, 5, 5), id="default-solved-by-both"),
+        # ``served`` keeps the old reading: every kernel, a failure at 1x.
+        pytest.param(
+            population.KernelPolicy.SERVED,
+            2.0 ** (4.0 / 5.0),
+            (4.0**4 * 8.0) ** (1.0 / 5.0),
+            5,
+            None,
+            id="served-scores-a-failure-at-one",
+        ),
+    ],
+)
+def test_by_default_a_wrong_answer_is_no_speedup_and_counts_against_the_success_rate(
+    over: population.KernelPolicy | None,
+    control_x: float,
+    treated_x: float,
+    kernels: int,
+    solved: tuple[int, int, int, int] | None,
+) -> None:
+    pair = solved_and_failed_pair()
+    points = efficacy_figures.setup_points(*pair) if over is None else efficacy_figures.setup_points(*pair, over=over)
     assert points is not None
     control, treated = points
-    assert 2.0**control.x == pytest.approx(2.0)
-    assert 2.0**treated.x == pytest.approx(4.0)
-    assert control.kernels == treated.kernels == 4
-    assert (control.solved, control.served, treated.solved, treated.served) == (4, 5, 5, 5)
-
-
-def test_the_fallback_reading_scores_the_wrong_answer_at_one() -> None:
-    """``served`` keeps the old reading: every kernel, a failure at 1x."""
-    points = efficacy_figures.setup_points(*solved_and_failed_pair(), over=population.KernelPolicy.SERVED)
-    assert points is not None
-    control, treated = points
-    assert 2.0**control.x == pytest.approx(2.0 ** (4.0 / 5.0))
-    assert 2.0**treated.x == pytest.approx((4.0**4 * 8.0) ** (1.0 / 5.0))
-    assert control.kernels == 5
-
-
-def test_the_dot_row_stacks_the_success_row_between_speedup_and_cost(tmp_path: pathlib.Path) -> None:
-    control, treated = solved_and_failed_pair()
-    frame = pd.concat([control, treated])
-    stats = plot.points(control, treated)
-    efficacy_figures.figure_dot_row([("Blind", "no-score", stats, frame)], tmp_path / "dots.pdf")
-    assert (tmp_path / "dots.pdf").exists()
+    assert 2.0**control.x == pytest.approx(control_x)
+    assert 2.0**treated.x == pytest.approx(treated_x)
+    assert control.kernels == kernels
+    if over is None:
+        assert treated.kernels == kernels
+    if solved is not None:
+        assert (control.solved, control.served, treated.solved, treated.served) == solved
 
 
 def drawn_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, measures: tuple[Measure, ...]) -> Figure:
@@ -1027,19 +1025,9 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
     width, height = box_inches(full, speedup)
     share = efficacy_figures.MEASURE_HEIGHT[Measure.SUCCESS] / efficacy_figures.MEASURE_HEIGHT[Measure.SPEEDUP]
     assert box_inches(full, success) == pytest.approx((width, height * share), abs=1e-3), "the success row's share"
-
-
-def test_a_full_tag_mark_on_the_ceiling_is_drawn_whole() -> None:
-    """A mark at N sits on the axis limit's 5% headroom, thinner than a mark in a half-height row, so
-    a clipped mark printed as half a circle."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0, 8, 8), setup(1.0, 2.0, 8, 8))
-    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved Rate")
-    marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
-    assert marks
-    assert not any(mark.get_clip_on() for mark in marks)
+    # the measures keep their order, with the success row stacked between speedup and cost
+    assert plot.dot_measures(plot.Options(success_row=True)) == (Measure.SPEEDUP, Measure.SUCCESS, Measure.COST)
+    assert plot.dot_measures(plot.Options(success_row=False)) == (Measure.SPEEDUP, Measure.COST)
 
 
 def test_the_success_row_draws_its_marks_and_no_interval() -> None:
@@ -1048,8 +1036,12 @@ def test_the_success_row_draws_its_marks_and_no_interval() -> None:
     fig, ax = plt.subplots()
     row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0, 7, 10), setup(1.0, 2.0, 10, 10))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved Rate")
-    assert [collection for collection in ax.collections if isinstance(collection, PathCollection)]
+    marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
+    assert marks
     assert not [collection for collection in ax.collections if isinstance(collection, LineCollection)]
+    # a mark at N sits on the axis limit's 5% headroom, thinner than a mark in a half-height row, so a clipped mark
+    # printed as half a circle: a full-tag mark on the ceiling is drawn whole
+    assert not any(mark.get_clip_on() for mark in marks)
 
 
 @pytest.mark.parametrize(("solved", "served", "want"), [
@@ -1107,55 +1099,6 @@ def test_a_key_too_tall_for_its_band_grows_the_canvas_instead_of_covering_the_na
     assert legend.get_window_extent(renderer).y0 >= 0.0
 
 
-@pytest.mark.parametrize("legs", [("C", "Fortran") * 3])
-def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: tuple[str, ...]) -> None:
-    """Three "Fortran" placeholders two columns apart share the staggered second line and touched.
-    The column is as narrow as that gets while the step-down floor (``category_min_scale``, the
-    shared 6pt print floor) can still clear them; any narrower is the floor's warning, not a smaller type."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(1.3, 1.0))
-    config = efficacy_figures.PAPER_CONFIG
-    rows = [efficacy_figures.SetupRow("qwen38", leg, "#1f77b4", setup(1.0, 2.0), setup(1.0, 2.0)) for leg in legs]
-    ax.set_xlim(-0.6, len(rows) - 0.4)
-    efficacy_figures.draw_category_axis(ax, rows, config)
-    efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
-    renderer = fig.canvas.get_renderer()
-    size = ax.get_xticklabels()[0].get_fontsize()
-    assert size < config.type_.tick_pt
-    assert not plotstyle.crowded_ticks(ax, renderer, size / 3.0 * fig.dpi / 72.0)
-
-
-def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_the_marks() -> None:
-    """The label starts above both intervals; where one ends at the top tick it printed across the
-    frame, and holding it under the frame must not land it back on a mark."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(1.2, 1.0))
-    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0), setup(3.5, 4.0))
-    efficacy_figures.draw_measure_row(ax, [row], Measure.SPEEDUP, "^", {}, differences=frozenset({("qwen38", "HIP")}))
-    plotstyle.settle_clear_labels(fig)
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-    (label,) = [text for text in ax.texts if text.get_gid() == plotstyle.CLEAR_GID]
-    box, frame = label.get_window_extent(renderer), ax.get_window_extent(renderer)
-    assert frame.x0 <= box.x0
-    assert box.x1 <= frame.x1
-    assert frame.y0 <= box.y0
-    assert box.y1 <= frame.y1
-    assert not any(box.overlaps(mark) for mark in plotstyle.mark_boxes(ax))
-
-
-@pytest.mark.parametrize(("success_row", "want"), [
-    (True, (Measure.SPEEDUP, Measure.SUCCESS, Measure.COST)),
-    (False, (Measure.SPEEDUP, Measure.COST)),
-])  # fmt: skip
-def test_without_the_success_row_speedup_and_cost_keep_their_order(
-    success_row: bool, want: tuple[Measure, ...]
-) -> None:
-    assert plot.dot_measures(plot.Options(success_row=success_row)) == want
-
-
 def setup(x: float, high: float, solved: int = 4, served: int = 6) -> efficacy_figures.SetupPoint:
     """A setup at ``log2`` speedup ``x`` whose interval tops out at ``high``."""
     return efficacy_figures.SetupPoint(x, x - 1.0, high, 1e5, 5e4, 2e5, served, served, solved, served)
@@ -1185,6 +1128,22 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
     assert label.xy == (0, 6.0), label.xy
     assert (label.get_ha(), label.get_va()) == ("center", "bottom")
 
+    # The label starts above both intervals; where one ends at the top tick it printed across the frame, and
+    # holding it under the frame must not land it back on a mark.
+    fig, ax = plt.subplots(figsize=(1.2, 1.0))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0), setup(3.5, 4.0))
+    efficacy_figures.draw_measure_row(ax, [row], Measure.SPEEDUP, "^", {}, differences=frozenset({("qwen38", "HIP")}))
+    plotstyle.settle_clear_labels(fig)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    (label,) = [text for text in ax.texts if text.get_gid() == plotstyle.CLEAR_GID]
+    box, frame = label.get_window_extent(renderer), ax.get_window_extent(renderer)
+    assert frame.x0 <= box.x0
+    assert box.x1 <= frame.x1
+    assert frame.y0 <= box.y0
+    assert box.y1 <= frame.y1
+    assert not any(box.overlaps(mark) for mark in plotstyle.mark_boxes(ax))
+
 
 def test_the_success_row_runs_to_100_percent_and_carries_no_x_ticks() -> None:
     """The top tick is 100% (every served kernel solved), marked by a dashed rule; the axis runs 5%
@@ -1204,36 +1163,36 @@ def test_the_success_row_runs_to_100_percent_and_carries_no_x_ticks() -> None:
     assert all(tick.tick1line.get_markersize() == 0.0 for tick in ax.xaxis.get_major_ticks())
 
 
-@pytest.mark.parametrize(("solved", "served", "want"), [(8, 8, 1.0), (0, 40, 0.0), (31, 40, 0.775), (0, 0, 0.0)])
-def test_the_success_rate_is_solved_over_served_and_zero_for_an_unserved_setup(
-    solved: int, served: int, want: float
-) -> None:
-    """A setup nobody served yet has no rate to show; it reads 0, and the row skips drawing it."""
-    assert efficacy_figures.success_rate(solved, served) == want
-
-
-def test_a_short_cost_row_labels_one_two_and_five_of_every_decade() -> None:
-    config = efficacy_figures.measure_row_config(efficacy_figures.PAPER_CONFIG, 0.98)
-    assert config.token_subs == (1.0, 2.0, 5.0)
-
-
-@pytest.mark.parametrize(("legs", "staggered"), [
-    (("HIP", "OpenMP Offloading", "Triton") * 3, True),
-    (("C",), False),
-])  # fmt: skip
+@pytest.mark.parametrize(
+    ("legs", "width", "staggered"),
+    [
+        pytest.param(("HIP", "OpenMP Offloading", "Triton") * 3, 1.6, True, id="crowded-alternate"),
+        pytest.param(("C",), 1.6, False, id="sparse-stay"),
+        # Three "Fortran" placeholders two columns apart share the staggered second line and touched. The column is
+        # as narrow as that gets while the step-down floor (``category_min_scale``, the shared 6pt print floor) can
+        # still clear them; any narrower is the floor's warning, not a smaller type.
+        pytest.param(("C", "Fortran") * 3, 1.3, None, id="touching-step-down"),
+    ],
+)
 def test_crowded_category_ticks_alternate_two_lines_and_sparse_ones_do_not(
-    legs: tuple[str, ...], staggered: bool
+    legs: tuple[str, ...], width: float, staggered: bool | None
 ) -> None:
     """Nine categories on a 1.6in axis: "Triton" beside "OMP" printed as one word."""
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(1.6, 1.0))
+    fig, ax = plt.subplots(figsize=(width, 1.0))
     config = efficacy_figures.PAPER_CONFIG
     rows = [efficacy_figures.SetupRow("qwen38", leg, "#1f77b4", setup(1.0, 2.0), setup(1.0, 2.0)) for leg in legs]
     ax.set_xlim(-0.6, len(rows) - 0.4)
     efficacy_figures.draw_category_axis(ax, rows, config)
     before = [tick.get_pad() for tick in ax.xaxis.get_major_ticks()]
     efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
+    if staggered is None:
+        renderer = fig.canvas.get_renderer()
+        size = ax.get_xticklabels()[0].get_fontsize()
+        assert size < config.type_.tick_pt
+        assert not plotstyle.crowded_ticks(ax, renderer, size / 3.0 * fig.dpi / 72.0)
+        return
     after = [tick.get_pad() for tick in ax.xaxis.get_major_ticks()]
     assert after[0::2] == before[0::2]
     assert (after[1::2] != before[1::2]) is staggered, (before, after)
@@ -1290,19 +1249,16 @@ def pending_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mar
     return kept[0]
 
 
+@pytest.mark.parametrize("mark", [True, False], ids=["marked", "unmarked"])
 def test_mark_pending_draws_a_question_mark_per_pending_category_on_every_row(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mark: bool
 ) -> None:
-    fig = pending_dot_row(tmp_path, monkeypatch, mark=True)
-    for ax in fig.axes:
-        assert [t.get_text() for t in ax.texts if t.get_gid() == plotstyle.PENDING_GID] == ["?", "?"]
-    assert plotstyle.PENDING_LABEL in [t.get_text() for legend in fig.legends for t in legend.get_texts()]
-
-
-def test_without_mark_pending_a_pending_category_stays_empty(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fig = pending_dot_row(tmp_path, monkeypatch, mark=False)
+    fig = pending_dot_row(tmp_path, monkeypatch, mark=mark)
+    if mark:
+        for ax in fig.axes:
+            assert [t.get_text() for t in ax.texts if t.get_gid() == plotstyle.PENDING_GID] == ["?", "?"]
+        assert plotstyle.PENDING_LABEL in [t.get_text() for legend in fig.legends for t in legend.get_texts()]
+        return
     assert not any(t.get_gid() == plotstyle.PENDING_GID for ax in fig.axes for t in ax.texts)
     # The slots are kept either way: two models of one language share one tick
     # and the pending one still holds its column's width.
@@ -1467,14 +1423,6 @@ def test_a_comparator_is_drawn_on_the_speedup_and_solved_rows_and_never_on_cost(
     # It sits beside the models under their one delivery tick, and the key names it.
     assert len(speedup.get_xticks()) == 1
     assert "Pluto" in [text.get_text() for legend in fig.legends for text in legend.get_texts()]
-
-
-def test_a_comparator_never_wears_a_packets_shape_or_shares_one() -> None:
-    shapes = efficacy_figures.comparator_shapes(["ppcg_hip", "jax_gpu", "pluto", "jax_cpu"])
-    packets_worn = {palette.packet_marker(key) for key in palette.hue_order("packets")}
-    assert set(shapes) == {"pluto", "ppcg_hip", "jax"}  # jax_cpu and jax_gpu are one JAX
-    assert len(set(shapes.values())) == 3
-    assert not set(shapes.values()) & (packets_worn | {efficacy_figures.CONTROL_MARKER})
 
 
 def test_the_paper_key_sets_five_columns(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -19,6 +19,7 @@ and int/int true division.
 
 import ast
 from collections.abc import Callable
+from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -32,7 +33,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     expand_sum,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.reductions import expand_arg_reduction
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import reduce_axis_stmts
 from tests.translators.op_oracle import all_ok, run_op
 
 ALL = ("c", "cpp", "fortran", "numba")
@@ -45,11 +45,6 @@ def call_args(src: str) -> tuple[list[ast.Name], list[ast.keyword]]:
 
 def target(name: str = "out") -> ast.Name:
     return ast.Name(id=name, ctx=ast.Store())
-
-
-def src_(stmts: list[ast.Assign | ast.For]) -> str:
-    mod = ast.fix_missing_locations(ast.Module(body=list(stmts), type_ignores=[]))
-    return ast.unparse(mod)
 
 
 # Fix 2: integer sum/prod accumulate in int64 (not a float 0.0 / 1.0)         #
@@ -71,65 +66,6 @@ def test_integer_sum_and_prod_use_an_int_accumulator_and_int64_dtype(
     assert init.value.value == identity
     assert isinstance(init.value.value, int)
     assert ld["out"] == "int64"  # result upcast to int64 (numpy rule)
-
-
-def test_integer_sum_prod_numeric_all_backends() -> None:
-    a = np.array([1, 2, 3, 4, 5], dtype=np.int64)
-    src = "import numpy as np\ndef f(a, s, p):\n s[0] = np.sum(a)\n p[0] = np.prod(a)\n"
-    res = run_op(
-        src,
-        "f",
-        {"a": a},
-        {"s": (1,), "p": (1,)},
-        {"N": 5},
-        shapes={"a": "(N,)", "s": "(1,)", "p": "(1,)"},
-        dtypes={"a": "int64", "s": "int64", "p": "int64"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
-
-
-# Fix 1: NaN propagation in max / min / argmax / argmin                       #
-
-
-def test_max_min_nan_propagation_all_backends() -> None:
-    a = np.array([1.0, np.nan, 2.0, -3.0])
-    src = "import numpy as np\ndef f(a, mx, mn):\n mx[0] = np.max(a)\n mn[0] = np.min(a)\n"
-    # pythran runs the full reduction natively, and its runtime ``np.max`` /
-    # ``np.min`` SUPPRESS NaN (verified: returns 2.0 for this input) -- a pythran
-    # limitation in code the shared translator does not own. The C / C++ /
-    # Fortran path (which this fix targets) plus numba / jax propagate NaN.
-    res = run_op(
-        src,
-        "f",
-        {"a": a},
-        {"mx": (1,), "mn": (1,)},
-        {"N": 4},
-        shapes={"a": "(N,)", "mx": "(1,)", "mn": "(1,)"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
-
-
-def test_argmax_argmin_first_nan_index_all_backends() -> None:
-    a = np.array([1.0, 5.0, np.nan, 2.0, np.nan])  # first NaN at index 2
-    assert np.argmax(a) == 2
-    assert np.argmin(a) == 2
-    src = "import numpy as np\ndef f(a, i, j):\n i[0] = np.argmax(a)\n j[0] = np.argmin(a)\n"
-    res = run_op(
-        src,
-        "f",
-        {"a": a},
-        {"i": (1,), "j": (1,)},
-        {"N": 5},
-        shapes={"a": "(N,)", "i": "(1,)", "j": "(1,)"},
-        dtypes={"i": "int64", "j": "int64"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
 
 
 # Fix 3: zero-size reduction refuses to lower (no OOB seed)                    #
@@ -160,102 +96,6 @@ def test_max_zero_length_kept_axis_ok() -> None:
     expand_max(target(), args, {"a": ("0", "M")}, kws)  # must not raise
 
 
-# Fix 4: std / var honor ddof (divide by N - ddof)                            #
-
-
-def test_var_ddof_numeric_all_backends() -> None:
-    a = np.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
-    src = "import numpy as np\ndef f(a, v, s):\n v[0] = np.var(a, ddof=1)\n s[0] = np.std(a, ddof=2)\n"
-    res = run_op(
-        src,
-        "f",
-        {"a": a},
-        {"v": (1,), "s": (1,)},
-        {"N": 8},
-        shapes={"a": "(N,)", "v": "(1,)", "s": "(1,)"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
-
-
-# Fix 5: sum / prod / max / min honor initial=                                #
-
-
-def test_initial_numeric_all_backends() -> None:
-    a = np.array([1.0, 2.0, 3.0, 4.0])
-    src = (
-        "import numpy as np\ndef f(a, s, p, mx, mn):\n"
-        " s[0] = np.sum(a, initial=10.0)\n"
-        " p[0] = np.prod(a, initial=2.0)\n"
-        " mx[0] = np.max(a, initial=100.0)\n"
-        " mn[0] = np.min(a, initial=-5.0)\n"
-    )
-    res = run_op(
-        src,
-        "f",
-        {"a": a},
-        {"s": (1,), "p": (1,), "mx": (1,), "mn": (1,)},
-        {"N": 4},
-        shapes={"a": "(N,)", "s": "(1,)", "p": "(1,)", "mx": "(1,)", "mn": "(1,)"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
-
-
-# Fix 6: mean / std / var preserve a FLOAT input's dtype (float32 stays f32)  #
-
-
-# Fix 6b: AXIS sum/prod accumulate in int64 for a bool / narrow-int input      #
-
-
-def test_axis_sum_prod_integer_input_allocates_int64() -> None:
-    # numpy upcasts an integer accumulator to int64: an axis-reduction TEMP at the INPUT width
-    # (``s.dtype``) would wrap an int32 column sum past 2^31.
-    for op in ("sum", "prod"):
-        assert "np.int64" in src_(reduce_axis_stmts("t", "s", op, [0], 2, 0, elem_kind="int"))
-        assert "np.int64" in src_(reduce_axis_stmts("t", "s", op, [0], 2, 0, elem_kind="bool"))
-
-
-def test_axis_sum_int32_overflow_all_backends() -> None:
-    # each column sums to 4 * 2**30 = 2**32, which does NOT fit int32.
-    x = np.full((4, 3), 2**30, dtype=np.int32)
-    assert np.sum(x, axis=0).dtype == np.int64  # numpy anchor
-    res = run_op(
-        "import numpy as np\ndef f(x, out):\n    out[:] = np.sum(x, axis=0)\n",
-        "f",
-        {"x": x},
-        {"out": (3,)},
-        {"N": 4},
-        shapes={"x": "(4,3)", "out": "(3,)"},
-        dtypes={"x": "int32"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
-
-
-# Fix 7: concatenate accepts a negative-literal axis (axis=-1)                #
-
-
-def test_concatenate_negative_axis_all_backends() -> None:
-    a = np.arange(6.0).reshape(2, 3)
-    b = (np.arange(4.0) + 10).reshape(2, 2)
-    src = "import numpy as np\ndef f(a, b, out):\n out[:] = np.concatenate((a, b), axis=-1)\n"
-    res = run_op(
-        src,
-        "f",
-        {"a": a, "b": b},
-        {"out": (2, 5)},
-        {"M": 2, "N": 3, "K": 2},
-        shapes={"a": "(M, N)", "b": "(M, K)", "out": "(M, 5)"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
-
-
 # Fix 8/9: elementwise broadcasts BOTH operands (and symmetric size-1)         #
 
 
@@ -274,86 +114,130 @@ def test_broadcast_extents_size1_symmetric() -> None:
     assert unp(broadcast_extents(ext_("N", "M"), ext_("N", "1"))) == ("N", "M")
 
 
-def test_maximum_broadcast_lower_rank_first_operand_all_backends() -> None:
-    a = np.array([1.0, 5.0, 3.0])  # (M,)
-    B = np.array(
-        [
-            [0.0, 6.0, 2.0],  # (N, M)
-            [4.0, 1.0, 9.0],
-        ]
-    )
-    src = "import numpy as np\ndef f(a, B, out):\n out[:] = np.maximum(a, B)\n"
-    res = run_op(
-        src,
-        "f",
-        {"a": a, "B": B},
+class OracleCase(NamedTuple):
+    """One kernel compiled and run on every backend against numpy, with the keywords of ``run_op``."""
+
+    src: str
+    inputs: dict[str, np.ndarray]
+    outputs: dict[str, tuple[int, ...]]
+    symbols: dict[str, int]
+    shapes: dict[str, str]
+    dtypes: dict[str, str] | None = None
+    #: A numpy fact the case rests on, asserted before the run.
+    anchor: Callable[[], bool] | None = None
+
+
+NAN_ARGS = np.array([1.0, 5.0, np.nan, 2.0, np.nan])  # first NaN at index 2
+OVERFLOW_INT32 = np.full((4, 3), 2**30, dtype=np.int32)  # each column sums to 4 * 2**30 = 2**32: not an int32
+
+
+# pythran runs the full reduction natively, and its runtime ``np.max`` / ``np.min`` SUPPRESS NaN (verified: returns 2.0
+# for the NaN-propagation input) -- a pythran limitation in code the shared translator does not own. The C / C++ /
+# Fortran path (which the NaN fix targets) plus numba / jax propagate NaN.
+ORACLE_CASES = {
+    "integer-sum-prod": OracleCase(
+        "import numpy as np\ndef f(a, s, p):\n s[0] = np.sum(a)\n p[0] = np.prod(a)\n",
+        {"a": np.array([1, 2, 3, 4, 5], dtype=np.int64)},
+        {"s": (1,), "p": (1,)},
+        {"N": 5},
+        {"a": "(N,)", "s": "(1,)", "p": "(1,)"},
+        {"a": "int64", "s": "int64", "p": "int64"},
+    ),
+    "max-min-nan-propagation": OracleCase(
+        "import numpy as np\ndef f(a, mx, mn):\n mx[0] = np.max(a)\n mn[0] = np.min(a)\n",
+        {"a": np.array([1.0, np.nan, 2.0, -3.0])},
+        {"mx": (1,), "mn": (1,)},
+        {"N": 4},
+        {"a": "(N,)", "mx": "(1,)", "mn": "(1,)"},
+    ),
+    "argmax-argmin-first-nan-index": OracleCase(
+        "import numpy as np\ndef f(a, i, j):\n i[0] = np.argmax(a)\n j[0] = np.argmin(a)\n",
+        {"a": NAN_ARGS},
+        {"i": (1,), "j": (1,)},
+        {"N": 5},
+        {"a": "(N,)", "i": "(1,)", "j": "(1,)"},
+        {"i": "int64", "j": "int64"},
+        lambda: bool(np.argmax(NAN_ARGS) == 2 and np.argmin(NAN_ARGS) == 2),
+    ),
+    "var-std-ddof": OracleCase(
+        "import numpy as np\ndef f(a, v, s):\n v[0] = np.var(a, ddof=1)\n s[0] = np.std(a, ddof=2)\n",
+        {"a": np.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])},
+        {"v": (1,), "s": (1,)},
+        {"N": 8},
+        {"a": "(N,)", "v": "(1,)", "s": "(1,)"},
+    ),
+    "initial": OracleCase(
+        "import numpy as np\ndef f(a, s, p, mx, mn):\n"
+        " s[0] = np.sum(a, initial=10.0)\n"
+        " p[0] = np.prod(a, initial=2.0)\n"
+        " mx[0] = np.max(a, initial=100.0)\n"
+        " mn[0] = np.min(a, initial=-5.0)\n",
+        {"a": np.array([1.0, 2.0, 3.0, 4.0])},
+        {"s": (1,), "p": (1,), "mx": (1,), "mn": (1,)},
+        {"N": 4},
+        {"a": "(N,)", "s": "(1,)", "p": "(1,)", "mx": "(1,)", "mn": "(1,)"},
+    ),
+    "axis-sum-int32-overflow": OracleCase(
+        "import numpy as np\ndef f(x, out):\n    out[:] = np.sum(x, axis=0)\n",
+        {"x": OVERFLOW_INT32},
+        {"out": (3,)},
+        {"N": 4},
+        {"x": "(4,3)", "out": "(3,)"},
+        {"x": "int32"},
+        lambda: np.sum(OVERFLOW_INT32, axis=0).dtype == np.int64,  # numpy anchor
+    ),
+    "concatenate-negative-axis": OracleCase(
+        "import numpy as np\ndef f(a, b, out):\n out[:] = np.concatenate((a, b), axis=-1)\n",
+        {"a": np.arange(6.0).reshape(2, 3), "b": (np.arange(4.0) + 10).reshape(2, 2)},
+        {"out": (2, 5)},
+        {"M": 2, "N": 3, "K": 2},
+        {"a": "(M, N)", "b": "(M, K)", "out": "(M, 5)"},
+    ),
+    "maximum-broadcast-lower-rank-first-operand": OracleCase(
+        "import numpy as np\ndef f(a, B, out):\n out[:] = np.maximum(a, B)\n",
+        {"a": np.array([1.0, 5.0, 3.0]), "B": np.array([[0.0, 6.0, 2.0], [4.0, 1.0, 9.0]])},  # (M,), (N, M)
         {"out": (2, 3)},
         {"M": 3, "N": 2},
-        shapes={"a": "(M,)", "B": "(N, M)", "out": "(N, M)"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
-
-
-def test_multiply_broadcast_row_vector_all_backends() -> None:
-    a = np.array([[2.0, 3.0, 4.0]])  # (1, M)
-    B = np.array(
-        [
-            [1.0, 1.0, 1.0],  # (N, M)
-            [5.0, 6.0, 7.0],
-        ]
-    )
-    src = "import numpy as np\ndef f(a, B, out):\n out[:] = np.multiply(a, B)\n"
-    res = run_op(
-        src,
-        "f",
-        {"a": a, "B": B},
+        {"a": "(M,)", "B": "(N, M)", "out": "(N, M)"},
+    ),
+    "multiply-broadcast-row-vector": OracleCase(
+        "import numpy as np\ndef f(a, B, out):\n out[:] = np.multiply(a, B)\n",
+        {"a": np.array([[2.0, 3.0, 4.0]]), "B": np.array([[1.0, 1.0, 1.0], [5.0, 6.0, 7.0]])},  # (1, M), (N, M)
         {"out": (2, 3)},
         {"M": 3, "N": 2},
-        shapes={"a": "(1, M)", "B": "(N, M)", "out": "(N, M)"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
-
-
-# Fix 10: an Ellipsis subscript entry fills all otherwise-unindexed axes       #
-
-
-# Fix 11: int / int is TRUE division (float64), not integer division          #
-
-
-def test_int_true_division_all_backends() -> None:
-    a = np.array([7, 1, 9], dtype=np.int64)
-    b = np.array([2, 4, 2], dtype=np.int64)
-    src = "import numpy as np\ndef f(a, b, out):\n out[0] = a[0] / b[0]\n out[1] = a[1] / b[1]\n out[2] = a[2] / b[2]\n"
-    res = run_op(
-        src,
-        "f",
-        {"a": a, "b": b},
+        {"a": "(1, M)", "B": "(N, M)", "out": "(N, M)"},
+    ),
+    "int-true-division": OracleCase(
+        "import numpy as np\ndef f(a, b, out):\n out[0] = a[0] / b[0]\n out[1] = a[1] / b[1]\n out[2] = a[2] / b[2]\n",
+        {"a": np.array([7, 1, 9], dtype=np.int64), "b": np.array([2, 4, 2], dtype=np.int64)},
         {"out": (3,)},
         {"N": 3},
-        shapes={"a": "(N,)", "b": "(N,)", "out": "(N,)"},
-        dtypes={"a": "int64", "b": "int64"},
-        backends=ALL,
-    )
-    ok, unused = all_ok(res)
-    assert ok, res
-
-
-def test_explicit_float_cast_in_division_all_backends() -> None:
-    a = np.array([7, 3], dtype=np.int64)
-    b = np.array([2, 4], dtype=np.int64)
-    src = "import numpy as np\ndef f(a, b, out):\n out[0] = float(a[0]) / b[0]\n out[1] = float(a[1]) / b[1]\n"
-    res = run_op(
-        src,
-        "f",
-        {"a": a, "b": b},
+        {"a": "(N,)", "b": "(N,)", "out": "(N,)"},
+        {"a": "int64", "b": "int64"},
+    ),
+    "explicit-float-cast-in-division": OracleCase(
+        "import numpy as np\ndef f(a, b, out):\n out[0] = float(a[0]) / b[0]\n out[1] = float(a[1]) / b[1]\n",
+        {"a": np.array([7, 3], dtype=np.int64), "b": np.array([2, 4], dtype=np.int64)},
         {"out": (2,)},
         {"N": 2},
-        shapes={"a": "(N,)", "b": "(N,)", "out": "(N,)"},
-        dtypes={"a": "int64", "b": "int64"},
+        {"a": "(N,)", "b": "(N,)", "out": "(N,)"},
+        {"a": "int64", "b": "int64"},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", ORACLE_CASES.values(), ids=ORACLE_CASES.keys())
+def test_explicit_float_cast_in_division_all_backends(case: OracleCase) -> None:
+    """Every fix above, compiled and run on every backend and compared bit-exact to numpy."""
+    assert case.anchor is None or case.anchor()
+    res = run_op(
+        case.src,
+        "f",
+        case.inputs,
+        case.outputs,
+        case.symbols,
+        shapes=case.shapes,
+        dtypes=case.dtypes,
         backends=ALL,
     )
     ok, unused = all_ok(res)

@@ -37,36 +37,41 @@ def test_only_the_reservations_a_job_could_run_into_are_avoided() -> None:
     assert [one.name for one in root] == ["mine"], "a reservation its user may use is no obstacle, another's is"
 
 
-def test_a_job_that_ends_before_the_reservation_is_given_what_it_asked() -> None:
-    result = reservations.plan(hours(6), hours(1), avoided(), NOW)  # 18:00 + 6 h + margin < 07:00 tomorrow
-    assert (result.seconds, result.begin, result.blocked_by) == (hours(6), None, None)
+AGAIN = reservations.Reservation(
+    "again",
+    datetime.datetime(2026, 11, 19, 6, 0),
+    datetime.datetime(2026, 11, 19, 12, 0),
+    "mi300",
+    frozenset({"root"}),
+    frozenset(),
+)
 
 
-def test_a_job_that_reaches_into_it_is_shortened_down_to_its_minimum() -> None:
-    result = reservations.plan(hours(20), hours(1), avoided(), NOW)
-    assert result.seconds == hours(13) - reservations.MARGIN_SECONDS and result.begin is None
-    assert result.blocked_by == "maintenance"
-
-
-def test_an_experiment_whose_minimum_is_its_whole_time_waits_for_the_reservation_to_end() -> None:
-    result = reservations.plan(hours(16), hours(16), avoided(), NOW)
-    assert result.seconds == hours(16) and result.begin == datetime.datetime(2026, 11, 18, 19, 0, 0)
-
-
-def test_a_later_reservation_defers_past_the_first_too() -> None:
-    chained = [
-        *avoided(),
-        reservations.Reservation(
-            "again",
-            datetime.datetime(2026, 11, 19, 6, 0),
-            datetime.datetime(2026, 11, 19, 12, 0),
-            "mi300",
-            frozenset({"root"}),
-            frozenset(),
+@pytest.mark.parametrize(
+    ("asked", "minimum", "later", "expected"),
+    [
+        # 18:00 + 6 h + margin < 07:00 tomorrow: the job is given what it asked.
+        (6, 1, False, {"seconds": hours(6), "begin": None, "blocked_by": None}),
+        # A job that reaches into the reservation is shortened down to its minimum.
+        (
+            20,
+            1,
+            False,
+            {"seconds": hours(13) - reservations.MARGIN_SECONDS, "begin": None, "blocked_by": "maintenance"},
         ),
-    ]
-    result = reservations.plan(hours(16), hours(16), chained, NOW)
-    assert result.begin == datetime.datetime(2026, 11, 19, 12, 0, 0)
+        # An experiment whose minimum is its whole time waits for the reservation to end.
+        (16, 16, False, {"seconds": hours(16), "begin": datetime.datetime(2026, 11, 18, 19, 0, 0)}),
+        # A later reservation defers past the first too.
+        (16, 16, True, {"begin": datetime.datetime(2026, 11, 19, 12, 0, 0)}),
+    ],
+    ids=["ends-before", "shortened-to-minimum", "waits-for-the-end", "later-reservation-defers-too"],
+)
+def test_a_later_reservation_defers_past_the_first_too(
+    asked: int, minimum: int, later: bool, expected: dict[str, object]
+) -> None:
+    result = reservations.plan(hours(asked), hours(minimum), [*avoided(), *([AGAIN] if later else [])], NOW)
+    actual = {"seconds": result.seconds, "begin": result.begin, "blocked_by": result.blocked_by}
+    assert {name: actual[name] for name in expected} == expected
 
 
 def test_the_cli_reads_scontrol_and_prints_walltime_and_begin(

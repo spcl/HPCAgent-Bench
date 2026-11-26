@@ -174,8 +174,20 @@ def served_fixture(tmp_path: pathlib.Path, make_judge: JudgeFactory) -> tuple[pa
     return cache, url
 
 
-def test_the_tool_withholds_an_unverified_form(served: tuple[pathlib.Path, str]) -> None:
+def test_the_tool_withholds_an_unverified_form(
+    served: tuple[pathlib.Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A form rendered on request was never graded, so it would be withheld: the judge does not spend a device
+    slot on a miss."""
     cache, url = served
+
+    def no_render(*args: object, **kwargs: object) -> str:
+        raise AssertionError("verified_only must not render on demand")
+
+    monkeypatch.setattr(cpf_prerender, "render_on_demand", no_render)
+    miss = get_form(url, "gemm")
+    assert miss["verdict"] == "unavailable"
+    assert "graded correct" in miss["note"]
     answer = get_form(url, "argmax_value")
     assert answer["verdict"] == "unavailable"
     assert "source" not in answer or not answer["source"], answer
@@ -184,20 +196,6 @@ def test_the_tool_withholds_an_unverified_form(served: tuple[pathlib.Path, str])
     verify(cache)
     answer = get_form(url, "argmax_value")
     assert (answer["verdict"], answer["source"]) == ("ok", "// cpf: proven: all\n// argmax_value form\n")
-
-
-def test_the_tool_renders_nothing_on_a_miss(served: tuple[pathlib.Path, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    """A form rendered on request was never graded, so it would be withheld: the judge does not spend a device
-    slot on it."""
-    url = served[1]
-
-    def no_render(*args: object, **kwargs: object) -> str:
-        raise AssertionError("verified_only must not render on demand")
-
-    monkeypatch.setattr(cpf_prerender, "render_on_demand", no_render)
-    answer = get_form(url, "gemm")
-    assert answer["verdict"] == "unavailable"
-    assert "graded correct" in answer["note"]
 
 
 def test_submit_refuses_only_a_kernel_never_rendered(tmp_path: pathlib.Path) -> None:

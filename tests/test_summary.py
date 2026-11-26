@@ -30,11 +30,6 @@ def test_an_unmeasured_cell_is_not_no_change(bad: float) -> None:
     assert math.isnan(summary.signed_change(bad))
 
 
-def test_geomean_is_the_ratio_whose_product_matches() -> None:
-    assert summary.geomean([2.0, 8.0]) == pytest.approx(4.0)
-    assert summary.geomean([2.0, 0.5]) == pytest.approx(1.0)
-
-
 @pytest.mark.parametrize("bad", [[], [2.0, 0.0], [2.0, -1.0], [2.0, math.nan], [2.0, math.inf]])
 def test_geomean_refuses_what_is_not_a_set_of_ratios(bad: list[float]) -> None:
     """A zero or a negative is a MISSING measurement, not a slow one. Six copies of this function
@@ -51,18 +46,23 @@ def test_geomean_asked_to_drop_skips_missing_measurements_and_has_none_for_an_em
     assert summary.geomean([2.0, 0.0, -1.0, math.nan, 8.0], unusable=summary.Unusable.DROP) == pytest.approx(4.0)
     assert math.isnan(summary.geomean([0.0, -1.0], unusable=summary.Unusable.DROP))
     assert math.isnan(summary.geomean([], unusable=summary.Unusable.DROP))
-
-
-def test_usable_ratios_drops_and_warns() -> None:
     with pytest.warns(UserWarning, match="not finite positive ratios"):
         kept = summary.usable_ratios([2.0, 0.0, -1.0, math.nan, 8.0], label="cell")
     assert kept.tolist() == [2.0, 8.0]
+    # The valid case: the geomean is the ratio whose product matches.
+    assert summary.geomean([2.0, 8.0]) == pytest.approx(4.0)
+    assert summary.geomean([2.0, 0.5]) == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize("n", [1, 3, 5])
+@pytest.mark.parametrize("n", [1, 3, 5, 6])
 def test_an_interval_is_withheld_below_six_values(n: int) -> None:
     """Below six values no interval can hold 95% (three values have ten distinct bootstrap resamples): the point
-    stays, the ends are NaN, and it must not raise."""
+    stays, the ends are NaN, and it must not raise. The figure's geomean draws its interval from six values on."""
+    figure = summary.geomean_interval([1.0, 2.0, 4.0, 1.0, 2.0, 4.0][:n])
+    assert figure.method == ("bootstrap-BCa" if n >= 6 else "underpowered")
+    assert math.isfinite(figure.low) == (n >= 6) == math.isfinite(figure.high)
+    if n >= 6:
+        return
     interval = summary.geomean_ci([2.0, 4.0, 8.0, 1.0, 16.0][:n])
     assert (interval.n, interval.method) == (n, "underpowered")
     assert math.isfinite(interval.point)
@@ -77,14 +77,6 @@ def test_the_geomean_interval_is_the_95_percent_bca_bootstrap_and_reproducible()
     assert (first.point, first.low, first.high) == pytest.approx((2.0, 2.0 ** (1 / 3), 2.0 ** (5 / 3)))
     assert first.method == "bootstrap-BCa"
     assert summary.geomean_ci([1.0, 2.0, 4.0, 1.0, 2.0, 4.0]) == first
-
-
-@pytest.mark.parametrize(("n", "has_interval"), [(5, False), (6, True)])
-def test_a_figure_geomean_draws_its_interval_only_from_six_values(n: int, has_interval: bool) -> None:
-    """Below 6 values the point stays and the interval is withheld; from 6 it is the bootstrap interval."""
-    interval = summary.geomean_interval([1.0, 2.0, 4.0, 1.0, 2.0, 4.0][:n])
-    assert interval.method == ("bootstrap-BCa" if has_interval else "underpowered")
-    assert math.isfinite(interval.low) == has_interval == math.isfinite(interval.high)
 
 
 def test_the_paired_geomean_is_an_exact_sign_flip_test() -> None:
@@ -108,22 +100,19 @@ def test_a_cost_has_an_arithmetic_mean_with_its_own_interval() -> None:
     assert summary.mean_interval([1.0, 2.0]).method == "underpowered"
 
 
-def test_paired_change_says_underpowered_instead_of_drawing_an_interval() -> None:
-    """Below six pairs the two-sided test cannot reach 0.05 whatever the data says, so an interval
-    would be decoration."""
-    result = sign_flip([1.0, 2.0, 3.0, 4.0])
-    assert result.method == "underpowered"
-    assert math.isnan(result.low)
-    assert math.isnan(result.high)
-    assert math.isnan(result.pvalue)
-
-
 def test_paired_geomean_is_the_geometric_mean_of_the_paired_ratios() -> None:
     """A setup comparison is reported as the geomean of its per-kernel ratios, so one kernel at 40x
     moves the estimate exactly as it moves that geomean."""
     ratios = [1.05, 1.1, 0.95, 1.2, 0.9, 1.15, 1.02, 40.0]
     change = sign_flip([math.log(ratio) for ratio in ratios])
     assert math.exp(change.estimate) == pytest.approx(summary.geomean(ratios))
+
+    # The kernels that did not change stay: dropping their zero logs would report the change of the kernels that
+    # moved as the setup's change.
+    logs = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0]
+    unchanged = sign_flip(logs)
+    assert (unchanged.n, summary.signs(logs).ties) == (6, 4)
+    assert unchanged.estimate == pytest.approx(1.0 / 3.0)
 
 
 @pytest.mark.parametrize("shift", [0.0, 0.1, 0.2, 0.35, 0.6])
@@ -135,18 +124,18 @@ def test_paired_geomean_interval_excludes_no_change_exactly_when_its_test_reject
     assert clear_of_zero == (change.pvalue < summary.default_alpha()), (change.low, change.high, change.pvalue)
 
 
-def test_paired_geomean_keeps_the_kernels_that_did_not_change() -> None:
-    """Dropping the zero logs would report the change of the kernels that moved as the setup's change."""
-    logs = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0]
+@pytest.mark.parametrize(
+    "logs",
+    [[1.0, 2.0, 3.0, 4.0], [0.1] * (summary.MIN_INTERVAL_SAMPLES - 2) + [0.3]],
+    ids=["four-pairs", "one-below-the-floor"],
+)
+def test_paired_change_withholds_interval_and_p_below_the_floor(logs: list[float]) -> None:
+    """Below six pairs the two-sided test cannot reach 0.05 whatever the data says, so an interval
+    would be decoration."""
     change = sign_flip(logs)
-    assert (change.n, summary.signs(logs).ties) == (6, 4)
-    assert change.estimate == pytest.approx(1.0 / 3.0)
-
-
-def test_paired_geomean_withholds_interval_and_p_below_the_floor() -> None:
-    change = sign_flip([0.1] * (summary.MIN_INTERVAL_SAMPLES - 2) + [0.3])
     assert change.method == "underpowered"
     assert math.isnan(change.low)
+    assert math.isnan(change.high)
     assert math.isnan(change.pvalue)
 
 

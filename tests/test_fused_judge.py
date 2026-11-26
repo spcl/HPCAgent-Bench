@@ -114,27 +114,10 @@ def stage_fused_job(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> 
 # config scope + resolution
 
 
-def test_a_nested_scoped_environment_layers_over_the_outer_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A protocol's scope inside a fused request's setup scope (grade_under.protocol_grade under
-    JudgeHandler.setup_scope) adds its keys; the setup's own keys still resolve from the setup."""
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_SETUP", "job-level")
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_STUDY", "job-level")
-    monkeypatch.delenv("HPCAGENT_BENCH_MEASUREMENT_REPEAT", raising=False)
-    setup = {"HPCAGENT_BENCH_RECORD_SETUP": "setup-setup", "HPCAGENT_BENCH_RECORD_STUDY": None}
-    with config.scoped_environment(setup):
-        with config.scoped_environment({"HPCAGENT_BENCH_MEASUREMENT_REPEAT": "5"}):
-            assert config.current().record.setup == "setup-setup"
-            assert config.current().record.study == ""
-            assert config.env_value("HPCAGENT_BENCH_MEASUREMENT_REPEAT") == "5"
-            with config.scoped_environment({"HPCAGENT_BENCH_RECORD_SETUP": "inner"}):
-                assert config.current().record.setup == "inner"  # the inner scope still wins its own keys
-        assert config.env_value("HPCAGENT_BENCH_MEASUREMENT_REPEAT") is None
-        assert config.current().record.setup == "setup-setup"
-
-
 def test_a_scoped_environment_overrides_and_unsets_only_inside_its_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_SETUP", "job-level")
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_STUDY", "job-level")
+    monkeypatch.delenv("HPCAGENT_BENCH_MEASUREMENT_REPEAT", raising=False)
     scope = {"HPCAGENT_BENCH_RECORD_SETUP": "setup-setup", "HPCAGENT_BENCH_RECORD_STUDY": None}
     with config.scoped_environment(scope):
         assert config.current().record.setup == "setup-setup"
@@ -145,13 +128,17 @@ def test_a_scoped_environment_overrides_and_unsets_only_inside_its_context(monke
         other.start()
         other.join()
         assert seen == ["job-level"], "a scope leaked into another request's thread"
+        # A protocol's scope inside a fused request's setup scope (grade_under.protocol_grade under
+        # JudgeHandler.setup_scope) adds its keys; the setup's own keys still resolve from the setup.
+        with config.scoped_environment({"HPCAGENT_BENCH_MEASUREMENT_REPEAT": "5"}):
+            assert config.current().record.setup == "setup-setup"
+            assert config.current().record.study == ""
+            assert config.env_value("HPCAGENT_BENCH_MEASUREMENT_REPEAT") == "5"
+            with config.scoped_environment({"HPCAGENT_BENCH_RECORD_SETUP": "inner"}):
+                assert config.current().record.setup == "inner"  # the inner scope still wins its own keys
+        assert config.env_value("HPCAGENT_BENCH_MEASUREMENT_REPEAT") is None
+        assert config.current().record.setup == "setup-setup"
     assert config.current().record.setup == "job-level"
-
-
-def test_a_resolved_overlay_parses_sets_and_unsets() -> None:
-    assert fused.parse_resolved("A=1\n-B\n\nC=x=y\n") == {"A": "1", "B": None, "C": "x=y"}
-    with pytest.raises(ValueError):
-        fused.parse_resolved("not a line\n")
 
 
 def test_a_token_resolves_to_its_own_setup_and_nothing_else(fused_job: dict[str, str]) -> None:

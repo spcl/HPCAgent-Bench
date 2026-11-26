@@ -71,35 +71,39 @@ def build_gate(**changes: object) -> Gate:
     return dataclasses.replace(PROBE, **changes)
 
 
-def test_a_gate_must_say_where_it_is_enforced_and_name_a_resolvable_symbol() -> None:
-    assert build_gate().verdict is Verdict.REJECT
-    for changes, message in (
+def check_nothing(context: Context) -> tuple[Found, ...]:
+    return ()
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
         ({"where": ()}, "at least one repo-relative path"),
         ({"symbol": "not a symbol"}, "package.module"),
-    ):
-        with pytest.raises(RegistryError, match=message):
-            build_gate(**changes)
-
-
-def test_a_rerun_label_needs_a_check_and_an_in_place_gate_takes_none() -> None:
-    def check(context: Context) -> tuple[Found, ...]:
-        return ()
-
-    with pytest.raises(RegistryError, match="the gate has none"):
-        build_gate(reruns=True)
-    with pytest.raises(RegistryError, match="takes no check"):
-        build_gate(verdict=Verdict.CONSTRUCTION, check=check)
-    with pytest.raises(RegistryError, match="takes no check"):
-        anticheat.post_run_gate("probe_check", title="Probe", catches="x", verdict=Verdict.FINAL, where=("a.py",))(
-            check
-        )
-    assert "probe_check" not in ANTICHEAT.entries
+        ({"reruns": True}, "the gate has none"),
+        ({"verdict": Verdict.CONSTRUCTION, "check": check_nothing}, "takes no check"),
+    ],
+    ids=["no-where", "bad-symbol", "rerun-label-without-check", "in-place-gate-with-check"],
+)
+def test_a_gate_must_say_where_it_is_enforced_and_name_a_resolvable_symbol(
+    changes: dict[str, object], message: str
+) -> None:
+    """A gate names where it is enforced and a resolvable symbol; a rerun label needs a check and an in-place gate
+    takes none."""
+    assert build_gate().verdict is Verdict.REJECT
+    with pytest.raises(RegistryError, match=message):
+        build_gate(**changes)
 
 
 def test_post_run_gate_registers_its_check_at_the_next_slot() -> None:
     def check(context: Context) -> tuple[Found, ...]:
         return ()
 
+    with pytest.raises(RegistryError, match="takes no check"):
+        anticheat.post_run_gate("probe_check", title="Probe", catches="x", verdict=Verdict.FINAL, where=("a.py",))(
+            check
+        )
+    assert "probe_check" not in ANTICHEAT.entries
     slot = len(ANTICHEAT.entries)
     try:
         registered = anticheat.post_run_gate(

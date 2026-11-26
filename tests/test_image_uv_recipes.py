@@ -88,6 +88,10 @@ def test_a_judge_agent_image_installs_only_what_it_builds_from_source(image: str
     image_syncs = re.findall(r"UV_PROJECT_ENVIRONMENT=(?!/opt/rocprof)[^\n]*\\\s+(uv sync [^;]*)", text)
     assert image_syncs, image
     assert [one for one in image_syncs if "--extra" in one or "--only-group" not in one] == [], image
+    # A sync that selects an extra would put the framework wheels into the image (they install at launch).
+    rebuild = re.search(r"numpy_on_openblas\.sh /opt/view /opt/hpcagent-bench ([^&]*)&&", text)
+    assert rebuild is not None, image
+    assert rebuild.group(1).split() == ["--only-group", "image-python"]
 
 
 @pytest.mark.parametrize("image", JUDGE_AGENT)
@@ -126,14 +130,6 @@ def test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(image: s
     after = text[gate.end() :]
     assert 'python3 -c "import torch' not in after
     assert "import dace" not in after
-
-
-@pytest.mark.parametrize("image", JUDGE_AGENT)
-def test_the_openblas_rebuild_syncs_the_image_group_only(image: str) -> None:
-    """A sync that selects an extra would put the framework wheels into the image (they install at launch)."""
-    rebuild = re.search(r"numpy_on_openblas\.sh /opt/view /opt/hpcagent-bench ([^&]*)&&", recipe(image))
-    assert rebuild is not None, image
-    assert rebuild.group(1).split() == ["--only-group", "image-python"]
 
 
 def test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild() -> None:

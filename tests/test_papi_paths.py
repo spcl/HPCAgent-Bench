@@ -45,6 +45,13 @@ def test_build_flags_name_the_directory_of_the_libpapi_this_process_loaded(
     lib = fake_install(tmp_path, monkeypatch, header=True)
     include = tmp_path / "prefix" / "include"
     assert papi.build_flags() == ([f"-I{include}"], [f"-L{lib.parent}", f"-Wl,-rpath,{lib.parent}", "-lpapi"])
+    # A libpapi that is not mapped is papi_missing.
+    maps = tmp_path / "unmapped"
+    maps.write_text("7f0000-7f1000 r-xp 00000000 00:2a 11 /usr/lib/libc.so.6\n")
+    monkeypatch.setattr(papi, "MAPS", maps)
+    with pytest.raises(papi.PapiUnavailable) as caught:
+        papi.build_flags()
+    assert caught.value.cause == "papi_missing", caught.value.cause
 
 
 def test_build_flags_add_no_include_directory_without_papi_h(
@@ -53,16 +60,6 @@ def test_build_flags_add_no_include_directory_without_papi_h(
     """An ``-I`` naming a directory with no ``papi.h`` would only hide where the header really is."""
     fake_install(tmp_path, monkeypatch, header=False)
     assert papi.build_flags()[0] == []
-
-
-def test_a_libpapi_that_is_not_mapped_is_papi_missing(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    maps = tmp_path / "maps"
-    maps.write_text("7f0000-7f1000 r-xp 00000000 00:2a 11 /usr/lib/libc.so.6\n")
-    monkeypatch.setattr(papi, "check", lambda: None)
-    monkeypatch.setattr(papi, "MAPS", maps)
-    with pytest.raises(papi.PapiUnavailable) as caught:
-        papi.build_flags()
-    assert caught.value.cause == "papi_missing", caught.value.cause
 
 
 class Strerror:
@@ -178,12 +175,8 @@ def test_a_thread_that_came_and_went_between_the_reps_fails_the_summed_count(mon
     assert row["count"] is None, row
     assert "1 thread(s) started after the counters armed" in row["missing"], row["missing"]
 
-
-def test_a_thread_that_came_and_went_between_the_reps_refuses_the_per_thread_report(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The distribution would be missing exactly the thread it is about, so the report is absent
-    with the cause that says so rather than balanced over the threads that were attached."""
+    # The per-thread distribution would be missing exactly the thread it is about, so the report is absent with the
+    # cause that says so rather than balanced over the threads that were attached.
     lib = ScriptedPapi(lambda tid, calls: (calls * 10, calls * 20))
     install(monkeypatch, lib)
     monkeypatch.setattr(papi, "thread_ids", transient_worker(lib))
@@ -265,9 +258,7 @@ def test_a_refused_attach_counts_the_calling_thread_alone_and_says_why(monkeypat
     assert "cannot attach to thread 101" in row["fallback"], row
     assert "simulated refusal" in row["fallback"], row
 
-
-def test_a_refused_attach_refuses_the_per_thread_report_by_cause(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The calling thread alone has no distribution, so the per-thread answer is absent, not balanced."""
+    # The calling thread alone has no distribution, so the per-thread answer is absent, not balanced.
     lib = ScriptedPapi(one_two_three_four, attach_rc=-1)
     install(monkeypatch, lib)
     monkeypatch.setattr(papi, "thread_ids", lambda: (os.getpid(), *WORKERS))

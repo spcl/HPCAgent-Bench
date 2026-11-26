@@ -33,16 +33,11 @@ def test_each_reported_phase_and_the_total_are_summarized_with_the_slowest_kerne
     assert (by_phase["optimize"].max, by_phase["optimize"].slowest) == (157.0, "cloudsc")
     assert by_phase["compile"].p50 == 2.5
     assert (by_phase["total"].p50, by_phase["total"].kernels) == (3.5, 3)
-
-
-def test_a_tuner_reports_its_tune_time_in_the_total() -> None:
-    by_phase = {entry.phase: entry for entry in canon.build_times([row("gemm", 1.0, 0.5, 2.0, tune=40.0)])}
-    assert (by_phase["tune"].p50, by_phase["total"].p50) == (40.0, 43.5)
-
-
-def test_an_unmeasured_or_failed_row_counts_in_no_distribution() -> None:
-    rows = [row("gemm", None, None, None), row("crashed", 99.0, 1.0, 1.0, status="crash")]
-    assert canon.build_times(rows) == []
+    # A tuner reports its tune time in the total.
+    tuned = {entry.phase: entry for entry in canon.build_times([row("gemm", 1.0, 0.5, 2.0, tune=40.0)])}
+    assert (tuned["tune"].p50, tuned["total"].p50) == (40.0, 43.5)
+    # An unmeasured or failed row counts in no distribution.
+    assert canon.build_times([row("gemm", None, None, None), row("crashed", 99.0, 1.0, 1.0, status="crash")]) == []
 
 
 def test_the_table_names_every_summarized_row() -> None:

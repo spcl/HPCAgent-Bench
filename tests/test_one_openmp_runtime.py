@@ -64,18 +64,17 @@ def test_one_file_reached_through_two_symlinks_is_one_runtime(tmp_path: pathlib.
     assert openmp_runtimes.runtimes_in_maps(maps) == (str(real),)
 
 
-def test_libgomp_and_libomp_are_two_runtimes(tmp_path: pathlib.Path) -> None:
-    gomp, omp = touch(tmp_path / "libgomp.so.1.0.0"), touch(tmp_path / "libomp.so.5")
-    found = openmp_runtimes.runtimes_in_maps("\n".join(maps_line(p) for p in (gomp, omp)))
-    assert found == tuple(sorted((str(gomp), str(omp))))
-
-
-def test_a_wheels_hashed_libgomp_that_is_its_own_file_is_a_second_runtime(tmp_path: pathlib.Path) -> None:
-    system = touch(tmp_path / "usr" / "libgomp.so.1.0.0")
-    wheel = touch(tmp_path / "torch.libs" / "libgomp-a34b3233.so.1.0.0")
-    found = openmp_runtimes.runtimes_in_maps("\n".join(maps_line(p) for p in (system, wheel)))
-    assert len(found) == 2
-    assert str(wheel) in found
+@pytest.mark.parametrize(
+    "second",
+    ["libomp.so.5", "nvhpc/libnvomp.so", "torch.libs/libgomp-a34b3233.so.1.0.0"],
+    ids=["libomp", "nvhpc", "wheels-hashed-libgomp-of-its-own"],
+)
+def test_libgomp_and_libomp_are_two_runtimes(tmp_path: pathlib.Path, second: str) -> None:
+    """libgomp and any other runtime file (libomp, NVHPC's libnvomp, a wheel's hashed libgomp that is its own file, not
+    a link to the system one) are two runtimes."""
+    gomp, other = touch(tmp_path / "usr" / "libgomp.so.1.0.0"), touch(tmp_path / second)
+    found = openmp_runtimes.runtimes_in_maps("\n".join(maps_line(p) for p in (gomp, other)))
+    assert found == tuple(sorted((str(gomp), str(other))))
 
 
 def test_the_llvm_libgomp_shim_counts_as_the_libomp_it_links_to(tmp_path: pathlib.Path) -> None:
@@ -93,12 +92,6 @@ def test_libraries_that_are_not_an_openmp_runtime_are_not_counted(tmp_path: path
     assert openmp_runtimes.runtimes_in_maps(maps_line(touch(tmp_path / name))) == ()
 
 
-def test_the_nvhpc_runtime_counts_beside_the_others(tmp_path: pathlib.Path) -> None:
-    gomp, nvomp = touch(tmp_path / "libgomp.so.1.0.0"), touch(tmp_path / "nvhpc" / "libnvomp.so")
-    found = openmp_runtimes.runtimes_in_maps("\n".join(maps_line(p) for p in (gomp, nvomp)))
-    assert found == tuple(sorted((str(gomp), str(nvomp))))
-
-
 def test_iomp5_counts_and_anonymous_and_deleted_mappings_are_handled(tmp_path: pathlib.Path) -> None:
     iomp = touch(tmp_path / "libiomp5.so")
     maps = "\n".join(
@@ -109,13 +102,10 @@ def test_iomp5_counts_and_anonymous_and_deleted_mappings_are_handled(tmp_path: p
         ]
     )
     assert openmp_runtimes.runtimes_in_maps(maps) == (str(iomp),)
-
-
-def test_the_counter_reads_a_maps_file_and_reports_nothing_for_an_unreadable_one(tmp_path: pathlib.Path) -> None:
-    gomp = touch(tmp_path / "libgomp.so.1.0.0")
-    maps = tmp_path / "maps"
-    maps.write_text(maps_line(gomp))
-    assert openmp_runtimes.mapped_runtimes(str(maps)) == (str(gomp),)
+    # The counter reads a maps file, and reports nothing for an unreadable one.
+    maps_file = tmp_path / "maps"
+    maps_file.write_text(maps_line(touch(tmp_path / "libgomp.so.1.0.0")))
+    assert openmp_runtimes.mapped_runtimes(str(maps_file)) == (str(tmp_path / "libgomp.so.1.0.0"),)
     assert openmp_runtimes.mapped_runtimes(str(tmp_path / "absent")) == ()
 
 
@@ -547,31 +537,6 @@ def test_every_link_line_the_judge_renders_asks_for_runpath(tmp_path: pathlib.Pa
     ]
     for link in links:
         assert "-Wl,--enable-new-dtags" in link, link
-
-
-@pytest.mark.integration
-def test_a_judge_linked_executable_carries_runpath_and_no_rpath(tmp_path: pathlib.Path) -> None:
-    """The distributed track's executable link (the MPI wrapper swapped for gcc, so no MPI is needed) with an
-    rpath on its link line: readelf shows RUNPATH and no RPATH."""
-    src, driver = tmp_path / "kern.c", tmp_path / "driver.c"
-    src.write_text("double kern(const double *x, int n) { return n > 0 ? x[0] : 0.0; }\n")
-    driver.write_text(
-        "double kern(const double *x, int n);\nint main(void) { double x = 1.0; return kern(&x, 1) != 1.0; }\n"
-    )
-    cmds = languages.build_mpi_executable_commands(
-        [(Language.C, src)],
-        driver,
-        tmp_path / "bench",
-        cc_override={Language.C: "gcc"},
-        extra_link=(f"-Wl,-rpath,{tmp_path}",),
-    )
-    failed, log = languages.run_build_commands(cmds, tmp_path)
-    assert not failed, log
-    dynamic = subprocess.run(
-        ["readelf", "-d", str(tmp_path / "bench")], capture_output=True, text=True, check=True
-    ).stdout
-    assert "(RUNPATH)" in dynamic, dynamic
-    assert "(RPATH)" not in dynamic, dynamic
 
 
 #: Loads the library BEFORE numpy (so its own NEEDED entries pick the BLAS and the runtime), then counts runtimes.

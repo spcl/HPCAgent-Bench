@@ -25,7 +25,7 @@ def command(figure: plot.Figure) -> types.ModuleType:
 
 
 @pytest.mark.parametrize("figure", list(plot.Figure))
-def test_options_are_the_flags_at_their_defaults(figure: plot.Figure) -> None:
+def test_options_are_the_flags_at_their_defaults(figure: plot.Figure, capsys: pytest.CaptureFixture[str]) -> None:
     module = command(figure)
     parsed = vars(module.build_parser().parse_args(REQUIRED[figure]))
     filled = dataclasses.asdict(module.build_parser().parse_args(REQUIRED[figure], namespace=module.Options()))
@@ -34,11 +34,8 @@ def test_options_are_the_flags_at_their_defaults(figure: plot.Figure) -> None:
     assert dataclasses.asdict(module.Options()) == {
         name: None if name in given else value for name, value in parsed.items()
     }
-
-
-@pytest.mark.parametrize("figure", list(plot.Figure))
-def test_a_single_valued_flag_given_twice_is_refused(figure: plot.Figure, capsys: pytest.CaptureFixture[str]) -> None:
-    parser = command(figure).build_parser()
+    # A single-valued flag given twice is refused.
+    parser = module.build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args([*REQUIRED[figure], "--experiment", "a", "--experiment=b"])
     assert "--experiment given 2 times" in capsys.readouterr().err

@@ -19,6 +19,7 @@ both native backends move together.
 """
 
 import numpy as np
+import pytest
 
 from tests.translators.op_oracle import assert_all_ok, run_op
 
@@ -37,12 +38,15 @@ def run_(body: str) -> dict[str, str]:
     return run_op(src, "f", {"a": A, "b": B}, {"out": (6,)}, SYMS, shapes=SHAPES, backends=NATIVE, dtypes=DTYPES)
 
 
-def test_np_power_on_int64_arrays_is_exact() -> None:
-    assert_all_ok(run_("    out[:] = np.power(a, b)"))
-
-
-def test_pow_operator_on_int64_subscripts_is_exact() -> None:
-    assert_all_ok(run_("    for i in range(6):\n        out[i] = a[i] ** b[i]"))
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param("    out[:] = np.power(a, b)", id="np_power"),
+        pytest.param("    for i in range(6):\n        out[i] = a[i] ** b[i]", id="pow_operator_on_subscripts"),
+    ],
+)
+def test_integer_power_spelling_is_exact(body: str) -> None:
+    assert_all_ok(run_(body))
 
 
 def test_float_power_still_matches_numpy() -> None:

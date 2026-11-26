@@ -5,15 +5,25 @@
 import warnings
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.stats.summary import drop_outliers, median_ci
 
 
-def test_drop_removes_slow_hiccup() -> None:
-    tight = [1.0, 1.0, 1.01, 0.99, 1.02, 0.98, 1.0, 1.0]
-    kept, dropped = drop_outliers([*tight, 10.0], warn=False)
-    assert dropped.tolist() == [10.0]
-    assert 10.0 not in kept.tolist()
+@pytest.mark.parametrize(
+    ("sample", "expected"),
+    [
+        ([1.0, 1.0, 1.01, 0.99, 1.02, 0.98, 1.0, 1.0, 10.0], [10.0]),
+        # Tight cluster (MAD == 0 because >= half are identical) + one hiccup: the mean-abs-dev fallback still
+        # flags it.
+        ([1.0] * 20 + [50.0], [50.0]),
+    ],
+    ids=["slow-hiccup", "mad-zero-fallback"],
+)
+def test_drop_removes_slow_hiccup(sample: list[float], expected: list[float]) -> None:
+    kept, dropped = drop_outliers(sample, warn=False)
+    assert dropped.tolist() == expected
+    assert not set(expected) & set(kept.tolist())
 
 
 def test_keeps_ordinary_jitter() -> None:
@@ -45,26 +55,23 @@ def test_degenerate_and_tiny_samples_no_drop() -> None:
     assert drop_outliers([5.0] * 10, warn=False)[1].size == 0  # all identical: no robust scale
 
 
-def test_mad_zero_fallback_catches_outlier() -> None:
-    # Tight cluster (MAD == 0 because >= half are identical) + one hiccup: the mean-abs-dev
-    # fallback still flags it.
-    kept, dropped = drop_outliers([1.0] * 20 + [50.0], warn=False)
-    assert dropped.tolist() == [50.0]
-
-
-def test_median_ci_brackets_median() -> None:
-    x = np.random.default_rng(0).normal(100.0, 5.0, 200).tolist()
-    med, lo, hi, n_drop = median_ci(x, warn=False)
+@pytest.mark.parametrize(
+    ("sample", "n_dropped", "point", "collapsed"),
+    [
+        (np.random.default_rng(0).normal(100.0, 5.0, 200).tolist(), 0, None, False),
+        ([1.0] * 49 + [100.0], 1, 1.0, False),  # the hiccup is dropped and counted
+        ([3.0] * 10, None, 3.0, True),  # no spread: the interval collapses onto the median
+    ],
+    ids=["brackets-median", "drops-and-reports-count", "point-ci-on-no-spread"],
+)
+def test_median_ci_brackets_median(
+    sample: list[float], n_dropped: int | None, point: float | None, collapsed: bool
+) -> None:
+    med, lo, hi, n_drop = median_ci(sample, warn=False)
     assert lo <= med <= hi
-    assert n_drop == 0
-
-
-def test_median_ci_drops_and_reports_count() -> None:
-    med, lo, hi, n_drop = median_ci([1.0] * 49 + [100.0], warn=False)
-    assert n_drop == 1
-    assert abs(med - 1.0) < 1e-9
-
-
-def test_median_ci_point_ci_on_no_spread() -> None:
-    med, lo, hi, n_drop = median_ci([3.0] * 10, warn=False)
-    assert (med, lo, hi) == (3.0, 3.0, 3.0)
+    if n_dropped is not None:
+        assert n_drop == n_dropped
+    if collapsed:
+        assert (med, lo, hi) == (point, point, point)
+    elif point is not None:
+        assert abs(med - point) < 1e-9

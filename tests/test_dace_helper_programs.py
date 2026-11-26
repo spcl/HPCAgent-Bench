@@ -160,12 +160,8 @@ def test_a_kept_helper_gets_its_own_program(two_extent_module: str) -> None:
     helpers = sorted(n for n in declared if n != "k")
     assert helpers, "the helper was inlined away; the module declares only the kernel"
     assert all(n.startswith("_scale") for n in helpers), helpers
-
-
-def test_the_kernel_calls_the_helper_rather_than_repeating_its_body(two_extent_module: str) -> None:
-    """Both call sites survive as CALLS. Inlining is what would replace each with a copy of the
-    helper's loop, once per call."""
-    declared = programs(two_extent_module)
+    # Both call sites survive as CALLS. Inlining is what would replace each with a copy of the
+    # helper's loop, once per call.
     kernel_text = ast.unparse(declared["k"])
     calls = [
         node.func.id
@@ -276,23 +272,20 @@ def parse_through_dace(module: str, stem: str, tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.dace_frontend
-def test_the_emitted_module_parses_through_the_dace_frontend(two_extent_module: str, tmp_path: pathlib.Path) -> None:
-    """The calling convention above is checked on the TEXT, and text can be self-consistent and
-    still wrong: a helper declared over the caller's symbol while its body computes in its own
-    parameter satisfies every assertion here and refuses to parse ("could not broadcast [n] into
-    [N]"). Only the frontend settles it, so the fixture is put through it."""
-    import dace  # noqa: F401 -- the marker gates this test on dace being installed
-
-    parse_through_dace(two_extent_module, "two_extent_dace", tmp_path)
-
-
-@pytest.mark.dace_frontend
-def test_the_shadowed_extent_module_parses_through_the_dace_frontend(
-    shadowed_module: str, tmp_path: pathlib.Path
+@pytest.mark.parametrize(
+    ("module_fixture", "stem"),
+    [("two_extent_module", "two_extent_dace"), ("shadowed_module", "shadowed_extent_dace")],
+    ids=["two-extents", "shadowed-extents"],
+)
+def test_the_emitted_module_parses_through_the_dace_frontend(
+    module_fixture: str, stem: str, request: pytest.FixtureRequest, tmp_path: pathlib.Path
 ) -> None:
-    """The vocabulary assertion above reads the text; this one settles it. Both go red on the same
-    emission, and neither subsumes the other -- an emitter that respelled BOTH sides onto a name
-    the caller never passes would satisfy the text and still refuse to parse."""
+    """The calling convention and the vocabulary above are checked on the TEXT, and text can be self-consistent and
+    still wrong: a helper declared over the caller's symbol while its body computes in its own
+    parameter satisfies every text assertion and refuses to parse ("could not broadcast [n] into
+    [N]"). Only the frontend settles it, so each fixture is put through it. Neither fixture subsumes the other --
+    an emitter that respelled BOTH sides of the shadowed one onto a name the caller never passes would satisfy the
+    text and still refuse to parse."""
     import dace  # noqa: F401 -- the marker gates this test on dace being installed
 
-    parse_through_dace(shadowed_module, "shadowed_extent_dace", tmp_path)
+    parse_through_dace(request.getfixturevalue(module_fixture), stem, tmp_path)

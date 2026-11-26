@@ -218,12 +218,9 @@ def test_every_row_of_a_cancelled_task_is_dropped_with_a_warning() -> None:
     with pytest.warns(UserWarning, match="dropped 2 row"):
         kept = studies.drop_cancelled_episode_rows(cancelled_frame())
     assert kept.episode_id.unique().tolist() == ["a.n0.p39.w39"]
-
-
-def test_a_frame_without_a_cancelled_column_is_left_alone() -> None:
-    """Extractions predating the flag say nothing about cancellation, and a guess is not a record."""
-    frame = cancelled_frame().drop(columns=["episode_cancelled"])
-    assert len(studies.drop_cancelled_episode_rows(frame)) == len(frame)
+    # extractions predating the flag say nothing about cancellation, and a guess is not a record
+    legacy = cancelled_frame().drop(columns=["episode_cancelled"])
+    assert len(studies.drop_cancelled_episode_rows(legacy)) == len(legacy)
 
 
 def adhoc_frame() -> pd.DataFrame:
@@ -239,16 +236,11 @@ def adhoc_frame() -> pd.DataFrame:
     )
 
 
-def test_every_row_stored_under_adhoc_is_dropped_with_a_warning() -> None:
-    """A grade filed with no episode id has no episode identity, so it answers no setup's kernel, and the
-    kernel is owed a rerun instead."""
-    with pytest.warns(UserWarning, match="dropped 2 row"):
-        kept = studies.drop_adhoc_rows(adhoc_frame())
-    assert kept.episode_id.tolist() == ["a.n0.p4.w4"]
-
-
 def test_read_observations_never_returns_an_adhoc_row(tmp_path: pathlib.Path) -> None:
-    """Every figure reads through here."""
+    """A grade filed with no episode id has no episode identity, so it answers no setup's kernel, and the kernel
+    is owed a rerun instead. Every figure reads through here."""
+    with pytest.warns(UserWarning, match="dropped 2 row"):
+        assert studies.drop_adhoc_rows(adhoc_frame()).episode_id.tolist() == ["a.n0.p4.w4"]
     path = tmp_path / "obs.csv"
     adhoc_frame().to_csv(path, index=False)
     with pytest.warns(UserWarning, match="stored under episode id 'adhoc'"):

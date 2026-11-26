@@ -127,38 +127,31 @@ def test_a_packet_naming_an_overlay_its_plugin_does_not_ship_is_refused(
         plugins.register_packets(agent_plugins.find([folder]))
 
 
-def test_two_plugins_of_one_name_are_refused(tmp_path: pathlib.Path) -> None:
-    first = write_plugin(tmp_path / "a", "twin")
-    second = write_plugin(tmp_path / "b", "twin")
-    with pytest.raises(ValueError, match="plugin 'twin' is both"):
-        agent_plugins.find([first, second])
-
-
+@pytest.mark.parametrize(
+    ("table", "registered", "message"),
+    [
+        pytest.param(
+            '[packets.zzz]\nname = "Shadow"\naliases = ["lang-cpp"]\n',
+            False,
+            "'lang-cpp' is a shipped skill page's name",
+            id="shipped-page",
+        ),
+        pytest.param('[packets.short]\nname = "Shadow"\n', True, "'short' is already registered", id="alias"),
+    ],
+)
 def test_a_plugin_packet_named_like_a_shipped_page_is_refused_and_adds_nothing(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, table: str, registered: bool, message: str
 ) -> None:
-    """A shipped page's name would silently change what an existing spec token means; nothing of the plugin lands."""
+    """A shipped page's name would silently change what an existing spec token means, and the registry's own alias
+    check would raise only once earlier packets of the plugin had landed; nothing of the plugin lands."""
     folder = write_plugin(tmp_path, "aaa")
     manifest = folder / "plugin.toml"
-    manifest.write_text(manifest.read_text() + '\n[packets.zzz]\nname = "Shadow"\naliases = ["lang-cpp"]\n')
+    manifest.write_text(manifest.read_text() + "\n" + table)
     kind = Kind[PacketDef]("packets")
+    if registered:
+        kind.add("shipped", PacketDef(name="Shipped"), aliases=("short",))
     monkeypatch.setattr(plugins, "PACKETS", kind)
-    with pytest.raises(ValueError, match="'lang-cpp' is a shipped skill page's name"):
-        plugins.register_packets(agent_plugins.find([folder]))
-    assert "aaa" not in kind.entries
-
-
-def test_a_plugin_packet_named_like_a_registered_alias_is_refused_and_adds_nothing(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The registry's own check would raise only once earlier packets of the plugin had landed."""
-    folder = write_plugin(tmp_path, "aaa")
-    manifest = folder / "plugin.toml"
-    manifest.write_text(manifest.read_text() + '\n[packets.short]\nname = "Shadow"\n')
-    kind = Kind[PacketDef]("packets")
-    kind.add("shipped", PacketDef(name="Shipped"), aliases=("short",))
-    monkeypatch.setattr(plugins, "PACKETS", kind)
-    with pytest.raises(ValueError, match="'short' is already registered"):
+    with pytest.raises(ValueError, match=message):
         plugins.register_packets(agent_plugins.find([folder]))
     assert "aaa" not in kind.entries
 
@@ -217,6 +210,11 @@ def test_a_malformed_manifest_names_its_file(tmp_path: pathlib.Path) -> None:
     (tmp_path / "plugin.toml").write_text('name = "Not A Name"\n', encoding="utf-8")
     with pytest.raises(ValueError, match=r"plugin\.toml"):
         agent_plugins.read(tmp_path)
+
+    first = write_plugin(tmp_path / "a", "twin")
+    second = write_plugin(tmp_path / "b", "twin")
+    with pytest.raises(ValueError, match="plugin 'twin' is both"):
+        agent_plugins.find([first, second])
 
 
 def test_a_plugins_children_start_in_the_openmp_context_of_the_runtime_it_names(
@@ -381,9 +379,6 @@ def test_a_post_route_answers_its_own_episode_only(
     assert post(f"{url}/probe_count", {"episode_id": "ep-b", "rank": 0})[1]["error"] == "ep-b:1:None"
     assert post(f"{url}/probe_count", {"episode_id": "ep-z", "rank": 0})[0] == HTTPStatus.FORBIDDEN
     assert post(f"{url}/probe_count", {"episode_id": "ep-a", "rank": 7})[0] == HTTPStatus.MISDIRECTED_REQUEST
-
-
-def test_a_route_may_not_take_a_name_the_judge_answers() -> None:
     with pytest.raises(ValueError, match="one the judge answers itself"):
         routes.route("score", methods=(HTTPMethod.POST,))(lambda judge, request: None)
 

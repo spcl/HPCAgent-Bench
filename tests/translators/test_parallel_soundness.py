@@ -68,14 +68,18 @@ def test_a_live_accumulator_captured_each_iteration_is_not_a_reduction(src: str)
 
 
 # D: a store through a tuple target is a store
-def test_overlapping_stores_through_a_tuple_target_are_not_parallel_safe() -> None:
-    """dwt2d's level loop, ``out[:h, :h], out[h:2 * h, :h] = analyze(...)``: every level rewrites the corner the
-    next reads, but the tuple's stores were invisible and the loop became ``nb.prange``."""
-    loop = stmt_(
-        "for lvl in range(m):\n    h = n >> lvl\n    out[:h, :h], out[h:2 * h, :h] = f(out[: 2 * h, : 2 * h])\n"
-    )
-    assert not loop_is_parallel_safe(loop)
-
-
-def test_independent_stores_through_a_tuple_target_stay_parallel_safe() -> None:
-    assert loop_is_parallel_safe(stmt_("for i in range(n):\n    a[i], b[i] = c[i], d[i]\n"))
+@pytest.mark.parametrize(
+    ("src", "safe"),
+    [
+        # dwt2d's level loop: every level rewrites the corner the next reads, but the tuple's stores were invisible and
+        # the loop became ``nb.prange``.
+        (
+            "for lvl in range(m):\n    h = n >> lvl\n    out[:h, :h], out[h:2 * h, :h] = f(out[: 2 * h, : 2 * h])\n",
+            False,
+        ),
+        ("for i in range(n):\n    a[i], b[i] = c[i], d[i]\n", True),
+    ],
+    ids=["overlapping_stores", "independent_stores"],
+)
+def test_overlapping_stores_through_a_tuple_target_are_not_parallel_safe(src: str, safe: bool) -> None:
+    assert bool(loop_is_parallel_safe(stmt_(src))) is safe

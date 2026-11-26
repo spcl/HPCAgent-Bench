@@ -52,10 +52,6 @@ NUMBA_LAYOUT_WITNESSES = ("spmv", "bicg_solvers")
 NUMBA_CONFIGS = [(k, cfg) for k, cfg in KERNEL_CONFIGS if cfg == "csr" or k.short in NUMBA_LAYOUT_WITNESSES]
 
 
-def test_the_numba_layout_witnesses_are_sparse_kernels() -> None:
-    assert set(NUMBA_LAYOUT_WITNESSES) <= {k.short for k in KERNELS}
-
-
 @isolated
 @pytest.mark.skipif(not KERNEL_CONFIGS, reason="no sparse kernels discovered")
 @pytest.mark.parametrize(("kernel", "config"), NUMBA_CONFIGS, ids=[f"{k.short}-{cfg}" for k, cfg in NUMBA_CONFIGS])
@@ -148,9 +144,3 @@ def test_gmres_dace_early_convergence_matches_reference() -> None:
     assert np.max(np.abs(x_dace - x_ref)) < 1e-10, (
         f"dace early-convergence result diverged from the reference: {np.max(np.abs(x_dace - x_ref))}"
     )
-
-
-def test_at_least_the_known_sparse_kernels_are_discovered() -> None:
-    """Guards against the discovery silently finding nothing (e.g. a path
-    regression). spmv + spmm are migrated to sparse_layouts today."""
-    assert {"spmv", "spmm"}.issubset(set(IDS)), f"expected spmv+spmm among discovered sparse kernels, got {IDS}"

@@ -121,7 +121,7 @@ def test_a_directory_without_a_manifest_is_not_a_knowledge_base(tmp_path: pathli
         knowledge.load(tmp_path)
 
 
-def test_the_hash_names_the_documents_and_not_the_manifest(base_dir: pathlib.Path) -> None:
+def test_the_hash_names_the_documents_and_not_the_manifest(base_dir: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """Editing, renaming, adding or removing a document changes the hash; rewording the manifest does not."""
     original = knowledge.content_hash(base_dir)
     assert (original[:7], len(original)) == ("sha256:", 7 + 64)
@@ -142,9 +142,7 @@ def test_the_hash_names_the_documents_and_not_the_manifest(base_dir: pathlib.Pat
     (base_dir / "extra.md").write_text("", encoding="utf-8")
     assert knowledge.content_hash(base_dir) != original, "an added empty file is still a different base"
 
-
-def test_moving_bytes_between_two_files_changes_the_hash(tmp_path: pathlib.Path) -> None:
-    """Each file's size is hashed with it, so the same bytes split differently are a different base."""
+    # Each file's size is hashed with it, so the same bytes split differently are a different base.
     for name, (first, second) in {"a": ("ab", "c"), "b": ("a", "bc")}.items():
         (tmp_path / name).mkdir()
         (tmp_path / name / "1.md").write_text(first, encoding="utf-8")
@@ -178,10 +176,6 @@ def test_search_finds_an_instruction_by_its_full_spelling_and_by_a_part(base_dir
     assert convert[0].passage.document == "isa/conversion.md"
     assert (convert[0].passage.first_line, convert[0].passage.last_line) == (1, 5)
     assert knowledge.search(base, "zzz_no_such_term") == []
-
-
-def test_search_is_bounded_and_deterministic(base_dir: pathlib.Path) -> None:
-    base = knowledge.load(base_dir)
     many = knowledge.search(base, "register allocation", limit=1000)
     assert len(many) == knowledge.MAX_RESULTS
     assert [hit.passage for hit in many] == [hit.passage for hit in knowledge.search(base, "register allocation", 1000)]

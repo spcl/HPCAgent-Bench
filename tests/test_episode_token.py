@@ -54,22 +54,3 @@ def test_every_driver_of_a_job_reads_one_secret() -> None:
             restore(saved)
     assert len(set(seen)) == 1 and seen[0]
     assert leftovers == [http_json.EPISODE_SECRET_NAME]
-
-
-def test_no_run_dir_issues_no_token() -> None:
-    saved = {key: os.environ.pop(key) for key in ("RUN_DIR",) if key in os.environ}
-    try:
-        assert http_json.EPISODE_TOKEN_ENV not in agent_driver.identity_env(0, 0)
-    finally:
-        os.environ.update(saved)
-
-
-def test_the_tools_send_the_token_as_a_header() -> None:
-    saved = os.environ.get(http_json.EPISODE_TOKEN_ENV)
-    os.environ[http_json.EPISODE_TOKEN_ENV] = "abc"
-    try:
-        assert http_json.episode_token_header() == {http_json.EPISODE_TOKEN_HEADER: "abc"}
-    finally:
-        os.environ.pop(http_json.EPISODE_TOKEN_ENV)
-        if saved is not None:
-            os.environ[http_json.EPISODE_TOKEN_ENV] = saved

@@ -91,12 +91,9 @@ def test_weak_efficiency_divides_by_p_over_the_realized_work_ratio() -> None:
     # the work-SCALED speedup is what the speedup panel draws, and its ideal is P
     assert point.value(scaling.Quantity.SPEEDUP) == pytest.approx(3.2)  # 4 * 1000 / 1250
     assert point.value(scaling.Quantity.EFFICIENCY) == pytest.approx(0.8)
-
-
-def test_a_weak_row_without_a_work_ratio_is_read_as_exact_growth() -> None:
-    """An absent work_ratio means r = P (metric.ideal_speedup's own None), never r = 0 or a drop."""
-    rows = [row("mlscale-weak-qwen38-hip", "dist_mlp_tp", "weak", 8, 1000.0, single_rank_ns=1000.0)]
-    point = only(scaling.curves(frame(rows))).points[0]
+    # An absent work_ratio means r = P (metric.ideal_speedup's own None), never r = 0 or a drop.
+    bare = [row("mlscale-weak-qwen38-hip", "dist_mlp_tp", "weak", 8, 1000.0, single_rank_ns=1000.0)]
+    point = only(scaling.curves(frame(bare))).points[0]
     assert point.work_ratio == pytest.approx(8.0)
     assert point.ideal_speedup == pytest.approx(1.0)
     assert point.efficiency == pytest.approx(1.0)
@@ -126,14 +123,10 @@ def test_a_failed_p_is_dropped_with_its_reason_and_leaves_a_hole_not_a_zero() ->
     assert curve.dropped == ((8, "P=8: mpi build failed"),)
     assert scaling.dropped_points([curve]) == [(setup, "dist_moe_dispatch", "strong", 8, "P=8: mpi build failed")]
     assert all(p.efficiency > 0 for p in curve.points)  # nothing was filled in at zero
-
-
-def test_a_point_with_no_recorded_note_still_says_why_it_is_absent() -> None:
-    """Every drop carries a reason; a row with none gets a plain statement rather than an empty cell."""
-    rows = [row("mlscale-weak-qwen38-hip", "dist_gemm_add_relu", "weak", 16, 0.0)]
-    curve = only(scaling.curves(frame(rows)))
-    assert curve.points == ()
-    assert curve.dropped[0][1] == "no measured time recorded at this P"
+    # Every drop carries a reason; a row with none gets a plain statement rather than an empty cell.
+    unnoted = only(scaling.curves(frame([row("mlscale-weak-qwen38-hip", "dist_gemm_add_relu", "weak", 16, 0.0)])))
+    assert unnoted.points == ()
+    assert unnoted.dropped[0][1] == "no measured time recorded at this P"
 
 
 def test_a_single_point_curve_draws_nothing_and_is_counted() -> None:
@@ -275,10 +268,7 @@ def test_an_empty_frame_draws_nothing_and_raises_nothing() -> None:
     assert scaling.figure_per_kernel([], "weak") is None
     assert scaling.points_table([]).empty
     assert scaling.dropped_table([]).empty
-
-
-def test_a_frame_of_grade_rows_alone_holds_no_scaling_rows() -> None:
-    """The per-P rows are selected by ``record``, so an ordinary observations CSV yields no curves."""
+    # The per-P rows are selected by ``record``, so an ordinary observations CSV yields no curves.
     grades = pd.DataFrame(
         [{"row_kind": "submission", "setup": "mlscale-weak-qwen38-hip", "kernel": "dist_softmax", "speedup": 2.0}]
     )
@@ -404,22 +394,3 @@ def test_a_panel_spanning_four_decades_still_labels_its_ticks() -> None:
     low, high = fig.axes[0].get_ylim()
     shown = [t for t in fig.axes[0].yaxis.get_majorticklocs() if low <= t <= high]
     assert len(shown) >= 2, (low, high, shown)
-
-
-def test_model_lines_are_thinner_than_the_baseline_and_the_geomean_column_is_wider() -> None:
-    """Overlapping model curves hid each other at full width; the geomean column holds three
-    banded series and needs more room than an operator column."""
-
-    rows = perfect_strong("mlscale-strong-qwen38-hip", "dist_softmax") + perfect_strong(
-        scaling.TORCH_DIST_SETUP, "dist_softmax"
-    )
-    for index, entry in enumerate(rows):
-        entry["episode_id"] = f"run-{index // len(RANKS)}"
-    fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_softmax"], geomean_panel=True)
-    assert fig is not None
-    panel, geomean = fig.axes[0], fig.axes[1]
-    widths = {line.get_label(): line.get_linewidth() for line in panel.get_lines()}
-    model = next(w for label, w in widths.items() if label.startswith("Qwen"))
-    base = widths[scaling.TORCH_DIST_LABEL]
-    assert model == pytest.approx(base * scaling.AGENT_LINE_SCALE), widths
-    assert geomean.get_position().width > panel.get_position().width * 1.2

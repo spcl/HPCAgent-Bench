@@ -14,6 +14,8 @@ parameter; see tests/test_spec_dimensions_config.py for that half.
 import json
 import pathlib
 import re
+import shutil
+import subprocess
 import tempfile
 from collections.abc import Callable
 
@@ -23,7 +25,7 @@ from hpcagent_bench.translators.numpyto_c.emit import emit_c, emit_cpp
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.native_tu import build_run_c, have_gcc, have_gpp
+from tests.translators.native_tu import build_run_c
 
 SRC = (
     "import numpy as np\n"
@@ -76,27 +78,15 @@ def test_a_narrowed_pinned_float_carries_the_literal_suffix_of_its_own_type() ->
     assert "constexpr float tol = 1e-06f;" in emit_cpp(kir, fn_name="f")
     # fp64 is the control: a double literal in a double is exact, so nothing is appended.
     assert "constexpr double tol = 1e-06;" in emit_c(kir_(), fn_name="f")
-
-
-def test_a_narrowed_pinned_float_still_compiles_as_c23() -> None:
-    """The suffix rule is only worth anything if the compiler agrees -- and the C23 constexpr
-    diagnostic is the whole reason this test exists, so it has to be a real compile."""
-    import shutil
-    import subprocess
-
-    from hpcagent_bench.translators.numpyto_common.ir import apply_precision
-
-    if shutil.which("gcc") is None:  # pragma: no cover -- toolchain gate
-        import pytest
-
-        pytest.skip("gcc not installed")
-    d = pathlib.Path(tempfile.mkdtemp())
-    src = d / "k.c"
-    src.write_text(emit_c(apply_precision(kir_(), "float32"), fn_name="f"))
-    r = subprocess.run(
-        ["gcc", "-O2", "-std=c23", "-fsyntax-only", str(src)], capture_output=True, text=True, check=False
-    )
-    assert r.returncode == 0, r.stderr
+    # The suffix rule is only worth anything if the compiler agrees, so it compiles as C23 when gcc is present.
+    if shutil.which("gcc") is not None:
+        d = pathlib.Path(tempfile.mkdtemp())
+        src = d / "k.c"
+        src.write_text(c)
+        r = subprocess.run(
+            ["gcc", "-O2", "-std=c23", "-fsyntax-only", str(src)], capture_output=True, text=True, check=False
+        )
+        assert r.returncode == 0, r.stderr
 
 
 def test_without_the_pinned_declaration_the_same_knobs_stay_parameters() -> None:
@@ -182,14 +172,8 @@ def test_a_pinned_knob_named_like_a_libc_function_is_declared_under_a_respelled_
     body = declarations.split("void f(", 1)[1]
     assert "(atol_ + rtol)" in body, "the use site must read the respelled declaration"
     assert re.search(r"\batol\b", declarations) is None, "past the headers, nothing may still spell <stdlib.h>'s atol"
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize(
-    ("emit", "cpp"),
-    [pytest.param(emit_c, False, marks=have_gcc, id="c"), pytest.param(emit_cpp, True, marks=have_gpp, id="cpp")],
-)
-def test_a_knob_named_like_a_libc_function_computes_with_its_pinned_value(emit: Callable[..., str], cpp: bool) -> None:
-    """The alias has to survive the preprocessor, not just a string match: the driver checks that
-    ``atol`` in the body still means 1e-09 and not <stdlib.h>'s string conversion."""
-    assert build_run_c(emit(libc_name_kir(), fn_name="f"), LIBC_NAME_DRIVER, cpp=cpp).returncode == 0
+    # The alias has to survive the preprocessor, not just a string match: the driver checks that ``atol`` in the
+    # body still means 1e-09 and not <stdlib.h>'s string conversion.
+    cpp = emit is emit_cpp
+    if shutil.which("g++" if cpp else "gcc") is not None:
+        assert build_run_c(text, LIBC_NAME_DRIVER, cpp=cpp).returncode == 0

@@ -34,9 +34,18 @@ def apply(pass_obj: ast.NodeTransformer, src: str) -> str:
     return ast.unparse(ast.fix_missing_locations(ast.Module(body=body, type_ignores=[])))
 
 
-def test_diff_becomes_the_slice_difference() -> None:
-    """The identity numpy documents, and the only form these backends trace natively."""
-    assert apply(DiffToSliceDifference(), "d = np.diff(p)") == "d = p[1:] - p[:-1]"
+@pytest.mark.parametrize(
+    ("make_pass", "src", "expected"),
+    [
+        # The identity numpy documents, and the only form these backends trace natively.
+        (DiffToSliceDifference, "d = np.diff(p)", "d = p[1:] - p[:-1]"),
+        # ``copy`` decides whether numpy MAY alias, never what the values are; dace takes no such arg.
+        (StripAstypeCopyKwarg, "y = x.astype(np.float32, copy=False)", "y = x.astype(np.float32)"),
+    ],
+    ids=["diff_becomes_the_slice_difference", "astype_copy_kwarg_is_dropped"],
+)
+def test_diff_becomes_the_slice_difference(make_pass: type[ast.NodeTransformer], src: str, expected: str) -> None:
+    assert apply(make_pass(), src) == expected
 
 
 def test_per_element_repeat_walks_a_running_offset() -> None:
@@ -61,8 +70,3 @@ def test_per_element_repeat_walks_a_running_offset() -> None:
 )
 def test_a_form_whose_extent_is_data_is_left_standing(pass_obj: ast.NodeTransformer, src: str) -> None:
     assert apply(pass_obj, src) == src
-
-
-def test_astype_copy_kwarg_is_dropped() -> None:
-    """``copy`` decides whether numpy MAY alias, never what the values are; dace takes no such arg."""
-    assert apply(StripAstypeCopyKwarg(), "y = x.astype(np.float32, copy=False)") == "y = x.astype(np.float32)"

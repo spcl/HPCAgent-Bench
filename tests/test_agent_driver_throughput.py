@@ -57,10 +57,13 @@ def test_the_probe_counts_the_servers_tokens_not_its_own_request(
     """max_tokens is what was ASKED for; completion_tokens is what came back. A model that stops
     early must be scored on what it produced, or every early stop reads as a throughput drop."""
     seen: list[dict] = []
+    urls: list[str] = []
     clock = iter([0.0, 2.0])
 
     def fake_urlopen(request: Request, timeout: int | None = None) -> FakeResponse:
         seen.append(json.loads(request.data))
+        urls.append(request.full_url)
+        assert request.get_method() == "POST"
         return FakeResponse(reply(completion_tokens=100))
 
     monkeypatch.setattr(driver.urllib.request, "urlopen", fake_urlopen)
@@ -76,24 +79,8 @@ def test_the_probe_counts_the_servers_tokens_not_its_own_request(
     assert body["stream"] is False, "a streamed reply has no usage block to count from"
     assert body["temperature"] == 0.0
     assert body["max_tokens"] == driver.PROBE_MAX_TOKENS
-
-
-def test_the_probe_posts_to_the_chat_route_of_the_replica_it_was_given(
-    driver: types.ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The replica URL already ends in /v1 -- the probe must not rebuild it or invent a host."""
-    urls: list[str] = []
-
-    def fake_urlopen(request: Request, timeout: int | None = None) -> FakeResponse:
-        urls.append(request.full_url)
-        assert request.get_method() == "POST"
-        return FakeResponse(reply(completion_tokens=10))
-
-    monkeypatch.setattr(driver.urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(driver.time, "monotonic", iter([0.0, 1.0]).__next__)
-
-    driver.throughput_probe("http://nid002994:8000/v1", {}, 1)
-    assert urls == ["http://nid002994:8000/v1/chat/completions"]
+    # The replica URL already ends in /v1 -- the probe must not rebuild it or invent a host.
+    assert urls == ["http://vllm:8000/v1/chat/completions"]
 
 
 def test_a_failing_replica_costs_the_sample_and_not_the_run(
@@ -144,29 +131,33 @@ def test_the_report_takes_the_median_and_writes_the_raw_samples(
     assert "median=41.00 tok/s" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    ("samples", "run_dir_exists", "message"),
+    [
+        # Reporting is the last thing between readiness and the agents; a bad path must not stop them.
+        (
+            [{"elapsed_s": 1.0, "completion_tokens": 10.0, "prompt_tokens": 5.0, "completion_tok_s": 10.0}],
+            False,
+            "could not write",
+        ),
+        # Every request failing is a real outcome. It must be SAID, not silently written as a zero that later
+        # reads as a measured throughput of zero.
+        ([], True, "no samples"),
+    ],
+    ids=["unwritable-run-dir", "no-samples"],
+)
 def test_an_unwritable_run_dir_does_not_raise(
     driver: types.ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
+    samples: list[dict[str, float]],
+    run_dir_exists: bool,
+    message: str,
 ) -> None:
-    """Reporting is the last thing between readiness and the agents; a bad path must not stop them."""
-    monkeypatch.setenv("RUN_DIR", str(tmp_path / "does" / "not" / "exist"))
-    driver.report_throughput(
-        [{"elapsed_s": 1.0, "completion_tokens": 10.0, "prompt_tokens": 5.0, "completion_tok_s": 10.0}]
-    )
-    assert "could not write" in capsys.readouterr().out
-
-
-def test_no_samples_reports_nothing_and_writes_nothing(
-    driver: types.ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pathlib.Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Every request failing is a real outcome. It must be SAID, not silently written as a zero that
-    later reads as a measured throughput of zero."""
-    monkeypatch.setenv("RUN_DIR", str(tmp_path))
-    driver.report_throughput([])
-    assert "no samples" in capsys.readouterr().out
-    assert list(tmp_path.iterdir()) == []
+    run_dir = tmp_path if run_dir_exists else tmp_path / "does" / "not" / "exist"
+    monkeypatch.setenv("RUN_DIR", str(run_dir))
+    driver.report_throughput(samples)
+    assert message in capsys.readouterr().out
+    if run_dir_exists:
+        assert list(run_dir.iterdir()) == []

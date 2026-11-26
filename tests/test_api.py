@@ -36,19 +36,11 @@ def test_runconfig_holds_members_and_validates() -> None:
         api.RunMode.parse("on-the-moon")
     with pytest.raises(ValueError):
         api.RunConfig(repeat=0)  # repeat must be >= 1
-
-
-# lazy top-level exports (PEP 562)
-
-
-def test_toplevel_lazy_exports() -> None:
-    import hpcagent_bench
-
-    assert hpcagent_bench.init is api.init  # forwarded to hpcagent_bench.api on first access
-    assert hpcagent_bench.RunMode is api.RunMode
-    assert hpcagent_bench.Kernel is api.Kernel
-    with pytest.raises(AttributeError):
-        hpcagent_bench.does_not_exist  # noqa: B018 -- the unknown attribute still raises (not swallowed)
+    # ``mode`` is compared with ``is``, and ``"auto"`` is the boundary spelling of the per-track baseline.
+    spelled = api.RunConfig(mode="container", baseline="auto", preset="S")
+    assert (spelled.mode, spelled.baseline, spelled.preset) == (api.RunMode.CONTAINER, None, Preset.S)
+    with pytest.raises(ValueError, match="not a"):
+        api.RunConfig(mode="containre")
 
 
 # init + the handle
@@ -67,12 +59,8 @@ def test_init_applies_overrides_and_rejects_unknown() -> None:
     assert k2.config.oracle is api.Oracle.TORCH
     with pytest.raises(TypeError):
         api.init("gemm", not_a_real_knob=1)
-
-
-def test_toplevel_helpers_reject_overrides_on_a_handle() -> None:
-    k = api.init("gemm")
     with pytest.raises(TypeError):
-        api.score(k, "void gemm_fp64(){}", mode="container")  # overrides + a handle is ambiguous
+        api.score(api.init("gemm"), "void gemm_fp64(){}", mode="container")  # overrides + a handle is ambiguous
 
 
 def test_score_from_payload_roundtrips_type() -> None:
@@ -179,11 +167,3 @@ def test_container_mode_scores_via_a_running_judge(make_judge: Callable[..., tup
     assert isinstance(s, Score)
     assert s.correct
     assert s.speedup > 0
-
-
-def test_run_config_turns_spellings_into_members() -> None:
-    """``mode`` is compared with ``is``, and ``"auto"`` is the boundary spelling of the per-track baseline."""
-    cfg = api.RunConfig(mode="container", baseline="auto", preset="S")
-    assert (cfg.mode, cfg.baseline, cfg.preset) == (api.RunMode.CONTAINER, None, Preset.S)
-    with pytest.raises(ValueError, match="not a"):
-        api.RunConfig(mode="containre")

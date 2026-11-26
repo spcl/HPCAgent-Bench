@@ -99,23 +99,23 @@ def assert_round_trips(path: pathlib.Path, grade_id: int, sent: Requests) -> Non
     assert from_rows == sent
 
 
-def test_the_fixture_holds_every_relayout_action() -> None:
-    """A new relayout operation must join :data:`OPERATIONS` (and the schema's CHECK) before it is recorded."""
-    assert {op.action for op in OPERATIONS} == set(Action)
-
-
-def test_each_operation_alone_round_trips(tmp_path: pathlib.Path) -> None:
-    """One grade per operation, so a failure names the operation that does not survive."""
+@pytest.mark.parametrize(
+    "alone",
+    [
+        pytest.param([Requests(Startup(), (op,)) for op in OPERATIONS], id="each-operation"),
+        pytest.param(
+            [
+                Requests(startup, ())
+                for startup in (Startup(load=("blas",)), Startup(grid=("P",)), Startup(grid=("2", "P")))
+            ],
+            id="each-startup",
+        ),
+    ],
+)
+def test_each_operation_alone_round_trips(tmp_path: pathlib.Path, alone: list[Requests]) -> None:
+    """One grade per operation or startup, so a failure names the one that does not survive."""
     db = tmp_path / "r.db"
-    for stamp, op in enumerate(OPERATIONS, start=1):
-        sent = Requests(Startup(), (op,))
-        assert_round_trips(db, recorded_grade(db, sent, ts_ms=stamp), sent)
-
-
-def test_startup_alone_round_trips(tmp_path: pathlib.Path) -> None:
-    db = tmp_path / "r.db"
-    for stamp, startup in enumerate((Startup(load=("blas",)), Startup(grid=("P",)), Startup(grid=("2", "P"))), 1):
-        sent = Requests(startup, ())
+    for stamp, sent in enumerate(alone, start=1):
         assert_round_trips(db, recorded_grade(db, sent, ts_ms=stamp), sent)
 
 

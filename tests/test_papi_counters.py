@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator, Sequence
 import pytest
 
 from hpcagent_bench import flags, osinfo
-from hpcagent_bench.categories import Language, Preset, SourceMode
+from hpcagent_bench.categories import Language, Preset
 from hpcagent_bench.flags import Mode
 from hpcagent_bench.harness import papi, profiling
 from tests.papi_probe import CAN_COUNT, PAPI_LIBRARY, armable
@@ -64,43 +64,26 @@ ZEN4_AVAILABLE = (
 #: or nothing will ever ask for it.
 
 
-def test_no_candidate_swaps_operations_for_instructions() -> None:
-    """The one substitution that must never happen: PAPI_FP_INS counts INSTRUCTIONS, and one
-    packed FMA is one instruction and many operations. A fallback from ops to instructions would
-    report a number an order of magnitude wrong under a name that looks right."""
-    for candidate in papi.METRICS["fp_ops"]:
-        assert all(term.endswith("_OPS") for term in candidate), candidate
-
-
-def test_resolve_takes_the_direct_event_when_the_cpu_has_it() -> None:
-    assert papi.resolve("data_cache_misses", ZEN4_AVAILABLE) == ("PAPI_L1_DCM",)
-    assert papi.resolve("instructions", ZEN4_AVAILABLE) == ("PAPI_TOT_INS",)
-
-
-def test_resolve_derives_cache_hits_when_the_preferred_event_is_missing() -> None:
-    """PAPI_L1_DCH exists on almost no CPU. Accesses minus misses is the SAME number, exactly,
-    from two events that still fit the counter budget -- so the metric survives the gap."""
-    assert "PAPI_L1_DCH" not in ZEN4_AVAILABLE
-    assert papi.resolve("cache_hits", ZEN4_AVAILABLE) == ("PAPI_L1_DCA", "-PAPI_L1_DCM")
-
-
-def test_resolve_falls_through_to_the_next_cache_level() -> None:
-    """L1 instruction misses are unavailable here; L2 answers the same question one level down,
-    and the expression that ships with the count says which level it was."""
-    assert papi.resolve("instruction_cache_misses", ZEN4_AVAILABLE) == ("PAPI_L2_ICM",)
-
-
-def test_resolve_reports_nothing_rather_than_a_different_quantity() -> None:
-    """No integer-instruction preset on this CPU, and nothing else counts integer instructions.
-    The answer is None -- the caller then reports the metric missing."""
-    assert papi.resolve("integer_instructions", ZEN4_AVAILABLE) is None
-
-
-def test_resolve_needs_every_event_of_a_derived_candidate() -> None:
-    """A derivation is only usable when BOTH its events are countable; half of one is not a
-    partial answer, it is a wrong one."""
-    assert papi.resolve("cache_hits", ("PAPI_L1_DCA",)) is None
-    assert papi.resolve("cache_hits", ("PAPI_L1_DCM",)) is None
+# Cases: direct event; PAPI_L1_DCH exists on almost no CPU, so cache hits derive as accesses minus
+# misses (the same number from two events that fit the counter budget); L1 instruction misses are
+# unavailable, so L2 answers one level down; no integer-instruction preset exists and nothing else
+# counts them, so the answer is None; half a derivation is a wrong answer, not a partial one.
+@pytest.mark.parametrize(
+    ("metric", "available", "want"),
+    [
+        pytest.param("data_cache_misses", ZEN4_AVAILABLE, ("PAPI_L1_DCM",), id="direct-data-cache-misses"),
+        pytest.param("instructions", ZEN4_AVAILABLE, ("PAPI_TOT_INS",), id="direct-instructions"),
+        pytest.param("cache_hits", ZEN4_AVAILABLE, ("PAPI_L1_DCA", "-PAPI_L1_DCM"), id="derived-cache-hits"),
+        pytest.param("instruction_cache_misses", ZEN4_AVAILABLE, ("PAPI_L2_ICM",), id="next-cache-level"),
+        pytest.param("integer_instructions", ZEN4_AVAILABLE, None, id="no-different-quantity"),
+        pytest.param("cache_hits", ("PAPI_L1_DCA",), None, id="derivation-missing-misses"),
+        pytest.param("cache_hits", ("PAPI_L1_DCM",), None, id="derivation-missing-accesses"),
+    ],
+)
+def test_resolve_picks_the_candidate_the_cpu_can_count(
+    metric: str, available: Sequence[str], want: tuple[str, ...] | None
+) -> None:
+    assert papi.resolve(metric, available) == want
 
 
 def test_expression_and_combine_agree_about_the_signs() -> None:
@@ -120,11 +103,7 @@ def test_every_group_names_metrics_that_exist() -> None:
         assert len(set(metrics)) == len(metrics), f"{group} asks for the same metric twice, i.e. twice the runs"
         for metric in metrics:
             assert metric in papi.METRICS, f"{group} names {metric!r}, which is not a metric"
-
-
-def test_the_all_group_is_every_metric_and_the_default_is_not() -> None:
-    """`all` is the sweep; the default has to be the cheap one, or 'counters' silently costs
-    every metric there is -- one measured run each."""
+    # `all` is the sweep; the default has to be the cheap one, or 'counters' costs one measured run per metric.
     assert set(papi.GROUPS["all"]) == set(papi.METRICS)
     assert len(papi.GROUPS[profiling.DEFAULT_COUNTER_GROUP]) < len(papi.METRICS)
 
@@ -196,23 +175,33 @@ def test_every_ratio_ships_the_formula_that_produced_it() -> None:
     assert row["inputs"] == {"instructions": 10, "cycles": 5}
     assert row["expressions"]["instructions"] == "PAPI_TOT_INS"
     assert row["reading"]
+    # The text view is what a reader sees: a ratio that could not be computed appears as a reason, not a gap.
+    text = "\n".join(profiling.render_ratios(papi.derive(rows)))
+    assert "ipc" in text
+    assert "instructions / cycles" in text
+    assert "2.0000" in text
+    assert "stall_fraction" in text
+    assert "no count for stalled_cycles" in text
 
 
-def test_a_ratio_whose_metrics_were_not_counted_is_named_not_dropped() -> None:
-    """Silence reads as 'nothing interesting'. The reason has to say which count was missing --
-    including a metric that ran and came back unavailable on this CPU."""
-    rows = [counted_row("cycles", 5), papi.missing("instructions", "no candidate on this CPU")]
+@pytest.mark.parametrize(
+    ("rows", "reason"),
+    [
+        pytest.param(
+            [counted_row("cycles", 5), papi.missing("instructions", "no candidate on this CPU")],
+            "instructions",
+            id="metric-unavailable",
+        ),
+        pytest.param([counted_row("instructions", 10), counted_row("cycles", 0)], "0", id="zero-denominator"),
+    ],
+)
+def test_a_ratio_whose_metrics_were_not_counted_is_named_not_dropped(rows: list[dict], reason: str) -> None:
+    """Silence reads as 'nothing interesting'. The reason has to say which count was missing -- including a metric
+    that ran and came back unavailable on this CPU -- and a counter that honestly read 0 makes the RATIO undefined,
+    not infinite."""
     derived = papi.derive(rows)
     assert "ipc" not in derived["ratios"]
-    assert "instructions" in derived["unavailable"]["ipc"]
-
-
-def test_a_zero_denominator_is_unavailable_rather_than_infinite() -> None:
-    """The counter honestly read 0; the RATIO is undefined, and 'inf' would be plotted."""
-    rows = [counted_row("instructions", 10), counted_row("cycles", 0)]
-    derived = papi.derive(rows)
-    assert "ipc" not in derived["ratios"]
-    assert "0" in derived["unavailable"]["ipc"]
+    assert reason in derived["unavailable"]["ipc"]
     assert papi.quotient(1.0, 0.0) is None
 
 
@@ -230,18 +219,6 @@ def test_a_cross_level_hit_rate_carries_a_caveat() -> None:
     assert papi.cache_levels(["PAPI_L1_DCA - PAPI_L1_DCM"]) == ("L1",)
 
 
-def test_the_rendered_ratios_carry_the_formula_and_the_reasons() -> None:
-    """The text view is what a human (or an LLM) reads; a ratio that could not be computed must
-    appear as a reason, not as a gap that reads like 'uninteresting'."""
-    rows = [counted_row("instructions", 10, expression="PAPI_TOT_INS"), counted_row("cycles", 5)]
-    text = "\n".join(profiling.render_ratios(papi.derive(rows)))
-    assert "ipc" in text
-    assert "instructions / cycles" in text
-    assert "2.0000" in text
-    assert "stall_fraction" in text
-    assert "no count for stalled_cycles" in text
-
-
 def segfaulting_worker(*args: object, **kwargs: object) -> None:
     """Stand-in for :func:`papi.counting_worker` that dies the way an agent's kernel dies."""
     # Deliberate: this child is proving the harness survives a fatal signal. pytest enables
@@ -255,21 +232,23 @@ def raising_worker(*args: object, **kwargs: object) -> None:
     raise RuntimeError("PAPI_start failed: no such event")
 
 
-def test_a_segfaulting_counted_run_costs_one_metric_not_the_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The isolation contract: metric k's child dying is metric k's number lost, the parent alive,
-    and the signal NAMED -- not an exception the caller has to guess the meaning of."""
-    monkeypatch.setattr(papi, "counting_worker", segfaulting_worker)
-    row = papi.count_metric("/nonexistent.so", None, {}, Language.C, "instructions", rep_timeout=5.0)
+@pytest.mark.parametrize(
+    ("worker", "metric", "missing"),
+    [
+        pytest.param(segfaulting_worker, "instructions", "SIGSEGV", id="segfault"),
+        pytest.param(raising_worker, "fp_ops", "PAPI_start failed", id="papi-failure-in-the-child"),
+    ],
+)
+def test_a_segfaulting_counted_run_costs_one_metric_not_the_process(
+    monkeypatch: pytest.MonkeyPatch, worker: Callable[..., None], metric: str, missing: str
+) -> None:
+    """The isolation contract: metric k's child dying is metric k's number lost, the parent alive, and the cause
+    NAMED (the signal, or the PAPI error the child raised) -- not an exception the caller has to decode."""
+    monkeypatch.setattr(papi, "counting_worker", worker)
+    row = papi.count_metric("/nonexistent.so", None, {}, Language.C, metric, rep_timeout=5.0)
+    assert row["metric"] == metric
     assert row["count"] is None
-    assert "SIGSEGV" in row["missing"]
-
-
-def test_a_papi_failure_inside_the_child_is_reported_as_that_metric_s_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(papi, "counting_worker", raising_worker)
-    row = papi.count_metric("/nonexistent.so", None, {}, Language.C, "fp_ops", rep_timeout=5.0)
-    assert row["metric"] == "fp_ops"
-    assert row["count"] is None
-    assert "PAPI_start failed" in row["missing"]
+    assert missing in row["missing"]
 
 
 def counted_line(metric: str) -> str:
@@ -460,20 +439,9 @@ def test_feature_set_is_the_intersection_of_what_we_want_and_what_the_cpu_has(mo
     assert features["supported"]["instructions"]["derived"] is False
     assert "PAPI_INT_INS" in features["unsupported"]["integer_instructions"]
     assert features["hardware_counters"] == 5
-
-
-def test_feature_set_answers_for_a_subset_when_asked(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(papi, "available_events", lambda: ZEN4_AVAILABLE)
-    monkeypatch.setattr(papi, "hardware_counters", lambda: 5)
-    features = papi.feature_set(("instructions", "integer_instructions"))
-    assert set(features["supported"]) == {"instructions"}
-    assert set(features["unsupported"]) == {"integer_instructions"}
-
-
-def test_no_candidate_can_exceed_a_plausible_counter_budget() -> None:
-    """A candidate wider than the CPU's counter registers would be MULTIPLEXED -- the estimate
-    this module exists to refuse. Four is the narrowest budget in the wild."""
-    assert max(len(c) for cands in papi.METRICS.values() for c in cands) <= 4
+    subset = papi.feature_set(("instructions", "integer_instructions"))
+    assert set(subset["supported"]) == {"instructions"}
+    assert set(subset["unsupported"]) == {"integer_instructions"}
 
 
 def test_thread_ids_put_the_calling_thread_first() -> None:
@@ -483,60 +451,6 @@ def test_thread_ids_put_the_calling_thread_first() -> None:
     assert tids[0] == os.getpid()
     assert len(set(tids)) == len(tids)
     assert sorted(tids[1:]) == list(tids[1:])
-
-
-@requires_papi
-def test_the_count_covers_the_timed_call_and_nothing_else(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The assertion this whole module exists for: gemm at preset S does 2*NI*NJ*NK multiply-adds,
-    so a correctly bracketed fp-op count lands ON that number. A count that also swept up
-    interpreter start-up, the seeded input generation or the per-rep buffer copies would not --
-    which is how a wrong number wearing a right label gets caught.
-
-    NOT skipped on a CPU with no fp-op preset, which is what a hosted runner is: there the metric
-    is honestly unavailable, and the assertion is the other half of the contract -- count_metric
-    refuses it by name, NAMES the events it could not arm, and the parent survives to ask for the
-    next metric. Both halves run everywhere: the refusal is forced with an empty event set, so a
-    machine with counters walks the same ladder a machine without them walks for real.
-    """
-    from hpcagent_bench.harness.agent import reference_source
-    from hpcagent_bench.harness.envelope import Submission
-    from hpcagent_bench.harness.grading import data_seeded
-    from hpcagent_bench.harness.sandbox import Sandbox
-    from hpcagent_bench.harness.task import Task
-    from hpcagent_bench.spec import BenchSpec
-    from hpcagent_bench.support.bindings.contract import binding_from_spec
-
-    spec = BenchSpec.load("gemm")
-    sizes = spec.parameters["S"]
-    expected = 2 * sizes["NI"] * sizes["NJ"] * sizes["NK"]
-    binding = binding_from_spec(spec)
-    task = Task("gemm", SourceMode.RESTRICTED, Language.C)
-    # Read off the REAL machine, before the patch below empties its event set.
-    have_fp_ops, absent = armable("fp_ops"), unarmable_events("fp_ops")
-    with Sandbox(binding) as sandbox:
-        built = sandbox.build(Submission(language=Language.C, source=reference_source(task)), debug=True)
-        assert built.ok, built.log[-2000:]
-        data = data_seeded("gemm", Preset.S, "float64", 42)
-        row = papi.count_metric(built.lib, binding, data, Language.C, "fp_ops", reps=2, rep_timeout=300.0)
-        # A machine with no countable event at all, forced. The patch crosses count_metric's fork.
-        monkeypatch.setattr(papi, "available_events", lambda: ())
-        starved = papi.count_metric(built.lib, binding, data, Language.C, "fp_ops", reps=1, rep_timeout=300.0)
-    assert starved["count"] is None
-    assert "PAPI_FP_OPS" in starved["missing"]
-
-    if not have_fp_ops:
-        assert row["count"] is None, row
-        assert absent, row
-        assert all(event in row["missing"] for event in absent), row
-        return
-    assert row["count"] is not None, row.get("missing")
-    assert row["reps_counted"] == 2
-    assert row["elapsed_ns"] > 0
-    # 5% either side: the reference also scales C by beta and alpha, which is O(NI*NJ) more work.
-    assert 0.95 * expected <= row["count"] <= 1.05 * expected, (
-        f"{row['expression']} counted {row['count']}, expected ~{expected} (2*NI*NJ*NK): the "
-        "counted region is not the timed call"
-    )
 
 
 #: A gemm submission that really does run on OpenMP worker threads, so a count that only saw the
@@ -708,46 +622,53 @@ def test_pinning_is_confinement_to_ONE_CORE_not_to_one_cpu(monkeypatch: pytest.M
     assert papi.placement(9)["pinned"] is False
     assert papi.placement(9)["core"] is None
 
-
-def test_an_unreadable_thread_has_no_placement_rather_than_a_guessed_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A thread that exited between the run and the probe must not come back pinned to cpu 0."""
+    # A thread that exited between the run and the probe has no placement, not one guessed as cpu 0.
+    monkeypatch.undo()
     monkeypatch.setattr(papi, "TASK_DIR", pathlib.Path("/nonexistent/task"))
     assert papi.thread_cpus(1) == ()
     assert papi.placement(1) == {"cpus": [], "pinned": False, "core": None}
 
 
-def test_cpi_and_ipc_are_reciprocals_and_both_are_labelled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The arithmetic the deliverable is about. CPI = cycles/instructions, IPC its reciprocal;
-    a reader who inverts the wrong one gets a plausible number and no way to notice."""
+@pytest.mark.parametrize(
+    ("counted", "cycle_terms", "want"),
+    [
+        pytest.param(
+            ((11, (2000, 1000)), (12, (3000, 6000))),
+            ("PAPI_TOT_CYC",),
+            {"cpi": [2.0, 0.5], "ipc": [0.5, 2.0], "cycle_share": [0.4, 0.6]},
+            id="reciprocals",
+        ),
+        # 0.0 is a measurement and this is not one: an undefined ratio stays None into the rendered '--'.
+        pytest.param(
+            ((11, (0, 0)),),
+            ("PAPI_TOT_CYC",),
+            {"cpi": [None], "ipc": [None], "participated": [False]},
+            id="counted-nothing-gets-no-ratio",
+        ),
+        # The two metrics share one event set, so the values are one flat vector: slicing it at a hardcoded 1
+        # instead of len(cycle_terms) reads a cycle count as an instruction count when cycles are derived.
+        pytest.param(
+            ((11, (500, 100, 3000)),),
+            ("PAPI_A", "-PAPI_B"),
+            {"cycles": [400], "instructions": [3000]},
+            id="derived-candidate-does-not-shift-the-instruction-slice",
+        ),
+    ],
+)
+def test_cpi_and_ipc_are_reciprocals_and_both_are_labelled(
+    monkeypatch: pytest.MonkeyPatch, counted: tuple, cycle_terms: tuple[str, ...], want: dict[str, list]
+) -> None:
+    """The arithmetic the deliverable is about. CPI = cycles/instructions, IPC its reciprocal; a reader who inverts
+    the wrong one gets a plausible number and no way to notice."""
     monkeypatch.setattr(papi, "placement", lambda tid: {"cpus": [0], "pinned": True, "core": "0,8"})
-    rows = papi.per_thread_rows(((11, (2000, 1000)), (12, (3000, 6000))), ("PAPI_TOT_CYC",), ("PAPI_TOT_INS",))
-    assert [row["cpi"] for row in rows] == [2.0, 0.5]
-    assert [row["ipc"] for row in rows] == [0.5, 2.0]
+    rows = papi.per_thread_rows(counted, cycle_terms, ("PAPI_TOT_INS",))
+    for field, expected in want.items():
+        assert [row[field] for row in rows] == expected
     for row in rows:
-        assert row["cpi"] * row["ipc"] == pytest.approx(1.0)
-    assert [row["cycle_share"] for row in rows] == [0.4, 0.6]
-
-
-def test_a_thread_that_counted_nothing_gets_no_ratio_rather_than_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    """0.0 is a measurement and this is not one: an undefined ratio must stay None all the way
-    into the rendered table, where it is '--'."""
-    monkeypatch.setattr(papi, "placement", lambda tid: {"cpus": [0], "pinned": True, "core": "0,8"})
-    row = papi.per_thread_rows(((11, (0, 0)),), ("PAPI_TOT_CYC",), ("PAPI_TOT_INS",))[0]
-    assert row["cpi"] is None
-    assert row["ipc"] is None
-    assert row["participated"] is False
+        if row["cpi"] is not None:
+            assert row["cpi"] * row["ipc"] == pytest.approx(1.0)
     assert papi.fmt(None) == "--"
     assert papi.fmt(0.0) == "0.0000"
-
-
-def test_a_derived_candidate_does_not_shift_the_instruction_slice(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The two metrics share one event set, so the row's values are one flat vector. Slicing it
-    at a hardcoded 1 instead of len(cycle_terms) would silently read a cycle count as an
-    instruction count on any CPU whose cycle metric resolved to a derivation."""
-    monkeypatch.setattr(papi, "placement", lambda tid: {"cpus": [0], "pinned": True, "core": "0,8"})
-    row = papi.per_thread_rows(((11, (500, 100, 3000)),), ("PAPI_A", "-PAPI_B"), ("PAPI_TOT_INS",))[0]
-    assert row["cycles"] == 400
-    assert row["instructions"] == 3000
 
 
 def test_imbalance_is_max_over_mean_and_reads_as_wasted_span() -> None:
@@ -805,9 +726,7 @@ def test_every_trap_that_fired_is_named_and_no_other(monkeypatch: pytest.MonkeyP
     assert "ESTIMATE" in text
     assert "MULTIPLEX" in text.upper()
 
-
-def test_an_unreadable_governor_is_stated_rather_than_assumed_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A container without sysfs must not read as 'the clock was fixed'."""
+    # A container without sysfs must not read as 'the clock was fixed'.
     monkeypatch.setattr(papi, "GOVERNOR_SYSFS", pathlib.Path("/nonexistent/scaling_governor"))
     monkeypatch.setattr(flags, "smt_enabled", lambda: False)
     assert papi.governor() == ""

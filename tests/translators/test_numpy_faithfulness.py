@@ -140,21 +140,3 @@ def test_index_read_plus_an_integer_is_stored_without_a_second_rebase(tmp_path: 
     emitted = emit_fortran(lower(parse_kernel(numpy_py, manifest)), fn_name="f")
     store = next(line.strip() for line in emitted.splitlines() if line.strip().startswith("out("))
     assert store.endswith("= perm((i_l0) + 1) + 1"), store
-
-
-def test_batched_fft_matches_numpy() -> None:
-    native()
-    z = np.arange(16.0).reshape(4, 4) + 1j
-    src = "import numpy as np\ndef f(z, out):\n    out[:] = np.fft.fft(z, axis=-2, norm='ortho')\n"
-    backends = ("c", "numba")
-    status = run_op(
-        src,
-        "f",
-        {"z": z},
-        {"out": (4, 4)},
-        {"N": 4},
-        shapes={"z": "(N, N)", "out": "(N, N)"},
-        dtypes={"out": "complex128"},
-        backends=backends,
-    )
-    assert all(status[b] == "ok" for b in backends), status

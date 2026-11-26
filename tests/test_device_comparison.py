@@ -128,22 +128,21 @@ def test_the_stub_device_grades_every_adversarial_case_as_the_host(monkeypatch: 
     assert log == ["device 3", "pool freed"] * len(CASES)
 
 
-def test_a_full_device_falls_back_to_the_host_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An upload the GPU has no memory for is graded on the host, with the same verdict."""
-    log: list[str] = []
-    host = verdicts(False)
-    install_stub(monkeypatch, log, oom=True)
-    assert verdicts(True) == host
-
-
-def test_a_wedged_device_runtime_falls_back_to_the_host_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A runtime failing every device call, the pool release included, is graded on the host; the log says so once."""
+@pytest.mark.parametrize(
+    ("failure", "noted_once"), [({"oom": True}, False), ({"wedged": True}, True)], ids=["full_device", "wedged_runtime"]
+)
+def test_a_full_device_falls_back_to_the_host_verdict(
+    monkeypatch: pytest.MonkeyPatch, failure: dict[str, bool], noted_once: bool
+) -> None:
+    """An upload the GPU has no memory for is graded on the host, with the same verdict. A runtime failing every
+    device call, the pool release included, is graded on the host too; the log says so once."""
     grading.note_host_compare.cache_clear()
     host = verdicts(False)
-    install_stub(monkeypatch, [], wedged=True)
+    install_stub(monkeypatch, [], **failure)
     with contextlib.redirect_stderr(io.StringIO()) as log:
         assert verdicts(True) == host
-    assert log.getvalue().count(HOST_COMPARE_NOTE) == 1
+    if noted_once:
+        assert log.getvalue().count(HOST_COMPARE_NOTE) == 1
 
 
 def test_an_ungradeable_tolerance_stays_the_grade(monkeypatch: pytest.MonkeyPatch) -> None:

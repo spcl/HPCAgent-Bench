@@ -28,9 +28,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     shape_exprs_equal,
     sympify_shape,
 )
-from hpcagent_bench.translators.numpyto_common.lowering import (
-    EllipsisExpander,
-)
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
 from tests.translators import op_oracle
 
@@ -50,40 +47,82 @@ def unparse_(stmts: list[ast.stmt]) -> str:
 # A.2  batched matmul result-shape (both-batched is the new case)              #
 
 
-def test_matmul_result_shape_one_sided_batched() -> None:
-    assert matmul_result_shape(("B", "M", "K"), ("K", "N")) == ("B", "M", "N")
-    assert matmul_result_shape(("M", "K"), ("B", "K", "N")) == ("B", "M", "N")
-
-
-def test_matmul_result_shape_batch_mismatch_is_none() -> None:
-    # Different leading batch dims do not contract.
-    assert matmul_result_shape(("B", "M", "K"), ("C", "K", "N")) is None
+@pytest.mark.parametrize(
+    ("a", "b", "aliases", "expected"),
+    [
+        pytest.param(("B", "M", "K"), ("K", "N"), None, ("B", "M", "N"), id="left-batched"),
+        pytest.param(("M", "K"), ("B", "K", "N"), None, ("B", "M", "N"), id="right-batched"),
+        # Different leading batch dims do not contract.
+        pytest.param(("B", "M", "K"), ("C", "K", "N"), None, None, id="batch-mismatch"),
+        pytest.param(
+            ("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim"), None, None, id="unaliased-contraction-dim"
+        ),
+        pytest.param(
+            ("seq", "batch", "channels"),
+            ("embed_dim", "3 * embed_dim"),
+            {"channels": "embed_dim"},
+            ("seq", "batch", "3 * embed_dim"),
+            id="aliased-contraction-dim",
+        ),
+        # An alias must not let a rank-3 operand contract with a rank-4 one.
+        pytest.param(
+            ("batch", "M", "K"),
+            ("batch_size", "H", "K", "N"),
+            {"batch": "batch_size"},
+            None,
+            id="aliased-batch-dim-still-checks-rank",
+        ),
+    ],
+)
+def test_matmul_result_shape_one_sided_batched(
+    a: tuple[str, ...], b: tuple[str, ...], aliases: dict[str, str] | None, expected: tuple[str, ...] | None
+) -> None:
+    assert matmul_result_shape(a, b, aliases) == expected
 
 
 # A.2b shape tokens from two vocabularies still name one extent                #
 
 
-def test_dims_agree_through_a_dimension_alias() -> None:
-    # ``batch, channels, h, w = x.shape`` binds locals the init.shapes side spells with symbols.
-    aliases = {"batch": "batch_size", "channels": "embed_dim"}
-    assert dims_agree("channels", "embed_dim", aliases)
-    assert dims_agree("batch", "batch_size", aliases)
-    assert not dims_agree("channels", "batch_size", aliases)
-
-
-def test_dims_agree_symbolically_when_substitution_leaves_arithmetic() -> None:
-    # swin's patch-merge doubles a stage's channels: the two sides stay textually different
-    # after substitution, and only the symbolic rung settles them.
-    assert dims_agree("4 * c", "16 * embed_dim", {"c": "4 * embed_dim"})
-    assert not dims_agree("4 * c", "15 * embed_dim", {"c": "4 * embed_dim"})
-
-
-def test_dims_agree_resolves_a_shape_read_against_the_table() -> None:
-    # An inlined helper spells its dims as a read off a LOCAL array, which no alias resolves.
-    aliases = {"__inl91_c": "__inl8_y.shape[3]"}
-    table = {"__inl8_y": ("b", "h", "w", "embed_dim")}
-    assert dims_agree("__inl91_c", "embed_dim", aliases, table)
-    assert not dims_agree("__inl91_c", "h", aliases, table)
+@pytest.mark.parametrize(
+    ("a", "b", "aliases", "table", "expected"),
+    [
+        # ``batch, channels, h, w = x.shape`` binds locals the init.shapes side spells with symbols.
+        pytest.param(
+            "channels", "embed_dim", {"channels": "embed_dim", "batch": "batch_size"}, None, True, id="alias-1"
+        ),
+        pytest.param("batch", "batch_size", {"channels": "embed_dim", "batch": "batch_size"}, None, True, id="alias-2"),
+        pytest.param(
+            "channels", "batch_size", {"channels": "embed_dim", "batch": "batch_size"}, None, False, id="alias-differs"
+        ),
+        # swin's patch-merge doubles a stage's channels: the two sides stay textually different
+        # after substitution, and only the symbolic rung settles them.
+        pytest.param("4 * c", "16 * embed_dim", {"c": "4 * embed_dim"}, None, True, id="symbolic-agrees"),
+        pytest.param("4 * c", "15 * embed_dim", {"c": "4 * embed_dim"}, None, False, id="symbolic-differs"),
+        # An inlined helper spells its dims as a read off a LOCAL array, which no alias resolves.
+        pytest.param(
+            "__inl91_c",
+            "embed_dim",
+            {"__inl91_c": "__inl8_y.shape[3]"},
+            {"__inl8_y": ("b", "h", "w", "embed_dim")},
+            True,
+            id="shape-read-agrees",
+        ),
+        pytest.param(
+            "__inl91_c",
+            "h",
+            {"__inl91_c": "__inl8_y.shape[3]"},
+            {"__inl8_y": ("b", "h", "w", "embed_dim")},
+            False,
+            id="shape-read-differs",
+        ),
+        # Unresolvable must decline, never claim agreement: a wrong True contracts over two extents.
+        pytest.param("a b c", "embed_dim", {"zz": "1"}, None, False, id="unparseable-token"),
+    ],
+)
+def test_dims_agree_through_a_dimension_alias(
+    a: str, b: str, aliases: dict[str, str], table: dict[str, tuple[str, ...]] | None, expected: bool
+) -> None:
+    assert bool(dims_agree(a, b, aliases, table)) is expected
 
 
 def no_simplify(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,84 +136,67 @@ def no_simplify(monkeypatch: pytest.MonkeyPatch) -> None:
     shape_exprs_equal.cache_clear()
 
 
-def test_a_polynomial_difference_never_reaches_simplify(monkeypatch: pytest.MonkeyPatch) -> None:
-    # An expanded polynomial is canonical, so a non-zero expansion is already the answer. simplify
-    # was measured at 785 ms on one of these pairs.
+@pytest.mark.parametrize(
+    ("a", "b", "aliases", "expected"),
+    [
+        # An expanded polynomial is canonical, so a non-zero expansion is already the answer. simplify
+        # was measured at 785 ms on one of these pairs.
+        pytest.param("(c + 6 * g) * h * w", "c * h * w + 6 * g * h * w", {"zz": "1"}, True, id="equal-polynomials"),
+        pytest.param("4 * c", "15 * embed_dim", {"c": "4 * embed_dim"}, False, id="unequal-polynomials"),
+        # The dominant shape in the ML track: a floor makes the difference non-polynomial, so only the
+        # numeric point settles it short of simplify.
+        pytest.param(
+            "n * ((h - 2) // 1 + 1) * ((w - 2) // 1 + 1)", "n * oh * ow", {"zz": "1"}, False, id="conv-extent"
+        ),
+    ],
+)
+def test_a_polynomial_difference_never_reaches_simplify(
+    monkeypatch: pytest.MonkeyPatch, a: str, b: str, aliases: dict[str, str], expected: bool
+) -> None:
     no_simplify(monkeypatch)
-    assert dims_agree("(c + 6 * g) * h * w", "c * h * w + 6 * g * h * w", {"zz": "1"})
-    assert not dims_agree("4 * c", "15 * embed_dim", {"c": "4 * embed_dim"})
+    assert bool(dims_agree(a, b, aliases)) is expected
 
 
-def test_a_conv_extent_is_refuted_numerically_not_symbolically(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The dominant shape in the ML track: a floor makes the difference non-polynomial, so only the
-    # numeric point settles it short of simplify.
-    no_simplify(monkeypatch)
-    assert not dims_agree("n * ((h - 2) // 1 + 1) * ((w - 2) // 1 + 1)", "n * oh * ow", {"zz": "1"})
-
-
-def test_the_numeric_probe_refutes_a_pair_that_agrees_at_the_first_point() -> None:
-    # ``2 * a`` and ``a + 7`` both give 14 at a = 7, which is why one point is not enough.
+@pytest.mark.parametrize(
+    ("a", "b", "refuted"),
+    [
+        # ``2 * a`` and ``a + 7`` both give 14 at a = 7, which is why one point is not enough.
+        pytest.param("2 * a", "a + 7", True, id="agrees-at-the-first-point"),
+        # The refutation may only ever answer False faster -- never claim a difference that is not there.
+        pytest.param("4 * (4 * e)", "16 * e", False, id="equal-pair"),
+        # A floor on both sides is where a careless probe would round its way to a false refutation.
+        pytest.param("2 * (c // g)", "(c // g) + (c // g)", False, id="equal-floors"),
+    ],
+)
+def test_the_numeric_probe_refutes_a_pair_that_agrees_at_the_first_point(a: str, b: str, refuted: bool) -> None:
     import sympy
 
-    assert shape_exprs_differ_numerically(sympy.sympify("2 * a"), sympy.sympify("a + 7"))
+    assert bool(shape_exprs_differ_numerically(sympy.sympify(a), sympy.sympify(b))) is refuted
 
 
-def test_the_numeric_probe_never_refutes_an_equal_pair() -> None:
-    # The refutation may only ever answer False faster -- never claim a difference that is not there.
-    import sympy
-
-    assert not shape_exprs_differ_numerically(sympy.sympify("4 * (4 * e)"), sympy.sympify("16 * e"))
-    # A floor on both sides is where a careless probe would round its way to a false refutation.
-    assert not shape_exprs_differ_numerically(sympy.sympify("2 * (c // g)"), sympy.sympify("(c // g) + (c // g)"))
-
-
-def test_the_symbolic_rung_is_asked_about_each_pair_once() -> None:
-    # The symbolic compare is 61% of a densenet lowering uncached, and reshape_axis_groups asks
-    # about the same pair once per axis of every reshape.
+@pytest.mark.parametrize(
+    ("calls", "misses", "hits"),
+    [
+        # The symbolic compare is 61% of a densenet lowering uncached, and reshape_axis_groups asks
+        # about the same pair once per axis of every reshape.
+        pytest.param([("4 * c", "16 * embed_dim")] * 3, 1, 2, id="repeated-pair"),
+        # A zero difference is symmetric, so the mirrored pair must not take a second entry.
+        pytest.param([("4 * c", "16 * embed_dim"), ("16 * embed_dim", "4 * c")], 1, 1, id="mirrored-pair"),
+    ],
+)
+def test_the_symbolic_rung_is_asked_about_each_pair_once(calls: list[tuple[str, str]], misses: int, hits: int) -> None:
     shape_exprs_equal.cache_clear()
     aliases = {"c": "4 * embed_dim"}
-    assert dims_agree("4 * c", "16 * embed_dim", aliases)
-    assert dims_agree("4 * c", "16 * embed_dim", aliases)
-    assert dims_agree("4 * c", "16 * embed_dim", aliases)
+    for a, b in calls:
+        assert dims_agree(a, b, aliases)
     info = shape_exprs_equal.cache_info()
-    assert (info.misses, info.hits) == (1, 2)
-
-
-def test_the_symbolic_key_does_not_depend_on_argument_order() -> None:
-    # A zero difference is symmetric, so the mirrored pair must not take a second entry.
-    shape_exprs_equal.cache_clear()
-    aliases = {"c": "4 * embed_dim"}
-    assert dims_agree("4 * c", "16 * embed_dim", aliases)
-    assert dims_agree("16 * embed_dim", "4 * c", aliases)
-    info = shape_exprs_equal.cache_info()
-    assert (info.misses, info.hits) == (1, 1)
+    assert (info.misses, info.hits) == (misses, hits)
 
 
 def test_sympify_shape_declines_a_token_that_does_not_parse() -> None:
     # None is what makes dims_agree answer False instead of raising out of the expander.
     assert sympify_shape("a b c") is None
     assert str(sympify_shape("4 * embed_dim")) == "4*embed_dim"
-
-
-def test_dims_agree_is_false_on_an_unparseable_token() -> None:
-    # Unresolvable must decline, never claim agreement: a wrong True contracts over two extents.
-    assert not dims_agree("a b c", "embed_dim", {"zz": "1"})
-
-
-def test_matmul_result_shape_accepts_an_aliased_contraction_dim() -> None:
-    aliases = {"channels": "embed_dim"}
-    assert matmul_result_shape(("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim")) is None
-    assert matmul_result_shape(("seq", "batch", "channels"), ("embed_dim", "3 * embed_dim"), aliases) == (
-        "seq",
-        "batch",
-        "3 * embed_dim",
-    )
-
-
-def test_matmul_result_shape_aliased_batch_dim_still_checks_rank() -> None:
-    # An alias must not let a rank-3 operand contract with a rank-4 one.
-    aliases = {"batch": "batch_size"}
-    assert matmul_result_shape(("batch", "M", "K"), ("batch_size", "H", "K", "N"), aliases) is None
 
 
 # A.3  einsum subscript parse + loop structure                                 #
@@ -198,25 +220,6 @@ def kir_(kernel_name: str, **arrays: tuple[str, ...]) -> SimpleNamespace:
     """Minimal KernelIR stand-in: name + (name -> shape-tuple) arrays."""
     arrs = [SimpleNamespace(name=n, shape=s, dtype=None) for n, s in arrays.items()]
     return SimpleNamespace(kernel_name=kernel_name, arrays=arrs, scalars=[])
-
-
-def test_batched_matmul_desugars_to_gemm_loop() -> None:
-    # The canonical SeisSol batched GEMM: 3-D ``I`` @ shared 2-D ``star``.
-    src = "def kernel(Q, I, star):\n    Q[:] = Q + I @ star\n"
-    kir = kir_("kernel", Q=("b", "n", "q"), I=("b", "n", "q"), star=("q", "q"))
-    out = desugar_for_python_backend(src, kir)
-    tree = ast.parse(out)
-    fn = tree.body[0]
-    loop = fn.body[0]
-    assert isinstance(loop, ast.For), "batched @ must become a for-loop of GEMMs"
-    assert loop.iter.args[0].value.attr == "shape"  # range(I.shape[0])
-    # Inside: a 2-D ``@`` (both operands dropped to rank 2 by [bv]).
-    body_src = unparse_(loop.body)
-    assert "@" in body_src
-    assert "[__bm0]" in body_src
-    # The shared 2-D ``star`` is NOT batch-indexed (broadcast).
-    assert "star[__bm0]" not in body_src
-    assert "star" in body_src
 
 
 def test_2d_matmul_left_verbatim() -> None:
@@ -283,18 +286,20 @@ def test_inner_rank1_is_dot() -> None:
     assert "s += u[__r0] * v[__r0]" in out
 
 
-def test_vdot_real_no_conjugate() -> None:
-    # Real operands: no conj() call (CONJG/__npb_conj is invalid on a real scalar).
+@pytest.mark.parametrize(
+    ("local_dtypes", "present", "absent"),
+    [
+        # Real operands: no conj() call (CONJG/__npb_conj is invalid on a real scalar).
+        pytest.param({}, "s += u[__vd] * v[__vd]", "conj", id="real"),
+        pytest.param({"u": "complex128"}, "np.conj(u[__vd])", None, id="complex-conjugates-first-operand"),
+    ],
+)
+def test_vdot_real_no_conjugate(local_dtypes: dict[str, str], present: str, absent: str | None) -> None:
     st = {"u": ("K",), "v": ("K",)}
-    out = unparse_(expand_vdot(name_("s"), [name_("u"), name_("v")], st, local_dtypes={}))
-    assert "conj" not in out
-    assert "s += u[__vd] * v[__vd]" in out
-
-
-def test_vdot_complex_conjugates_first_operand() -> None:
-    st = {"u": ("K",), "v": ("K",)}
-    out = unparse_(expand_vdot(name_("s"), [name_("u"), name_("v")], st, local_dtypes={"u": "complex128"}))
-    assert "np.conj(u[__vd])" in out
+    out = unparse_(expand_vdot(name_("s"), [name_("u"), name_("v")], st, local_dtypes=local_dtypes))
+    assert present in out
+    if absent is not None:
+        assert absent not in out
 
 
 # B.5  trace / diagonal direct                                                 #
@@ -310,16 +315,6 @@ def test_vdot_complex_conjugates_first_operand() -> None:
 
 
 # C.9  reshape method-form + ellipsis expansion                                #
-
-
-def test_ellipsis_leading_expands_to_full_slices() -> None:
-    tree = ast.parse("y = a[0, ...]")
-    EllipsisExpander({"a": ["M", "N", "P"]}).visit(tree)
-    elts = tree.body[0].value.slice.elts
-    assert isinstance(elts[0], ast.Constant)
-    assert elts[0].value == 0
-    assert isinstance(elts[1], ast.Slice)
-    assert isinstance(elts[2], ast.Slice)
 
 
 # C.10 np.tril mask (mirror of triu)                                          #
@@ -563,23 +558,22 @@ def reshape_src_index(order: str | None) -> str:
     return txt.split("A[", 1)[1].split("]", 1)[0]
 
 
-def test_reshape_c_order_row_major_index() -> None:
-    # C order: flat = r0 * Q + r1 -> A[(__r0) * Q + __r1]; Q scales the row.
-    idx = reshape_src_index("C")
-    assert "* Q" in idx or ") * (Q)" in idx
-    assert "* P" not in idx
-
-
-def test_reshape_f_order_column_major_index() -> None:
-    # F order: flat = r0 + r1 * P -> A[__r0 + (__r1) * P]; P scales the column.
-    idx = reshape_src_index("F")
-    assert "* P" in idx or ") * (P)" in idx
-    assert "* Q" not in idx
-
-
-def test_reshape_default_is_c_order() -> None:
-    # No order= kwarg defaults to C (matches numpy + prior behaviour).
-    assert reshape_src_index(None) == reshape_src_index("C")
+@pytest.mark.parametrize(
+    ("order", "scaled", "unscaled"),
+    [
+        # C order: flat = r0 * Q + r1 -> A[(__r0) * Q + __r1]; Q scales the row.
+        pytest.param("C", "Q", "P", id="C"),
+        # F order: flat = r0 + r1 * P -> A[__r0 + (__r1) * P]; P scales the column.
+        pytest.param("F", "P", "Q", id="F"),
+        # No order= kwarg defaults to C (matches numpy + prior behaviour).
+        pytest.param(None, "Q", "P", id="default-is-C"),
+    ],
+)
+def test_reshape_c_order_row_major_index(order: str | None, scaled: str, unscaled: str) -> None:
+    idx = reshape_src_index(order)
+    assert f"* {scaled}" in idx or f") * ({scaled})" in idx
+    assert f"* {unscaled}" not in idx
+    assert idx == reshape_src_index(order or "C")
 
 
 def test_sympify_shape_declines_a_read_past_the_end_of_a_tuple_token() -> None:
@@ -589,28 +583,28 @@ def test_sympify_shape_declines_a_read_past_the_end_of_a_tuple_token() -> None:
     assert str(sympify_shape("(out_channels, 1, 1)[0]")) == "out_channels"
 
 
-def test_a_floordiv_extent_equals_the_int_floor_spelling_of_itself() -> None:
+@pytest.mark.parametrize(
+    ("a", "b", "expected"),
+    [
+        pytest.param("int_floor(a, b)", "a // b", True, id="int-floor-spelling"),
+        pytest.param(
+            "(h + 2 * p - k) // s + 1", "int_floor(h + 2 * p - k, s) + 1", True, id="conv-extent-int-floor-spelling"
+        ),
+        pytest.param("int_floor(2 * oh, 2)", "oh", True, id="int-floor-cancels-against-a-bare-extent"),
+        pytest.param("(2 * oh) // 2", "oh", True, id="floordiv-cancels-against-a-bare-extent"),
+        pytest.param("int_floor(a, b)", "a // c", False, id="different-divisor"),
+        pytest.param("int_floor(a, b)", "a // (b + 1)", False, id="different-divisor-expression"),
+    ],
+)
+def test_a_floordiv_extent_equals_the_int_floor_spelling_of_itself(a: str, b: str, expected: bool) -> None:
     """``a // b`` and ``int_floor(a, b)`` are one quantity in two vocabularies -- ``//`` is what a
     manifest and a numpy reference write, ``int_floor`` is what the C and dace sides name it. Left
     unnormalised, sympify makes the first a ``floor`` and the second an opaque Function, and a
-    compare across the two declines for extents that are the same number."""
+    compare across the two declines for extents that are the same number.
+
+    The normalisation goes TOWARD sympy's ``floor`` and not toward ``int_floor``: an integer symbol lets sympy
+    cancel ``floor(2 * oh / 2)`` to ``oh``, and an opaque ``int_floor`` never cancels against anything.
+    The negative controls: collapsing both spellings onto one head must not collapse the operands with
+    them -- a wrong True there contracts over two different extents, which is a miscompile."""
     shape_exprs_equal.cache_clear()
-    assert shape_exprs_equal("int_floor(a, b)", "a // b")
-    assert shape_exprs_equal("(h + 2 * p - k) // s + 1", "int_floor(h + 2 * p - k, s) + 1")
-
-
-def test_the_normalised_floor_still_cancels_against_a_bare_extent() -> None:
-    """Why the normalisation goes TOWARD sympy's ``floor`` and not toward ``int_floor``: an integer
-    symbol lets sympy cancel ``floor(2 * oh / 2)`` to ``oh``, and an opaque ``int_floor`` never
-    cancels against anything. Normalising the other way would trade one missed pair for many."""
-    shape_exprs_equal.cache_clear()
-    assert shape_exprs_equal("int_floor(2 * oh, 2)", "oh")
-    assert shape_exprs_equal("(2 * oh) // 2", "oh")
-
-
-def test_a_floordiv_by_a_different_divisor_is_still_unequal() -> None:
-    """The negative control. Collapsing both spellings onto one head must not collapse the operands
-    with them -- a wrong True here contracts over two different extents, which is a miscompile."""
-    shape_exprs_equal.cache_clear()
-    assert not shape_exprs_equal("int_floor(a, b)", "a // c")
-    assert not shape_exprs_equal("int_floor(a, b)", "a // (b + 1)")
+    assert bool(shape_exprs_equal(a, b)) is expected

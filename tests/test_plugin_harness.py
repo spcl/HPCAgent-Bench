@@ -178,7 +178,15 @@ def packets_cli(user: pathlib.Path, *args: str) -> subprocess.CompletedProcess[s
 
 def test_a_packet_that_names_a_harness_runs_on_it_and_is_refused_on_another(tmp_path: pathlib.Path) -> None:
     """Submission: no harness named takes the packet's; the same harness passes; another is refused with exit 2."""
-    write_plugin(tmp_path / "user", '[packets.on_echo]\nname = "On Echo"\nharness = "echoharness"\n')
+    folder = write_plugin(
+        tmp_path / "user",
+        '[packets.on_echo]\nname = "On Echo"\nharness = "echoharness"\n'
+        '[packets.with_helper]\nname = "Helper"\nagents = ["helper"]\n',
+    )
+    (folder / "agents").mkdir()
+    (folder / "agents" / "helper.md").write_text(
+        "---\nname: helper\ndescription: helps\n---\nHelp.\n", encoding="utf-8"
+    )
     line = f"{harnesses.PACKET_HARNESS_ENV}=echoharness"
     for named in ("", "echoharness"):
         done = packets_cli(tmp_path / "user", "--packet", "on_echo", "--harness", named)
@@ -187,49 +195,46 @@ def test_a_packet_that_names_a_harness_runs_on_it_and_is_refused_on_another(tmp_
     refused = packets_cli(tmp_path / "user", "--packet", "on_echo", "--harness", "miniswe")
     assert refused.returncode == 2
     assert "runs on harness 'echoharness', and the setup names 'miniswe'" in refused.stderr
-
-
-def test_a_packet_with_subagents_is_refused_at_submission_on_a_harness_that_cannot_run_them(
-    tmp_path: pathlib.Path,
-) -> None:
-    """The refusal the driver made at agent start is made at submission too, by the same check."""
-    folder = write_plugin(tmp_path / "user", '[packets.with_helper]\nname = "Helper"\nagents = ["helper"]\n')
-    (folder / "agents").mkdir()
-    (folder / "agents" / "helper.md").write_text(
-        "---\nname: helper\ndescription: helps\n---\nHelp.\n", encoding="utf-8"
-    )
+    # The refusal the driver made at agent start is made at submission too, by the same check.
     assert packets_cli(tmp_path / "user", "--packet", "with_helper", "--harness", "anthropic").returncode == 0
     refused = packets_cli(tmp_path / "user", "--packet", "with_helper", "--harness", "miniswe")
     assert refused.returncode == 2
     assert "offers subagents, which harness 'miniswe' cannot run" in refused.stderr
 
 
-def test_the_check_names_a_packet_on_an_unknown_harness_or_one_it_cannot_run_on(tmp_path: pathlib.Path) -> None:
-    write_plugin(
-        tmp_path / "user",
-        '[packets.on_ghost]\nname = "Ghost"\nharness = "ghost"\n'
-        '[packets.narrow_cli]\nname = "Narrow"\nharness = "miniswe"\nenv = { HPCAGENT_BENCH_NATIVE_TOOLS = "Read" }\n'
-        '[packets.on_echo]\nname = "On Echo"\nharness = "echoharness"\n',
-    )
+@pytest.mark.parametrize(
+    ("packets", "runner", "named", "unnamed"),
+    [
+        pytest.param(
+            '[packets.on_ghost]\nname = "Ghost"\nharness = "ghost"\n'
+            '[packets.narrow_cli]\nname = "Narrow"\nharness = "miniswe"\n'
+            'env = { HPCAGENT_BENCH_NATIVE_TOOLS = "Read" }\n'
+            '[packets.on_echo]\nname = "On Echo"\nharness = "echoharness"\n',
+            "run_echo.py",
+            [
+                "packet 'on_ghost': no harness 'ghost'",
+                "packet 'narrow_cli': the packet narrows the built-in tools",
+            ],
+            ["on_echo"],
+            id="packets",
+        ),
+        pytest.param("", "missing.py", ["harness 'echoharness': no runner missing.py"], [], id="runner"),
+    ],
+)
+def test_the_check_names_a_packet_on_an_unknown_harness_or_one_it_cannot_run_on(
+    tmp_path: pathlib.Path, packets: str, runner: str, named: list[str], unnamed: list[str]
+) -> None:
+    write_plugin(tmp_path / "user", packets, runner=runner)
     env = {**os.environ, plugins.USER_PLUGIN_DIRS_ENV: str(tmp_path / "user")}
     env.pop(plugins.PLUGIN_DIRS_ENV, None)
     argv = [sys.executable, "-m", "hpcagent_bench.plugins", "check"]
     done = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=300, check=False)
     assert done.returncode == 1, done.stdout + done.stderr
     lines = [line for line in done.stdout.splitlines() if line.startswith("plugin 'echoplug': ")]
-    assert any("packet 'on_ghost': no harness 'ghost'" in line for line in lines), done.stdout
-    assert any("packet 'narrow_cli': the packet narrows the built-in tools" in line for line in lines), done.stdout
-    assert not any("on_echo" in line for line in lines), done.stdout
-
-
-def test_the_check_names_a_harness_whose_runner_the_plugin_does_not_ship(tmp_path: pathlib.Path) -> None:
-    write_plugin(tmp_path / "user", runner="missing.py")
-    env = {**os.environ, plugins.USER_PLUGIN_DIRS_ENV: str(tmp_path / "user")}
-    env.pop(plugins.PLUGIN_DIRS_ENV, None)
-    argv = [sys.executable, "-m", "hpcagent_bench.plugins", "check"]
-    done = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=300, check=False)
-    assert done.returncode == 1
-    assert "plugin 'echoplug': harness 'echoharness': no runner missing.py" in done.stdout
+    for text in named:
+        assert any(text in line for line in lines), done.stdout
+    for text in unnamed:
+        assert not any(text in line for line in lines), done.stdout
 
 
 def test_optimas_is_the_optimas_plugins_harness_with_the_identity_layer_and_wire_format_it_had() -> None:

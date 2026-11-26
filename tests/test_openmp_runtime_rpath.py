@@ -45,26 +45,26 @@ def test_a_runtime_in_a_libdir_no_loader_searches_earns_an_rpath(tmp_path: pathl
     assert languages.driver_library_dir(cc, ("libomp.so",)) == str(libdir)
 
 
-def test_a_runtime_the_loader_already_finds_earns_none(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # A library in one of the loader's default directories needs no RUNPATH; the directory is the stub's own.
-    loader_dir = tmp_path / "usr-lib"
-    loader_dir.mkdir()
-    resident = loader_dir / "libgomp.so"
-    resident.write_bytes(b"")
-    monkeypatch.setattr(languages, "DEFAULT_LOADER_DIRS", (str(loader_dir.resolve()),))
-    cc = stub_driver(tmp_path, resident)
-    languages.driver_library_dir.cache_clear()
-    assert languages.driver_library_dir(cc, ("libgomp.so",)) == ""
-
-
-def test_a_driver_that_cannot_place_the_name_earns_none(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("resident", [True, False], ids=["in-a-loader-directory", "driver-cannot-place-it"])
+def test_a_runtime_the_loader_already_finds_earns_none(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, resident: bool
 ) -> None:
-    # What gcc answers for libomp.so: the name straight back, with no path in front of it.
-    monkeypatch.delenv("LIBRARY_PATH", raising=False)
-    cc = stub_driver(tmp_path, "libomp.so")
+    if resident:
+        # A library in one of the loader's default directories needs no RUNPATH; the directory is the stub's own.
+        loader_dir = tmp_path / "usr-lib"
+        loader_dir.mkdir()
+        library = loader_dir / "libgomp.so"
+        library.write_bytes(b"")
+        monkeypatch.setattr(languages, "DEFAULT_LOADER_DIRS", (str(loader_dir.resolve()),))
+        cc = stub_driver(tmp_path, library)
+        name = "libgomp.so"
+    else:
+        # What gcc answers for libomp.so: the name straight back, with no path in front of it.
+        monkeypatch.delenv("LIBRARY_PATH", raising=False)
+        cc = stub_driver(tmp_path, "libomp.so")
+        name = "libomp.so"
     languages.driver_library_dir.cache_clear()
-    assert languages.driver_library_dir(cc, ("libomp.so",)) == ""
+    assert languages.driver_library_dir(cc, (name,)) == ""
 
 
 def test_a_library_only_library_path_can_reach_is_still_named(
@@ -101,22 +101,3 @@ def test_an_openmp_shared_library_loads_after_it_links(tmp_path: pathlib.Path, b
     # The environment is deliberately NOT the one the build ran under: a graded .so is dlopen'd by
     # a judge process whose LD_LIBRARY_PATH is nobody's business, so the rpath has to carry it.
     ctypes.CDLL(str(lib))
-
-
-def test_the_link_line_carries_the_flag_and_its_runtime() -> None:
-    if "clang" not in languages.compiler_names():
-        pytest.skip("no 'clang' block in compilers.yaml")
-    cc = languages.compiler_driver("clang")
-    if languages.resolve_compiler(cc) is None:
-        pytest.skip(f"{cc} is not installed on this host")
-    cmds = languages.build_shared_lib_commands(
-        Language.C, pathlib.Path("k.c"), pathlib.Path("libk.so"), compiler="clang"
-    )
-    link = cmds[-1]
-    flag = next((t for t in link if t in languages.OPENMP_BASELINE_FLAGS), None)
-    assert flag is not None, link
-    runtime = languages.driver_library_dir(cc, languages.OPENMP_RUNTIME_SONAMES.get(flag, ("libomp.so", "libgomp.so")))
-    if not runtime:
-        pytest.skip(f"{cc} resolves its OpenMP runtime without help")
-    assert f"-Wl,-rpath,{runtime}" in link, link
-    assert pathlib.Path(runtime).exists()

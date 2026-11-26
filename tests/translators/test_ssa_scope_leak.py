@@ -68,21 +68,100 @@ REBIND_AT_LOOP_TOP = (
 
 
 @pytest.mark.parametrize(
-    "src",
+    ("mode", "src"),
     [
         # Whichever branch runs is a RUNTIME fact, so no static buffer choice is correct. Refusing is
         # the only sound answer -- silently binding to either one is the bug this pins.
-        REBIND_IN_UNTAKEN_BRANCH,
+        pytest.param("emit", REBIND_IN_UNTAKEN_BRANCH, id="rebinding_in_untaken_branch"),
         # The kill is what makes the loop case safe, so a body with NO kill before the read must still
         # be refused. Here ``x`` is bound before the loop and re-bound at a second extent inside it,
         # with the re-entry read at the top of the body reaching that second binding: which extent that
         # read sees depends on the iteration.
-        REBIND_AT_LOOP_TOP,
+        pytest.param("emit", REBIND_AT_LOOP_TOP, id="reentry_read_before_any_rebinding"),
+        # A guard consulting only the IMMEDIATELY enclosing block lets a rebinding one level deeper
+        # escape -- the same miscompile the guard exists for, just nested. Every enclosing loop's
+        # re-entry POINT is carried down and truncated per name at the mint site (the truncation
+        # depends on the name, so a pre-truncated prefix cannot be passed down).
+        pytest.param(
+            "lower",
+            """
+def k(a, out, n, m, iters):
+    e = np.zeros((n,))
+    for it in range(iters):
+        out[it] = e[0]
+        for j in range(m):
+            e = np.zeros((m,))
+            e[j] = 1.0
+""",
+            id="rebinding_nested_below_the_loop_body",
+        ),
+        # `X = np.zeros(n) + X[0]` kills X, but its RHS reads the previous binding FIRST. Truncating
+        # the prefix before the whole statement skipped that read.
+        pytest.param(
+            "lower",
+            """
+def k(a, out, n, m, T):
+    X = np.zeros((n,))
+    for t in range(T):
+        X = np.zeros((n,)) + X[0]
+        out[t] = X[0]
+        X = np.zeros((m,))
+        X[0] = 1.0
+""",
+            id="killing_statement_own_rhs_read",
+        ),
+        # `e += 1.0` reads and writes the SAME buffer, but its bare-Name target carries ctx=Store, so
+        # it was neither a kill (correctly) nor a read (wrongly) and liveness answered "dead".
+        pytest.param(
+            "lower",
+            """
+def k(a, out, n, m):
+    e = np.zeros((n,))
+    if n > 0:
+        e = np.zeros((m,))
+        e[0] = 2.0
+    e += 1.0
+""",
+            id="augmented_assignment_read",
+        ),
+        # `for e in range(k)` with a runtime k == 0 never binds e, so the previous binding survives --
+        # may-define, not must-define. Treating it as a kill dropped every read before it.
+        pytest.param(
+            "lower",
+            """
+def k(a, out, n, m, iters):
+    e = np.zeros((n,))
+    for it in range(iters):
+        for e in range(0):
+            pass
+        out[it] = e[0]
+        e = np.zeros((m,))
+        e[0] = 1.0
+""",
+            id="zero_trip_for_target_is_not_a_kill",
+        ),
+        # A While re-tests its condition after the body, so the test is live-after code too.
+        pytest.param(
+            "lower",
+            """
+def k(a, out, n, m):
+    x = np.zeros((n,))
+    c = 0
+    while x[0] < 1.0:
+        x = np.zeros((m,))
+        c = c + 1
+""",
+            id="while_test_runs_after_the_body",
+        ),
     ],
-    ids=["rebinding_in_untaken_branch", "reentry_read_before_any_rebinding"],
 )
-def test_conditional_shape_rebinding_is_refused_not_miscompiled(src: str) -> None:
-    # The oracle reports an emit-time refusal as a status rather than propagating it, so assert on that.
+def test_conditional_shape_rebinding_is_refused_not_miscompiled(mode: str, src: str) -> None:
+    """Every backend refuses (the oracle reports an emit-time refusal as a status, so assert on that) and so does
+    the SSA lowering of a rebinding whose read is ambiguous."""
+    if mode == "lower":
+        with pytest.raises(NotImplementedError, match="conditional control flow"):
+            lower_(src)
+        return
     for backend, status in run_(src).items():
         assert status.startswith("FAIL:emit:NotImplementedError"), f"{backend}: {status}"
         assert "conditional control flow" in status, f"{backend}: {status}"
@@ -198,78 +277,6 @@ SHAPES = {"a": ["n"], "out": ["n"]}
 
 def lower_(body: str) -> None:
     ssa_rename_reassigned(ast.parse("import numpy as np\n" + body), dict(SHAPES))
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        # A guard consulting only the IMMEDIATELY enclosing block lets a rebinding one level deeper
-        # escape -- the same miscompile the guard exists for, just nested. Every enclosing loop's
-        # re-entry POINT is carried down and truncated per name at the mint site (the truncation
-        # depends on the name, so a pre-truncated prefix cannot be passed down).
-        """
-def k(a, out, n, m, iters):
-    e = np.zeros((n,))
-    for it in range(iters):
-        out[it] = e[0]
-        for j in range(m):
-            e = np.zeros((m,))
-            e[j] = 1.0
-""",
-        # `X = np.zeros(n) + X[0]` kills X, but its RHS reads the previous binding FIRST. Truncating
-        # the prefix before the whole statement skipped that read.
-        """
-def k(a, out, n, m, T):
-    X = np.zeros((n,))
-    for t in range(T):
-        X = np.zeros((n,)) + X[0]
-        out[t] = X[0]
-        X = np.zeros((m,))
-        X[0] = 1.0
-""",
-        # `e += 1.0` reads and writes the SAME buffer, but its bare-Name target carries ctx=Store, so
-        # it was neither a kill (correctly) nor a read (wrongly) and liveness answered "dead".
-        """
-def k(a, out, n, m):
-    e = np.zeros((n,))
-    if n > 0:
-        e = np.zeros((m,))
-        e[0] = 2.0
-    e += 1.0
-""",
-        # `for e in range(k)` with a runtime k == 0 never binds e, so the previous binding survives --
-        # may-define, not must-define. Treating it as a kill dropped every read before it.
-        """
-def k(a, out, n, m, iters):
-    e = np.zeros((n,))
-    for it in range(iters):
-        for e in range(0):
-            pass
-        out[it] = e[0]
-        e = np.zeros((m,))
-        e[0] = 1.0
-""",
-        # A While re-tests its condition after the body, so the test is live-after code too.
-        """
-def k(a, out, n, m):
-    x = np.zeros((n,))
-    c = 0
-    while x[0] < 1.0:
-        x = np.zeros((m,))
-        c = c + 1
-""",
-    ],
-    ids=[
-        "rebinding_nested_below_the_loop_body",
-        "killing_statement_own_rhs_read",
-        "augmented_assignment_read",
-        "zero_trip_for_target_is_not_a_kill",
-        "while_test_runs_after_the_body",
-    ],
-)
-def test_a_rebinding_whose_read_is_ambiguous_is_refused(body: str) -> None:
-    with pytest.raises(NotImplementedError, match="conditional control flow"):
-        lower_(body)
 
 
 def test_starred_and_nested_unpacking_are_recognised_as_kills() -> None:

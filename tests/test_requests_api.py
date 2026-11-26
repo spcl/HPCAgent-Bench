@@ -35,6 +35,12 @@ def distributed(*ops: dict[str, object], grid: list[object] | None = None) -> Re
     return Requests.validate({"startup": {"grid": grid or ["P"]}, "operations": list(ops)})
 
 
+class Envelope(pydantic.BaseModel):
+    """A model with a ``requests`` field, as the envelope declares it."""
+
+    requests: RequestsField = Requests()
+
+
 def test_the_request_round_trips_through_json() -> None:
     raw = {
         "startup": {"load": ["blas"], "grid": ["root(P, 2)", "root(P, 2)"]},
@@ -60,6 +66,27 @@ def test_the_request_round_trips_through_json() -> None:
         "operations": [{"action": "cast", "array": "A", "to": "fp32"}],
     }
 
+    # :data:`RequestsField` validates the JSON object (or takes a request as is), dumps it back as JSON in both
+    # dump modes and refuses a malformed one with the message :meth:`Requests.validate` raises.
+    field_raw = {"startup": {"load": ["blas"]}, "operations": [{"action": "cast", "array": "A", "to": "fp32"}]}
+    envelope = Envelope.model_validate({"requests": field_raw})
+    assert envelope.requests == Requests.validate(field_raw)
+    assert isinstance(envelope.requests, Requests)
+    assert Envelope(requests=envelope.requests).requests is envelope.requests
+    assert envelope.model_dump(mode="json") == {"requests": field_raw}
+    assert envelope.model_dump() == {"requests": field_raw}
+    assert Envelope.model_validate(envelope.model_dump()) == envelope
+    assert Requests.validate(field_raw) == envelope.requests
+    assert Envelope().model_dump(mode="json") == {"requests": {}}
+    assert REQUESTS_ADAPTER.validate_python(None) == Requests()
+    assert REQUESTS_ADAPTER.dump_python(envelope.requests, mode="json") == field_raw
+    malformed = {"operations": [{"action": "format", "array": "M", "to": "csr2"}]}
+    with pytest.raises(ValueError, match="sparse format 'csr2'") as direct:
+        Requests.validate(malformed)
+    with pytest.raises(pydantic.ValidationError) as field:
+        Envelope.model_validate({"requests": malformed})
+    assert field.value.errors()[0]["ctx"]["error"].args == direct.value.args
+
 
 @pytest.mark.parametrize(
     ("raw", "match"),
@@ -77,35 +104,6 @@ def test_the_request_round_trips_through_json() -> None:
 def test_a_malformed_request_is_a_request_fault(raw: dict[str, object], match: str) -> None:
     with pytest.raises(ValueError, match=match):
         Requests.validate(raw)
-
-
-class Envelope(pydantic.BaseModel):
-    """A model with a ``requests`` field, as the envelope declares it."""
-
-    requests: RequestsField = Requests()
-
-
-def test_a_pydantic_field_reads_and_writes_the_request() -> None:
-    """:data:`RequestsField` validates the JSON object (or takes a request as is), dumps it back as JSON in
-    both dump modes and refuses a malformed one with the message :meth:`Requests.validate` raises."""
-    raw = {"startup": {"load": ["blas"]}, "operations": [{"action": "cast", "array": "A", "to": "fp32"}]}
-    envelope = Envelope.model_validate({"requests": raw})
-    assert envelope.requests == Requests.validate(raw)
-    assert isinstance(envelope.requests, Requests)
-    assert Envelope(requests=envelope.requests).requests is envelope.requests
-    assert envelope.model_dump(mode="json") == {"requests": raw}
-    assert envelope.model_dump() == {"requests": raw}
-    assert Envelope.model_validate(envelope.model_dump()) == envelope
-    assert Requests.validate(raw) == envelope.requests
-    assert Envelope().model_dump(mode="json") == {"requests": {}}
-    assert REQUESTS_ADAPTER.validate_python(None) == Requests()
-    assert REQUESTS_ADAPTER.dump_python(envelope.requests, mode="json") == raw
-    malformed = {"operations": [{"action": "format", "array": "M", "to": "csr2"}]}
-    with pytest.raises(ValueError, match="sparse format 'csr2'") as direct:
-        Requests.validate(malformed)
-    with pytest.raises(pydantic.ValidationError) as field:
-        Envelope.model_validate({"requests": malformed})
-    assert field.value.errors()[0]["ctx"]["error"].args == direct.value.args
 
 
 def test_the_submission_declares_requests_as_the_pydantic_field() -> None:

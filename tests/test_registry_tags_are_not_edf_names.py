@@ -43,13 +43,10 @@ def test_registry_tags_do_not_carry_the_edf_prefix() -> None:
         + "\n  ".join(f"{k}={v}" for k, v in sorted(wrong.items()))
         + "\nPublished tags name one image each, e.g. agent-amd."
     )
-
-
-def test_edf_names_do_carry_the_prefix() -> None:
-    """The converse, so the two cannot be swapped in the other direction either."""
+    # The converse, so the two cannot be swapped in the other direction either.
     edfs = _vars_matching("_EDF_LATEST")
     assert edfs, "images.env defined no *_EDF_LATEST variables"
-    wrong = {k: v for k, v in edfs.items() if not v.startswith(PROJECT_PREFIX)}
-    assert not wrong, "EDF names must carry the project prefix:\n  " + "\n  ".join(
-        f"{k}={v}" for k, v in sorted(wrong.items())
+    bare = {k: v for k, v in edfs.items() if not v.startswith(PROJECT_PREFIX)}
+    assert not bare, "EDF names must carry the project prefix:\n  " + "\n  ".join(
+        f"{k}={v}" for k, v in sorted(bare.items())
     )

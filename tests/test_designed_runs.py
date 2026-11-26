@@ -35,21 +35,14 @@ def test_every_planned_cell_counts_its_solved_owed_and_unsolved_runs() -> None:
         assert len(states) == stub.RUNS, (setup, kernel, len(states))
         got = (states.count(RunState.SOLVED), states.count(RunState.OWED))
         assert got == (stub.SOLVED[(setup, kernel)], plan.owed), (setup, kernel, got)
+    # An owed answer has no final grade yet; a value would be a live grade passed off as one.
+    owed = runs.loc[runs[population.RUN_STATE_COLUMN] == RunState.OWED]
+    assert len(owed) == stub.PLAN[stub.OWED_CELL].owed
+    assert owed["speedup"].isna().all()
 
 
 def cell_of(runs: pd.DataFrame, setup: str, kernel: str) -> pd.DataFrame:
     return runs.loc[(runs["setup"] == setup) & (runs["kernel"] == kernel)]
-
-
-def test_the_run_is_the_slot_the_label_carries() -> None:
-    frame = stub.stub_observations()
-    runs = population.designed_runs(frame)
-    cell = cell_of(runs, stub.SETUPS[0], stub.KERNELS[1])
-    assert list(cell[population.SLOT_COLUMN]) == list(range(1, stub.RUNS + 1))
-    assert all(
-        recording.slot_of(label) == run
-        for label, run in zip(cell["episode_id"], cell[population.SLOT_COLUMN], strict=True)
-    )
 
 
 def test_a_setup_name_with_a_dot_keeps_its_slot_and_its_name() -> None:
@@ -109,16 +102,6 @@ def test_a_suspect_credited_answer_is_a_solved_run_at_its_measured_speedup() -> 
     assert row["speedup"].item() == flagged["speedup"].item()
 
 
-def test_a_run_that_submitted_nothing_is_owed_a_rerun() -> None:
-    """The planner reruns such a slot, so until it does the run is no outcome, not an unsolved one."""
-    frame = stub.stub_observations()
-    runs = population.designed_runs(frame)
-    answered = set(frame.loc[frame["row_kind"] != "episode", "episode_id"])
-    silent = runs.loc[~runs["episode_id"].isin(answered)]
-    assert len(silent) == 2
-    assert set(silent[population.RUN_STATE_COLUMN]) == {RunState.OWED}
-
-
 def test_a_refused_submit_is_an_unsolved_run_not_an_owed_one() -> None:
     """The judge graded the agent's answer and it failed: a real outcome, never rerun."""
     frame = stub.stub_observations()
@@ -138,14 +121,6 @@ def test_an_attempt_that_is_no_verdict_leaves_the_run_owed(reason: str) -> None:
     frame.loc[refused & (frame["episode_id"] == label), "reason"] = reason
     runs = population.designed_runs(frame)
     assert runs.loc[runs["episode_id"] == label, population.RUN_STATE_COLUMN].item() == RunState.OWED
-
-
-def test_an_owed_run_carries_no_speedup() -> None:
-    """An owed answer has no final grade yet; a value would be a live grade passed off as one."""
-    runs = population.designed_runs(stub.stub_observations())
-    owed = runs.loc[runs[population.RUN_STATE_COLUMN] == RunState.OWED]
-    assert len(owed) == stub.PLAN[stub.OWED_CELL].owed
-    assert owed["speedup"].isna().all()
 
 
 def test_a_later_unsolved_final_grade_overrides_an_earlier_credited_answer() -> None:

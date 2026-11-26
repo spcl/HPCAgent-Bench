@@ -34,11 +34,7 @@ def test_a_bf16_array_keeps_its_declared_domain() -> None:
     assert image.min() >= -1.0
     assert image.max() <= 1.0
     assert np.abs(weight).max() <= FIRST_WEIGHT_BOUND * (1 + dtype_eps(ml_dtypes.bfloat16))
-
-
-def test_a_bf16_output_gets_its_own_eps_floor() -> None:
-    """Two bf16 arrays one ULP apart at a large magnitude agree under the eps floor of their format --
-    the floor that was zero while bf16 counted as no float."""
+    # a bf16 output gets its own eps floor: two arrays one ULP apart at a large magnitude agree under it
     want = np.full(4096, 256.0, dtype=ml_dtypes.bfloat16)
     have = (want.astype(np.float32) + 2.0).astype(ml_dtypes.bfloat16)
     ok, _error, detail = compare_arrays(want, have, rtol=0.0, atol=1e-6)
@@ -74,10 +70,7 @@ def test_the_ml_default_is_a_unit_activation_and_fan_in_weights() -> None:
     low, high = ml_default_domain(False, (96, 3, 11, 11))
     assert high == pytest.approx(1.0 / math.sqrt(3 * 11 * 11))
     assert low == -high
-
-
-def test_an_undomained_ml_kernel_is_fed_as_a_network() -> None:
-    """Its first array (the activation) spans [-1, 1]; its filter stays within its declared He bound."""
+    # an undomained ML kernel is fed as a network: its activation spans [-1, 1], its filter stays within its He bound
     data = Benchmark(UNDOMAINED_KERNEL).get_data(preset=Preset.S, datatype="float64", input_seed=SEED)
     activation, weight = data["x"], data["conv_weight"]
     assert np.abs(activation).max() <= UNIT_HALF_RANGE

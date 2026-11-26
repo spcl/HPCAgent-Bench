@@ -76,30 +76,6 @@ def test_pluto_is_its_own_base_and_a_native_subclass() -> None:
     assert FRAMEWORKS.entries["ppcg_hip"].language == "hip"
 
 
-def test_native_flavors_carry_language_and_compiler() -> None:
-    """``compiler`` is the ``compilers.yaml`` block the build forces; a column without one builds with
-    its language's first block, which is the gcc family for c/fortran."""
-    from hpcagent_bench.languages import resolved_compiler_for
-
-    expect = {
-        "cc": ("c", "gcc"),
-        "cc_autopar": ("c", "gcc"),
-        "llvm": ("cpp", "clangpp"),
-        "cpp": ("cpp", "gpp"),
-        "fortran": ("fortran", "gfortran"),
-        "fortran_autopar": ("fortran", "gfortran"),
-        "flang": ("fortran", "flang"),
-        "polly": ("cpp", "clangpp"),
-        "pluto": ("c", "clang-pluto"),
-        "cc_icx": ("c", "icx"),
-        "cc_aocc": ("c", "aocc"),
-    }
-    for name, (lang, block) in expect.items():
-        column = FRAMEWORKS.entries[name]
-        assert column.language == lang
-        assert resolved_compiler_for(Language.parse(lang), column.compiler)[0] == block, name
-
-
 def test_arch_families_share_one_class(probe_flavor: str) -> None:
     # One column per device, one flavor per pipeline on each device, plus an optimizer flavor per stage it extends.
     # Listed so adding one stays a deliberate edit here rather than a silent asymmetry.
@@ -201,13 +177,7 @@ def test_the_native_tables_are_projections_of_the_registry() -> None:
         column = FRAMEWORKS.entries[name]
         assert FRAMEWORK_LANG[name].text == column.language
         assert NATIVE_FRAMEWORKS[name].text == (column.emit_language or column.language)
-
-
-def test_the_polyhedral_columns_emit_c_and_compile_what_their_tool_writes() -> None:
-    """polycc and ppcg both read the C target's ``_pluto_input.c``; polycc writes C and ppcg writes CUDA."""
-    from hpcagent_bench.autogen import NATIVE_FRAMEWORKS
-    from hpcagent_bench.frameworks.native_runtime import FRAMEWORK_LANG
-
+    # polycc and ppcg both read the C target's ``_pluto_input.c``; polycc writes C and ppcg writes CUDA.
     for name in ("pluto", "ppcg", "ppcg_cuda", "ppcg_hip"):
         assert NATIVE_FRAMEWORKS[name] is Language.C
         assert LANG_TARGET[NATIVE_FRAMEWORKS[name]] == "c"

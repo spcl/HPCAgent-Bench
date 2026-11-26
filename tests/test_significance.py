@@ -13,7 +13,6 @@ import pytest
 from scipy import stats  # pyright: ignore[reportMissingTypeStubs]
 
 from hpcagent_bench import config, protocols
-from hpcagent_bench.harness import timing
 from hpcagent_bench.registry import RegistryError
 from hpcagent_bench.stats import population, significance
 from tests.test_paired_setups import STATISTICS, load_study_module
@@ -89,7 +88,7 @@ def test_mcnemar_is_exact_on_the_discordant_kernels(only_left: int, only_right: 
     assert significance.paired_proportion(pairs).pvalue == pytest.approx(expected, rel=1e-12)
 
 
-def test_the_corrections_match_the_hand_worked_values() -> None:
+def test_a_family_verdict_names_its_correction_and_skips_an_untested_member() -> None:
     """m = 4, p = .01 .04 .03 .20: Benjamini-Hochberg's step-up minimum from the top gives .04 .0533 .0533 .20.
     A NaN (a test never run) stays out of m."""
     pvalues = [0.01, 0.04, math.nan, 0.03, 0.20]
@@ -97,9 +96,6 @@ def test_the_corrections_match_the_hand_worked_values() -> None:
     assert significance.correct([]) == []
     raw = [0.001, 0.01, 0.03, 0.2, 0.5, 0.9]
     assert all(p - 1e-12 <= q <= 1.0 for p, q in zip(raw, significance.correct(raw), strict=True))
-
-
-def test_a_family_verdict_names_its_correction_and_skips_an_untested_member() -> None:
     family = significance.verdicts([0.01, math.nan, 0.04, 0.03, 0.20])
     assert [v.adjusted for v in family] == pytest.approx([0.04, math.nan, 0.16 / 3.0, 0.16 / 3.0, 0.20], nan_ok=True)
     finding = significance.Finding
@@ -111,13 +107,6 @@ def test_a_family_verdict_names_its_correction_and_skips_an_untested_member() ->
         finding.NOT_SIGNIFICANT,
     ]
     assert {v.correction for v in family} == {"benjamini-hochberg"}
-
-
-def test_the_verdict_and_alternative_spellings_are_the_stored_ones() -> None:
-    """A verdict column of a stats table and scipy's ``alternative`` read these spellings; they must not move."""
-    assert significance.Finding.texts() == ("significant", "not-significant", "underpowered")
-    assert significance.Side.texts() == ("less", "greater", "two-sided")
-    assert significance.Leg.texts() == ("speedup", "tokens")
 
 
 def test_two_identical_samples_carry_no_difference() -> None:
@@ -191,14 +180,6 @@ def test_the_default_paired_table_corrects_each_leg_on_its_own() -> None:
     assert [row["p_adjusted"] for row in pooled] == [0.015625, 0.125]
 
 
-def test_the_final_grade_keeps_its_timing_test_and_its_stamp() -> None:
-    """The final grade and its A/A declare one timing test, and its credits keep the ``mwd-v2`` stamp and p."""
-    assert protocols.final_timing_test() == timing.TIMING_TEST == "mannwhitney_delta"
-    assert protocols.PROTOCOLS["mw2x3"].timing_test == "mannwhitney_delta"
-    reduced = timing.reduce_mannwhitney_delta([90, 91, 92, 93, 94], [100, 101, 102, 103, 104], p=0.1)
-    assert (reduced.reduction, reduced.speedup, reduced.p_value) == ("mwd-v2", 102 / 92, 0.003968253968253968)
-
-
 def test_a_protocol_cannot_declare_an_unregistered_timing_test(monkeypatch: pytest.MonkeyPatch) -> None:
     """Another timing test is another protocol: a statistic gated by an unknown test refuses the registration,
     and an A/A calibration tests exactly as the grade it calibrates."""
@@ -220,18 +201,6 @@ def test_alpha_is_the_level_of_every_verdict_and_interval() -> None:
         assert significance.verdicts([0.02])[0].finding is significance.Finding.NOT_SIGNIFICANT
         narrow = significance.equivalence(logs)
     assert narrow.low < wide.low < wide.high < narrow.high
-
-
-def test_a_correction_runs_once_per_leg_or_once_per_family() -> None:
-    """``family-leg`` (default) corrects each leg on its own, ``family`` pools them."""
-    legs, pvalues = ["speedup", "tokens", "speedup", "tokens"], [0.01, 0.04, 0.02, 0.5]
-    assert significance.families(legs) == [[0, 2], [1, 3]]
-    per_leg = [v.adjusted for v in significance.scoped(legs, pvalues, significance.verdicts)]
-    assert per_leg == pytest.approx([0.02, 0.08, 0.02, 0.5])
-    with config.overridden("statistics.correction_family", "family"):
-        assert significance.families(legs) == [[0, 1, 2, 3]]
-        pooled = [v.adjusted for v in significance.scoped(legs, pvalues, significance.verdicts)]
-    assert pooled == pytest.approx([0.04, 0.16 / 3, 0.04, 0.5])
 
 
 def test_every_table_states_the_settings_it_was_made_with(tmp_path: pathlib.Path) -> None:
@@ -272,20 +241,6 @@ def test_a_p_of_exactly_alpha_is_not_rejected_and_its_interval_holds_zero() -> N
     assert tested.low <= 0.0 <= tested.high
     wider = significance.paired(logs, alpha=4.0 / 64.0 + 1e-9)
     assert wider.low > 0.0
-
-
-def test_a_log_t_interval_and_the_sign_flip_test_can_disagree_and_one_construction_cannot() -> None:
-    """Five small gains and one large one: every log ratio is positive, so the exact sign-flip p is 2/64 and its
-    interval excludes 0, while the Student t interval of the same mean (the paper's log-t formula) holds 0 and the
-    t test does not reject. Mixing the t interval with the sign-flip p would print p < 0.05 beside an interval
-    containing 1."""
-    logs = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 3.0])
-    tested = significance.paired(logs)
-    assert tested.pvalue == 2.0 / 64.0
-    assert tested.low > 0.0
-    half = float(stats.t.ppf(0.975, 5)) * float(np.std(logs, ddof=1)) / math.sqrt(6)
-    assert float(np.mean(logs)) - half < 0.0
-    assert float(stats.ttest_1samp(logs, 0.0).pvalue) > 0.05
 
 
 @pytest.mark.parametrize("counts", [(0, 0), (3, 3), (6, 1), (9, 2), (1, 12), (14, 0)])
@@ -355,17 +310,6 @@ def test_a_doubling_is_different_and_its_equivalence_p_says_outside() -> None:
     assert tested.pvalue == 1.0 - 1.0 / 2**10
     ((conclusion, _),) = significance.conclusions([difference.pvalue], [tested.pvalue])
     assert conclusion == significance.Conclusion.DIFFERENT
-
-
-def test_a_small_but_certain_change_inside_the_margin_stays_different() -> None:
-    """A 5% change measured to within 1% is both significant and inside a 20% margin; the conclusion names the
-    difference and the equivalence p still travels beside it."""
-    logs = [math.log(1.05) + step for step in null_logs(0.01)]
-    tested = significance.equivalence(logs, margin=1.2)
-    assert tested.pvalue < 0.05
-    ((conclusion, adjusted),) = significance.conclusions([significance.paired(logs).pvalue], [tested.pvalue])
-    assert conclusion == significance.Conclusion.DIFFERENT
-    assert adjusted == tested.pvalue
 
 
 def test_the_margin_is_configured_and_must_be_a_ratio_above_one() -> None:

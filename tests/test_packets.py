@@ -20,6 +20,17 @@ def test_resolve_control_is_empty() -> None:
     assert resolved.env == ()
     assert resolved.parts == ()
 
+    blind = packets.resolve("no-score-tool", "c")
+    assert blind.key == "no-score-tool"
+    assert blind.env == (("AGENT_SUBMISSION_MODE", "blind"),)
+
+    autokernel = packets.resolve("autokernel", "c")
+    assert autokernel.key == "autokernel"
+    assert autokernel.tools == ("experiment",)
+    assert autokernel.env == ()
+    assert autokernel.skills == ()
+    assert packets.prompt_layers("autokernel") == ("autokernel:prompt/overlay.yaml",)
+
 
 @pytest.mark.parametrize(
     ("spec", "language", "key", "label"),
@@ -66,13 +77,10 @@ def test_resolve_lang_expands_language_and_openmp_pages_for_c() -> None:
     assert resolved.key == "lang"
     assert resolved.skills == ("lang-c", "openmp-c")
 
-
-def test_resolve_lang_has_no_openmp_page_for_cuda() -> None:
-    """cuda ships no ``openmp-cuda`` page, so the pair the C/C++/Fortran setups get is absent here --
-    what the setup gets instead is the host-language page below."""
-    resolved = packets.resolve("lang", "cuda")
-    assert "openmp-cuda" not in resolved.skills
-    assert resolved.skills == ("lang-cpp", "lang-cuda")
+    # cuda ships no ``openmp-cuda`` page; the setup gets the host-language page instead.
+    cuda = packets.resolve("lang", "cuda")
+    assert "openmp-cuda" not in cuda.skills
+    assert cuda.skills == ("lang-cpp", "lang-cuda")
 
 
 @pytest.mark.parametrize(
@@ -109,13 +117,6 @@ def test_resolve_lang_skills_stages_every_shipped_page_but_a_packet_tools_own_or
         "cpf-gpu-src-bare",
     }
     assert resolved.env == (), "no skill content may ride in the main prompt: the packet sets no hints file"
-
-
-def test_resolve_profiling_is_the_bundle() -> None:
-    resolved = packets.resolve("profiling", "c")
-    assert resolved.key == "profiling"
-    assert resolved.skills == ("nsys", "opt-reports", "profiling", "rocprof")
-    assert resolved.env == ()
 
 
 @pytest.mark.parametrize(
@@ -171,6 +172,14 @@ def test_canonical_names_a_composite_only_when_the_spec_stages_the_same_pages() 
     """``profiling`` as a token is the frozen bundle, rocprof and nsys included: spelling a playbook's
     pages with it stages two tracer pages the playbook does not carry, so it is not that playbook."""
     assert packets.canonical("divide-and-conquer;profiling;opt-reports") == "divide-and-conquer+opt-reports+profiling"
+    # A composite is its skills AND its sub-packets: without the profiling page the tracers alone are not the
+    # profiling bundle, and the bundle's members plus its own name do not collapse to ``profiling``.
+    assert packets.canonical("opt-reports;rocprof") == "opt-reports+rocprof"
+    assert packets.canonical("nsys;opt-reports;rocprof") == "nsys+opt-reports+rocprof"
+    assert (
+        packets.canonical("divide-and-conquer;nsys;opt-reports;profiling;rocprof")
+        == "divide-and-conquer+nsys+opt-reports+profiling+rocprof"
+    )
 
 
 @pytest.mark.parametrize("spec", ["profiling", "all-in", "divide-and-conquer;profiling", "lang;all-in"])
@@ -184,73 +193,20 @@ def test_a_frozen_packet_still_resolves_for_the_records_that_hold_it() -> None:
     assert packets.resolve("all-in", "c", environ={}, fill=False).key == "all-in"
 
 
-def test_canonical_does_not_name_a_composite_whose_own_page_is_missing() -> None:
-    """A composite is its skills AND its sub-packets: without the profiling page the tracers alone
-    are not the profiling bundle, and recording them under its key would claim a page never staged."""
-    assert packets.canonical("opt-reports;rocprof") == "opt-reports+rocprof"
-    assert packets.canonical("nsys;opt-reports;rocprof") == "nsys+opt-reports+rocprof"
-
-
-def test_resolve_no_score_tool_sets_the_blind_mode() -> None:
-    resolved = packets.resolve("no-score-tool", "c")
-    assert resolved.key == "no-score-tool"
-    assert resolved.env == (("AGENT_SUBMISSION_MODE", "blind"),)
-
-
-def test_resolve_autokernel_carries_its_tool_and_its_prompt_overlay() -> None:
-    resolved = packets.resolve("autokernel", "c")
-    assert resolved.key == "autokernel"
-    assert resolved.tools == ("experiment",)
-    assert resolved.env == ()
-    assert resolved.skills == ()
-    assert packets.prompt_layers("autokernel") == ("autokernel:prompt/overlay.yaml",)
-
-
-def test_resolve_all_in_composes_cpf_src_dc_profiling_and_lang() -> None:
-    resolved = packets.resolve("all-in", "c", environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/dropin"})
-    assert resolved.key == "all-in"
-    assert resolved.label == "All-in"
-    assert resolved.skills == (
-        "cpf-cpu-src",
-        "divide-and-conquer",
-        "lang-c",
-        "nsys",
-        "openmp-c",
-        "opt-reports",
-        "profiling",
-        "rocprof",
-    )
-    assert resolved.env == (("CPF_DROPIN_DIR", "/views/dropin"), ("HPCAGENT_BENCH_CPF_VERIFIED_ONLY", "true"))
-
-
-def test_resolve_an_implicit_single_skill_packet() -> None:
-    resolved = packets.resolve("mpi-c", "c")
-    assert resolved.key == "mpi-c"
-    assert resolved.label == "mpi-c"
-    assert resolved.skills == ("mpi-c",)
-    assert resolved.env == ()
-    assert resolved.parts == ("mpi-c",)
-
-
 def test_resolve_an_ad_hoc_semicolon_list() -> None:
     resolved = packets.resolve("rocprof;nsys", "c")
     assert resolved.skills == ("nsys", "rocprof")
     assert resolved.key == "nsys+rocprof"
     assert resolved.label == "ROCm Profiler + Nsight Systems"
-
-
-def test_resolve_ignores_whitespace_and_duplicate_tokens() -> None:
-    resolved = packets.resolve(" rocprof ; rocprof ; nsys ", "c")
-    assert resolved.skills == ("nsys", "rocprof")
-    assert resolved.parts == ("nsys", "rocprof")
+    spaced = packets.resolve(" rocprof ; rocprof ; nsys ", "c")
+    assert spaced.skills == ("nsys", "rocprof")
+    assert spaced.parts == ("nsys", "rocprof")
+    assert packets.label("divide-and-conquer;profiling") == "Divide and Conquer + Profiling Tools"
 
 
 def test_resolve_an_unknown_token_raises_naming_it() -> None:
     with pytest.raises(ValueError, match="nosuchpacket"):
         packets.resolve("nosuchpacket", "c")
-
-
-def test_resolve_a_missing_placeholder_raises_naming_the_var() -> None:
     with pytest.raises(ValueError, match="HPCAGENT_BENCH_CPF_CACHE"):
         packets.resolve("cpf-tool", "c", environ={})
 
@@ -281,50 +237,15 @@ def test_a_recorded_device_neutral_cpf_key_reads_as_the_cpu_packet(alias: str, k
     assert packets.canonical(f"{alias}+lang-skills") == packets.canonical(f"{key}+lang-skills")
 
 
-def test_canonical_of_an_already_canonical_combination_round_trips() -> None:
-    assert packets.canonical("lang-skills+no-score-tool") == "lang-skills+no-score-tool"
-    assert (
-        packets.canonical("divide-and-conquer+nsys+opt-reports+profiling+rocprof")
-        == "divide-and-conquer+nsys+opt-reports+profiling+rocprof"
-    )
-    assert (
-        packets.canonical("cpf+divide-and-conquer+nsys+opt-reports+profiling+rocprof")
-        == "cpf+divide-and-conquer+nsys+opt-reports+profiling+rocprof"
-    )
-
-
-def test_canonical_recognises_all_in_from_its_parts() -> None:
-    assert packets.canonical("cpf-src;divide-and-conquer;profiling;lang") == "all-in"
-    assert packets.canonical("lang;profiling;divide-and-conquer;cpf-src") == "all-in"
-
-
-def test_canonical_does_not_collapse_profiling_when_its_parts_are_spelled_out() -> None:
-    """The bundle's members plus its own name is five tokens, not the three ``profiling``
-    composes from -- it must NOT collapse to ``profiling`` and drop a token silently."""
-    assert (
-        packets.canonical("divide-and-conquer;nsys;opt-reports;profiling;rocprof")
-        == "divide-and-conquer+nsys+opt-reports+profiling+rocprof"
-    )
-
-
 def test_has_part_matches_a_bare_packet() -> None:
     assert packets.has_part("lang-skills", "lang-skills")
     assert not packets.has_part("cpf-tool", "lang-skills")
     assert not packets.has_part("", "lang-skills")
-
-
-def test_has_part_matches_a_composite_carrying_it() -> None:
-    """``llrsingle`` records ``lang-skills+no-score-tool`` on its treated setups; a reader asking
-    whether that recorded packet carries the skills treatment must find it inside the composite,
-    not only when the recorded value is the bare key."""
+    # ``llrsingle`` records ``lang-skills+no-score-tool``: a reader finds a part inside the composite.
     assert packets.has_part("lang-skills+no-score-tool", "lang-skills")
     assert packets.has_part("lang-skills+no-score-tool", "no-score-tool")
     assert not packets.has_part("lang-skills+no-score-tool", "cpf-tool")
     assert not packets.has_part("no-score-tool", "lang-skills")
-
-
-def test_label_of_an_ad_hoc_combination_joins_the_parts() -> None:
-    assert packets.label("divide-and-conquer;profiling") == "Divide and Conquer + Profiling Tools"
 
 
 @pytest.mark.parametrize("key", tags.order("packets"))

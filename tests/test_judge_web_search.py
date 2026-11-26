@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import types
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
 
@@ -151,33 +152,39 @@ def test_web_search_tool_answers_via_fake_serpapi_crawl_and_llm() -> None:
 UNPROVISIONED_ENV = {"SERPAPI_API_KEY": "", "WEBSEARCH_LLM_BASE_URL": "", "WEBSEARCH_LLM_MODEL": ""}
 
 
+@pytest.mark.parametrize(
+    ("setting", "call"),
+    [
+        pytest.param(UNPROVISIONED_ENV, lambda ws: ws.call_serpapi("how do I use crawl4ai", 3, 5.0), id="serpapi-key"),
+        # The LLM synthesis leg is provisioning too: a setup with a SerpAPI key but no configured judge-local LLM is
+        # just as unprovisioned as one with neither.
+        pytest.param(
+            {"WEBSEARCH_LLM_BASE_URL": "", "WEBSEARCH_LLM_MODEL": "fake-model"},
+            lambda ws: ws.call_llm("query", [], 5.0),
+            id="llm-base-url",
+        ),
+        pytest.param(
+            {"WEBSEARCH_LLM_BASE_URL": "http://127.0.0.1:1/v1", "WEBSEARCH_LLM_MODEL": ""},
+            lambda ws: ws.call_llm("query", [], 5.0),
+            id="llm-model",
+        ),
+    ],
+)
 def test_missing_serpapi_key_raises_not_provisioned_not_a_bare_runtime_error(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, setting: dict[str, str], call: Callable[[types.ModuleType], object]
 ) -> None:
     """``hpcagent_bench/cluster/judge_service.py`` tells a 'never configured' 503 apart from a 'this call
     failed' 502 by ``isinstance(exc, NotProvisionedError)`` -- so a config gap must raise THAT
     class, not a plain :class:`RuntimeError` a real SerpAPI/crawl/LLM failure also raises."""
     web_search = load_web_search()
-    for key, value in UNPROVISIONED_ENV.items():
+    for key, value in setting.items():
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("SERPAPI_URL", raising=False)
     with pytest.raises(web_search.NotProvisionedError):
-        web_search.call_serpapi("how do I use crawl4ai", 3, 5.0)
+        call(web_search)
     # It IS a RuntimeError too: main()'s existing except clause must keep catching it.
     with pytest.raises(RuntimeError):
-        web_search.call_serpapi("how do I use crawl4ai", 3, 5.0)
-
-
-@pytest.mark.parametrize("missing", ["WEBSEARCH_LLM_BASE_URL", "WEBSEARCH_LLM_MODEL"])
-def test_missing_llm_config_raises_not_provisioned(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
-    """The LLM synthesis leg is provisioning too: a setup with a SerpAPI key but no configured
-    judge-local LLM is just as unprovisioned as one with neither."""
-    web_search = load_web_search()
-    monkeypatch.setenv("WEBSEARCH_LLM_BASE_URL", "http://127.0.0.1:1/v1")
-    monkeypatch.setenv("WEBSEARCH_LLM_MODEL", "fake-model")
-    monkeypatch.setenv(missing, "")
-    with pytest.raises(web_search.NotProvisionedError):
-        web_search.call_llm("query", [], 5.0)
+        call(web_search)
 
 
 def test_a_real_search_failure_is_still_a_plain_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,29 +212,24 @@ def test_a_real_search_failure_is_still_a_plain_runtime_error(monkeypatch: pytes
         server.server_close()
 
 
-def test_cli_marks_a_not_provisioned_refusal_with_a_cause(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The CLI (a hand-run debugging path, same contract as the service) must carry the same
-    distinction into its JSON error body, not just the exit code."""
+@pytest.mark.parametrize(
+    ("setting", "cause"),
+    [
+        # A hand-run debugging path, same contract as the service: the distinction travels into the JSON error body,
+        # not just the exit code.
+        pytest.param(UNPROVISIONED_ENV, "not_provisioned", id="not-provisioned"),
+        pytest.param({"WEBSEARCH_MAX_RESULTS": "abc"}, None, id="bad-setting"),
+    ],
+)
+def test_cli_marks_a_not_provisioned_refusal_with_a_cause(setting: dict[str, str], cause: str | None) -> None:
     env = os.environ.copy()
-    env.update(UNPROVISIONED_ENV)
+    env.update(setting)
     env.pop("SERPAPI_URL", None)
-    proc = subprocess.run(
-        [sys.executable, str(TOOL), "--query", "anything"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 2
-    body = json.loads(proc.stderr)
-    assert body["ok"] is False
-    assert body["cause"] == "not_provisioned"
-
-
-def test_cli_answers_a_bad_setting_with_the_json_error_body() -> None:
-    env = {**os.environ, "WEBSEARCH_MAX_RESULTS": "abc"}
     proc = subprocess.run(
         [sys.executable, str(TOOL), "--query", "anything"], env=env, capture_output=True, text=True, check=False
     )
     assert proc.returncode == 2, proc.stderr
-    assert json.loads(proc.stderr)["ok"] is False
+    body = json.loads(proc.stderr)
+    assert body["ok"] is False
+    if cause is not None:
+        assert body["cause"] == cause

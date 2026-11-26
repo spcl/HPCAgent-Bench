@@ -68,9 +68,7 @@ def test_the_accepted_wrong_answers_are_exactly_the_recorded_ones(rows: list[mut
         if row.corruption not in WITHIN_BAND and mutation.ACCEPT in (row.symbolic, row.probed):
             accepted[row.reference, row.precision].add(row.corruption)
     assert accepted == ACCEPTED_WRONG
-
-
-def test_unit_scale_and_fp64_structural_corruptions_are_never_accepted(rows: list[mutation.Row]) -> None:
+    # Unit-scale and fp64 structural corruptions are never accepted: the recorded set already excludes them.
     structural = SLICES | {"index_shift_by_one", "constant_zero", "constant_mean", "constant_peak"}
     for row in rows:
         beyond = row.corruption not in WITHIN_BAND
@@ -112,15 +110,14 @@ def test_what_a_newly_gradeable_length_accepts_was_already_accepted_at_a_gradeab
         assert [other.symbolic for other in same] == [mutation.ACCEPT], row
 
 
-def test_refused_is_the_ungradeable_guard(rows: list[mutation.Row]) -> None:
-    for row in rows:
+def test_unchanged_references_pass_wherever_the_length_is_gradeable(
+    checks: list[mutation.Control], rows: list[mutation.Row]
+) -> None:
+    for row in rows:  # the refusal is the ungradeable guard, and a probed length is never refused
         precision = Precision(row.precision)
         guard = ungradeable(accumulation_eps(precision), row.symbolic_length, tolerance_band(precision).rtol)
         assert (row.symbolic == mutation.REFUSED) == guard, row
         assert row.probed != mutation.REFUSED, row
-
-
-def test_unchanged_references_pass_wherever_the_length_is_gradeable(checks: list[mutation.Control]) -> None:
     identity = [one for one in checks if one.name.startswith("identity:")]
     assert len(identity) == 60
     for one in identity:

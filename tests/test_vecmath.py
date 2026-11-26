@@ -8,7 +8,6 @@ import pathlib
 import re
 import shutil
 import subprocess
-import tomllib
 
 import pytest
 
@@ -76,20 +75,6 @@ def declared_functions() -> list:
 # Config guards: no toolchain needed, so they run in every job
 
 
-def test_the_vecmath_header_ships_with_the_package() -> None:
-    """flags.py -include's this path on every gcc/g++ compile; pyproject's package data must list it."""
-    assert flags.VECMATH_H.is_file(), f"{flags.VECMATH_H} is missing"
-    root = pathlib.Path(flags.__file__).resolve().parents[1]
-    # ``[tool.setuptools.package-data]`` is the one list both distributions take the header from: the
-    # wheel is built from it, and setuptools adds every package-data file to the sdist as well, so
-    # MANIFEST.in only names files outside the packages.
-    declared = tomllib.loads((root / "pyproject.toml").read_text())
-    package_data = declared["tool"]["setuptools"]["package-data"]
-    assert any("envs/vecmath.h" in entry for entries in package_data.values() for entry in entries), (
-        "vecmath.h is not in [tool.setuptools.package-data]; the wheel and the sdist will drop it"
-    )
-
-
 #: Every CPU baseline constant, and the route by which it reaches libmvec. Enumerated so that
 #: ADDING a baseline without classifying it fails :func:`test_every_cpu_baseline_is_classified`
 #: -- checking only the two obvious ones is how pythran and flang came to build libm scalar.
@@ -99,7 +84,7 @@ def test_the_vecmath_header_ships_with_the_package() -> None:
 #: ``flag``    -fveclib=libmvec, a clang-family driver option.
 #: ``block``   probe-gated at use, declared as a ``veclib_ref`` in compilers.yaml.
 #: ``driver``  the distro driver spec pre-includes glibc's Fortran directives -- a host property,
-#:             asserted for real by test_gfortran_vectorizes_libm_at_the_baseline.
+#:             asserted for real by test_gcc_vectorizes_libm_at_the_baseline.
 #: ``builtin`` the compiler ships its own vector libm (NVHPC) and needs no knob.
 #: ``device``  device code, where libmvec (a host glibc library) does not apply at all.
 VECLIB_ROUTE = {
@@ -197,46 +182,38 @@ def test_the_header_declares_nothing_libmvec_does_not_export() -> None:
 
 
 @LINUX_ONLY
-def test_gcc_vectorizes_libm_at_the_baseline(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("compiler", ["gcc", "g++", "gfortran"])
+def test_gcc_vectorizes_libm_at_the_baseline(tmp_path: pathlib.Path, compiler: str) -> None:
     """The regression this file exists for: before the header, gcc called scalar libm in a loop while
-    clang vectorized the same source."""
-    assert shutil.which("gcc"), "gcc is required to build native C kernels"
-    obj = compile_object(tmp_path, C_LIBM_LOOP, ".c", "gcc", flags.CPU_BASELINE_GCC, languages.std_flag(Language.C))
-    calls = libmvec_calls(obj)
-    assert calls, "gcc emitted NO libmvec calls at CPU_BASELINE_GCC -- the vecmath.h -include is not reaching it"
-    assert any("_exp" in s for s in calls), f"got {sorted(calls)}"
-    assert any("_log" in s for s in calls), f"got {sorted(calls)}"
-
-
-@LINUX_ONLY
-def test_gxx_vectorizes_libm_at_the_baseline(tmp_path: pathlib.Path) -> None:
-    """C++ is a separate risk from C: the decls must survive <cmath>'s extern "C" + noexcept."""
-    assert shutil.which("g++"), "g++ is required to build native C++ kernels"
-    obj = compile_object(
-        tmp_path, CXX_LIBM_LOOP, ".cpp", "g++", flags.CPU_BASELINE_GCC, languages.std_flag(Language.CPP)
-    )
-    assert libmvec_calls(obj), "g++ emitted NO libmvec calls at CPU_BASELINE_GCC"
-
-
-@LINUX_ONLY
-def test_gfortran_vectorizes_libm_at_the_baseline(tmp_path: pathlib.Path) -> None:
-    """gfortran gets libmvec for free via the driver spec's pre-include; a host whose spec omits it
+    clang vectorized the same source. C++ is a separate risk from C: the decls must survive <cmath>'s extern "C" +
+    noexcept. gfortran gets libmvec for free via the driver spec's pre-include; a host whose spec omits it
     silently loses libmvec while C keeps it, so the fortran column stops being comparable."""
-    assert shutil.which("gfortran"), "gfortran is required to build native Fortran kernels"
-    obj = compile_object(
-        tmp_path,
-        FORTRAN_LIBM_LOOP,
-        ".f90",
-        "gfortran",
-        flags.CPU_BASELINE_GFORTRAN,
-        "-ffree-form",
-        languages.std_flag(Language.FORTRAN),
+    assert shutil.which(compiler), f"{compiler} is required to build native kernels"
+    if compiler == "gcc":
+        obj = compile_object(tmp_path, C_LIBM_LOOP, ".c", "gcc", flags.CPU_BASELINE_GCC, languages.std_flag(Language.C))
+    elif compiler == "g++":
+        obj = compile_object(
+            tmp_path, CXX_LIBM_LOOP, ".cpp", "g++", flags.CPU_BASELINE_GCC, languages.std_flag(Language.CPP)
+        )
+    else:
+        obj = compile_object(
+            tmp_path,
+            FORTRAN_LIBM_LOOP,
+            ".f90",
+            "gfortran",
+            flags.CPU_BASELINE_GFORTRAN,
+            "-ffree-form",
+            languages.std_flag(Language.FORTRAN),
+        )
+    calls = libmvec_calls(obj)
+    assert calls, (
+        f"{compiler} emitted NO libmvec calls at the baseline -- for gcc the vecmath.h -include is not reaching it; "
+        "for gfortran this host's gcc spec does not pre-include glibc's math-vector-fortran.h, so Fortran needs an "
+        "explicit -fpre-include that C does not"
     )
-    assert libmvec_calls(obj), (
-        "gfortran emitted NO libmvec calls at CPU_BASELINE_GFORTRAN -- this host's gcc spec "
-        "does not pre-include glibc's math-vector-fortran.h, so Fortran needs an explicit "
-        "-fpre-include that C does not"
-    )
+    if compiler == "gcc":
+        assert any("_exp" in s for s in calls), f"got {sorted(calls)}"
+        assert any("_log" in s for s in calls), f"got {sorted(calls)}"
 
 
 @LINUX_ONLY

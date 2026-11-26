@@ -79,15 +79,29 @@ def test_an_allocation_sized_by_a_scalar_expression_is_one_dimensional() -> None
             "x.reshape((x.shape[0], x.shape[1], 1))",
             3,
         ),
+        # The LENGTH is what must be compile-time. A bound that is a runtime scalar leaves the tuple alone rather
+        # than guessing a length: ``x.shape`` still expands to its per-axis tuple (rank-3 knowledge, not a guess),
+        # but a ``[k:]`` left standing is the decline, and any fixed-length tuple in its place would be a length
+        # invented from a runtime scalar.
+        (
+            "def f(x, k):\n    y = x.reshape(x.shape[k:] + (1,))\n",
+            {"x": 3},
+            frozenset({"k"}),
+            "(x.shape[0], x.shape[1], x.shape[2])[k:]",
+            None,
+        ),
     ],
-    ids=["trailing_axes", "negative_bound"],
+    ids=["trailing_axes", "negative_bound", "symbolic_bound"],
 )
 def test_a_slice_of_the_shape_tuple_is_still_compile_time(
-    src: str, ranks: dict[str, int], int_scalars: frozenset[str], want: str, rank_of_y: int
+    src: str, ranks: dict[str, int], int_scalars: frozenset[str], want: str, rank_of_y: int | None
 ) -> None:
     interp = fold(src, ranks=ranks, int_scalars=int_scalars, arrays=frozenset({"x"}))
-    assert want in source_of(interp)
-    assert interp.ranks["y"] == rank_of_y
+    assert want in source_of(interp), source_of(interp)
+    if rank_of_y is None:
+        assert "y" not in interp.ranks
+    else:
+        assert interp.ranks["y"] == rank_of_y
 
 
 def test_the_group_norm_axis_folds_once_the_reshape_collapses() -> None:
@@ -103,53 +117,33 @@ def test_the_group_norm_axis_folds_once_the_reshape_collapses() -> None:
     assert "axis=(2, 3, 4)" in source_of(interp)
 
 
-def test_a_symbolic_slice_bound_declines() -> None:
-    """The LENGTH is what must be compile-time. A bound that is a runtime scalar leaves the tuple
-    alone rather than guessing a length."""
-    interp = fold(
-        "def f(x, k):\n    y = x.reshape(x.shape[k:] + (1,))\n",
-        ranks={"x": 3},
-        int_scalars=frozenset({"k"}),
-        arrays=frozenset({"x"}),
-    )
-    # ``x.shape`` still expands to its per-axis tuple -- that part is rank-3 knowledge, not a guess.
-    # The SLICE is what must survive: a ``[k:]`` left standing is the decline, and any fixed-length
-    # tuple in its place would be a length invented from a runtime scalar.
-    src = source_of(interp)
-    assert "(x.shape[0], x.shape[1], x.shape[2])[k:]" in src, src
-    assert "y" not in interp.ranks
-
-
-def test_a_rank_preserving_rebind_inside_a_loop_keeps_the_rank() -> None:
-    """The max-pool accumulator. ``out`` is rank 4 before the loop and rank 4 after every iteration,
-    so it is rank 4 afterwards whether the loop ran or not."""
+@pytest.mark.parametrize(
+    ("rebind", "rank"),
+    [
+        # The max-pool accumulator. ``out`` is rank 4 before the loop and rank 4 after every iteration, so it is rank
+        # 4 afterwards whether the loop ran or not.
+        ("np.maximum(out, x)", 4),
+        # The conservative half: after the loop ``out`` is rank 4 or rank 1 depending on a trip count nothing here
+        # can evaluate, so it has no compile-time rank. Reporting either would be a guess.
+        ("np.full((5,), 0.0)", None),
+    ],
+    ids=["preserving", "changing"],
+)
+def test_a_rank_preserving_rebind_inside_a_loop_keeps_the_rank(rebind: str, rank: int | None) -> None:
     interp = fold(
         "def f(x, ks):\n"
         "    out = np.full((1, 2, 3, 4), 0.0)\n"
         "    for k in range(ks):\n"
-        "        out = np.maximum(out, x)\n"
-        "    y = out.reshape(out.shape[1:])\n",
+        f"        out = {rebind}\n" + ("    y = out.reshape(out.shape[1:])\n" if rank is not None else ""),
         ranks={"x": 4},
         int_scalars=frozenset({"ks"}),
         arrays=frozenset({"x"}),
     )
-    assert interp.ranks["out"] == 4
+    if rank is None:
+        assert "out" not in interp.ranks
+        return
+    assert interp.ranks["out"] == rank
     assert "out.reshape((out.shape[1], out.shape[2], out.shape[3]))" in source_of(interp)
-
-
-def test_a_rank_changing_rebind_inside_a_loop_drops_the_rank() -> None:
-    """The conservative half: after the loop ``out`` is rank 4 or rank 1 depending on a trip count
-    nothing here can evaluate, so it has no compile-time rank. Reporting either would be a guess."""
-    interp = fold(
-        "def f(x, ks):\n"
-        "    out = np.full((1, 2, 3, 4), 0.0)\n"
-        "    for k in range(ks):\n"
-        "        out = np.full((5,), 0.0)\n",
-        ranks={"x": 4},
-        int_scalars=frozenset({"ks"}),
-        arrays=frozenset({"x"}),
-    )
-    assert "out" not in interp.ranks
 
 
 def test_desugar_tuples_entry_point_agrees() -> None:

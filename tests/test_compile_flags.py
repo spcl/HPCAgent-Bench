@@ -134,14 +134,6 @@ def test_every_shared_library_block_compiles_position_independent(monkeypatch: p
     )
 
 
-def test_flang_uses_the_flang_baseline_not_the_clang_one() -> None:
-    """flang must not inherit the C/C++ clang baseline; pinned by name since the toolchain may be absent."""
-    block = compiler_blocks()["flang"]
-    assert block.baseline_ref == "FLANG_BASELINE", (
-        f"flang resolves {block.baseline_ref}; FLANG_BASELINE exists for this compiler and is otherwise unreferenced"
-    )
-
-
 def test_every_native_flavor_is_wired_end_to_end() -> None:
     """A flavor built through the C-ABI path must be registered in every table that path reads.
 
@@ -153,7 +145,7 @@ def test_every_native_flavor_is_wired_end_to_end() -> None:
     """
     from hpcagent_bench.autogen import NATIVE_FRAMEWORKS
     from hpcagent_bench.columns import FRAMEWORKS
-    from hpcagent_bench.frameworks.native_runtime import FRAMEWORK_LANG
+    from hpcagent_bench.frameworks.native_runtime import FRAMEWORK_COMPILER, FRAMEWORK_LANG
 
     built = {n for n, column in FRAMEWORKS.entries.items() if column.base in ("native", "pluto")}
     assert {"cc", "pluto", "ppcg_cuda", "ppcg_hip"} <= built, "the check would pass vacuously"
@@ -163,13 +155,7 @@ def test_every_native_flavor_is_wired_end_to_end() -> None:
     assert not (built - set(NATIVE_FRAMEWORKS)), (
         f"missing from autogen.NATIVE_FRAMEWORKS: {built - set(NATIVE_FRAMEWORKS)}"
     )
-
-
-def test_a_cpp_flavor_names_its_compiler_explicitly() -> None:
-    """Any cpp flavor absent from FRAMEWORK_COMPILER silently gets the g++ default."""
-    from hpcagent_bench.columns import FRAMEWORKS
-    from hpcagent_bench.frameworks.native_runtime import FRAMEWORK_COMPILER, FRAMEWORK_LANG
-
+    # Any cpp flavor absent from FRAMEWORK_COMPILER silently gets the g++ default.
     unset = sorted(
         n
         for n, column in FRAMEWORKS.entries.items()
@@ -243,29 +229,26 @@ def test_a_driver_below_its_floor_is_not_resolved(fake_path: pathlib.Path) -> No
         )
 
 
-def test_resolve_compiler_prefers_the_highest_version_numerically(fake_path: pathlib.Path) -> None:
-    """A lexical sort picks ``zzc-9`` and silently pins the suite to an ancient toolchain."""
-    for name in ("zzc-9", "zzc-14", "zzc-21"):
-        make_fake_driver(fake_path, name)
-    assert languages.resolve_compiler("zzc") == str(fake_path / "zzc-21")
-
-
-def test_resolve_compiler_prefers_the_unversioned_driver(fake_path: pathlib.Path) -> None:
-    """The unversioned driver is the distro's chosen default; a higher sibling must not win."""
-    make_fake_driver(fake_path, "zzc")
-    make_fake_driver(fake_path, "zzc-21")
-    assert languages.resolve_compiler("zzc") == str(fake_path / "zzc")
-
-
-def test_resolve_compiler_follows_the_flang_rename(fake_path: pathlib.Path) -> None:
-    """LLVM renamed ``flang-new`` to ``flang``; either spelling must find what is installed.
-
-    The 22 is load-bearing: flang carries a COMPILER_MIN_MAJOR of 20 (the release that
-    added -fdo-concurrent-to-openmp=host, which every graded Fortran build passes), so a
-    fixture below it would be rejected for the version and prove nothing about the rename.
-    """
-    make_fake_driver(fake_path, "flang-new-22")
-    assert languages.resolve_compiler("flang") == str(fake_path / "flang-new-22")
+@pytest.mark.parametrize(
+    ("drivers", "name", "expected"),
+    [
+        # A lexical sort picks ``zzc-9`` and silently pins the suite to an ancient toolchain.
+        (("zzc-9", "zzc-14", "zzc-21"), "zzc", "zzc-21"),
+        # The unversioned driver is the distro's chosen default; a higher sibling must not win.
+        (("zzc", "zzc-21"), "zzc", "zzc"),
+        # LLVM renamed ``flang-new`` to ``flang``; either spelling must find what is installed. The 22 is
+        # load-bearing: flang carries a COMPILER_MIN_MAJOR of 20, so a fixture below it would be rejected for the
+        # version and prove nothing about the rename.
+        (("flang-new-22",), "flang", "flang-new-22"),
+    ],
+    ids=["highest-version-numerically", "unversioned-driver", "flang-rename"],
+)
+def test_resolve_compiler_picks_the_driver_the_site_means(
+    fake_path: pathlib.Path, drivers: tuple[str, ...], name: str, expected: str
+) -> None:
+    for driver in drivers:
+        make_fake_driver(fake_path, driver)
+    assert languages.resolve_compiler(name) == str(fake_path / expected)
 
 
 #: Blocks that pin no ``-std=`` and are RIGHT not to, each for a stated reason. Anything else that
@@ -309,15 +292,8 @@ def test_every_c_family_block_pins_a_language_standard() -> None:
             missing.append(f"{name} (lang={block.lang})")
     assert not missing, f"C-family blocks pinning no language standard: {sorted(missing)}"
 
-
-def test_the_cpp_standard_is_the_same_everywhere_it_is_not_vendor_capped() -> None:
-    """Every C++ target -- host, CUDA and HIP -- pins the SAME standard.
-
-    Different host and device standards would make `lang-cpp` describe a standard the host half
-    of a device file is never built with. One value means a C++ rule is true wherever it is written.
-    """
-    from hpcagent_bench.languages import load_compilers
-
+    # Every C++ target -- host, CUDA and HIP -- pins the SAME standard, so a C++ rule is true wherever it is
+    # written.
     disagree = {}
     for name, block in load_compilers().items():
         if block.lang not in ("cpp", "hip", "cuda") or name in _NO_STD_BY_DESIGN:

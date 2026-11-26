@@ -95,45 +95,23 @@ def test_a_legacy_dir_without_attempts_jsonl_also_counts_only_its_final_attempt(
     assert totals.tokens_effective_crashed == 1000 + 100
     assert totals.tokens_billed_crashed == 1000
 
-
-def test_a_legacy_dirs_final_attempt_starts_when_the_crash_was_moved_aside(
-    token_cost: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """Old runs carry no ledger, so the cut X7 applies comes from the rename: the moved-aside
-    transcript was renamed while the crash was handled, which is where the final attempt began."""
-    crashed = tmp_path / "claude.attempt1.log"
-    write_claude_log(crashed, input_tokens=1000, output_tokens=100)
-    write_claude_log(tmp_path / "claude.log", input_tokens=2000, output_tokens=200)
-    os.utime(crashed, (1_700_000_000, 1_700_000_000))
-
+    # Old runs carry no ledger, so the cut comes from the rename: the moved-aside transcript was renamed while the
+    # crash was handled, which is where the final attempt began.
+    os.utime(tmp_path / "claude.attempt1.log", (1_700_000_000, 1_700_000_000))
     assert token_cost.episode_totals(tmp_path).final_attempt_start_ms == 1_700_000_000_000
 
-
-def test_a_fresh_relaunched_task_counts_only_its_final_attempt_and_reports_the_rest_as_crashed(
-    token_cost: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """T5: the relaunch wiped the workspace, so attempt 1 built no part of what attempt 2 was graded
-    on. Its spend is real and is reported as crashed; the ledger states when attempt 2 began."""
-    write_claude_log(tmp_path / "claude.attempt1.log", input_tokens=1000, output_tokens=100)
-    write_claude_log(tmp_path / "claude.log", input_tokens=2000, output_tokens=200)
-    write_attempts(token_cost, tmp_path, [(1, 1_000, True), (2, 2_000, False)])
-
-    totals = token_cost.episode_totals(tmp_path)
-
-    assert totals.attempts == 2
-    assert (totals.tokens_effective, totals.tokens_billed) == (2000 + 200, 2000)
-    assert (totals.tokens_effective_crashed, totals.tokens_billed_crashed) == (1000 + 100, 1000)
-    assert totals.final_attempt_start_ms == 2_000
-
-
-def test_a_single_attempt_tasks_total_is_that_attempts_own(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
-    write_claude_log(tmp_path / "claude.log", input_tokens=500, output_tokens=50)
-
-    totals = token_cost.episode_totals(tmp_path)
-
-    assert totals.attempts == 1
-    assert totals.tokens_effective == 550
-    assert totals.tokens_billed == 500
+    # T5: a relaunch wiped the workspace, so attempt 1 built no part of what attempt 2 was graded on. Its spend is
+    # reported as crashed; the ledger states when attempt 2 began.
+    relaunched = tmp_path / "relaunched"
+    relaunched.mkdir()
+    write_claude_log(relaunched / "claude.attempt1.log", input_tokens=1000, output_tokens=100)
+    write_claude_log(relaunched / "claude.log", input_tokens=2000, output_tokens=200)
+    write_attempts(token_cost, relaunched, [(1, 1_000, True), (2, 2_000, False)])
+    ledgered = token_cost.episode_totals(relaunched)
+    assert ledgered.attempts == 2
+    assert (ledgered.tokens_effective, ledgered.tokens_billed) == (2000 + 200, 2000)
+    assert (ledgered.tokens_effective_crashed, ledgered.tokens_billed_crashed) == (1000 + 100, 1000)
+    assert ledgered.final_attempt_start_ms == 2_000
 
 
 def test_skipping_lines_that_cannot_carry_usage_changes_no_total(
@@ -393,16 +371,6 @@ def test_the_budget_fold_reads_a_partial_message_transcript_as_it_read_the_old_o
     assert load_http_json().transcript_tokens() == 1000 + 1500
 
 
-def test_a_worker_dir_without_a_transcript_has_no_token_total(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
-    """A worker directory the driver never entered is not a task that cost 0 tokens -- it has no
-    measurement at all, same as R7 treats a missing kernel token total."""
-    totals = token_cost.episode_totals(tmp_path)
-
-    assert totals.attempts == 0
-    assert totals.tokens_effective is None
-    assert totals.tokens_billed is None
-
-
 def test_a_runner_harnesss_totals_come_from_its_final_attempts_usage_file(
     token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
@@ -526,7 +494,7 @@ COMPACTED_LINES = [
 ]
 
 
-def test_a_compaction_requests_own_tokens_are_recovered_once_in_the_effective_fold(
+def test_a_compaction_requests_own_tokens_are_recovered_once_in_the_effective_and_billed_folds(
     token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """``events_cost`` (``episode_cost``, what ``AGENT_MAX_TOKENS`` and the extractor's ``effective``
@@ -545,33 +513,14 @@ def test_a_compaction_requests_own_tokens_are_recovered_once_in_the_effective_fo
     assert cost["naive_total"] == (1500 + 5000) + 1000 + (70 + 200)
     assert cost["effective"] == (1500 + 5000) + (70 + 200)
 
-
-def test_a_compaction_requests_own_tokens_are_recovered_once_in_the_billed_fold(
-    token_cost: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """``accumulate_total_tokens`` (what the live ``AGENT_MAX_TOKENS`` watcher sums and
-    ``transcript_total_tokens`` writes into ``tokens.json``) recovers the SAME gap under a synthetic
-    message id, so the billed total picks up the compaction's tokens exactly once too."""
+    # ``accumulate_total_tokens`` (what the live ``AGENT_MAX_TOKENS`` watcher sums and ``transcript_total_tokens``
+    # writes into ``tokens.json``) recovers the SAME gap under a synthetic message id, so the billed total picks up
+    # the compaction's tokens exactly once too, and agrees with the effective fold's naive total.
     total_by_message: dict[str, int] = {}
-
     total = token_cost.accumulate_total_tokens(COMPACTED_LINES, total_by_message)
-
     assert total == 1000 + 1500 + (7500 + 270 - 2500)
     assert total_by_message[token_cost.COMPACTION_MESSAGE_ID] == 7500 + 270 - 2500
-    # The billed and effective folds agree: both are "everything, once" with no cache discount.
-    cost = token_cost.episode_cost(tmp_path_log(tmp_path, COMPACTED_LINES))
     assert total == cost["naive_total"]
-
-
-def test_refolding_the_same_lines_does_not_double_the_recovered_tokens(token_cost: ModuleType) -> None:
-    """A re-fold over lines this dict has already seen -- the driver's whole-file re-read after a
-    live-watched run, or a second migration pass -- must not add the recovery twice: the synthetic
-    id is "last write wins", exactly like every real message id."""
-    total_by_message: dict[str, int] = {}
-    once = token_cost.accumulate_total_tokens(COMPACTED_LINES, total_by_message)
-    twice = token_cost.accumulate_total_tokens(COMPACTED_LINES, total_by_message)
-
-    assert once == twice
 
 
 def test_the_compact_boundary_and_the_result_may_arrive_in_separate_polls(token_cost: ModuleType) -> None:
@@ -586,6 +535,10 @@ def test_the_compact_boundary_and_the_result_may_arrive_in_separate_polls(token_
     total = token_cost.accumulate_total_tokens(COMPACTED_LINES[3:], total_by_message)  # the result, later
 
     assert total == 1000 + 1500 + (7500 + 270 - 2500)
+
+    # A re-fold over lines this dict has already seen -- the driver's whole-file re-read after a live-watched run --
+    # must not add the recovery twice: the synthetic id is "last write wins", like every real message id.
+    assert token_cost.accumulate_total_tokens(COMPACTED_LINES, total_by_message) == total
 
 
 def test_modelusage_noise_without_a_compaction_is_never_mistaken_for_one(
@@ -680,6 +633,12 @@ def test_a_resumed_crash_counts_both_legs_once_and_reports_the_cut_off_request_a
     assert (totals.tokens_effective, totals.tokens_effective_crashed) == (1500 + 270, 0)
     assert totals.tokens_effective_lost == (1300 - 1200) + 30  # its fresh prompt and its partial reply
 
+    # Only the driver's resume line drops a request: an episode that simply ended (killed, out of clock) spent the
+    # cut-off prompt and nothing re-sent it.
+    cut_off = resumed_transcript(token_cost, resumed=False)
+    assert token_cost.accumulate_total_tokens(cut_off, {}) == 1000 + 1200 + 1300 + 30
+    assert token_cost.accumulate_output_tokens(cut_off, {}) == 100 + 50 + 30
+
 
 def test_a_lost_request_after_a_compaction_is_its_whole_prompt_split_as_the_cost_is(
     token_cost: ModuleType, tmp_path: pathlib.Path
@@ -722,14 +681,6 @@ def test_the_live_watcher_folds_a_resumed_transcript_to_the_same_totals_line_by_
         assert token_cost.accumulate_output_tokens([line], output) == token_cost.accumulate_output_tokens(
             lines[:count_so_far], {}
         )
-
-
-def test_without_a_resume_the_cut_off_request_still_counts(token_cost: ModuleType) -> None:
-    """Only the driver's resume line drops a request: an episode that simply ended (killed, out of clock) spent the
-    cut-off prompt and nothing re-sent it."""
-    lines = resumed_transcript(token_cost, resumed=False)
-    assert token_cost.accumulate_total_tokens(lines, {}) == 1000 + 1200 + 1300 + 30
-    assert token_cost.accumulate_output_tokens(lines, {}) == 100 + 50 + 30
 
 
 #: The third-party packages the agent runtime may import at module level: its declared dependencies

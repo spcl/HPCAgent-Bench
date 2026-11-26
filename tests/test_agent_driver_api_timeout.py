@@ -70,10 +70,8 @@ def test_every_other_ending_is_left_alone(driver: ModuleType, tmp_path: pathlib.
     """A finished run, the turn cap, and an agent that merely WROTE about a timeout."""
     assert driver.api_timeout(transcript(tmp_path, closing)) is False
     assert driver.api_timeout(tmp_path / "absent.log") is False
-
-
-def test_a_finished_run_is_still_not_a_crash(driver: ModuleType, tmp_path: pathlib.Path) -> None:
-    assert driver.closing_crashed(0, driver.transcript_closing(transcript(tmp_path, FINISHED))) is False
+    if closing == FINISHED:
+        assert driver.closing_crashed(0, driver.transcript_closing(transcript(tmp_path, FINISHED))) is False
 
 
 def closing_event(text: str) -> str:

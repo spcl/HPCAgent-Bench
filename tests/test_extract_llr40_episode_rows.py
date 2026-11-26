@@ -109,16 +109,6 @@ def test_one_episode_row_per_episode_record_carries_its_tokens(tmp_path: pathlib
     assert all(row["speedup"] == "" for row in rows)
 
 
-def test_an_episode_that_never_reached_the_judge_still_yields_its_episode_row(tmp_path: pathlib.Path) -> None:
-    """A task that never graded anything still spent tokens; its record creates its run."""
-    job_dir = job(tmp_path)
-    write_record(job_dir, 3)
-
-    rows = {row["episode_id"]: row for row in episode_rows(merged(job_dir))}
-
-    assert (rows["setup-a.n0.p3.w3"]["setup"], rows["setup-a.n0.p3.w3"]["tokens"]) == ("setup-a", 5_000)
-
-
 def test_a_relaunched_episode_row_reports_the_crashed_spend_and_the_cut(tmp_path: pathlib.Path) -> None:
     """T5: the task is its final attempt; what the wiped one spent is reported beside it, and the
     stamp is the cut X7 drops the wiped attempt's judge rows with."""

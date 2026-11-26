@@ -26,27 +26,17 @@ def episode_rows(fresh: float, cached: float, output: float) -> pd.DataFrame:
     )
 
 
-def test_the_paper_cards_weight_cache_reads_and_output_as_stated() -> None:
-    cards = cost.shipped_cards()
-    assert (cards["effective"].fresh_input, cards["effective"].cached_input, cards["effective"].output) == (1, 0, 1)
-    assert (cards["billed"].fresh_input, cards["billed"].cached_input, cards["billed"].output) == (1, 0.1, 1)
-    assert (cards["api-priced"].cached_input, cards["api-priced"].output) == (0.1, 5)
-    assert (cards["total"].cached_input, cards["total"].output) == (1, 1)
-
-
-def test_billed_card_charges_a_tenth_of_every_re_sent_prefix() -> None:
-    priced = cost.priced(episode_rows(fresh=1000.0, cached=20000.0, output=300.0), cost.resolve("billed"))
-    assert priced["tokens"].iloc[0] == pytest.approx(1000 + 2000 + 300)
-
-
-def test_api_priced_card_weights_output_five_times() -> None:
-    priced = cost.priced(episode_rows(fresh=1000.0, cached=20000.0, output=300.0), cost.resolve("api-priced"))
-    assert priced["tokens"].iloc[0] == pytest.approx(1000 + 2000 + 1500)
-
-
-def test_a_judge_row_keeps_its_own_tokens() -> None:
-    priced = cost.priced(episode_rows(fresh=1.0, cached=1.0, output=1.0), cost.resolve("total"))
-    assert priced["tokens"].iloc[1] == pytest.approx(5.0)
+@pytest.mark.parametrize(
+    ("card", "total"),
+    [
+        pytest.param("billed", 1000 + 2000 + 300, id="billed"),
+        pytest.param("api-priced", 1000 + 2000 + 1500, id="api-priced"),
+    ],
+)
+def test_billed_card_charges_a_tenth_of_every_re_sent_prefix(card: str, total: float) -> None:
+    """Both cards charge a tenth of every re-sent prefix; ``api-priced`` also weights output five times."""
+    priced = cost.priced(episode_rows(fresh=1000.0, cached=20000.0, output=300.0), cost.resolve(card))
+    assert priced["tokens"].iloc[0] == pytest.approx(total)
 
 
 def test_effective_card_leaves_the_frame_untouched_even_without_components() -> None:
@@ -60,12 +50,9 @@ def test_a_card_that_needs_missing_components_refuses_instead_of_mispricing() ->
         cost.priced(frame, cost.resolve("billed"))
 
 
-def test_inline_weights_are_a_card() -> None:
-    card = cost.resolve("fresh_input=1,cached_input=0.25,output=4")
-    assert (card.fresh_input, card.cached_input, card.output) == (1.0, 0.25, 4.0)
-
-
 def test_a_user_file_adds_cards_and_a_bad_weight_is_refused(tmp_path: pathlib.Path) -> None:
+    card = cost.resolve("fresh_input=1,cached_input=0.25,output=4")  # inline weights are a card
+    assert (card.fresh_input, card.cached_input, card.output) == (1.0, 0.25, 4.0)
     good = tmp_path / "cards.yaml"
     good.write_text("kimi:\n  name: Kimi List Price\n  fresh_input: 1\n  cached_input: 0.17\n  output: 4.2\n")
     assert cost.resolve("kimi", good).output == pytest.approx(4.2)

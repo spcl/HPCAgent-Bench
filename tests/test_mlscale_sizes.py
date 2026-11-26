@@ -69,17 +69,12 @@ def test_every_fuzz_cell_is_64_aligned_at_every_p_up_to_its_floor(kernel: str, f
             assert int(params[sym]) % QUANTUM == 0, (cell["label"], sym, params[sym])
         for sym in aligned:
             assert int(params[sym]) % (QUANTUM * floor) == 0, (cell["label"], sym, params[sym])
-
-
-@pytest.mark.parametrize("kernel", KERNELS)
-def test_a_declared_fuzz_set_holds_only_64_multiples(kernel: str) -> None:
-    """A set-valued draw is never rounded (its members are the only legal values), so the manifest
-    must declare them on the grid; a split symbol is never set-valued unless it is exempt."""
-    spec = BenchSpec.load(kernel)
+    # a set-valued draw is never rounded (its members are the only legal values), so the manifest must declare
+    # them on the grid; a split symbol is never set-valued unless it is exempt
     for sym, value in spec.parameters["fuzzed"].items():
         if not isinstance(value, dict) or sym in exempt(spec) or sym not in shape_symbols(spec):
             continue
-        assert sym not in mpi_sizing.aligned_symbols(spec.mpi), sym
+        assert sym not in aligned, sym
         assert all(int(m) % QUANTUM == 0 for m in value["set"]), (sym, value)
 
 

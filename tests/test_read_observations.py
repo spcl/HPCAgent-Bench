@@ -54,17 +54,6 @@ def write_pair(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     return csv_path, db_path
 
 
-def test_a_db_and_its_csv_give_the_same_rows_in_the_same_order(tmp_path: pathlib.Path) -> None:
-    csv_path, db_path = write_pair(tmp_path)
-    from_csv = studies.read_observations(csv_path)
-    from_db = studies.read_observations(db_path)
-    assert list(from_db.columns) == list(FIELDS)
-    assert list(from_csv.columns) == list(FIELDS)
-    assert from_db["kernel"].tolist() == from_csv["kernel"].tolist() == ["k2", "k1"]
-    pd.testing.assert_series_equal(from_db["speedup"], from_csv["speedup"], check_dtype=False)
-    pd.testing.assert_series_equal(from_db["tokens"], from_csv["tokens"], check_dtype=False)
-
-
 def test_the_token_columns_have_the_same_dtype_from_either_file(tmp_path: pathlib.Path) -> None:
     """Same rows AND the same dtype. An untyped CREATE TABLE gave the columns no affinity, so the
     "" the CSV writer spells a missing cell as was stored as TEXT and made the whole column object
@@ -73,6 +62,9 @@ def test_the_token_columns_have_the_same_dtype_from_either_file(tmp_path: pathli
     csv_path, db_path = write_pair(tmp_path)
     from_csv = studies.read_observations(csv_path)
     from_db = studies.read_observations(db_path)
+    assert list(from_db.columns) == list(FIELDS)
+    assert list(from_csv.columns) == list(FIELDS)
+    assert from_db["kernel"].tolist() == from_csv["kernel"].tolist() == ["k2", "k1"]
     for column in ("tokens", "tokens_crashed", "speedup"):
         assert from_db[column].dtype == from_csv[column].dtype, column
         pd.testing.assert_series_equal(from_db[column], from_csv[column])

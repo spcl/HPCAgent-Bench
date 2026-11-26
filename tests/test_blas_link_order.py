@@ -46,9 +46,9 @@ def test_the_oracle_builds_a_loadable_cblas_object(tmp_path: pathlib.Path, backe
 
 
 def test_the_shared_backend_link_line_puts_the_libraries_after_the_objects(tmp_path: pathlib.Path) -> None:
-    cmds = languages.build_kernel_lib_commands(
-        [(Language.C, tmp_path / "k.c")], tmp_path / "libk.so", build_dir=tmp_path
-    )
+    src = tmp_path / "probe.c"
+    src.write_text(_GEMM_TU)
+    cmds = languages.build_kernel_lib_commands([(Language.C, src)], tmp_path / "libprobe.so", build_dir=tmp_path)
     link = cmds[-1]
     last_obj = max(i for i, t in enumerate(link) if t.endswith(".o"))
     blas = languages.library_build_flags(Language.C, languages.ALWAYS_LINKED_LIBRARIES)[1]
@@ -56,13 +56,7 @@ def test_the_shared_backend_link_line_puts_the_libraries_after_the_objects(tmp_p
     missing = [t for t in blas if t not in link]
     assert not missing, f"BLAS tokens absent from the link line: {missing} not in {link}"
     assert all(link.index(t) > last_obj for t in blas), f"BLAS token before the last object: {link}"
-
-
-def test_the_shared_backend_compile_line_can_find_the_cblas_header(tmp_path: pathlib.Path) -> None:
-    """A -l on the link step is useless if <cblas.h> never resolved at compile time."""
-    src = tmp_path / "probe.c"
-    src.write_text(_GEMM_TU)
-    cmds = languages.build_kernel_lib_commands([(Language.C, src)], tmp_path / "libprobe.so", build_dir=tmp_path)
+    # A -l on the link step is useless if <cblas.h> never resolved at compile time.
     for cmd in cmds:
         r = subprocess.run(cmd, capture_output=True, text=True, check=False)
         assert r.returncode == 0, f"{' '.join(cmd)}\n{r.stderr[:800]}"

@@ -191,19 +191,17 @@ def test_an_unknown_packet_tool_stops_the_server() -> None:
     assert "nosuchtool" in result.stderr
 
 
-def test_without_a_packet_the_driver_adds_no_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No packet: no packet tool is allowed."""
+@pytest.mark.parametrize(("env", "tool_count"), [({}, 0), (AUTOKERNEL, 1)], ids=["no_packet", "autokernel"])
+def test_the_driver_allows_the_packet_tools(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], tool_count: int
+) -> None:
+    """No packet: no packet tool is allowed. The autokernel packet: claude's allow-list gains its tool, once, as
+    the server serves it."""
     monkeypatch.delenv(TOOLS_ENV, raising=False)
-    driver = load_driver()
-    assert "experiment" not in driver.agent_tools()
-
-
-def test_the_driver_allows_the_packet_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The autokernel packet: claude's allow-list gains its tool."""
-    for name, value in AUTOKERNEL.items():
+    for name, value in env.items():
         monkeypatch.setenv(name, value)
     driver = load_driver()
-    assert driver.agent_tools().count("experiment") == 1, "allowed once, as the server serves it"
+    assert driver.agent_tools().count("experiment") == tool_count
 
 
 def workflow_vars(packet: str) -> dict[str, str]:
@@ -212,13 +210,12 @@ def workflow_vars(packet: str) -> dict[str, str]:
     return next(dict(block.vars) for block in prompt.blocks if block.id == prompt_build.WORKFLOW_BLOCK)
 
 
-def test_without_a_packet_the_resolved_prompt_fills_no_workflow() -> None:
-    assert workflow_vars("") == {}
-
-
-def test_the_packets_workflow_fills_the_workflow_slot_of_the_resolved_prompt() -> None:
-    """The staged prompt.md carries the workflow, so the driver has no slot left to fill."""
-    assert workflow_vars("autokernel") == {"WORKFLOW": WORKFLOW.read_text(encoding="utf-8").rstrip("\n")}
+@pytest.mark.parametrize(("packet", "filled"), [("", False), ("autokernel", True)], ids=["no_packet", "autokernel"])
+def test_the_packets_workflow_fills_the_workflow_slot_of_the_resolved_prompt(packet: str, filled: bool) -> None:
+    """The staged prompt.md carries the workflow, so the driver has no slot left to fill; without a packet the
+    resolved prompt fills no workflow."""
+    expected = {"WORKFLOW": WORKFLOW.read_text(encoding="utf-8").rstrip("\n")} if filled else {}
+    assert workflow_vars(packet) == expected
 
 
 def test_an_overlay_its_plugin_does_not_ship_is_refused() -> None:

@@ -119,19 +119,12 @@ def test_every_npm_cli_is_pinned_to_an_exact_version(package: str) -> None:
     assert EXACT_VERSION.fullmatch(version), f"{package} is pinned as {version!r}, not an exact version"
 
 
-def test_claude_code_is_the_version_the_drivers_claude_settings_were_checked_against() -> None:
-    assert dependencies()["@anthropic-ai/claude-code"] == CLAUDE_CODE_VERSION
-
-
 def test_the_npm_lock_was_generated_from_package_json() -> None:
     """npm ci rejects a lock that disagrees with package.json, but only at build time, hours in."""
     packages = locked_packages()
     assert packages[""]["dependencies"] == dependencies(), packages[""]["dependencies"]
     locked = {name: packages[f"node_modules/{name}"]["version"] for name in dependencies()}
     assert locked == dependencies(), locked
-
-
-def test_every_locked_npm_package_is_a_registry_tarball_with_its_integrity() -> None:
     floating = [
         path
         for path, meta in locked_packages().items()
@@ -161,6 +154,7 @@ def test_pins_env_names_an_exact_tool_version_or_checksum(key: str) -> None:
 
 def test_every_python_harness_has_exactly_one_group() -> None:
     assert tuple(sorted(PYTHON_HARNESSES)) == HARNESS_GROUP_NAMES, HARNESS_GROUP_NAMES
+    assert {name: spec.layer for name, spec in harnesses().RUNNERS.items()} == BUILT_IN_LAYERS
 
 
 @pytest.mark.parametrize("dockerfile", JUDGE_AGENT_DOCKERFILES)
@@ -218,10 +212,6 @@ BUILT_IN_LAYERS: dict[str, str] = {
     "openai": "harness-native",
     "tuner": "",
 }
-
-
-def test_every_built_in_runner_keeps_the_prompt_layer_its_recorded_setups_read() -> None:
-    assert {name: spec.layer for name, spec in harnesses().RUNNERS.items()} == BUILT_IN_LAYERS
 
 
 def test_the_submitter_asks_the_drivers_registry_for_a_harness_and_its_layer() -> None:

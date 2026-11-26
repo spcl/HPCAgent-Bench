@@ -5,8 +5,10 @@ variadic ``max``/``min``, ``np.var`` as a scalar reduction, Fortran ABI order); 
 ``tests/test_e2e_numerical.py``'s."""
 
 import ast
+import operator
 import pathlib
 import types
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -234,23 +236,37 @@ def test_add_at_flattened_2d_index_and_value() -> None:
     assert "deexx[ikb[__sat1_0, __sat1_1]] += delta[__sat1_0, __sat1_1]" in out
 
 
-def test_add_at_scalar_value_broadcasts() -> None:
-    """``np.add.at(counts, bin_id, 1)`` (azimint_naive): a scalar value is not an
-    array name or its negation -- it broadcasts the SAME literal to every
-    scatter iteration (a counting histogram), not a per-element gather."""
-    out = scatter("np.add.at(counts, bin_id, 1)", {"bin_id": ["E"]})
-    assert "for __sat1 in range(E):" in out
-    assert "counts[bin_id[__sat1]] += 1" in out
-
-
-def test_add_at_broadcast_to_value_peeled() -> None:
-    """``np.add.at(out, idx, np.broadcast_to(val, (E,)))``: the wrapper carries
-    no information ``scalarize_at_iters`` needs once ``val`` is scalarised
-    structurally, so it is peeled to ``val`` rather than reaching the emitter
-    as a raw (unlowered) ``np.broadcast_to`` call."""
-    out = scatter("np.add.at(out, idx, np.broadcast_to(val, (E,)))", {"idx": ["E"], "val": ["E"]})
-    assert "out[idx[__sat1]] += val[__sat1]" in out
-    assert "broadcast_to" not in out
+@pytest.mark.parametrize(
+    ("src", "shapes", "present", "absent"),
+    [
+        (
+            "np.add.at(counts, bin_id, 1)",
+            {"bin_id": ["E"]},
+            ["for __sat1 in range(E):", "counts[bin_id[__sat1]] += 1"],
+            [],
+        ),
+        (
+            "np.add.at(out, idx, np.broadcast_to(val, (E,)))",
+            {"idx": ["E"], "val": ["E"]},
+            ["out[idx[__sat1]] += val[__sat1]"],
+            ["broadcast_to"],
+        ),
+    ],
+    ids=["scalar_literal", "broadcast_to_peeled"],
+)
+def test_add_at_scalar_value_broadcasts(
+    src: str, shapes: dict[str, list[str]], present: list[str], absent: list[str]
+) -> None:
+    """``np.add.at(counts, bin_id, 1)`` (azimint_naive): a scalar value is not an array name or its
+    negation -- it broadcasts the SAME literal to every scatter iteration (a counting histogram), not a
+    per-element gather. ``np.add.at(out, idx, np.broadcast_to(val, (E,)))``: the wrapper carries no
+    information ``scalarize_at_iters`` needs once ``val`` is scalarised structurally, so it is peeled to
+    ``val`` rather than reaching the emitter as a raw (unlowered) ``np.broadcast_to`` call."""
+    out = scatter(src, shapes)
+    for fragment in present:
+        assert fragment in out
+    for fragment in absent:
+        assert fragment not in out
 
 
 def test_add_at_boolean_index_refused_not_mislowered() -> None:
@@ -506,11 +522,24 @@ def pad(src: str, table: dict[str, tuple[str, ...]]) -> str:
     return ast.unparse(tree).strip()
 
 
-def test_pad_trailing_slice_on_3d_partial_index() -> None:
-    # ``TN[:, 1:] = T[:, :-1]`` on a 3-D array gains the implicit trailing axis.
-    out = pad("TN[:, 1:] = T[:, :-1]", {"TN": ("Z", "Y", "X"), "T": ("Z", "Y", "X")})
-    assert "TN[:, 1:, :]" in out
-    assert "T[:, :-1, :]" in out
+@pytest.mark.parametrize(
+    ("src", "table", "present", "counts"),
+    [
+        # ``TN[:, 1:] = T[:, :-1]`` on a 3-D array gains the implicit trailing axis.
+        ("TN[:, 1:] = T[:, :-1]", {"TN": ("Z", "Y", "X"), "T": ("Z", "Y", "X")}, ["TN[:, 1:, :]", "T[:, :-1, :]"], {}),
+        # 4 real slices already cover the 4-D source -> no extra pad despite newaxis.
+        ("c = inp[:, a:b, c:d, :, None]", {"inp": ("N", "H", "W", "Ci"), "c": ("X",)}, [], {"None": 1, ":": 4}),
+    ],
+    ids=["partial_index_3d", "newaxis_full_source_rank"],
+)
+def test_pad_trailing_slice_on_3d_partial_index(
+    src: str, table: dict[str, tuple[str, ...]], present: list[str], counts: dict[str, int]
+) -> None:
+    out = pad(src, table)
+    for fragment in present:
+        assert fragment in out
+    for fragment, count in counts.items():
+        assert out.count(fragment) == count
 
 
 # O. .copy() / np.copy on a Subscript receiver (row materialize)               #
@@ -545,16 +574,6 @@ def test_body_local_dim_alias_excluded_from_params() -> None:
 
 
 # T. Shape inference sees through .astype / Compare / BinOp wrappers            #
-
-
-# U. Trailing-slice pad does NOT count newaxis against the array rank           #
-
-
-def test_pad_newaxis_full_source_rank_not_padded() -> None:
-    # 4 real slices already cover the 4-D source -> no extra pad despite newaxis.
-    out = pad("c = inp[:, a:b, c:d, :, None]", {"inp": ("N", "H", "W", "Ci"), "c": ("X",)})
-    assert out.count("None") == 1
-    assert out.count(":") == 4
 
 
 def test_fortran_abi_param_order_matches_binding() -> None:
@@ -1141,41 +1160,47 @@ def exec_desugared(
     return scope
 
 
-def test_cholesky_lowering_matches_numpy() -> None:
+def cholesky_case() -> tuple:
     rng = np.random.default_rng(0)
     n = 7
     M = rng.random((n, n))
     A = M @ M.T + n * np.eye(n)  # SPD
     src = "def kernel(A, out):\n    out[:] = np.linalg.cholesky(A)\n"
     arrays = [("A", "float64", ("N", "N")), ("out", "float64", ("N", "N"))]
-    sc = exec_desugared(src, arrays, ["A", "out"], {"A": A.copy(), "out": np.zeros((n, n))})
-    assert np.allclose(sc["out"], np.linalg.cholesky(A), rtol=1e-12, atol=1e-12)
+    scope = {"A": A.copy(), "out": np.zeros((n, n))}
+    return src, arrays, ["A", "out"], scope, "out", np.linalg.cholesky(A), 1e-12
 
 
-def test_solve_lowering_matches_numpy_1d_and_2d() -> None:
+def solve_case(rhs_shape: tuple[str, ...]) -> tuple:
     rng = np.random.default_rng(1)
     n, k = 6, 3
     A = rng.random((n, n)) + n * np.eye(n)
-    b1 = rng.random(n)
-    B2 = rng.random((n, k))
-    s1 = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
-    a1 = [("A", "float64", ("N", "N")), ("b", "float64", ("N",)), ("x", "float64", ("N",))]
-    sc1 = exec_desugared(s1, a1, ["A", "b", "x"], {"A": A.copy(), "b": b1.copy(), "x": np.zeros(n)})
-    assert np.allclose(sc1["x"], np.linalg.solve(A, b1), rtol=1e-11, atol=1e-11)
-    s2 = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
-    a2 = [("A", "float64", ("N", "N")), ("b", "float64", ("N", "K")), ("x", "float64", ("N", "K"))]
-    sc2 = exec_desugared(s2, a2, ["A", "b", "x"], {"A": A.copy(), "b": B2.copy(), "x": np.zeros((n, k))})
-    assert np.allclose(sc2["x"], np.linalg.solve(A, B2), rtol=1e-11, atol=1e-11)
+    b = rng.random(n) if len(rhs_shape) == 1 else rng.random((n, k))
+    src = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
+    arrays = [("A", "float64", ("N", "N")), ("b", "float64", rhs_shape), ("x", "float64", rhs_shape)]
+    scope = {"A": A.copy(), "b": b.copy(), "x": np.zeros(b.shape)}
+    return src, arrays, ["A", "b", "x"], scope, "x", np.linalg.solve(A, b), 1e-11
 
 
-def test_inv_lowering_matches_numpy_complex() -> None:
+def inv_case() -> tuple:
     rng = np.random.default_rng(2)
     n = 5
     A = rng.random((n, n)) + 1j * rng.random((n, n)) + n * np.eye(n)
     src = "def kernel(A, out):\n    out[:] = np.linalg.inv(A)\n"
     arrays = [("A", "complex128", ("N", "N")), ("out", "complex128", ("N", "N"))]
-    sc = exec_desugared(src, arrays, ["A", "out"], {"A": A.copy(), "out": np.zeros((n, n), np.complex128)})
-    assert np.allclose(sc["out"], np.linalg.inv(A), rtol=1e-10, atol=1e-10)
+    scope = {"A": A.copy(), "out": np.zeros((n, n), np.complex128)}
+    return src, arrays, ["A", "out"], scope, "out", np.linalg.inv(A), 1e-10
+
+
+@pytest.mark.parametrize(
+    "case",
+    [cholesky_case(), solve_case(("N",)), solve_case(("N", "K")), inv_case()],
+    ids=["cholesky", "solve_1d", "solve_2d", "inv_complex"],
+)
+def test_cholesky_lowering_matches_numpy(case: tuple) -> None:
+    src, arrays, input_args, scope, out_name, expected, tol = case
+    sc = exec_desugared(src, arrays, input_args, scope)
+    assert np.allclose(sc[out_name], expected, rtol=tol, atol=tol)
 
 
 EIGH_SRC = (
@@ -1370,12 +1395,20 @@ def float_dtypes(kir: KernelIR) -> list[str]:
     return [a.dtype for a in kir.arrays] + [s.dtype for s in kir.scalars] + list(kir.local_dtypes.values())
 
 
+def int_dtypes(kir: KernelIR) -> list[str]:
+    return [a.dtype for a in kir.arrays if a.dtype.startswith(("int", "uint"))]
+
+
 def test_apply_precision_narrows_helper_sub_irs_too() -> None:
     from hpcagent_bench.translators.numpyto_common.ir import apply_precision
 
     kir = kir_with_helper()
     assert kir.helpers, "fixture kernel no longer carries a non-inlined helper -- pick another"
+    before = {h.kernel_name: int_dtypes(h) for h in kir.helpers}
     apply_precision(kir, "float32")
+    after = {h.kernel_name: int_dtypes(h) for h in kir.helpers}
+    # The narrow is float/complex only -- an index array inside a helper must stay integer.
+    assert before == after, f"apply_precision changed integer dtypes inside a helper: {before} -> {after}"
     for helper in kir.helpers:
         assert helper.float_precision == "float32", (
             f"helper {helper.kernel_name!r} kept float_precision={helper.float_precision!r}: the caller "
@@ -1383,17 +1416,6 @@ def test_apply_precision_narrows_helper_sub_irs_too() -> None:
         )
         stale = [d for d in float_dtypes(helper) if d in ("float64", "complex128")]
         assert not stale, f"helper {helper.kernel_name!r} kept fp64 dtypes {sorted(set(stale))} after apply_precision"
-
-
-def test_apply_precision_leaves_integers_alone_in_helpers() -> None:
-    """The narrow is float/complex only -- an index array inside a helper must stay integer."""
-    from hpcagent_bench.translators.numpyto_common.ir import apply_precision
-
-    kir = kir_with_helper()
-    before = {h.kernel_name: [a.dtype for a in h.arrays if a.dtype.startswith(("int", "uint"))] for h in kir.helpers}
-    apply_precision(kir, "float32")
-    after = {h.kernel_name: [a.dtype for a in h.arrays if a.dtype.startswith(("int", "uint"))] for h in kir.helpers}
-    assert before == after, f"apply_precision changed integer dtypes inside a helper: {before} -> {after}"
 
 
 # U. A `parameters:` preset entry used as a truth value is an INTEGER param     #
@@ -1422,23 +1444,37 @@ def test_fortran_wraps_a_preset_symbol_used_as_a_condition() -> None:
 VEC = ("float64", ("N",))
 
 
-def test_listcomp_over_constant_range_unrolls_a_runtime_body() -> None:
-    """``[f(x, i) for i in range(3)]`` -> a list display of the substituted bodies:
-    only the loop (the part the frontend cannot represent) goes away."""
-    src = "def kernel(x, out):\n    g = [np.sin(x[i]) for i in range(3)]\n    out[0] = g[0] + g[1] + g[2]\n"
+@pytest.mark.parametrize(
+    ("src", "present", "absent", "counts"),
+    [
+        (
+            "def kernel(x, out):\n    g = [np.sin(x[i]) for i in range(3)]\n    out[0] = g[0] + g[1] + g[2]\n",
+            ["np.sin(x[0])", "np.sin(x[2])"],
+            ["for i in range"],
+            {"np.sin(": 3},
+        ),
+        (
+            "def kernel(x, out):\n    fracs = (0.5, 1.0)\n    g = [x[0] * f for f in fracs]\n    out[0] = g[0] + g[1]\n",
+            ["g = [x[0] * 0.5, x[0] * 1.0]"],
+            [],
+            {},
+        ),
+    ],
+    ids=["range", "const_name_table"],
+)
+def test_listcomp_over_constant_range_unrolls_a_runtime_body(
+    src: str, present: list[str], absent: list[str], counts: dict[str, int]
+) -> None:
+    """``[f(x, i) for i in range(3)]`` -> a list display of the substituted bodies: only the loop (the
+    part the frontend cannot represent) goes away. The iterable may also be a NAME, resolved through the
+    same ``const_name_values`` table the constant fold uses -- not a second constant evaluator."""
     out = desugar(src, [("x", *VEC), ("out", *VEC)], [], ["x", "out"], None)
-    assert "for i in range" not in out, f"comprehension survived the unroll:\n{out}"
-    assert out.count("np.sin(") == 3, f"body not copied once per element:\n{out}"
-    assert "np.sin(x[0])" in out, out
-    assert "np.sin(x[2])" in out, out
-
-
-def test_listcomp_iterable_resolved_through_the_const_name_table() -> None:
-    """The iterable may also be a NAME, resolved through the same ``const_name_values``
-    table the constant fold uses -- not a second constant evaluator."""
-    src = "def kernel(x, out):\n    fracs = (0.5, 1.0)\n    g = [x[0] * f for f in fracs]\n    out[0] = g[0] + g[1]\n"
-    out = desugar(src, [("x", *VEC), ("out", *VEC)], [], ["x", "out"], None)
-    assert "g = [x[0] * 0.5, x[0] * 1.0]" in out, out
+    for fragment in absent:
+        assert fragment not in out, f"comprehension survived the unroll:\n{out}"
+    for fragment, count in counts.items():
+        assert out.count(fragment) == count, f"body not copied once per element:\n{out}"
+    for fragment in present:
+        assert fragment in out, out
 
 
 @pytest.mark.parametrize(
@@ -1496,51 +1532,66 @@ def keepdims_src(call: str) -> str:
     return f"def kernel(x, out):\n    t = x[0]\n    t = x\n    m = {call}\n    out[:] = x - m\n"
 
 
-def test_keepdims_puts_the_length_1_axis_back_at_its_own_position() -> None:
-    """``np.sum(x, axis=1, keepdims=True)`` on ``(N, M, K)`` is ``(N, 1, K)`` -- the
-    axis comes back WHERE IT WAS. Appending it instead would broadcast the reduction
-    against the wrong axis and still typecheck, so the position is asserted, not the
-    rank."""
-    src = keepdims_src("np.sum(t, axis=1, keepdims=True)")
-    out = desugar(src, D3, [], ["x", "out"], "dace")
-    assert "keepdims" not in out, f"dace's _sum takes no keepdims kwarg:\n{out}"
-    assert "np.sum(t__ssa1, axis=1)[:, None, ...]" in out, f"axis not restored at position 1:\n{out}"
+@pytest.mark.parametrize(
+    ("call", "arrays", "shape", "divisor", "flip", "expected", "reference"),
+    [
+        (
+            "np.sum(t, axis=1, keepdims=True)",
+            D3,
+            (3, 4, 5),
+            7.0,
+            False,
+            "np.sum(t__ssa1, axis=1)[:, None, ...]",
+            lambda x: np.sum(x, axis=1, keepdims=True),
+        ),
+        (
+            "np.max(t, axis=-2, keepdims=True)",
+            D3,
+            (3, 4, 5),
+            3.0,
+            True,
+            "np.max(t__ssa1, axis=-2)[..., None, :]",
+            lambda x: np.max(x, axis=-2, keepdims=True),
+        ),
+        (
+            "np.mean(t, axis=(1, 3), keepdims=True)",
+            D4,
+            (2, 3, 4, 5),
+            11.0,
+            False,
+            "np.mean(t__ssa1, axis=(1, 3))[:, None, :, None, ...]",
+            lambda x: np.mean(x, axis=(1, 3), keepdims=True),
+        ),
+    ],
+    ids=["positive_axis_in_place", "negative_axis_at_the_back", "tuple_axis_in_place"],
+)
+def test_keepdims_puts_the_length_1_axis_back_at_its_own_position(
+    call: str,
+    arrays: list[tuple[str, str, tuple[str, ...]]],
+    shape: tuple[int, ...],
+    divisor: float,
+    flip: bool,
+    expected: str,
+    reference: Callable[[np.ndarray], np.ndarray],
+) -> None:
+    """``np.sum(x, axis=1, keepdims=True)`` on ``(N, M, K)`` is ``(N, 1, K)`` -- the axis comes back
+    WHERE IT WAS. Appending it instead would broadcast the reduction against the wrong axis and still
+    typecheck, so the position is asserted, not the rank. A negative axis counts from the END, and the
+    rank that resolves it is what this pass does not have, so it anchors on a TRAILING ellipsis
+    (``axis=-2`` -> ``[..., None, :]``). A NON-CONTIGUOUS tuple axis is the case a naive "append k ones"
+    gets wrong: ``axis=(1, 3)`` on ``(N, M, K, L)`` is ``(N, 1, K, 1)``, not ``(N, K, 1, 1)``."""
+    src = keepdims_src(call)
+    out = desugar(src, arrays, [], ["x", "out"], "dace")
+    assert "keepdims" not in out, f"dace's reductions take no keepdims kwarg:\n{out}"
+    assert expected in out, f"axis not restored in place:\n{out}"
 
-    x = np.arange(3 * 4 * 5, dtype=np.float64).reshape(3, 4, 5) / 7.0
-    ref, got = np.zeros((3, 4, 5)), np.zeros((3, 4, 5))
+    x = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    x = (x[::-1] if flip else x) / divisor
+    ref, got = np.zeros(shape), np.zeros(shape)
     exec_source(src, [x.copy(), ref])
-    exec_desugared(src, D3, ["x", "out"], {"x": x.copy(), "out": got}, backend="dace")
+    exec_desugared(src, arrays, ["x", "out"], {"x": x.copy(), "out": got}, backend="dace")
     assert np.array_equal(ref, got), "desugared keepdims does not match the verbatim numpy"
-    assert np.array_equal(ref, x - np.sum(x, axis=1, keepdims=True)), "the fixture itself is wrong"
-
-
-def test_keepdims_negative_axis_anchors_at_the_back() -> None:
-    """A negative axis counts from the END, and the rank that resolves it is exactly
-    what this pass does not have -- so the entries anchor on a TRAILING ellipsis
-    instead: ``axis=-2`` -> ``[..., None, :]``, never ``[:, None, ...]``."""
-    src = keepdims_src("np.max(t, axis=-2, keepdims=True)")
-    out = desugar(src, D3, [], ["x", "out"], "dace")
-    assert "np.max(t__ssa1, axis=-2)[..., None, :]" in out, f"negative axis restored at the front:\n{out}"
-
-    x = np.arange(3 * 4 * 5, dtype=np.float64).reshape(3, 4, 5)[::-1] / 3.0
-    ref, got = np.zeros((3, 4, 5)), np.zeros((3, 4, 5))
-    exec_source(src, [x.copy(), ref])
-    exec_desugared(src, D3, ["x", "out"], {"x": x.copy(), "out": got}, backend="dace")
-    assert np.array_equal(ref, got), "desugared negative-axis keepdims does not match verbatim numpy"
-
-
-def test_keepdims_tuple_axis_restores_every_reduced_axis_in_place() -> None:
-    """A NON-CONTIGUOUS tuple axis is the case a naive "append k ones" gets wrong:
-    ``axis=(1, 3)`` on ``(N, M, K, L)`` is ``(N, 1, K, 1)``, not ``(N, K, 1, 1)``."""
-    src = keepdims_src("np.mean(t, axis=(1, 3), keepdims=True)")
-    out = desugar(src, D4, [], ["x", "out"], "dace")
-    assert "np.mean(t__ssa1, axis=(1, 3))[:, None, :, None, ...]" in out, f"axes not restored in place:\n{out}"
-
-    x = np.arange(2 * 3 * 4 * 5, dtype=np.float64).reshape(2, 3, 4, 5) / 11.0
-    ref, got = np.zeros((2, 3, 4, 5)), np.zeros((2, 3, 4, 5))
-    exec_source(src, [x.copy(), ref])
-    exec_desugared(src, D4, ["x", "out"], {"x": x.copy(), "out": got}, backend="dace")
-    assert np.array_equal(ref, got), "desugared tuple-axis keepdims does not match verbatim numpy"
+    assert np.array_equal(ref, x - reference(x)), "the fixture itself is wrong"
 
 
 @pytest.mark.parametrize(
@@ -1563,33 +1614,40 @@ def test_keepdims_bails_when_the_axes_do_not_resolve(call: str) -> None:
     assert "keepdims=True" in out, f"{call} must not be rewritten:\n{out}"
 
 
-def test_keepdims_left_to_the_loop_lowering_when_the_rank_is_known() -> None:
-    """No churn: with the operand's rank in hand ``hoist_reduce_axis`` still lowers the
-    same call to its explicit loop nest, and this pass never sees it."""
-    src = "def kernel(x, out):\n    m = np.sum(x, axis=1, keepdims=True)\n    out[:] = x - m\n"
-    out = desugar(src, D3, [], ["x", "out"], "dace")
-    assert "np.sum(" not in out, f"the loop lowering was pre-empted:\n{out}"
-    assert "None, ..." not in out, f"the loop lowering was pre-empted:\n{out}"
-    assert "np.empty((__rd0_d0, 1, __rd0_d2)" in out, f"keepdims loop nest missing its length-1 axis:\n{out}"
+@pytest.mark.parametrize(
+    ("op", "arrays", "shape", "present", "absent"),
+    [
+        ("-", D3, (3, 4, 5), ["np.empty((__rd0_d0, 1, __rd0_d2)"], ["np.sum(", "None, ..."]),
+        ("/", D2, (4, 4), ["__rd0_d0 = x.shape[0]", "np.empty((__rd0_d0, 1)"], ["np.sum(", "None, ..."]),
+    ],
+    ids=["rank3_loop_nest", "square_rank2_kept_axis_extent"],
+)
+def test_keepdims_left_to_the_loop_lowering_when_the_rank_is_known(
+    op: str,
+    arrays: list[tuple[str, str, tuple[str, ...]]],
+    shape: tuple[int, ...],
+    present: list[str],
+    absent: list[str],
+) -> None:
+    """No churn: with the operand's rank in hand ``hoist_reduce_axis`` still lowers the same call to its
+    explicit loop nest, and this pass never sees it. netvlad's ``np.sum(exp_x, axis=1, keepdims=True)``
+    over ``(N, M)`` allocates ``(N, 1)``: the temp is the operand's shape with the REDUCED axis set to 1.
+    Swapping the two still typechecks, so the extent is pinned by NAME and, on a square operand where a
+    shape check cannot tell the two apart, by numbers."""
+    src = f"def kernel(x, out):\n    m = np.sum(x, axis=1, keepdims=True)\n    out[:] = x {op} m\n"
+    out = desugar(src, arrays, [], ["x", "out"], "dace")
+    for fragment in absent:
+        assert fragment not in out, f"the loop lowering was pre-empted:\n{out}"
+    for fragment in present:
+        assert fragment in out, f"keepdims loop nest has the wrong kept extent:\n{out}"
 
-
-def test_keepdims_loop_temp_sizes_the_kept_axis_not_the_reduced_one() -> None:
-    """netvlad's ``np.sum(exp_x, axis=1, keepdims=True)`` over ``(N, M)`` allocates
-    ``(N, 1)``: the temp is the operand's shape with the REDUCED axis set to 1, every
-    other extent left where it was. Swapping the two still allocates a rank-2 ``(_, 1)``
-    and still typechecks, so the extent is pinned by NAME here and by numbers below --
-    on a square operand, where a shape check cannot tell the two apart at all."""
-    src = "def kernel(x, out):\n    m = np.sum(x, axis=1, keepdims=True)\n    out[:] = x / m\n"
-    out = desugar(src, D2, [], ["x", "out"], "dace")
-    assert "__rd0_d0 = x.shape[0]" in out, f"the temp's kept extent is not axis 0's:\n{out}"
-    assert "np.empty((__rd0_d0, 1)" in out, f"reduced axis 1 is not the length-1 one:\n{out}"
-
-    x = 1.0 + np.arange(16, dtype=np.float64).reshape(4, 4)  # exact sums: summation ORDER cannot matter
-    ref, got = np.zeros((4, 4)), np.zeros((4, 4))
+    x = 1.0 + np.arange(np.prod(shape), dtype=np.float64).reshape(shape)  # exact sums: summation ORDER cannot matter
+    ref, got = np.zeros(shape), np.zeros(shape)
     exec_source(src, [x.copy(), ref])
-    exec_desugared(src, D2, ["x", "out"], {"x": x.copy(), "out": got}, backend="dace")
-    assert np.array_equal(ref, got), "square operand: the loop nest reduced the wrong axis"
-    assert np.array_equal(ref, x / np.sum(x, axis=1, keepdims=True)), "the fixture itself is wrong"
+    exec_desugared(src, arrays, ["x", "out"], {"x": x.copy(), "out": got}, backend="dace")
+    assert np.array_equal(ref, got), "the loop nest reduced the wrong axis"
+    combine = operator.sub if op == "-" else operator.truediv
+    assert np.array_equal(ref, combine(x, np.sum(x, axis=1, keepdims=True))), "the fixture itself is wrong"
 
 
 DISPATCH = (

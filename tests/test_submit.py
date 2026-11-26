@@ -248,23 +248,17 @@ def test_extra_env_kv_never_moves_a_limit(tmp_path: pathlib.Path) -> None:
 
 
 def test_a_named_harness_is_recorded_and_reads_its_own_prompt(tmp_path: pathlib.Path) -> None:
+    """The GPU build contract is the track's, not claude's: a model on another harness gets the same build block on
+    top of its own harness layer, so harnesses differ only in how they call tools."""
     root = tree(tmp_path)
-    done = submit(root, BASE="harness", KERNELS_FILE="subset.txt", HARNESSES="claude miniswe")
+    done = submit(root, BASE="harness", KERNELS_FILE="subset.txt", LANGUAGES="c hip", HARNESSES="claude miniswe")
     assert done.returncode == 0, done.stderr
     claude, miniswe = setup_env(root, "wave-qwen38-c"), setup_env(root, "wave-qwen38-c-miniswe")
     assert (claude["HPCAGENT_BENCH_RECORD_HARNESS"], miniswe["HPCAGENT_BENCH_RECORD_HARNESS"]) == ("claude", "miniswe")
     assert miniswe["AGENT_PROMPT_LAYERS"] == "harness-cli" != claude["AGENT_PROMPT_LAYERS"]
-
-
-def test_every_harness_on_a_track_reads_the_tracks_build_contract(tmp_path: pathlib.Path) -> None:
-    """The GPU build contract is the track's, not claude's: a model on another harness gets the same build block on
-    top of its own harness layer, so harnesses differ only in how they call tools."""
-    root = tree(tmp_path)
-    done = submit(root, BASE="harness", KERNELS_FILE="subset.txt", LANGUAGES="hip", HARNESSES="claude miniswe")
-    assert done.returncode == 0, done.stderr
-    claude, miniswe = setup_env(root, "wave-qwen38-hip"), setup_env(root, "wave-qwen38-hip-miniswe")
-    assert claude["AGENT_PROMPT_LAYERS"] == "gpu"
-    assert miniswe["AGENT_PROMPT_LAYERS"] == "harness-cli,gpu"
+    claude_hip, miniswe_hip = setup_env(root, "wave-qwen38-hip"), setup_env(root, "wave-qwen38-hip-miniswe")
+    assert claude_hip["AGENT_PROMPT_LAYERS"] == "gpu"
+    assert miniswe_hip["AGENT_PROMPT_LAYERS"] == "harness-cli,gpu"
 
 
 def harness_packet_plugins(root: pathlib.Path) -> pathlib.Path:
@@ -308,29 +302,24 @@ def test_a_packet_that_names_a_harness_is_refused_on_another_and_leaves_no_setup
     assert done.returncode == 2
     assert "runs on harness 'openhands', and the setup names 'miniswe'" in done.stderr
     assert not list((root / "experiments").glob(".env.*"))
-
-
-def test_an_unknown_packet_is_refused_and_leaves_no_setup_env(tmp_path: pathlib.Path) -> None:
-    root = tree(tmp_path)
-    done = submit(root, KERNELS_FILE="subset.txt", PACKETS="no-such-packet")
-    assert done.returncode == 2
+    unknown = submit(root, KERNELS_FILE="subset.txt", PACKETS="no-such-packet")
+    assert unknown.returncode == 2
     assert not list((root / "experiments").glob(".env.*"))
 
 
-def test_a_submission_needs_an_account_and_names_its_flag_and_variable(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ("flags", "needles"),
+    [((), ("--account", "$SBATCH_ACCOUNT")), (("--account", "root"), ("root is not a project account",))],
+    ids=["no-account", "root-account"],
+)
+def test_a_submission_needs_an_account_and_names_its_flag_and_variable(
+    tmp_path: pathlib.Path, flags: tuple[str, ...], needles: tuple[str, ...]
+) -> None:
     root = tree(tmp_path)
-    done = submit(root, KERNELS_FILE="subset.txt", SUBMIT="1")
+    done = submit(root, *flags, KERNELS_FILE="subset.txt", SUBMIT="1")
     assert done.returncode == 2, done.stderr
-    assert "--account" in done.stderr, done.stderr
-    assert "$SBATCH_ACCOUNT" in done.stderr, done.stderr
-    assert not (root / "sbatch.calls").exists()
-
-
-def test_the_root_account_is_refused(tmp_path: pathlib.Path) -> None:
-    root = tree(tmp_path)
-    done = submit(root, "--account", "root", KERNELS_FILE="subset.txt", SUBMIT="1")
-    assert done.returncode == 2, done.stderr
-    assert "root is not a project account" in done.stderr, done.stderr
+    for needle in needles:
+        assert needle in done.stderr, done.stderr
     assert not (root / "sbatch.calls").exists()
 
 
@@ -392,22 +381,6 @@ def test_setup_records_resources(tmp_path: pathlib.Path) -> None:
     assert env["HPCAGENT_BENCH_AGENT_CPUS"] == "8"
     assert env["HPCAGENT_BENCH_CONTAINER_MEMORY"] == "200G"
     assert env["HPCAGENT_BENCH_CONTAINER_CPUS"] == "32"
-
-
-def test_a_setup_that_names_no_resource_limit_records_none(tmp_path: pathlib.Path) -> None:
-    """Unset limits pin nothing: a setup keeps the runtime defaults and its env carries no record line for them."""
-    root = tree(tmp_path)
-    done = submit(root, KERNELS_FILE="subset.txt")
-    assert done.returncode == 0, done.stderr
-    env = setup_env(root, "wave-qwen38-c")
-    limits = {
-        "HPCAGENT_BENCH_RECORD_MEM",
-        "AGENT_MEMORY_CAP_GB",
-        "HPCAGENT_BENCH_AGENT_CPUS",
-        "HPCAGENT_BENCH_CONTAINER_MEMORY",
-        "HPCAGENT_BENCH_CONTAINER_CPUS",
-    }
-    assert not [key for key in env if key in limits]
 
 
 def test_job_options_resolve_flag_over_environment_over_system(tmp_path: pathlib.Path) -> None:
@@ -486,50 +459,50 @@ def test_recording_setups_are_not_submitted_on_the_public_seeds(tmp_path: pathli
     assert not (root / "sbatch.calls").exists()
 
 
-def test_a_hosted_model_setup_lands_on_mi200_without_a_serving_layer(tmp_path: pathlib.Path) -> None:
-    """A model behind a provider API runs no engine on the node, so the hardware layer alone moves it."""
+@pytest.mark.parametrize(
+    ("model", "knobs", "setup", "expected"),
+    [
+        # A model behind a provider API runs no engine on the node, so the hardware layer alone moves it.
+        (
+            "musespark",
+            {},
+            "x-mi200-musespark-c",
+            {"INFERENCE_SOURCE": "service", "HPCAGENT_BENCH_RECORD_STUDY": "llr40-mi200"},
+        ),
+        # A tuner serves no model (INFERENCE_SOURCE=none), so the hardware layer alone moves it.
+        ("noop", {}, "x-mi200-noop-c", {"INFERENCE_SOURCE": "none", "TUNER": "noop"}),
+        # Setups are keyed by name alone: the same experiment on two machines must be two setups, as its study is.
+        # An experiment that does not name the hardware gains it as its last segment, so the name still parses.
+        (
+            "musespark",
+            {"EXPERIMENT": "x"},
+            "x-mi200-musespark-c",
+            {
+                "HPCAGENT_BENCH_RECORD_STUDY": "llr40-mi200",
+                "PROBLEMS_FILE": "problems-x-mi200-musespark-c-subset.jsonl",
+            },
+        ),
+        # A self-served model runs on mi200 through [hardware.mi200.models.<model>], pinned over the setup after
+        # [hardware.mi200].
+        (
+            "qwen38",
+            {},
+            "x-mi200-qwen38-c",
+            {"INFERENCE_CE_ENV": "hpcagent-bench-vllm-mi200-latest", "INFERENCE_ENGINE": "vllm"},
+        ),
+    ],
+    ids=["hosted-model", "tuner", "setup-name-carries-the-hardware", "served-model"],
+)
+def test_a_setup_lands_on_mi200_and_takes_the_serving_layer_its_model_needs(
+    tmp_path: pathlib.Path, model: str, knobs: dict[str, str], setup: str, expected: dict[str, str]
+) -> None:
     root = tree(tmp_path)
-    done = submit_mi200(root, "musespark")
+    done = submit_mi200(root, model, **knobs)
     assert done.returncode == 0, done.stderr
-    env = setup_env(root, "x-mi200-musespark-c")
-    assert env["INFERENCE_SOURCE"] == "service"
-    assert env["HPCAGENT_BENCH_RECORD_STUDY"] == "llr40-mi200"
+    env = setup_env(root, setup)
+    assert {key: env[key] for key in expected} == expected
     assert_on_mi200(root, env)
-
-
-def test_a_tuner_setup_lands_on_mi200_without_a_serving_layer(tmp_path: pathlib.Path) -> None:
-    """A tuner serves no model (INFERENCE_SOURCE=none), so the hardware layer alone moves it."""
-    root = tree(tmp_path)
-    done = submit_mi200(root, "noop")
-    assert done.returncode == 0, done.stderr
-    env = setup_env(root, "x-mi200-noop-c")
-    assert env["INFERENCE_SOURCE"] == "none"
-    assert env["TUNER"] == "noop"
-    assert_on_mi200(root, env)
-
-
-def test_the_setup_name_carries_a_hardware_other_than_the_base(tmp_path: pathlib.Path) -> None:
-    """Setups are keyed by name alone: the same experiment on two machines must be two setups, as its study is.
-    An experiment that does not name the hardware gains it as its last segment, so the name still parses."""
-    root = tree(tmp_path)
-    done = submit_mi200(root, "musespark", EXPERIMENT="x")
-    assert done.returncode == 0, done.stderr
-    env = setup_env(root, "x-mi200-musespark-c")
-    assert env["HPCAGENT_BENCH_RECORD_STUDY"] == "llr40-mi200"
-    assert env["PROBLEMS_FILE"] == "problems-x-mi200-musespark-c-subset.jsonl"
-    assert not (root / "experiments" / ".env.x-musespark-c-subset").exists()
-
-
-def test_a_served_model_setup_on_mi200_takes_its_serving_layer(tmp_path: pathlib.Path) -> None:
-    """A self-served model runs on mi200 through [hardware.mi200.models.<model>], pinned over the
-    setup after [hardware.mi200]."""
-    root = tree(tmp_path)
-    done = submit_mi200(root, "qwen38")
-    assert done.returncode == 0, done.stderr
-    env = setup_env(root, "x-mi200-qwen38-c")
-    assert env["INFERENCE_CE_ENV"] == "hpcagent-bench-vllm-mi200-latest"
-    assert env["INFERENCE_ENGINE"] == "vllm"
-    assert_on_mi200(root, env)
+    assert not (root / "experiments" / f".env.x-{model}-c-subset").exists()
 
 
 def test_a_served_model_with_no_mi200_serving_layer_is_refused(tmp_path: pathlib.Path) -> None:

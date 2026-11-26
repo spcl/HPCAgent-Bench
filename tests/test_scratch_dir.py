@@ -17,31 +17,25 @@ from hpcagent_bench.harness import native
 REPO = paths.ROOT
 
 
-def test_the_default_is_the_checkouts_dot_scratch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(paths.SCRATCH_ENV, raising=False)
-    monkeypatch.delenv("HPCAGENT_BENCH_REPO", raising=False)
-    assert paths.scratch_dir() == paths.ROOT / ".scratch"
-
-
-def test_the_default_follows_a_repo_the_caller_resolved(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({}, "{root}/.scratch"),
+        ({"HPCAGENT_BENCH_REPO": "{tmp}"}, "{tmp}/.scratch"),  # a repo the caller resolved
+        ({paths.SCRATCH_ENV: "{tmp}/elsewhere"}, "{tmp}/elsewhere"),  # the variable names another root
+        # ``$SCRATCH`` names run roots and caches; a native run's submissions stay with the checkout
+        ({"SCRATCH": "{tmp}"}, "{root}/.scratch"),
+    ],
+    ids=["default", "caller_repo", "variable", "site_scratch"],
+)
+def test_the_default_is_the_checkouts_dot_scratch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, env: dict[str, str], expected: str
 ) -> None:
     monkeypatch.delenv(paths.SCRATCH_ENV, raising=False)
-    monkeypatch.setenv("HPCAGENT_BENCH_REPO", str(tmp_path))
-    assert paths.scratch_dir() == tmp_path / ".scratch"
-
-
-def test_the_variable_names_another_root(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    monkeypatch.setenv(paths.SCRATCH_ENV, str(tmp_path / "elsewhere"))
-    assert paths.scratch_dir() == tmp_path / "elsewhere"
-
-
-def test_the_site_scratch_is_not_this_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    """``$SCRATCH`` names run roots and caches; a native run's submissions stay with the checkout."""
-    monkeypatch.delenv(paths.SCRATCH_ENV, raising=False)
-    monkeypatch.setenv("SCRATCH", str(tmp_path))
-    assert paths.scratch_dir() != tmp_path
-    assert tmp_path not in paths.scratch_dir().parents
+    monkeypatch.delenv("HPCAGENT_BENCH_REPO", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value.format(tmp=tmp_path))
+    assert paths.scratch_dir() == pathlib.Path(expected.format(root=paths.ROOT, tmp=tmp_path))
 
 
 def test_native_submissions_go_under_the_scratch_directory(

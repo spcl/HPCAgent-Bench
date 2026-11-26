@@ -27,10 +27,7 @@ def test_an_endpoint_that_forbids_sampling_gets_no_sampling_fields() -> None:
         4096, max_tokens_field="max_completion_tokens", accepts_sampling=False
     )
     assert sent == {"max_completion_tokens": 4096}
-
-
-def test_reasoning_effort_survives_the_no_sampling_gate() -> None:
-    """Effort is not a sampling control, so a fixed-decoding reasoning model still receives it."""
+    # Effort is not a sampling control, so a fixed-decoding reasoning model still receives it.
     thinking = Sampling(reasoning_effort="high")
     assert thinking.openai_options(64, accepts_sampling=False) == {"max_tokens": 64, "reasoning_effort": "high"}
 

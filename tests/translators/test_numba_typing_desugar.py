@@ -519,6 +519,12 @@ def test_a_none_placeholder_only_indexed_is_dropped_so_parallel_numba_types_it(t
             s = x * 2.0
             expected = s[:, 0] + np.where(s > 1.0, s, x)[:, 1]
         np.testing.assert_array_equal(out, expected)
+    # a ``None`` placeholder some bare read can still see is kept: dropping any of these placeholders would hand the
+    # read the earlier binding instead of ``None``
+    for src in REACHING_NONE_SRCS:
+        fn = ast.parse(src).body[0]
+        assert isinstance(fn, ast.FunctionDef)
+        assert not NonePlaceholderDrop(fn).names, src
 
 
 MEMO_SRC = """from functools import lru_cache
@@ -560,14 +566,6 @@ REACHING_NONE_SRCS = (
     "def f(x):\n    a = x\n    while a is not None:\n        a = None\n    return 0\n",
     "def f(xs):\n    a = None\n    ys = [0 for a in xs]\n    return g(a)\n",
 )
-
-
-def test_a_none_placeholder_a_bare_read_can_still_see_is_kept() -> None:
-    """Dropping any of these placeholders would hand the read the earlier binding instead of ``None``."""
-    for src in REACHING_NONE_SRCS:
-        fn = ast.parse(src).body[0]
-        assert isinstance(fn, ast.FunctionDef)
-        assert not NonePlaceholderDrop(fn).names, src
 
 
 def test_only_a_functools_memo_decorator_is_dropped() -> None:
@@ -651,11 +649,8 @@ def test_a_sparse_dispatch_branch_is_pruned_so_the_dense_body_compiles(tmp_path:
     a, b, out = rng.random((6, 6)), rng.random((6, 6)), np.zeros((6, 6))
     module.square_into(a, b, out)
     np.testing.assert_allclose(out, a @ b, rtol=1e-14, atol=0.0)
-
-
-def test_a_kernel_with_no_sparse_dispatch_is_emitted_with_its_comments() -> None:
-    """The prune rewrites the source only when it drops a branch; any other kernel keeps its text,
-    so its cached numba build is not invalidated."""
+    # The prune rewrites the source only when it drops a branch; any other kernel keeps its text, so its cached
+    # numba build is not invalidated.
     src = "import numpy as np\n\n\ndef twice(x, out):\n    # keep me\n    out[:] = 2 * x\n"
     assert "# keep me" in emit_numba(src)
 

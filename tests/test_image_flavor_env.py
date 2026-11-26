@@ -6,6 +6,7 @@ release of every role's EDF."""
 
 import pathlib
 import subprocess
+from collections.abc import Callable
 
 import pytest
 
@@ -53,14 +54,6 @@ def test_a_flavor_rewrites_the_agent_and_judge_edfs_and_leaves_serving_alone(
     assert env == expected
 
 
-@pytest.mark.parametrize("flavor", ["zen4", "Native"])
-def test_an_unknown_flavor_is_refused(tmp_path: pathlib.Path, flavor: str) -> None:
-    done, env = apply_flavor(tmp_path, flavor)
-    assert done.returncode == 2
-    assert "latest or native" in done.stderr
-    assert env == SETUP_ENV
-
-
 def apply_release(tmp_path: pathlib.Path, release: str) -> tuple[subprocess.CompletedProcess[str], str]:
     env_file = tmp_path / "setup.env"
     env_file.write_text(SETUP_ENV, encoding="utf-8")
@@ -86,8 +79,26 @@ def test_a_release_names_the_frozen_edf_of_every_role_serving_included(tmp_path:
     )
 
 
-def test_a_release_that_is_no_version_is_refused(tmp_path: pathlib.Path) -> None:
-    done, env = apply_release(tmp_path, "latest")
+@pytest.mark.parametrize(
+    ("apply", "value", "message"),
+    [
+        (apply_flavor, "zen4", "latest or native"),
+        (apply_flavor, "Native", "latest or native"),
+        (apply_release, "latest", "CE_IMAGE_RELEASE is v<N>"),
+    ],
+    ids=["unknown-flavor", "flavor-spelling", "release-that-is-no-version"],
+)
+def test_an_unknown_flavor_is_refused(
+    tmp_path: pathlib.Path,
+    apply: Callable[[pathlib.Path, str], tuple[subprocess.CompletedProcess[str], str]],
+    value: str,
+    message: str,
+) -> None:
+    """A flavor or a release the setup does not know is refused at staging and leaves the setup env as it was."""
+    done, env = apply(tmp_path, value)
     assert done.returncode == 2
-    assert "CE_IMAGE_RELEASE is v<N>" in done.stderr
-    assert "-v" not in env.replace("-vllm-", "-")
+    assert message in done.stderr
+    if apply is apply_flavor:
+        assert env == SETUP_ENV
+    else:
+        assert "-v" not in env.replace("-vllm-", "-")

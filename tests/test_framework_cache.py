@@ -202,36 +202,6 @@ def test_ensure_removes_a_stale_canonical_whose_emit_failed(
         KERNELS.refresh()
 
 
-def test_ensure_never_touches_a_hand_override(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A hand-written override (no autogen marker) is never emitted and never cached -- left byte-for-byte."""
-    from hpcagent_bench import autogen, paths
-    from hpcagent_bench.spec import KERNELS
-
-    benchmarks = tmp_path / "benchmarks"
-    kdir = widget_kernel(benchmarks)
-    override = kdir / "widget_dace.py"
-    override.write_text("# my own hand impl\nX = 42\n")
-
-    called = {"n": 0}
-
-    def fake_emit_targets(spec: BenchSpec, targets: Sequence[str]) -> dict[str, str]:
-        called["n"] += 1
-        return dict.fromkeys(targets, "ok")
-
-    original_root = paths.BENCHMARKS
-    monkeypatch.setattr(autogen, "emit_targets", fake_emit_targets)
-    try:
-        paths.BENCHMARKS = benchmarks
-        KERNELS.refresh()
-        autogen.ensure("widget", ["dace"])
-        assert called["n"] == 0, "an override must never trigger an emit"
-        assert override.read_text() == "# my own hand impl\nX = 42\n"
-        assert not (kdir / ".cache" / "widget_dace.py").exists(), "an override must never be cached"
-    finally:
-        paths.BENCHMARKS = original_root
-        KERNELS.refresh()
-
-
 def test_ensure_never_restores_a_stale_cache_entry_over_a_hand_override(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -267,6 +237,13 @@ def test_ensure_never_restores_a_stale_cache_entry_over_a_hand_override(
 
         autogen.ensure("widget", ["numba"])
         assert override.read_text() == hand
+
+        # A hand-written override (no autogen marker) is never emitted and never cached -- left byte-for-byte.
+        dace_override = kdir / "widget_dace.py"
+        dace_override.write_text("# my own hand impl\nX = 42\n")
+        autogen.ensure("widget", ["dace"])
+        assert dace_override.read_text() == "# my own hand impl\nX = 42\n"
+        assert not (cache / "widget_dace.py").exists(), "an override must never be cached"
     finally:
         paths.BENCHMARKS = original_root
         KERNELS.refresh()
@@ -315,32 +292,17 @@ def test_sdfg_cache_roundtrip_invalidation_and_corruption(
     saved.write_bytes(b"this is not a valid sdfgz")
     assert fc.load_sdfg(cache, "gemm", "cpu", fp) is None
 
-
-def test_dace_build_with_cache_bypasses_build_on_hit_and_invalidates_on_precision(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import_or_skip("dace")
-    from hpcagent_bench.frameworks import Benchmark, generate_framework
-
-    cache = tmp_path / ".cache"
-    cache.mkdir()
-    # Redirect BOTH the source cache and the SDFG cache into tmp so the real gemm/.cache stays clean.
-    monkeypatch.setattr(fc, "kernel_cache_dir", lambda kdir: cache)
-
-    fw = generate_framework("dace_cpu_parallel")
-    fw.set_datatype("float64")
-    bench = Benchmark("gemm")
-    ct_impl = fw.implementations(bench)[0][0]
-
+    # build_with_cache on the same framework and benchmark: a hit bypasses the build, a precision change misses.
+    src = tmp_path / "src"
     builds = {"n": 0}
 
     def build() -> object:
         builds["n"] += 1
-        return ct_impl.to_sdfg(simplify=False)
+        return fresh
 
     first = fw.build_with_cache(bench, "cpu", build)  # MISS -> build + save
     assert builds["n"] == 1
-    assert (cache / "gemm_cpu.sdfgz").exists()
+    assert (src / "gemm_cpu.sdfgz").exists()
 
     def must_not_run() -> None:
         raise AssertionError("build ran on a cache hit -- the load path was not taken")

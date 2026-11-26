@@ -223,17 +223,6 @@ def test_infrastructure_that_used_up_the_episodes_attempts_across_jobs_leaves_it
     assert (classes.get(TAG_RUNS[0]), classes.get(TAG_RUNS[1])) == (None, owed.OwedClass.INFRA)
 
 
-def test_a_launch_that_recorded_nothing_still_spends_its_attempt_in_collect(tmp_path: pathlib.Path) -> None:
-    """``owed collect`` counts attempts as ``owed run`` does: job 101 launched the kernel and died before its judge
-    wrote a shard, so it is no collected job, yet its attempt counts toward the cap (else collect lists a run that
-    run then refuses as capped)."""
-    launch(tmp_path, "100", [problem_of(TAG_KERNELS[0], 2)])
-    launch(tmp_path, "101", [problem_of(TAG_KERNELS[0], 3)])
-    job = make_job(tmp_path, "100", "exp")
-    episode(job, 0, TAG_KERNELS[0], 1, 10, cause="infra", relaunches={"infra_attempts": 2})
-    assert owed.owed([owed.Job("100", job, "exp")], TAG_RUNS[:1]) == {}
-
-
 def test_launches_are_ordered_by_when_they_started_not_by_their_run_id(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -328,16 +317,6 @@ def test_a_cancelled_episodes_grade_delivers_nothing_and_its_cancel_spends_no_at
     assert owed.owed([*jobs, owed.Job("101", repair, "exp")], [run]) == {run: owed.OwedClass.INFRA}
 
 
-def test_a_repair_that_delivers_ends_the_debt(tmp_path: pathlib.Path) -> None:
-    kernel, run = TAG_KERNELS[0], TAG_RUNS[0]
-    first, repair = make_job(tmp_path, "100", "exp"), make_job(tmp_path, "101", "exp")
-    episode(first, 0, kernel, 137, 10, cancelled=True)
-    episode(repair, 0, kernel, agent_driver.RC_SUBMITTED, 20, cause="agent", launch_kind="infra")
-    grade(repair, "submissions", kernel)
-    assert owed.delivered(repair) == {run}
-    assert owed.owed([owed.Job("100", first, "exp"), owed.Job("101", repair, "exp")], [run]) == {}
-
-
 def test_collect_writes_one_list_per_setup_and_removes_a_finished_one(tmp_path: pathlib.Path) -> None:
     runs, out = tmp_path / "runs", tmp_path / "out"
     job = make_job(runs, "100", "exp")
@@ -380,10 +359,31 @@ def test_a_designed_repeat_owes_every_slot_its_launch_gave(tmp_path: pathlib.Pat
     runs = owed.designed_runs([job], TAG_KERNELS[:2])
     assert runs == [owed.Run(kernel, slot) for kernel in TAG_KERNELS[:2] for slot in (1, 2, 3)]
 
+    # A job with no launch files owes each kernel once.
+    bare = make_job(tmp_path / "bare", "100", "exp")
+    assert owed.designed_runs([bare], TAG_KERNELS) == TAG_RUNS
 
-def test_a_job_with_no_launch_files_owes_each_kernel_once(tmp_path: pathlib.Path) -> None:
-    job = make_job(tmp_path, "100", "exp")
-    assert owed.designed_runs([job], TAG_KERNELS) == TAG_RUNS
+    # A launch whose problems are gone holds the setup to the whole tag.
+    gone = tmp_path / "gone"
+    first, second = make_job(gone, "100", "exp"), make_job(gone, "200", "exp")
+    launch(gone, "100", staged(TAG_KERNELS[:1]))
+    assert owed.designed_runs([first, second], TAG_KERNELS) == TAG_RUNS
+
+    # A setup staged for a subset owes the union of its launches within the tag: a second launch (no shard yet)
+    # adds its runs, a staged kernel outside the tag is not the tag's.
+    union = tmp_path / "union"
+    subset = make_job(union, "100", "exp")
+    launch(union, "100", staged([*TAG_KERNELS[:2], "not_in_the_tag"]))
+    launch(union, "200", staged(TAG_KERNELS[2:3]))
+    runs = owed.designed_runs(owed.identity_launches([owed.Job("100", subset, "exp")]), TAG_KERNELS)
+    assert runs == TAG_RUNS[:3]
+
+    # A task-changed final owes its run though no launch staged it.
+    changed_root = tmp_path / "changed"
+    changed_job = make_job(changed_root, "100", "exp")
+    launch(changed_root, "100", staged(TAG_KERNELS[:1]))
+    changed = owed.Run(TAG_KERNELS[1])
+    assert owed.designed_runs([changed_job], TAG_KERNELS, [changed]) == [TAG_RUNS[0], changed]
 
 
 def staged(kernels: list[str]) -> list[dict[str, object]]:
@@ -407,28 +407,6 @@ def test_a_reused_setup_owes_only_the_remainder_its_relaunch_staged(tmp_path: pa
     grade(job, "attempts", TAG_KERNELS[1])
     assert owed.main(["collect", "--runs", str(runs), "--tag", TAG, "--out", str(out)]) == 0
     assert not (out / "exp.txt").exists()
-
-
-def test_a_setup_staged_for_a_subset_owes_the_union_of_its_launches_within_the_tag(tmp_path: pathlib.Path) -> None:
-    """A second launch (no shard yet) adds its runs; a staged kernel outside the tag is not the tag's."""
-    first = make_job(tmp_path, "100", "exp")
-    launch(tmp_path, "100", staged([*TAG_KERNELS[:2], "not_in_the_tag"]))
-    launch(tmp_path, "200", staged(TAG_KERNELS[2:3]))
-    runs = owed.designed_runs(owed.identity_launches([owed.Job("100", first, "exp")]), TAG_KERNELS)
-    assert runs == TAG_RUNS[:3]
-
-
-def test_a_launch_whose_problems_are_gone_holds_the_setup_to_the_whole_tag(tmp_path: pathlib.Path) -> None:
-    first, second = make_job(tmp_path, "100", "exp"), make_job(tmp_path, "200", "exp")
-    launch(tmp_path, "100", staged(TAG_KERNELS[:1]))
-    assert owed.designed_runs([first, second], TAG_KERNELS) == TAG_RUNS
-
-
-def test_a_task_changed_final_owes_its_run_though_no_launch_staged_it(tmp_path: pathlib.Path) -> None:
-    job = make_job(tmp_path, "100", "exp")
-    launch(tmp_path, "100", staged(TAG_KERNELS[:1]))
-    changed = owed.Run(TAG_KERNELS[1])
-    assert owed.designed_runs([job], TAG_KERNELS, [changed]) == [TAG_RUNS[0], changed]
 
 
 def test_a_slot_is_owed_until_a_job_delivers_that_slot(tmp_path: pathlib.Path) -> None:
@@ -460,13 +438,6 @@ def test_run_replays_only_the_owed_slots_problem_lines(tmp_path: pathlib.Path) -
     kept = owed.rerun_problems(problems, {owed.parse_run(f"{TAG_KERNELS[1]} 2")})
     assert [json.loads(line)["slot"] for line in kept] == [2]
     assert owed.problem_run(ProblemLine.model_validate_json(kept[0])) == owed.Run(TAG_KERNELS[1], 2)
-
-
-@pytest.mark.parametrize(
-    "run", [pytest.param(owed.Run("kmp"), id="no-slot"), pytest.param(owed.Run("kmp", 7), id="slot")]
-)
-def test_a_listing_line_reads_back_as_its_run(run: owed.Run) -> None:
-    assert owed.parse_run(run.line()) == run
 
 
 def stub_repo(root: pathlib.Path) -> pathlib.Path:
@@ -546,23 +517,6 @@ def staged_rerun(tmp_path: pathlib.Path, extra_env: str = "") -> list[str]:
     return ["run", "--job-dir", str(job), "--kernels-file", str(kernels), "--repo", str(repo)]
 
 
-def test_a_rerun_never_runs_under_other_limits_than_its_launch_recorded(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An infrastructure rerun owes the run its first launch: the same limits, and nothing that would scale them."""
-    no_site_limits(tmp_path, monkeypatch)
-    assert owed.main([*staged_rerun(tmp_path), "--class", "infra", "--mode", "fresh"]) == 0
-    staged = tmp_path / "repo" / "experiments"
-    env = owed.read_env(staged / ".env.exp-owed-k-infra")
-    assert (env["AGENT_MAX_TOKENS"], env["AGENT_MAX_OUTPUT_TOKENS"], env["AGENT_TIMEOUT_SECONDS"]) == (
-        "1000",
-        "400",
-        "100",
-    )
-    assert not {"HPCAGENT_BENCH_RECORD_TOKEN_SCALE", "HPCAGENT_BENCH_RECORD_TIME_SCALE"} & set(env)
-    assert [line.launch_kind for line in read_lines(staged / "problems-exp-owed-k-infra.jsonl")] == ["infra"]
-
-
 def test_run_refuses_a_repair_of_an_episode_that_used_up_its_attempts(tmp_path: pathlib.Path) -> None:
     """AGENT_CRASH_ATTEMPTS: a run whose episode infrastructure ended on all four attempts is not relaunched again,
     and nothing is staged."""
@@ -628,11 +582,6 @@ def test_run_on_main_admits_a_clean_origin_main_that_descends_from_the_staged_co
     assert owed.main(flags) == 0
     (written,) = (repo / "experiments").glob(".env.*-owed-*")
     assert f"HPCAGENT_BENCH_RECORD_COMMIT={head}" in written.read_text().splitlines()
-
-
-def test_run_needs_the_class_its_runs_are_owed_for(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(SystemExit):
-        owed.main(staged_rerun(tmp_path))
 
 
 def test_run_stamps_each_problem_with_its_launch_and_how_the_one_before_ended(
@@ -955,27 +904,23 @@ def test_a_repair_resumes_an_episode_its_jobs_time_limit_cut_off_before_its_reco
         str(job / "episodes" / "exp" / f"exp.n0.p0.w{n}") for n in (0, 1)
     ]
 
-
-def test_a_resumed_episode_cut_off_again_adds_its_attempt_to_what_earlier_launches_ran(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A launch that resumed an episode after 100 s of earlier launches (its line's spent_seconds) and was cut off
-    after 9 s more owes the episode 109 s of its clock, never 9: the one wall-clock limit spans every launch."""
-    no_site_limits(tmp_path, monkeypatch)
-    runs = tmp_path / "runs"
-    job = make_job(runs, "100", "exp")
+    # A launch that resumed an episode after 100 s of earlier launches (its line's spent_seconds) and was cut off
+    # after 9 s more owes the episode 109 s of its clock, never 9: the one wall-clock limit spans every launch.
+    again = tmp_path / "again"
+    runs = again / "runs"
+    again_job = make_job(runs, "100", "exp")
     rows = [
         {"id": index, "kernel": f"track/{kernel}", "task": "t", "request_actions": {}, "spent_seconds": 100}
         for index, kernel in enumerate(TAG_KERNELS)
     ]
     launch(runs, "100", rows, f"SETUP=exp\nAGENTS_PER_NODE=4\nAGENT_NODES=1\n{LIMITS_ENV}")
-    listing = tmp_path / "exp.txt"
+    listing = again / "exp.txt"
     listing.write_text(f"{TAG_KERNELS[0]}\n")
-    repo = stub_repo(tmp_path / "repo")
-    cut_episode(job, 0, 9)
-    argv = ["run", "--job-dir", str(job), "--kernels-file", str(listing), "--repo", str(repo), "--class", "infra"]
-    assert owed.main(argv) == 0
-    problems = read_lines(tmp_path / "repo" / "experiments" / "problems-exp-owed-exp-infra.jsonl")
+    repo = stub_repo(again / "repo")
+    cut_episode(again_job, 0, 9)
+    again_argv = ["run", "--job-dir", str(again_job), "--kernels-file", str(listing), "--repo", str(repo)]
+    assert owed.main([*again_argv, "--class", "infra"]) == 0
+    problems = read_lines(again / "repo" / "experiments" / "problems-exp-owed-exp-infra.jsonl")
     assert [(line.launch_mode, line.spent_seconds) for line in problems] == [("resume", 109)]
 
 

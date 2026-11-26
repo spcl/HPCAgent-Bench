@@ -146,19 +146,14 @@ def test_gcc16_wording_extracts_the_masked_epilogue_and_the_unroll_factor() -> N
     assert "dependen" in reasons(verdict_at(grouped, 17))
 
 
-def test_clang_wording_extracts_the_lane_width_and_the_interleave() -> None:
-    inner = verdict_at(grouped_for(CLANG21, lr.CLANG), 4)
-    assert [(d.width, d.unit, d.interleave) for d in inner.vectorized] == [(8, "lanes", 4)]
-
-
 def test_a_wrapped_clang_remark_keeps_the_cause_on_its_second_line() -> None:
-    """The dependence cause exists ONLY on the wrapped line; dropping it leaves a bare refusal."""
+    """The dependence cause exists ONLY on the wrapped line; dropping it leaves a bare refusal. The same report
+    gives the lane width and the interleave, and its caret lines are neither remarks nor unparsed."""
     grouped = grouped_for(CLANG21, lr.CLANG)
     assert "dependen" in reasons(verdict_at(grouped, 17))
     assert "reorder" in reasons(verdict_at(grouped, 11))
-
-
-def test_clang_caret_lines_are_neither_remarks_nor_unparsed() -> None:
+    inner = verdict_at(grouped, 4)
+    assert [(d.width, d.unit, d.interleave) for d in inner.vectorized] == [(8, "lanes", 4)]
     parsed = lr.parse_report(CLANG21, lr.CLANG)
     assert parsed.unparsed == 0
     assert len(parsed.remarks) == 6, "one remark per `remark:` line, caret lines excluded"
@@ -186,32 +181,22 @@ def test_an_unknown_refusal_sentence_keeps_its_text_as_the_reason() -> None:
     assert verdict.missed == ("refused, for reasons yet to be invented",)
 
 
-def test_a_variable_length_vector_success_is_read_as_a_success() -> None:
-    """The SVE/RVV wording: no x86 compiler emits it, so only this pins it."""
-    detail = lr.vector_detail("loop vectorized using variable length vectors")
-    assert detail is not None
-    assert detail.parsed
-    assert detail.unit == ""
-
-
-def test_an_unrecognized_line_is_counted_rather_than_swallowed() -> None:
-    text = (
-        "k.c:9: a sentence no version of this parser has ever seen\n"
-        "k.c:4:26: optimized: loop vectorized using 64 byte vectors\n"
-    )
+@pytest.mark.parametrize(
+    ("text", "unparsed"),
+    [
+        ("k.c:9: a sentence no version of this parser has ever seen\n", 1),
+        # Warnings and include traces are not remarks the parser failed to read.
+        ("k.c:5:3: warning: unused variable 'z' [-Wunused-variable]\nIn file included from k.c:1:\n", 0),
+    ],
+    ids=["unrecognized-sentence", "warnings-and-include-traces"],
+)
+def test_an_unrecognized_line_is_counted_rather_than_swallowed(text: str, unparsed: int) -> None:
+    text += "k.c:4:26: optimized: loop vectorized using 64 byte vectors\n"
     parsed = lr.parse_report(text, lr.GCC)
-    assert parsed.unparsed == 1
+    assert parsed.unparsed == unparsed
     assert len(parsed.remarks) == 1
-    assert "1 unparsed remarks (see raw report)" in summary(text, lr.GCC)
-
-
-def test_warnings_and_include_traces_do_not_inflate_the_unparsed_count() -> None:
-    text = (
-        "k.c:5:3: warning: unused variable 'z' [-Wunused-variable]\n"
-        "In file included from k.c:1:\n"
-        "k.c:4:26: optimized: loop vectorized using 64 byte vectors\n"
-    )
-    assert lr.parse_report(text, lr.GCC).unparsed == 0
+    if unparsed:
+        assert f"{unparsed} unparsed remarks (see raw report)" in summary(text, lr.GCC)
 
 
 def test_a_remark_without_a_location_is_counted_apart_from_the_nests() -> None:
@@ -241,11 +226,8 @@ def test_nests_group_by_outermost_loop_and_carry_a_depth() -> None:
     nests = lr.scan_nests(SOURCE)
     assert [n.start for n in nests] == [3, 11, 17]
     assert [[loop.depth for loop in n.loops] for n in nests] == [[1, 2], [1], [1]]
-
-
-def test_a_remark_is_charged_to_the_innermost_loop_containing_its_line() -> None:
-    """gcc reports the cause on the offending STATEMENT, not on the loop header."""
-    nests = lr.scan_nests(SOURCE)
+    # A remark is charged to the innermost loop containing its line: gcc reports the cause on the offending
+    # STATEMENT, not on the loop header.
     assert lr.owning_loop(nests, 5)[1].line == 4
     assert lr.owning_loop(nests, 18)[1].line == 17
     assert lr.owning_loop(nests, 2) is None, "a function signature belongs to no loop"
@@ -267,16 +249,16 @@ OMP_SOURCE = (
 )
 
 
-@pytest.mark.parametrize(("remark_line", "loop_line"), [(2, 4), (3, 4), (5, 6)])
-def test_a_remark_on_the_pragma_directing_a_loop_is_charged_to_that_loop(remark_line: int, loop_line: int) -> None:
+@pytest.mark.parametrize(("remark_line", "loop_line"), [(2, 4), (3, 4), (5, 6), (10, None)])
+def test_a_remark_on_the_pragma_directing_a_loop_is_charged_to_that_loop(
+    remark_line: int, loop_line: int | None
+) -> None:
     """clang places an OpenMP loop's remarks on its pragma, above the header: charged to no loop, every CPF loop
-    reads as one the compiler said nothing about. A continuation line belongs to the pragma it continues, and an
-    inner loop's pragma to the inner loop rather than the outer body."""
-    assert lr.owning_loop(lr.scan_nests(OMP_SOURCE), remark_line)[1].line == loop_line
-
-
-def test_a_pragma_that_directs_no_loop_charges_no_loop() -> None:
-    assert lr.owning_loop(lr.scan_nests(OMP_SOURCE), 10) is None
+    reads as one the compiler said nothing about. A continuation line belongs to the pragma it continues, an
+    inner loop's pragma to the inner loop rather than the outer body, and a pragma that directs no loop charges
+    none."""
+    owner = lr.owning_loop(lr.scan_nests(OMP_SOURCE), remark_line)
+    assert (owner if owner is None else owner[1].line) == loop_line
 
 
 def test_a_deeper_loop_after_the_body_of_a_shallower_one_starts_its_own_nest() -> None:

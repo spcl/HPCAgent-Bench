@@ -51,6 +51,7 @@ MALFORMED_BLOCKS: list[tuple[str, object, str]] = [
     ("mpi", {"decomposition": {"axis": "NI"}}, "mpi.decomposition.axis: Input should be a valid list"),
     ("mpi", {"decomposition": {"axis": ["NI"], "work_exponent": "1"}}, "mpi.decomposition.work_exponent"),
     ("level", True, "level: Input should be a valid integer"),
+    ("levle", 1, "levle: unknown manifest field (did you mean 'level'?)"),
     ("timeout_s", "600", "timeout_s: expected a number (got str)"),
     ("timeout_s", 0, "timeout_s: Input should be greater than 0"),
     ("timeout_s", -5, "timeout_s: Input should be greater than 0"),
@@ -99,27 +100,28 @@ def test_every_violation_is_listed_in_one_error() -> None:
     assert "levle: " in str(err.value)
 
 
-def test_a_top_level_typo_names_the_closest_key() -> None:
+@pytest.mark.parametrize(
+    ("parameters", "refusal"),
+    [
+        # YAML 1.1 reads an unquoted ``on`` as ``True``: a size symbol named so matches no shape name.
+        pytest.param(
+            {"S": {True: 1, "NI": 1, "NJ": 1, "NK": 1}},
+            r"parameters\.S: key True: Input should be a valid string",
+            id="size-symbol",
+        ),
+        # pydantic does not render ``!r`` in custom error templates, so the repr travels in the error context: the
+        # refusal must name the offending key, not show a literal ``{key!r}`` placeholder.
+        pytest.param(
+            {"S": {"NI": {1: "x"}}},
+            r"parameters\.S\.NI: expected text mapping keys \(got int key 1\)",
+            id="inside-a-value",
+        ),
+    ],
+)
+def test_a_non_text_parameter_key_is_refused(parameters: dict[str, object], refusal: str) -> None:
     raw = gemm_raw()
-    raw["levle"] = raw.pop("level")
-    with pytest.raises(ValueError, match=r"levle: unknown manifest field \(did you mean 'level'\?\)"):
-        BenchSpec.from_yaml(raw, source=str(GEMM))
-
-
-def test_a_non_text_parameter_key_is_refused() -> None:
-    """YAML 1.1 reads an unquoted ``on`` as ``True``: a size symbol named so matches no shape name."""
-    raw = gemm_raw()
-    raw["parameters"] = {"S": {True: 1, "NI": 1, "NJ": 1, "NK": 1}}
-    with pytest.raises(ValueError, match=r"parameters\.S: key True: Input should be a valid string"):
-        BenchSpec.from_yaml(raw, source=str(GEMM))
-
-
-def test_a_non_text_key_inside_a_parameter_value_is_named() -> None:
-    """pydantic does not render ``!r`` in custom error templates, so the repr travels in the error
-    context: the refusal must name the offending key, not show a literal ``{key!r}`` placeholder."""
-    raw = gemm_raw()
-    raw["parameters"] = {"S": {"NI": {1: "x"}}}
-    with pytest.raises(ValueError, match=r"parameters\.S\.NI: expected text mapping keys \(got int key 1\)"):
+    raw["parameters"] = parameters
+    with pytest.raises(ValueError, match=refusal):
         BenchSpec.from_yaml(raw, source=str(GEMM))
 
 

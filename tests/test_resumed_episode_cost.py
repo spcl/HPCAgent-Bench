@@ -220,38 +220,29 @@ def answer(ts_ms: int) -> dict[str, object]:
     }
 
 
-def test_rule_1_a_crash_resumed_in_place_is_one_attempt_counted_once() -> None:
-    """A resumed crash leaves one transcript and nothing void: the task row's tokens are the cost."""
-    frame = submissions([answer(10), task("w0", FINAL_TOKENS, "agent", 10, tokens_crashed=0, tokens_void=0)])
-    slots = population.slot_tokens(frame)
-    assert slots.tokens.tolist() == [FINAL_TOKENS]
-    assert slots[population.VOID_COLUMN].tolist() == [0.0]
-
-
 def test_rule_2_the_agents_own_failure_is_counted_and_stands_unsolved() -> None:
-    """An episode the agent ended (no answer) is its slot's run, unsolved, its tokens counted."""
+    """An episode the agent ended (no answer) is its slot's run, unsolved, its tokens counted. A crash resumed in
+    place is one attempt counted once: it leaves one transcript and nothing void, so the task row's tokens are the
+    cost."""
     frame = submissions([task("w0", FINAL_TOKENS, "agent", 10, tokens_crashed=CRASHED_TOKENS)])
     assert population.kernel_tokens(frame).to_dict() == {"k": COUNTED_TOKENS}
     assert population.slot_tokens(frame)[population.VOID_COLUMN].tolist() == [0.0]
 
-
-def test_rule_3_a_limit_stopped_launch_and_a_later_launch_of_its_slot_both_count() -> None:
-    """The launch stopped by its token cap (cause limit) and a later launch of the slot that answered: both count."""
-    frame = submissions(
-        [
-            task("w0", 400.0, "limit", 10),
-            answer(30),
-            task("w0", FINAL_TOKENS, "agent", 30),
-        ]
-    )
-    assert population.kernel_tokens(frame).to_dict() == {"k": 400.0 + FINAL_TOKENS}
-    assert population.slot_tokens(frame)[population.VOID_COLUMN].tolist() == [0.0]
+    resumed = submissions([answer(10), task("w0", FINAL_TOKENS, "agent", 10, tokens_crashed=0, tokens_void=0)])
+    slots = population.slot_tokens(resumed)
+    assert slots.tokens.tolist() == [FINAL_TOKENS]
+    assert slots[population.VOID_COLUMN].tolist() == [0.0]
 
 
 def test_rule_4_an_infra_launch_is_void_and_reported_beside_its_rerun() -> None:
     """A launch lost to infrastructure (its final attempt's cause, or a judge fault on its grade) and rerun
     from scratch: only the rerun's tokens are the cost; the lost launches, and the void attempts inside the rerun,
-    are reported beside it."""
+    are reported beside it. A launch stopped by its token cap (cause limit) and a later launch of the slot that
+    answered both count."""
+    limited = submissions([task("w0", 400.0, "limit", 10), answer(30), task("w0", FINAL_TOKENS, "agent", 30)])
+    assert population.kernel_tokens(limited).to_dict() == {"k": 400.0 + FINAL_TOKENS}
+    assert population.slot_tokens(limited)[population.VOID_COLUMN].tolist() == [0.0]
+
     faulted = {
         "row_kind": "attempt",
         "run_root": "r20",

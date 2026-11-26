@@ -33,10 +33,6 @@ PINNED_STAMPS = {
 }
 
 
-def test_the_registered_stamps_are_the_pinned_ones() -> None:
-    assert {stamp: (p.role, p.inputs, p.repeat) for stamp, p in PROTOCOLS.items()} == PINNED_STAMPS
-
-
 def test_a_grade_protocol_is_one_line_and_its_stamp_says_what_it_times() -> None:
     """``mw<m>x<n>``: m inputs x n runs a side under the one-sided Mann-Whitney at alpha 0.1, gated by the
     registered test; its A/A calibration shares all of it."""

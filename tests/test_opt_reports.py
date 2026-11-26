@@ -150,49 +150,51 @@ def test_the_timed_build_is_unchanged_when_opt_reports_is_on(
     assert list(backend.rglob("*.so")) == [so], "a second .so appeared under the backend"
 
 
+@pytest.mark.parametrize(
+    ("framework", "built", "no_channel", "reason"),
+    [
+        # A family :data:`languages.REPORT_REFS` wires no flags for (``nvcc``, the MPI wrappers) must not read as "the
+        # harness forgot to check" -- an explicit reason, not an empty directory. Forced via
+        # :func:`languages.report_flags` rather than by finding a REAL such native column, because every
+        # C/C++/Fortran column this table has today (gcc/llvm/nvhpc) DOES have one.
+        pytest.param("fortran", True, True, "no optimization-report channel", id="no-report-channel"),
+        # ``--opt-reports`` is documented as C/C++/Fortran only; a framework outside
+        # ``native_runtime.FRAMEWORK_LANG`` (dace, numba, ...) must still get a manifest that SAYS so.
+        pytest.param("numpy", False, False, "not a compiled C/C++/Fortran column", id="non-native-framework"),
+        # A framework that never built this kernel has no build to describe; reporting on it anyway would either
+        # crash or silently describe a different kernel's leftover sources.
+        pytest.param("fortran", False, False, "no generated sources on disk", id="no-generated-sources"),
+    ],
+)
 def test_a_compiler_with_no_report_channel_records_a_reason(
-    backend: pathlib.Path, bench_stub: types.SimpleNamespace, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    request: pytest.FixtureRequest,
+    bench_stub: types.SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    framework: str,
+    built: bool,
+    no_channel: bool,
+    reason: str,
 ) -> None:
-    """A family :data:`languages.REPORT_REFS` wires no flags for (``nvcc``, the MPI wrappers) must
-    not read as "the harness forgot to check" -- an explicit reason, not an empty directory. Forced
-    here via :func:`languages.report_flags` rather than by finding a REAL such native column,
-    because every C/C++/Fortran column this table has today (gcc/llvm/nvhpc) DOES have one --
-    the whole point of the property is what happens on the family that does not."""
-    monkeypatch.setattr(opt_reports.languages, "report_flags", lambda lang, compiler=None: "")
+    """A manifest that cannot describe a build says why, never a directory that silently holds nothing."""
+    if built:
+        request.getfixturevalue("backend")
+    if no_channel:
+        monkeypatch.setattr(opt_reports.languages, "report_flags", lambda lang, compiler=None: "")
 
-    manifest = opt_reports.emit_kernel_reports(bench_stub, "fortran", tmp_path / "reports")
+    manifest = opt_reports.emit_kernel_reports(bench_stub, framework, tmp_path / "reports")
 
-    assert manifest.report_flags == ""
-    assert manifest.report_kind == ""
-    assert manifest.opt_report is None
-    assert "no optimization-report channel" in manifest.reason
-    # The assembly channel does not depend on the report channel (-S needs no report flags), so it
-    # must still be produced -- "no report" is not "no artifacts at all".
-    assert manifest.sources
-    assert all(s.assembly is not None for s in manifest.sources)
-
-
-def test_a_non_native_framework_is_declined_with_a_reason_not_silently_skipped(
-    bench_stub: types.SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    """``--opt-reports`` is documented as C/C++/Fortran only; a framework outside
-    ``native_runtime.FRAMEWORK_LANG`` (dace, numba, ...) must still get a manifest that SAYS so,
-    never a directory that silently holds nothing with no explanation."""
-    manifest = opt_reports.emit_kernel_reports(bench_stub, "numpy", tmp_path / "reports")
-
+    assert reason in manifest.reason
+    if no_channel:
+        assert manifest.report_flags == ""
+        assert manifest.report_kind == ""
+        assert manifest.opt_report is None
+        # The assembly channel does not depend on the report channel (-S needs no report flags), so it
+        # must still be produced -- "no report" is not "no artifacts at all".
+        assert manifest.sources
+        assert all(s.assembly is not None for s in manifest.sources)
+        return
     assert manifest.sources == ()
-    assert manifest.opt_report is None
-    assert "not a compiled C/C++/Fortran column" in manifest.reason
-    assert (tmp_path / "reports" / "probe" / "manifest.json").is_file()
-
-
-def test_a_kernel_with_no_generated_sources_is_declined_with_a_reason(
-    bench_stub: types.SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    """A framework that never built this kernel (no ``run-framework`` measured it yet) has no build
-    to describe; reporting on it anyway would either crash or -- worse -- silently describe a
-    different kernel's leftover sources."""
-    manifest = opt_reports.emit_kernel_reports(bench_stub, "fortran", tmp_path / "reports")
-
-    assert manifest.sources == ()
-    assert "no generated sources on disk" in manifest.reason
+    if framework == "numpy":
+        assert manifest.opt_report is None
+        assert (tmp_path / "reports" / "probe" / "manifest.json").is_file()

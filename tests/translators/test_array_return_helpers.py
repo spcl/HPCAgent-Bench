@@ -22,50 +22,61 @@ from tests.translators.op_oracle import all_ok, run_op
 ALL = ("c", "cpp", "fortran", "numba")
 
 
-def test_array_return_slice_target() -> None:
-    # Early-return array helper, result stored into a row slice of the output.
-    src = (
-        "import numpy as np\n"
-        "def clamp_row(v, lo):\n"
-        " if lo > 0.0:\n"
-        "  return np.maximum(v, lo)\n"
-        " return -v\n"
-        "def f(x, thr, out):\n"
-        " for i in range(x.shape[0]):\n"
-        "  out[i, :] = clamp_row(x[i, :], thr)\n"
-    )
-    x = np.linspace(-2.0, 2.0, 20).reshape(4, 5).astype(np.float64)
-    ok, res = all_ok(
-        run_op(
-            src,
-            "f",
-            {"x": x, "thr": 0.5},
-            {"out": (4, 5)},
+#: Early-return array helpers: a result stored into a row slice of the output, and into the whole output (the
+#: out-param is filled in place, no temp copy).
+SLICE_TARGET_SRC = (
+    "import numpy as np\n"
+    "def clamp_row(v, lo):\n"
+    " if lo > 0.0:\n"
+    "  return np.maximum(v, lo)\n"
+    " return -v\n"
+    "def f(x, thr, out):\n"
+    " for i in range(x.shape[0]):\n"
+    "  out[i, :] = clamp_row(x[i, :], thr)\n"
+)
+BARE_TARGET_SRC = (
+    "import numpy as np\n"
+    "def screen(v, s):\n"
+    " if s > 0.0:\n"
+    "  return v * s\n"
+    " return v + 1.0\n"
+    "def f(x, s, out):\n"
+    " out[:] = screen(x, s)\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("src", "x", "scalar", "out_shape", "params", "shapes"),
+    [
+        pytest.param(
+            SLICE_TARGET_SRC,
+            np.linspace(-2.0, 2.0, 20).reshape(4, 5).astype(np.float64),
+            {"thr": 0.5},
+            (4, 5),
             {"M": 4, "n": 5},
-            shapes={"x": "(M,n)", "out": "(M,n)"},
-            backends=ALL,
-        )
-    )
-    assert ok, res
-
-
-def test_array_return_bare_target() -> None:
-    # Whole-array target: the out-param is filled in place (no temp copy).
-    src = (
-        "import numpy as np\n"
-        "def screen(v, s):\n"
-        " if s > 0.0:\n"
-        "  return v * s\n"
-        " return v + 1.0\n"
-        "def f(x, s, out):\n"
-        " out[:] = screen(x, s)\n"
-    )
-    x = np.linspace(-3.0, 3.0, 12).astype(np.float64)
-    ok, res = all_ok(
-        run_op(
-            src, "f", {"x": x, "s": 2.0}, {"out": (12,)}, {"n": 12}, shapes={"x": "(n,)", "out": "(n,)"}, backends=ALL
-        )
-    )
+            {"x": "(M,n)", "out": "(M,n)"},
+            id="slice-target",
+        ),
+        pytest.param(
+            BARE_TARGET_SRC,
+            np.linspace(-3.0, 3.0, 12).astype(np.float64),
+            {"s": 2.0},
+            (12,),
+            {"n": 12},
+            {"x": "(n,)", "out": "(n,)"},
+            id="bare-target",
+        ),
+    ],
+)
+def test_array_return_slice_target(
+    src: str,
+    x: np.ndarray,
+    scalar: dict[str, float],
+    out_shape: tuple[int, ...],
+    params: dict[str, int],
+    shapes: dict[str, str],
+) -> None:
+    ok, res = all_ok(run_op(src, "f", {"x": x, **scalar}, {"out": out_shape}, params, shapes=shapes, backends=ALL))
     assert ok, res
 
 
@@ -170,35 +181,6 @@ def test_array_return_helper_native_desugar_bug3() -> None:
     assert ok, res
 
 
-def test_array_helper_emitted_as_outparam_c_function() -> None:
-    # Structural: the helper is a ``void`` C function with a trailing out-param,
-    # and the call site is a SINGLE opaque call (not a per-element loop calling
-    # the whole-array helper once per element).
-    from hpcagent_bench.translators.numpyto_c.emit import emit_c
-
-    src = (
-        "import numpy as np\n"
-        "def clamp_row(v, lo):\n"
-        " if lo > 0.0:\n"
-        "  return np.maximum(v, lo)\n"
-        " return -v\n"
-        "def f(x, thr, out):\n"
-        " for i in range(x.shape[0]):\n"
-        "  out[i, :] = clamp_row(x[i, :], thr)\n"
-    )
-    kir = helper_kir(src, shape="(M,n)", params={"M": 4, "n": 5})
-    assert len(kir.helpers) == 1
-    assert kir.helpers[0].return_kind == "__hret_0"
-    c = emit_c(kir, fn_name="f")
-    # Helper ABI == kernel ABI (abi_contract.md Sec. 4): pointers by name, then scalars by name,
-    # the out buffer sorting like any other pointer (``__hret_0`` < ``v``).
-    assert (
-        "static void clamp_row(double *restrict __hret_0, const double *restrict v, const double lo, const int64_t n)"
-    ) in c
-    # a single call statement, not ``__hret_tmp_0[..] = clamp_row(..)`` per element
-    assert "clamp_row(__hret_tmp_0, __harg_0_0, thr, n);" in c
-
-
 def helper_kir(src: str, precision: str = "", shape: str = "(n,)", params: dict[str, int] | None = None) -> KernelIR:
     """Lower ``src``'s one-array-in/one-array-out kernel ``f`` at ``precision`` (``""`` = fp64).
 
@@ -251,7 +233,17 @@ DTYPE_OF_SRC = (
 )
 
 
-def test_array_return_helper_buffers_follow_kernel_precision() -> None:
+@pytest.mark.parametrize(
+    ("precision", "dtype", "c_type", "f90_kind"),
+    [
+        pytest.param("float32", "float32", "float", "c_float", id="float32"),
+        # The default (no ``--precision``) path must stay exactly where it was: fp64 everywhere.
+        pytest.param("", "float64", "double", "c_double", id="fp64-unchanged"),
+    ],
+)
+def test_array_return_helper_buffers_follow_kernel_precision(
+    precision: str, dtype: str, c_type: str, f90_kind: str
+) -> None:
     # ``dtype=x.dtype`` is "whatever x is", so the helper's argument and its synthesized out-param
     # must narrow with the kernel. Read as the literal tag ``"dtype"`` they missed every emitter's
     # dtype table and fell back to double, and an fp32 caller then handed a ``float *`` to a
@@ -259,37 +251,19 @@ def test_array_return_helper_buffers_follow_kernel_precision() -> None:
     from hpcagent_bench.translators.numpyto_c.emit import emit_c, emit_cpp
     from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 
-    kir = helper_kir(DTYPE_OF_SRC, "float32")
-    assert [(a.name, a.dtype) for a in kir.helpers[0].arrays] == [("v", "float32"), ("__hret_0", "float32")]
+    kir = helper_kir(DTYPE_OF_SRC, precision)
+    assert [(a.name, a.dtype) for a in kir.helpers[0].arrays] == [("v", dtype), ("__hret_0", dtype)]
     assert (
-        "static void scale_up(float *restrict __hret_0, const float *restrict v, const int64_t n, const float s)"
+        f"static void scale_up({c_type} *restrict __hret_0, const {c_type} *restrict v, const int64_t n, "
+        f"const {c_type} s)"
     ) in emit_c(kir, fn_name="f")
     assert (
-        "static void scale_up(float *__restrict__ __hret_0, const float *__restrict__ v, "
-        "const int64_t n, const float s)"
+        f"static void scale_up({c_type} *__restrict__ __hret_0, const {c_type} *__restrict__ v, "
+        f"const int64_t n, const {c_type} s)"
     ) in emit_cpp(kir, fn_name="f")
     f90 = emit_fortran(kir, fn_name="f")
-    assert "real(c_float), intent(in) :: v(8)" in f90
-    assert "real(c_float), intent(inout) :: x_hret_0(n)" in f90
-
-
-def test_fp64_helper_buffers_are_unchanged() -> None:
-    # The default (no ``--precision``) path must stay exactly where it was: fp64 everywhere.
-    from hpcagent_bench.translators.numpyto_c.emit import emit_c, emit_cpp
-    from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
-
-    kir = helper_kir(DTYPE_OF_SRC, "")
-    assert [(a.name, a.dtype) for a in kir.helpers[0].arrays] == [("v", "float64"), ("__hret_0", "float64")]
-    assert (
-        "static void scale_up(double *restrict __hret_0, const double *restrict v, const int64_t n, const double s)"
-    ) in emit_c(kir, fn_name="f")
-    assert (
-        "static void scale_up(double *__restrict__ __hret_0, const double *__restrict__ v, "
-        "const int64_t n, const double s)"
-    ) in emit_cpp(kir, fn_name="f")
-    f90 = emit_fortran(kir, fn_name="f")
-    assert "real(c_double), intent(in) :: v(8)" in f90
-    assert "real(c_double), intent(inout) :: x_hret_0(n)" in f90
+    assert f"real({f90_kind}), intent(in) :: v(8)" in f90
+    assert f"real({f90_kind}), intent(inout) :: x_hret_0(n)" in f90
 
 
 def test_dace_call_temporaries_follow_the_run_precision() -> None:
@@ -325,16 +299,6 @@ def test_a_machine_learning_helper_and_its_buffers_follow_the_run_precision(kern
     assert "np.float32" not in src, src
     assert not re.search(r"np\.(empty|zeros|ones|full)\([^\n]*np\.float64", src), src
     assert not re.search(r"np\.full\(\([^()]*\), -?[0-9.]+\)", src), src
-
-
-def test_an_unresolvable_buffer_dtype_refuses() -> None:
-    # A refusal beats a silently wrong emit: a dtype expression nothing can resolve has no width
-    # any emitter can pick (stored verbatim it would render as double), so it stops here.
-    import pytest
-
-    src = DTYPE_OF_SRC.replace("dtype=x.dtype", "dtype=SOME_DTYPE")
-    with pytest.raises(NotImplementedError, match="does not resolve to a known dtype"):
-        helper_kir(src, "float32")
 
 
 def test_a_helper_local_resolves_its_dtype_against_the_helpers_own_params() -> None:
@@ -392,62 +356,107 @@ def test_inout_target_takes_one_abi_slot() -> None:
     assert "call scale_in_place(t, thr)" in f90
 
 
-def test_helper_specialised_on_a_rebound_shape_is_refused() -> None:
-    # A local rebound to a DIFFERENT shape resolves to whichever binding came first, and the helper
-    # built from it bakes those extents in as literals. vgg16's _maxpool2d was emitted for
-    # (batch, 3, 224, 224) and called on (batch, 512, 14, 14): wrong numbers and reads past the end,
-    # reported by no compiler. Refuse while the inference cannot tell the two apart.
-    import pytest
-
-    src = (
-        "import numpy as np\n"
-        "def half(v):\n"
-        " if v[0] > 0.0:\n"
-        "  return v[0:4]\n"
-        " return -v[0:4]\n"
-        "def f(x, thr, out):\n"
-        " t = np.zeros(8, dtype=x.dtype)\n"
-        " t[:] = x + 1.0\n"
-        " t = half(t)\n"
-        " t = half(t)\n"
-        " out[0:4] = t\n"
-    )
-    with pytest.raises(NotImplementedError, match="rebound to both"):
-        helper_kir(src)
+REBOUND_SHAPE_SRC = (
+    "import numpy as np\n"
+    "def half(v):\n"
+    " if v[0] > 0.0:\n"
+    "  return v[0:4]\n"
+    " return -v[0:4]\n"
+    "def f(x, thr, out):\n"
+    " t = np.zeros(8, dtype=x.dtype)\n"
+    " t[:] = x + 1.0\n"
+    " t = half(t)\n"
+    " t = half(t)\n"
+    " out[0:4] = t\n"
+)
 
 
-def test_a_fresh_local_bound_by_a_helper_call_gets_its_buffer() -> None:
-    """``y = pick(x, thr)`` binds a local nothing allocated.
+@pytest.mark.parametrize(
+    ("src", "precision", "match"),
+    [
+        # A refusal beats a silently wrong emit: a dtype expression nothing can resolve has no width any emitter can
+        # pick (stored verbatim it would render as double), so it stops here.
+        pytest.param(
+            DTYPE_OF_SRC.replace("dtype=x.dtype", "dtype=SOME_DTYPE"),
+            "float32",
+            "does not resolve to a known dtype",
+            id="unresolvable-buffer-dtype",
+        ),
+        # A local rebound to a DIFFERENT shape resolves to whichever binding came first, and the helper built from
+        # it bakes those extents in as literals. vgg16's _maxpool2d was emitted for (batch, 3, 224, 224) and called
+        # on (batch, 512, 14, 14): wrong numbers and reads past the end, reported by no compiler. Refuse while the
+        # inference cannot tell the two apart.
+        pytest.param(REBOUND_SHAPE_SRC, "", "rebound to both", id="rebound-shape"),
+    ],
+)
+def test_helper_specialised_on_a_rebound_shape_is_refused(src: str, precision: str, match: str) -> None:
+    with pytest.raises(NotImplementedError, match=match):
+        helper_kir(src, precision)
 
-    The bare-Name target is passed as the helper's out-param, so it is never a Store anywhere in
-    the tree. ``promote_free_names_to_params`` then rescued the name as a scalar int PARAMETER: it
-    entered the emitted ABI the binding never passes, and the C call handed an integer to a pointer
-    dummy (``passing argument 1 of 'build_up_b' makes pointer from integer without a cast``). mlp,
-    vision_transformer, squeezenet_fire_module, mamba2, channel_flow and cp2k_density_matrix_trs4
-    all sat on it.
-    """
-    src = (
-        "import numpy as np\n"
-        "def pick(v, lo):\n"
-        " if lo > 0.0:\n"
-        "  return np.maximum(v, lo)\n"
-        " return -v\n"
-        "def f(x, thr, out):\n"
-        " y = pick(x, thr)\n"
-        " out[:] = y * 3.0\n"
-    )
-    x = np.linspace(-2.0, 2.0, 20).reshape(4, 5).astype(np.float64)
-    ok, res = all_ok(
-        run_op(
-            src,
-            "f",
-            {"x": x, "thr": 0.5},
-            {"out": (4, 5)},
+
+@pytest.mark.parametrize(
+    ("src", "x", "scalar", "out_shape", "params", "shapes"),
+    [
+        # ``y = pick(x, thr)`` binds a local nothing allocated.
+        #
+        # The bare-Name target is passed as the helper's out-param, so it is never a Store anywhere in
+        # the tree. ``promote_free_names_to_params`` then rescued the name as a scalar int PARAMETER: it
+        # entered the emitted ABI the binding never passes, and the C call handed an integer to a pointer
+        # dummy (``passing argument 1 of 'build_up_b' makes pointer from integer without a cast``). mlp,
+        # vision_transformer, squeezenet_fire_module, mamba2, channel_flow and cp2k_density_matrix_trs4
+        # all sat on it.
+        pytest.param(
+            "import numpy as np\n"
+            "def pick(v, lo):\n"
+            " if lo > 0.0:\n"
+            "  return np.maximum(v, lo)\n"
+            " return -v\n"
+            "def f(x, thr, out):\n"
+            " y = pick(x, thr)\n"
+            " out[:] = y * 3.0\n",
+            np.linspace(-2.0, 2.0, 20).reshape(4, 5).astype(np.float64),
+            {"thr": 0.5},
+            (4, 5),
             {"M": 4, "n": 5},
-            shapes={"x": "(M, n)", "out": "(M, n)"},
-            backends=ALL,
-        )
-    )
+            {"x": "(M, n)", "out": "(M, n)"},
+            id="fresh-local-gets-a-buffer",
+        ),
+        # A local a helper call binds is sized by the CALLEE'S RETURN, never by joining the call's args.
+        #
+        # Nothing else resolves such a local: it is neither a declared array nor an allocation, so the
+        # resolver fell through to the elementwise route and answered with the broadcast join of the
+        # ARGUMENTS. ``shrink`` returns two columns fewer than it is given, so the join reported ``x``'s
+        # own ``(M, N)`` -- and ``scale``, reading a 4x3 buffer at 4x5 strides, ran off the end of it and
+        # into whatever followed. conv2d_batch_norm_scaling failed exactly this way, silently, because
+        # at preset S its two disagreeing extents happened to hold the same number.
+        pytest.param(
+            "import numpy as np\n"
+            "def shrink(v, k):\n"
+            " return v[:, k:] + v[:, :-k]\n"
+            "def scale(u, s):\n"
+            " return u * s\n"
+            "def f(x, s, out):\n"
+            " h = shrink(x, 2)\n"
+            " g = scale(h, s)\n"
+            " out[:] = g\n",
+            np.arange(20, dtype=np.float64).reshape(4, 5) + 1.0,
+            {"s": 3.0},
+            (4, 3),
+            {"M": 4, "N": 5},
+            {"x": "(M,N)", "out": "(M,N-2)"},
+            id="local-takes-the-callee-return-shape",
+        ),
+    ],
+)
+def test_a_fresh_local_bound_by_a_helper_call_gets_its_buffer(
+    src: str,
+    x: np.ndarray,
+    scalar: dict[str, float],
+    out_shape: tuple[int, ...],
+    params: dict[str, int],
+    shapes: dict[str, str],
+) -> None:
+    ok, res = all_ok(run_op(src, "f", {"x": x, **scalar}, {"out": out_shape}, params, shapes=shapes, backends=ALL))
     assert ok, res
 
 
@@ -566,40 +575,3 @@ def test_the_kept_helper_kernel_is_a_legal_translation_unit() -> None:
         ["gcc", "-O2", "-std=c23", "-fsyntax-only", str(src)], capture_output=True, text=True, check=False
     )
     assert r.returncode == 0, r.stderr
-
-
-def test_a_local_bound_from_a_helper_takes_the_callee_return_shape() -> None:
-    """A local a helper call binds is sized by the CALLEE'S RETURN, never by joining the call's args.
-
-    Nothing else resolves such a local: it is neither a declared array nor an allocation, so the
-    resolver fell through to the elementwise route and answered with the broadcast join of the
-    ARGUMENTS. ``shrink`` returns two columns fewer than it is given, so the join reported ``x``'s
-    own ``(M, N)`` -- and ``scale``, reading a 4x3 buffer at 4x5 strides, ran off the end of it and
-    into whatever followed. conv2d_batch_norm_scaling failed exactly this way, silently, because
-    at preset S its two disagreeing extents happened to hold the same number.
-    """
-    src = (
-        "import numpy as np\n"
-        "def shrink(v, k):\n"
-        " return v[:, k:] + v[:, :-k]\n"
-        "def scale(u, s):\n"
-        " return u * s\n"
-        "def f(x, s, out):\n"
-        " h = shrink(x, 2)\n"
-        " g = scale(h, s)\n"
-        " out[:] = g\n"
-    )
-    M, N = 4, 5
-    x = np.arange(M * N, dtype=np.float64).reshape(M, N) + 1.0
-    ok, res = all_ok(
-        run_op(
-            src,
-            "f",
-            {"x": x, "s": 3.0},
-            {"out": (M, N - 2)},
-            {"M": M, "N": N},
-            shapes={"x": "(M,N)", "out": "(M,N-2)"},
-            backends=ALL,
-        )
-    )
-    assert ok, res

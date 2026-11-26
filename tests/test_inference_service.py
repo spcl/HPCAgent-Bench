@@ -115,10 +115,7 @@ def test_a_setup_that_names_no_source_still_starts_its_own_server(service: types
     """Every setup written before this mode existed declares no source and must keep its server."""
     assert service.source({}) == service.Source.NODE
     assert service.source({"INFERENCE_SOURCE": "node"}) == service.Source.NODE
-
-
-def test_an_unknown_source_is_refused_rather_than_read_as_a_server_setup(service: types.ModuleType) -> None:
-    """A typo in the one key that decides whether a job allocates GPUs must not resolve silently."""
+    # A typo in the one key that decides whether a job allocates GPUs must not resolve silently.
     with pytest.raises(SystemExit, match="INFERENCE_SOURCE"):
         service.source({"INFERENCE_SOURCE": "hosted"})
 
@@ -199,17 +196,14 @@ def test_a_first_party_anthropic_service_authenticates_with_x_api_key_alone(serv
 # the key travels by NAME, never by value
 
 
-def test_the_exported_block_carries_the_key_variable_and_never_the_key(service: types.ModuleType) -> None:
-    """run_cluster.sh copies the key by indirection (``${!INFERENCE_KEY_ENV}``), so the secret
-    never passes through this process, its stdout, or the eval that reads it."""
-    exported = service.launcher_env(service.from_environ(openai_setup()))
-    assert exported["INFERENCE_KEY_ENV"] == "OPENAI_API_KEY"
-    assert all(SECRET not in value for value in exported.values())
-
-
 def test_the_shell_block_is_shell_safe_and_holds_no_key(service: types.ModuleType) -> None:
     """The launcher evals this block, so a value must never be able to become shell code -- and the
     key is not in it at all, only the name of the variable holding it."""
+    # run_cluster.sh copies the key by indirection (``${!INFERENCE_KEY_ENV}``), so the secret never passes through
+    # this process, its stdout, or the eval that reads it.
+    exported = service.launcher_env(service.from_environ(openai_setup()))
+    assert exported["INFERENCE_KEY_ENV"] == "OPENAI_API_KEY"
+    assert all(SECRET not in value for value in exported.values())
     block = service.shell_block(service.launcher_env(service.from_environ(muse_setup())))
     assert SECRET not in block
     assert "VLLM_SERVED_MODEL=muse-spark-1.3-contributor" in block
@@ -262,37 +256,47 @@ def test_the_launcher_checks_the_agent_network_before_it_exports_the_service(ser
 # provenance
 
 
-def test_the_run_records_the_provider_model_and_tier(service: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """Which service answered, at which tier, is the service setup's counterpart to the engine and
-    image a server setup records -- without it a contributor-tier run is indistinguishable from a
-    standard-tier one in the archive."""
-    service.record(tmp_path, muse_setup())
+@pytest.mark.parametrize(
+    ("setup", "expected"),
+    [
+        pytest.param(
+            muse_setup(),
+            {
+                "source": "service",
+                "provider": "meta",
+                "model": "muse-spark-1.3-contributor",
+                "tier": "contributor",
+                "api": "anthropic",
+                "base_url": "https://api.meta.ai/v1",
+                "key_env": "META_MODEL_API_KEY",
+            },
+            id="service",
+        ),
+        pytest.param(
+            {
+                "INFERENCE_ENGINE": "sglang",
+                "INFERENCE_CE_ENV": "hpcagent-bench-sglang-mi300-latest",
+                "VLLM_MODEL": "Qwen/Q",
+            },
+            {
+                "source": "node",
+                "engine": "sglang",
+                "ce_env": "hpcagent-bench-sglang-mi300-latest",
+                "model": "Qwen/Q",
+            },
+            id="server",
+        ),
+    ],
+)
+def test_the_run_records_the_provider_model_and_tier(
+    service: types.ModuleType, tmp_path: pathlib.Path, setup: dict[str, str], expected: dict[str, str]
+) -> None:
+    """Which service answered, at which tier, is the service setup's counterpart to the engine and image a server
+    setup records -- without it a contributor-tier run is indistinguishable from a standard-tier one in the archive.
+    One file answers "what produced these tokens" for both modes."""
+    service.record(tmp_path, setup)
     written = json.loads((tmp_path / service.RECORD_NAME).read_text(encoding="utf-8"))
-    assert written["source"] == "service"
-    assert written["provider"] == "meta"
-    assert written["model"] == "muse-spark-1.3-contributor"
-    assert written["tier"] == "contributor"
-    assert written["api"] == "anthropic"
-    assert written["base_url"] == "https://api.meta.ai/v1"
-    assert written["key_env"] == "META_MODEL_API_KEY"
-
-
-def test_a_server_setup_records_its_engine_instead(service: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """One file answers "what produced these tokens" for both modes, or a reader has to know which
-    mode a run used before knowing where to look."""
-    service.record(
-        tmp_path,
-        {
-            "INFERENCE_ENGINE": "sglang",
-            "INFERENCE_CE_ENV": "hpcagent-bench-sglang-mi300-latest",
-            "VLLM_MODEL": "Qwen/Q",
-        },
-    )
-    written = json.loads((tmp_path / service.RECORD_NAME).read_text(encoding="utf-8"))
-    assert written["source"] == "node"
-    assert written["engine"] == "sglang"
-    assert written["ce_env"] == "hpcagent-bench-sglang-mi300-latest"
-    assert written["model"] == "Qwen/Q"
+    assert {key: written[key] for key in expected} == expected
 
 
 # fake services: the request a service setup actually sends, and what its usage folds to
@@ -494,6 +498,10 @@ def test_a_service_setup_never_leaks_its_key_into_the_staged_setup_env() -> None
     written there, so rotating it never means editing a committed file."""
     text = rendered("experiment:musespark")
     assert "META_MODEL_API_KEY=" not in text.replace("INFERENCE_SERVICE_KEY_ENV=META_MODEL_API_KEY", "")
+    # The LiteLLM proxy config outlives the job, so it names the variable for LiteLLM to read, never its value.
+    script = (paths.ROOT / "hpcagent_bench" / "cluster" / "run_cluster.sh").read_text(encoding="utf-8")
+    assert "api_key: ${VLLM_API_KEY" not in script, "the proxy config would hold the key literally"
+    assert "os.environ/VLLM_API_KEY" in script
 
 
 def test_an_unreachable_service_fails_loudly(service: types.ModuleType) -> None:
@@ -502,13 +510,6 @@ def test_an_unreachable_service_fails_loudly(service: types.ModuleType) -> None:
     exported = service.launcher_env(service.from_environ(setup))
     with pytest.raises(RuntimeError, match="unreachable"):
         http_chat_json(f"{exported['VLLM_BASE_URL']}/chat/completions", {}, {}, 2.0, "service unreachable")
-
-
-def test_the_launcher_never_writes_the_key_value_into_the_run_tree() -> None:
-    """The LiteLLM proxy config outlives the job, so it names the variable for LiteLLM to read, never its value."""
-    script = (paths.ROOT / "hpcagent_bench" / "cluster" / "run_cluster.sh").read_text(encoding="utf-8")
-    assert "api_key: ${VLLM_API_KEY" not in script, "the proxy config would hold the key literally"
-    assert "os.environ/VLLM_API_KEY" in script
 
 
 def listing(model: str, *pricings: dict[str, str]) -> dict[str, object]:
@@ -521,14 +522,10 @@ def listing(model: str, *pricings: dict[str, str]) -> dict[str, object]:
     }
 
 
-def test_a_model_priced_zero_on_every_endpoint_is_free(service: types.ModuleType) -> None:
-    body = listing("stealth/union-alpha", {"prompt": "0", "completion": "0", "discount": 0})
-    assert service.not_free(service.PricingListing.model_validate(body), "stealth/union-alpha") is None
-
-
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
+        (listing("m", {"prompt": "0", "completion": "0", "discount": 0}), None),  # priced zero on every endpoint: free
         (listing("m", {"prompt": "0", "completion": "0"}, {"prompt": "0.000001", "completion": "0"}), "p1 charges"),
         (listing("m", {"prompt": "0", "completion": "0", "request": "0.02"}), "per request"),
         (listing("m"), "no endpoint"),
@@ -538,11 +535,14 @@ def test_a_model_priced_zero_on_every_endpoint_is_free(service: types.ModuleType
     ],
 )
 def test_a_free_only_setup_refuses_any_listing_that_does_not_prove_the_model_free(
-    service: types.ModuleType, body: dict[str, object], reason: str
+    service: types.ModuleType, body: dict[str, object], reason: str | None
 ) -> None:
     """A router picks the provider per request, so ONE paid endpoint, one metered unit, or a listing
     that proves nothing is enough to bill a key the user allowed only for a free model."""
     got = service.not_free(service.PricingListing.model_validate(body), "m")
+    if reason is None:
+        assert got is None, got
+        return
     assert got is not None, got
     assert reason in got, got
 
@@ -601,13 +601,13 @@ def test_a_pool_setup_reaches_every_replica_of_every_live_server(
     assert service.provenance(setup).source is service.Source.POOL
 
 
-def test_a_pool_server_of_another_checkpoint_is_refused(service: types.ModuleType, tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("case", ["empty", "another-checkpoint"])
+def test_an_empty_pool_is_refused(service: types.ModuleType, tmp_path: pathlib.Path, case: str) -> None:
     """A row records the setup's model; a server in the pool that serves another one would make that record false."""
-    service.write_pool_server(tmp_path, pool_server_env("901", "http://n1:8000/v1", model="Qwen/Qwen3.8-235B"))
-    with pytest.raises(SystemExit, match="refusing to record it"):
-        service.pool_servers(tmp_path, "openai/gpt-oss-120b")
-
-
-def test_an_empty_pool_is_refused(service: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    with pytest.raises(SystemExit, match="no live server"):
-        service.pool_launcher_env({"INFERENCE_POOL_DIR": str(tmp_path), "INFERENCE_NODES": "0"})
+    if case == "empty":
+        with pytest.raises(SystemExit, match="no live server"):
+            service.pool_launcher_env({"INFERENCE_POOL_DIR": str(tmp_path), "INFERENCE_NODES": "0"})
+    else:
+        service.write_pool_server(tmp_path, pool_server_env("901", "http://n1:8000/v1", model="Qwen/Qwen3.8-235B"))
+        with pytest.raises(SystemExit, match="refusing to record it"):
+            service.pool_servers(tmp_path, "openai/gpt-oss-120b")

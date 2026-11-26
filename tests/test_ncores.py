@@ -22,33 +22,49 @@ def test_reports_physical_cores_not_hyperthreads(monkeypatch: pytest.MonkeyPatch
     assert flags.ncores() == flags.physical_cores(os.sched_getaffinity(0))
 
 
-def test_the_explicit_override_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_LIMITS_CORES", "3")
-    assert flags.ncores() == 3
-
-
-def test_a_confined_process_is_not_widened_by_the_node_wide_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """run_cluster.sh exports the NODE's physical cores, so a rank pinned to one slot's share must
-    still read that share -- otherwise the override re-creates the oversubscription it was added to
-    fix, and silently, since the var is honoured before affinity is ever consulted."""
+@pytest.mark.parametrize(
+    "env",
+    [
+        pytest.param({}, id="no_override"),
+        pytest.param({"HPCAGENT_BENCH_LIMITS_CORES": "512"}, id="node_wide_override"),
+        pytest.param({"SLURM_CPUS_PER_TASK": "512"}, id="slurm_cpus_per_task"),
+    ],
+)
+def test_a_process_confined_to_one_cpu_reads_one_core_whatever_the_environment_says(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
+) -> None:
+    """os.cpu_count() is affinity-blind; a rank confined to its share must size autopar to that share,
+    not to the node (the 288-core/4-rank bug in miniature). run_cluster.sh exports the NODE's physical
+    cores, so a pinned rank must still read its share, or the override re-creates the oversubscription
+    silently. SLURM_CPUS_PER_TASK counts logical cpus, so believing it would undercount a
+    --hint=nomultithread allocation: when the rank is bound, affinity is exact."""
     full = os.sched_getaffinity(0)
     if len(full) < 2:
-        pytest.fail("need >= 2 cpus in the affinity mask")
+        pytest.fail("need >= 2 cpus in the affinity mask to prove affinity is honoured")
     subset = set(sorted(full)[:1])
-    monkeypatch.setenv("HPCAGENT_BENCH_LIMITS_CORES", "512")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
     try:
         os.sched_setaffinity(0, subset)
         confined = flags.ncores()
     finally:
         os.sched_setaffinity(0, full)
-    assert confined == 1, f"a rank pinned to one cpu read the node-wide override instead: {confined}"
+    assert confined == 1, f"confined to cpu {sorted(subset)} with {env} but ncores() said {confined}"
+    assert os.sched_getaffinity(0) == full, "affinity was not restored"
+    if not env:
+        assert flags.ncores() == flags.physical_cores(full), "affinity was not restored"
 
 
-@pytest.mark.parametrize("bogus", ["0", "-4", "", "many"])
-def test_a_bogus_override_is_ignored_rather_than_obeyed(monkeypatch: pytest.MonkeyPatch, bogus: str) -> None:
-    """HPCAGENT_BENCH_LIMITS_CORES=0 must not size a thread pool to zero."""
-    monkeypatch.setenv("HPCAGENT_BENCH_LIMITS_CORES", bogus)
-    assert flags.ncores() >= 1
+@pytest.mark.parametrize(("value", "exact"), [("3", 3), ("0", None), ("-4", None), ("", None), ("many", None)], ids=str)
+def test_a_bogus_override_is_ignored_rather_than_obeyed(
+    monkeypatch: pytest.MonkeyPatch, value: str, exact: int | None
+) -> None:
+    """HPCAGENT_BENCH_LIMITS_CORES=0 must not size a thread pool to zero; a valid value wins outright."""
+    monkeypatch.setenv("HPCAGENT_BENCH_LIMITS_CORES", value)
+    if exact is not None:
+        assert flags.ncores() == exact
+    else:
+        assert flags.ncores() >= 1
 
 
 def test_smt_siblings_collapse_to_one_core() -> None:
@@ -74,55 +90,22 @@ def test_a_cpu_with_no_readable_topology_counts_as_its_own_core() -> None:
     assert flags.physical_cores({999999, 999998}) == 2
 
 
-def test_respects_cpu_affinity_rather_than_the_whole_machine() -> None:
-    """os.cpu_count() is affinity-blind; a rank confined to its share must size autopar to that
-    share, not to the node (the 288-core/4-rank bug in miniature)."""
-    full = os.sched_getaffinity(0)
-    if len(full) < 2:
-        pytest.fail("need >= 2 cpus in the affinity mask to prove affinity is honoured")
-    subset = set(sorted(full)[:1])
-    try:
-        os.sched_setaffinity(0, subset)
-        confined = flags.ncores()
-    finally:
-        os.sched_setaffinity(0, full)
-    assert confined == 1, f"confined to cpu {sorted(subset)} but ncores() said {confined}"
-    assert flags.ncores() == flags.physical_cores(full), "affinity was not restored"
-
-
-def test_a_bound_rank_ignores_slurm_cpus_per_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When the rank IS bound, affinity is exact and SLURM must not override it: SLURM_CPUS_PER_TASK
-    counts logical cpus, so believing it would undercount a --hint=nomultithread allocation."""
-    full = os.sched_getaffinity(0)
-    if len(full) < 2:
-        pytest.fail("need >= 2 cpus in the affinity mask")
-    subset = set(sorted(full)[:1])
-    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "512")
-    try:
-        os.sched_setaffinity(0, subset)
-        bound = flags.ncores()
-    finally:
-        os.sched_setaffinity(0, full)
-    assert bound == 1, f"a bound rank let SLURM_CPUS_PER_TASK=512 inflate it to {bound}"
-
-
-def test_an_unbound_rank_falls_back_to_the_slurm_allocation(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("one_core", [True, False], ids=["exactly_one_cores_worth", "beyond_the_machine"])
+def test_an_unbound_rank_falls_back_to_the_slurm_allocation(monkeypatch: pytest.MonkeyPatch, one_core: bool) -> None:
     """The user's case: one node, 288 cpus, 4 ranks -> 72 per rank. When SLURM allocates a share but
-    doesn't confine us to it, affinity spans the node, so the allocation is the only remaining signal."""
+    doesn't confine us to it, affinity spans the node, so the allocation is the only remaining signal; it never
+    inflates the pool beyond the cores that exist."""
     total = os.cpu_count() or 1
     smt = max(1, total // max(1, flags.physical_cores(set(range(total)))))
     # State the precondition rather than inheriting it: "unbound" means affinity spans the whole
     # node, and a co-resident test that pinned threads (harbor.grade does) leaves this process
     # bound, which is the other branch entirely.
     monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(total)))
-    monkeypatch.setenv("SLURM_CPUS_PER_TASK", str(smt))  # exactly one core's worth
-    assert flags.ncores() == 1, "an unbound rank ignored its SLURM allocation"
-
-
-def test_the_slurm_fallback_never_inflates_beyond_the_machine(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A SLURM_CPUS_PER_TASK larger than the host must not size a pool bigger than the cores that exist."""
-    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "100000")
-    assert flags.ncores() <= flags.physical_cores(os.sched_getaffinity(0))
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", str(smt) if one_core else "100000")
+    if one_core:
+        assert flags.ncores() == 1, "an unbound rank ignored its SLURM allocation"
+    else:
+        assert flags.ncores() <= flags.physical_cores(set(range(total)))
 
 
 def test_omp_num_threads_is_not_a_source(monkeypatch: pytest.MonkeyPatch) -> None:

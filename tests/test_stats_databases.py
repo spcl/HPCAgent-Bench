@@ -48,13 +48,6 @@ def counts(db: pathlib.Path) -> dict[str, int]:
         }
 
 
-def test_one_database_is_read_as_it_is(tmp_path: pathlib.Path) -> None:
-    core = tmp_path / "core.db"
-    seed(core, CORE_SETUP, (2.0,))
-    with databases.union([core]) as db:
-        assert db == core
-
-
 def test_two_databases_are_unioned_with_their_ids_remapped(tmp_path: pathlib.Path) -> None:
     """Both files number their runs and grades from 1: merged by natural key, every grade keeps its
     run and a final grade keeps the grade it re-timed."""

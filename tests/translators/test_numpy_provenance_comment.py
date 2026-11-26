@@ -55,13 +55,9 @@ def test_the_note_names_the_numpy_call_not_the_hoisted_temp() -> None:
     got = notes(emit("    out[:] = np.sum(a, axis=1) * 2.0\n", "c"))
     assert got == ["/* numpy: np.sum(a, axis=1) */"], got
 
-
-def test_a_dropped_statement_leaves_no_orphan_comment() -> None:
-    """Every note in the output sits directly above a statement.
-
-    ``emit_stmt`` returns ``""`` for a statement the backends drop (an input-validation raise, a
-    bare return temp). A note attached to one of those would be a comment with nothing under it.
-    """
+    # Every note in the output sits directly above a statement: ``emit_stmt`` returns ``""`` for a statement the
+    # backends drop (an input-validation raise, a bare return temp), and a note attached to one of those would be a
+    # comment with nothing under it.
     for target, marker in (("c", "/* numpy:"), ("fortran", "! numpy:")):
         text = emit(OPS["np.sum(a, axis=1)"], target)
         lines = [ln for ln in text.splitlines() if ln.strip()]

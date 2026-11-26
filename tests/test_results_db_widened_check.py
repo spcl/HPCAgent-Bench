@@ -78,13 +78,12 @@ def test_a_merge_into_an_old_file_takes_triton_gpu_rows(tmp_path: pathlib.Path) 
     assert copied["grades"] == 1
     assert denominators(dest) == [("gemm", "c"), ("atax", TRITON)]
 
-
-def test_an_old_source_merges_into_a_current_file(tmp_path: pathlib.Path) -> None:
-    source = old_db(tmp_path / "old.db")
-    dest = tmp_path / "new.db"
-    results_seed.submission(dest, "triton.n0.p1.w1", "atax", 3, denominator=TRITON)
-    results_db.merge(dest, [source])
-    assert sorted(denominators(dest)) == [("atax", TRITON), ("gemm", "c")]
+    # The other direction: an old source merges into a current file.
+    old_source = old_db(tmp_path / "old.db")
+    current = tmp_path / "new.db"
+    results_seed.submission(current, "triton.n0.p1.w1", "atax", 3, denominator=TRITON)
+    results_db.merge(current, [old_source])
+    assert sorted(denominators(current)) == [("atax", TRITON), ("gemm", "c")]
 
 
 def test_a_check_with_neither_text_is_refused_and_the_file_unchanged(tmp_path: pathlib.Path) -> None:

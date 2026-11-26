@@ -93,15 +93,20 @@ def test_a_cpf_problem_requests_its_forms_workspace(
     assert make_problems.default_workspace_bytes("", "c", KERNEL) is None
 
 
-def test_a_form_needing_no_workspace_requests_none(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_CPF_CACHE", str(view_with_workspace(tmp_path, "0")))
-    assert make_problems.default_workspace_bytes("cpf-src", "c", KERNEL) is None
-    assert make_problems.form_workspace_note(KERNEL, "c", HintDetail.PROOFS) == ""
-
-
-def test_the_cpf_src_note_names_the_workspace(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_CPF_CACHE", str(view_with_workspace(tmp_path, WORKSPACE)))
-    assert WORKSPACE in make_problems.form_workspace_note(KERNEL, "c", HintDetail.PROOFS)
+@pytest.mark.parametrize(
+    ("workspace", "needs"), [("0", False), (WORKSPACE, True)], ids=["no-workspace", "workspace-in-the-src-note"]
+)
+def test_a_form_needing_no_workspace_requests_none(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, workspace: str, needs: bool
+) -> None:
+    """A zero-byte form requests nothing and adds no note; a form with a workspace names it in the cpf-src note."""
+    monkeypatch.setenv("HPCAGENT_BENCH_CPF_CACHE", str(view_with_workspace(tmp_path, workspace)))
+    note = make_problems.form_workspace_note(KERNEL, "c", HintDetail.PROOFS)
+    if needs:
+        assert WORKSPACE in note
+    else:
+        assert make_problems.default_workspace_bytes("cpf-src", "c", KERNEL) is None
+        assert note == ""
 
 
 def test_the_driver_exports_the_lines_default_workspace() -> None:
@@ -110,18 +115,23 @@ def test_the_driver_exports_the_lines_default_workspace() -> None:
     assert agent_driver.default_workspace_env({}) == {}
 
 
-def test_a_submission_naming_no_workspace_requests_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(http_json.DEFAULT_WORKSPACE_ENV, WORKSPACE)
-    assert http_json.submission_body({"source": "void k(void) {}"})["workspace_bytes"] == WORKSPACE
-
-
-def test_the_agents_own_workspace_request_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(http_json.DEFAULT_WORKSPACE_ENV, WORKSPACE)
-    assert (
-        http_json.submission_body({"source": "void k(void) {}", "workspace_bytes": "256"})["workspace_bytes"] == "256"
-    )
-
-
-def test_no_default_workspace_leaves_the_submission_as_sent(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(http_json.DEFAULT_WORKSPACE_ENV, raising=False)
-    assert "workspace_bytes" not in http_json.submission_body({"source": "void k(void) {}"})
+@pytest.mark.parametrize(
+    ("default", "body", "expected"),
+    [
+        (WORKSPACE, {}, WORKSPACE),
+        (WORKSPACE, {"workspace_bytes": "256"}, "256"),
+        (None, {}, None),
+    ],
+    ids=["default", "agent-wins", "no-default"],
+)
+def test_a_submission_naming_no_workspace_requests_the_default(
+    monkeypatch: pytest.MonkeyPatch, default: str | None, body: dict[str, str], expected: str | None
+) -> None:
+    """The default rides in unless the agent named its own; with no default the submission is left as sent."""
+    if default is None:
+        monkeypatch.delenv(http_json.DEFAULT_WORKSPACE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(http_json.DEFAULT_WORKSPACE_ENV, default)
+    sent = http_json.submission_body({"source": "void k(void) {}", **body})
+    assert sent.get("workspace_bytes") == expected
+    assert ("workspace_bytes" in sent) == (expected is not None)

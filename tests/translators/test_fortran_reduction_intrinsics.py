@@ -118,29 +118,35 @@ SHAPE_TABLE = {"a": ("N", "M")}
 DTYPE_TABLE = {"a": "float64"}
 
 
-def test_the_disagreeing_reductions_stay_on_loops() -> None:
-    """Each of these has an intrinsic, and each would answer a DIFFERENT question than numpy.
+@pytest.mark.parametrize(
+    ("call", "intrinsic"),
+    [
+        *DISAGREEING.items(),
+        ("np.sum(a, keepdims=True)", ""),
+        ("np.linalg.norm(a, 1)", ""),
+        ("np.linalg.norm(a, axis=1)", ""),
+    ],
+)
+def test_the_disagreeing_reductions_stay_on_loops(call: str, intrinsic: str) -> None:
+    """Each of the first five has an intrinsic, and each would answer a DIFFERENT question than numpy.
 
     NaN is the one that matters most: ``np.max`` propagates it, ``MAXVAL`` returns the largest
     non-NaN element instead. That is a wrong number with no diagnostic, so the loop lowering -- which
     emits the NaN-faithful comparison -- stays.
+
+    The whole-array claim also needs exactly one operand: these renderings reduce ALL of the array, so a
+    second argument asks a different question. ``keepdims`` changes the result rank and ``norm``'s ``ord``
+    names a different norm entirely. (An ``axis`` is not refused outright any more -- it routes to the
+    per-axis ``dim=`` form, pinned in ``test_fortran_axis_reductions.py``. ``linalg.norm`` has no per-axis
+    form and stays refused.)
     """
-    for call, intrinsic in DISAGREEING.items():
+    if intrinsic:
         text = fortran(call)
         assert intrinsic + "(" not in text, (call, text)
-
-
-def test_the_whole_array_claim_needs_exactly_one_operand() -> None:
-    """These renderings reduce ALL of the array, so a second argument asks a different question.
-
-    ``keepdims`` changes the result rank and ``norm``'s ``ord`` names a different norm entirely.
-    (An ``axis`` is not refused outright any more -- it routes to the per-axis ``dim=`` form, pinned
-    in ``test_fortran_axis_reductions.py``. ``linalg.norm`` has no per-axis form and stays refused.)
-    """
-    for call in ("np.sum(a, keepdims=True)", "np.linalg.norm(a, 1)", "np.linalg.norm(a, axis=1)"):
-        node = ast.parse(call, mode="eval").body
-        key = ("np", "linalg.norm" if "norm" in call else node.func.attr)
-        assert not renders_natively(key, node, SHAPE_TABLE, DTYPE_TABLE), call
+        return
+    node = ast.parse(call, mode="eval").body
+    key = ("np", "linalg.norm" if "norm" in call else node.func.attr)
+    assert not renders_natively(key, node, SHAPE_TABLE, DTYPE_TABLE), call
 
 
 def test_the_intrinsics_match_numpy_on_every_backend() -> None:

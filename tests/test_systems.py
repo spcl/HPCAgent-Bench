@@ -51,15 +51,18 @@ def test_the_environment_overrides_the_system_and_a_flag_overrides_the_environme
     assert systems.resolve("beverin", {}, environ).values["cpus_per_task"] == "7"
     assert systems.resolve("beverin", {"cpus_per_task": "9"}, environ).values["cpus_per_task"] == "9"
     assert systems.resolve("beverin", {}, environ).values["partition"] == "envpart"
-
-
-def test_an_explicit_gpus_per_task_displaces_the_systems_gpus_per_node() -> None:
+    # An explicit gpus_per_task displaces the system's gpus_per_node.
     values = systems.resolve("beverin", {"gpus_per_task": "1"}, {}).values
     assert values["gpus_per_task"] == "1"
     assert "gpus_per_node" not in values
     values = systems.resolve("beverin", {}, {}).values
     assert "gpus_per_node" in values
     assert "gpus_per_task" not in values
+    # The hardware is its flag, then its variable, then the system's.
+    assert systems.resolve("beverin", {}, {}).hardware == "mi300"
+    assert systems.resolve("beverin", {}, {"HPCAGENT_BENCH_HARDWARE": "mi200"}).hardware == "mi200"
+    assert systems.resolve("beverin", {"hardware": "x"}, {"HPCAGENT_BENCH_HARDWARE": "mi200"}).hardware == "x"
+    assert systems.resolve(None, {}, {}).hardware == ""
 
 
 def test_the_cluster_name_picks_the_system_and_an_unknown_cluster_picks_none() -> None:
@@ -70,9 +73,7 @@ def test_the_cluster_name_picks_the_system_and_an_unknown_cluster_picks_none() -
     assert systems.resolve(None, {"partition": "mi200"}, {"SLURM_CLUSTER_NAME": "beverin"}).system == "beverin-mi200"
     unserved = systems.resolve(None, {"partition": "debug"}, {"HPCAGENT_BENCH_SYSTEM": "beverin"})
     assert (unserved.system, unserved.values["gpus_per_node"]) == ("beverin", "4")
-
-
-def test_a_cluster_with_no_entry_runs_from_flags_and_the_environment_alone() -> None:
+    # A cluster with no entry runs from flags and the environment alone.
     resolved = systems.resolve(
         None, {"gpus_per_node": "2"}, {"SBATCH_ACCOUNT": "proj", "SBATCH_PARTITION": "gpu"}, systems.JOB_FIELDS
     )
@@ -99,14 +100,9 @@ def test_a_systems_file_adds_a_system(tmp_path: pathlib.Path) -> None:
         "1",
     )
     assert systems.resolve("beverin", {}, environ).system == "beverin"  # the shipped ones stay
-
-
-def test_an_unknown_system_names_the_known_ones() -> None:
+    # An unknown system names the known ones, and a missing required field names its flag and its variable.
     with pytest.raises(SystemExit, match="beverin"):
         systems.resolve("nowhere", {}, {})
-
-
-def test_a_missing_required_field_names_its_flag_and_its_variable() -> None:
     with pytest.raises(SystemExit, match=r"no account: pass --account or set \$SBATCH_ACCOUNT"):
         systems.resolve(None, {"gpus_per_node": "4"}, {}, systems.JOB_FIELDS, systems.JOB_REQUIRED)
     with pytest.raises(
@@ -127,13 +123,6 @@ def test_the_experiment_job_takes_only_its_own_fields_and_a_systems_gpu_count_fi
     assert resolved.hardware == "mi200"
 
 
-def test_the_hardware_is_its_flag_then_its_variable_then_the_systems() -> None:
-    assert systems.resolve("beverin", {}, {}).hardware == "mi300"
-    assert systems.resolve("beverin", {}, {"HPCAGENT_BENCH_HARDWARE": "mi200"}).hardware == "mi200"
-    assert systems.resolve("beverin", {"hardware": "x"}, {"HPCAGENT_BENCH_HARDWARE": "mi200"}).hardware == "x"
-    assert systems.resolve(None, {}, {}).hardware == ""
-
-
 def test_the_longest_time_limit_is_the_systems_unless_set_and_has_no_default() -> None:
     assert systems.resolve("beverin", {}, {}).extras["max_time_hours"] == "23"
     assert systems.resolve("beverin", {"max_time_hours": "5"}, {}).extras["max_time_hours"] == "5"
@@ -148,7 +137,9 @@ def printed(argv: list[str]) -> str:
     return out.getvalue()
 
 
-def test_the_options_command_prints_one_option_per_line_or_the_hardware(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_options_command_prints_one_option_per_line_or_the_hardware(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     monkeypatch.setattr(systems, "site_environment", site_environment({"SBATCH_ACCOUNT": "proj"}))
     lines = printed(["--system", "beverin", "--partition", "gpu"]).splitlines()
     assert lines == ["--partition=gpu", "--account=proj", "--gpus-per-node=4"]
@@ -156,31 +147,34 @@ def test_the_options_command_prints_one_option_per_line_or_the_hardware(monkeypa
     assert printed(["--print", "max_time_hours"]) == "\n"
     with pytest.raises(SystemExit, match="--gpus-per-node"):
         systems.options_main([])
-
-
-def test_print_names_one_resolved_value_and_require_refuses_it_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`--print` answers one value (empty when unset); `--require` makes unset an error naming flag and variable."""
-    monkeypatch.setattr(systems, "site_environment", site_environment({}))
-    assert printed(["--print", "gpus_per_node"]) == "\n"
-    with pytest.raises(SystemExit, match=r"--gpus-per-node or set \$HPCAGENT_BENCH_JOB_GPUS_PER_NODE"):
-        systems.options_main(["--print", "gpus_per_node", "--require", "gpus_per_node"])
-    assert printed(["--system", "beverin-mi200", "--print", "gpus_per_node", "--require", "gpus_per_node"]) == "8\n"
-
-
-def test_the_sbatch_command_puts_the_options_before_the_script_and_keeps_its_arguments() -> None:
+    # The sbatch command puts the options before the script and keeps its arguments.
     command = systems.sbatch_command("job.sbatch", {"cpus_per_task": "5", "nice": "100"}, ["a", "--aa"])
     assert command == ["sbatch", "--cpus-per-task=5", "--nice=100", "job.sbatch", "a", "--aa"]
-
-
-def test_mem_flag_reaches_sbatch(tmp_path: pathlib.Path) -> None:
-    """--mem is an sbatch option like any field: the flag beats the script's pinned --mem (services.sbatch takes the
-    whole node by default), the variable fills a script that pins none, and nothing is passed when nothing sets it."""
+    # --mem is an sbatch option like any field: the flag beats the script's pinned --mem (services.sbatch takes the
+    # whole node by default), the variable fills a script that pins none, and nothing is passed when nothing sets it.
     script = job_script(tmp_path, "#SBATCH --mem=0")
     assert not [word for word in dry_run(tmp_path, script)[1] if word.startswith("--mem")], "a pin is not repeated"
     assert "--mem=400G" in dry_run(tmp_path, "--mem", "400G", script)[1]
     assert "--mem=32G" in dry_run(tmp_path, "--mem=32G", script)[1]
     bare = job_script(tmp_path)
     assert "--mem=16G" in dry_run(tmp_path, bare, HPCAGENT_BENCH_JOB_MEM="16G")[1]
+
+
+def test_print_names_one_resolved_value_and_require_refuses_it_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """`--print` answers one value (empty when unset); `--require` makes unset an error naming flag and variable."""
+    monkeypatch.setattr(systems, "site_environment", site_environment({}))
+    assert printed(["--print", "gpus_per_node"]) == "\n"
+    with pytest.raises(SystemExit, match=r"--gpus-per-node or set \$HPCAGENT_BENCH_JOB_GPUS_PER_NODE"):
+        systems.options_main(["--print", "gpus_per_node", "--require", "gpus_per_node"])
+    assert printed(["--system", "beverin-mi200", "--print", "gpus_per_node", "--require", "gpus_per_node"]) == "8\n"
+    # `--print` repeats: the submitter reads several values with one interpreter instead of five.
+    extra = tmp_path / "systems.yaml"
+    extra.write_text("ours:\n  hardware: gfx\n")
+    site = site_environment({systems.SYSTEMS_FILE: str(extra), "HPCAGENT_BENCH_SYSTEM": "ours"})
+    monkeypatch.setattr(systems, "site_environment", site)
+    assert printed(["--print", "hardware", "--print", "mem"]).splitlines() == ["gfx", ""]
 
 
 def test_a_resource_extra_is_its_flag_then_its_variable_then_the_systems(
@@ -199,15 +193,6 @@ def test_a_resource_extra_is_its_flag_then_its_variable_then_the_systems(
     assert printed(["--print", "agent_memory_gb", "--print", "agent_cpus", "--print", "container_memory"]) == (
         "24\n8\n200G\n"
     )
-
-
-def test_repeated_print_names_print_one_value_per_line(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    """`--print` repeats: the submitter reads several values with one interpreter instead of five."""
-    extra = tmp_path / "systems.yaml"
-    extra.write_text("ours:\n  hardware: gfx\n")
-    site = site_environment({systems.SYSTEMS_FILE: str(extra), "HPCAGENT_BENCH_SYSTEM": "ours"})
-    monkeypatch.setattr(systems, "site_environment", site)
-    assert printed(["--print", "hardware", "--print", "mem"]).splitlines() == ["gfx", ""]
 
 
 def test_job_submit_forwards_the_resolved_resource_extras_through_sbatchs_environment(tmp_path: pathlib.Path) -> None:

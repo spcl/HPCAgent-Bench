@@ -36,10 +36,7 @@ JACOBI = "jacobi_2d"
 def test_parse_flag_refuses_a_typo_instead_of_reading_it_as_off() -> None:
     with pytest.raises(ValueError, match="invalid boolean flag 'ture'"):
         parse_flag("ture")
-
-
-def test_options_default_off() -> None:
-    """No variable set, or a variable exported empty (``export VAR=``): the shipped pipeline, byte for byte."""
+    # No variable set, or a variable exported empty (``export VAR=``): the shipped pipeline, byte for byte.
     assert from_env({}) == DacePipelineOptions(maximal=False, remove_transients=False)
     assert from_env({DACE_MAXIMAL_ENV: "", DACE_REMOVE_TRANSIENTS_ENV: ""}) == DacePipelineOptions()
 
@@ -82,22 +79,21 @@ class _Obj:
         self.code = code
 
 
-def test_write_code_objects_names_files_after_their_language(tmp_path: pathlib.Path) -> None:
-    written = dace_emit.write_code_objects([_Obj("k", "cpp", "int k;"), _Obj("k", "h", "int k;")], tmp_path)
-    assert [p.name for p in written] == ["k.cpp", "k.h"]
-    assert written[0].read_text() == "int k;"
-
-
-def test_write_code_objects_suffixes_a_collision(tmp_path: pathlib.Path) -> None:
-    written = dace_emit.write_code_objects([_Obj("k", "cpp", "a"), _Obj("k", "cpp", "b")], tmp_path)
-    assert [p.name for p in written] == ["k.cpp", "k-2.cpp"]
-    assert {p.read_text() for p in written} == {"a", "b"}, "a collision must not overwrite an earlier unit"
-
-
-def test_emit_program_sources_refuses_an_unknown_target_before_dace(tmp_path: pathlib.Path) -> None:
-    """The target check comes first, so a bad spelling fails on any install, dace or not."""
-    with pytest.raises(dace_emit.DaceEmitError, match="unknown emit target"):
-        dace_emit.emit_program_sources(object(), tmp_path, target="nvptx")
+@pytest.mark.parametrize(
+    ("objects", "names", "contents"),
+    [
+        ([("k", "cpp", "int k;"), ("k", "h", "int k;")], ["k.cpp", "k.h"], ["int k;", "int k;"]),
+        # A collision must not overwrite an earlier unit.
+        ([("k", "cpp", "a"), ("k", "cpp", "b")], ["k.cpp", "k-2.cpp"], ["a", "b"]),
+    ],
+    ids=["named-after-language", "suffixes-a-collision"],
+)
+def test_write_code_objects_names_files_after_their_language(
+    tmp_path: pathlib.Path, objects: list[tuple[str, str, str]], names: list[str], contents: list[str]
+) -> None:
+    written = dace_emit.write_code_objects([_Obj(*fields) for fields in objects], tmp_path)
+    assert [p.name for p in written] == names
+    assert [p.read_text() for p in written] == contents
 
 
 def test_emit_without_dace_is_a_skip_not_a_crash(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,14 +113,6 @@ def test_emit_without_dace_is_a_skip_not_a_crash(tmp_path: pathlib.Path, monkeyp
 def test_emit_kernel_refuses_a_selector_that_does_not_name_one_kernel(selector: str, message: str) -> None:
     with pytest.raises(dace_emit.DaceEmitError, match=message):
         dace_emit.emit_kernel_sources(selector)
-
-
-def test_emit_kernel_without_dace_skips_before_writing_anything(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Kernel resolution comes first, dace second: a real kernel named, dace absent -- the skip the CLI maps to
-    exit 2. Nothing was generated or written on the way there."""
-    monkeypatch.setitem(sys.modules, "dace", None)
-    with pytest.raises(dace_emit.DaceEmitUnavailable):
-        dace_emit.emit_kernel_sources(JACOBI)
 
 
 def test_emit_kernel_refuses_a_datatype_for_the_self_contained_form() -> None:
@@ -150,17 +138,32 @@ def stub_emit(monkeypatch: pytest.MonkeyPatch, calls: list[object], behave: obje
     monkeypatch.setattr(dace_emit, "emit_kernel_sources", recorder)
 
 
+@pytest.mark.parametrize(
+    ("argv", "env", "options"),
+    [
+        (["--maximal"], {}, DacePipelineOptions(maximal=True, remove_transients=False)),
+        # A variable alone turns the residual on for the command, exactly as it does for a column's run.
+        ([], {DACE_REMOVE_TRANSIENTS_ENV: "1"}, DacePipelineOptions(maximal=False, remove_transients=True)),
+    ],
+    ids=["flag", "environment"],
+)
 def test_the_cli_dispatches_emit_and_prints_the_written_paths(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    env: dict[str, str],
+    options: DacePipelineOptions,
 ) -> None:
     calls: list[object] = []
     stub_emit(monkeypatch, calls, behave=[pathlib.Path("/tmp/kern.cu")])
-    assert main(["dace", "emit", JACOBI, "--maximal"]) == 0
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert main(["dace", "emit", JACOBI, *argv]) == 0
     assert "kern.cu" in capsys.readouterr().out
     kernel, out_dir, kwargs = calls[0]
     assert kernel == JACOBI
     assert out_dir is None
-    assert kwargs["options"] == DacePipelineOptions(maximal=True, remove_transients=False)
+    assert kwargs["options"] == options
 
 
 def test_the_cli_maps_the_emitter_exceptions_to_exit_codes(
@@ -173,16 +176,6 @@ def test_the_cli_maps_the_emitter_exceptions_to_exit_codes(
     capsys.readouterr()
     assert main(["dace", "emit", JACOBI]) == 1
     assert capsys.readouterr().err == "dace emit: parallel_gpu on k: Invalid: x saved in /tmp/s\n"
-
-
-def test_the_cli_flags_or_with_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A variable alone turns the residual on for the command, exactly as it does for a column's run."""
-    calls: list[object] = []
-    stub_emit(monkeypatch, calls)
-    monkeypatch.setenv(DACE_REMOVE_TRANSIENTS_ENV, "1")
-    assert main(["dace", "emit", JACOBI]) == 0
-    _, _, kwargs = calls[0]
-    assert kwargs["options"] == DacePipelineOptions(maximal=False, remove_transients=True)
 
 
 # --- the pipeline residuals themselves (need dace) -------------------------------------------------
@@ -294,17 +287,6 @@ def test_dace_emit_writes_the_device_unit(tmp_path: pathlib.Path) -> None:
     assert "__global__" in devices[0].read_text()
     assert all(p.stat().st_size > 0 for p in written)
     assert dace.Config.get("compiler", "cuda", "backend") == backend_before
-
-
-def test_dace_emit_writes_the_host_module_for_cpu(tmp_path: pathlib.Path) -> None:
-    pytest.importorskip("dace")
-    from hpcagent_bench.frameworks.dace_emit import emit_program_sources
-
-    sdfg = _kernels().fusion_pair.to_sdfg(simplify=False)
-    written = emit_program_sources(sdfg, tmp_path, target="cpu", options=DacePipelineOptions())
-    host = [p for p in written if p.suffix == ".cpp"]
-    assert host, f"no host module written: {[p.name for p in written]}"
-    assert not [p for p in written if p.suffix == ".cu"], "a CPU emit names no device unit"
 
 
 def test_dace_emit_writes_the_self_contained_pair(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

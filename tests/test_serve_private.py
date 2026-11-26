@@ -109,11 +109,61 @@ def experiment_sglang_flags() -> dict[str, str]:
     return flags(found[0].replace("${HPCAGENT_BENCH_REPO}", str(ROOT)).split())
 
 
-def test_the_launcher_refuses_to_start_without_a_preset(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, None)
+@pytest.mark.parametrize(
+    ("preset", "env", "message", "untouched"),
+    [
+        pytest.param(None, {}, "PRESET must be mi300 or mi200", True, id="no-preset"),
+        pytest.param("mi300", {"MODE": "public"}, "MODE must be smoke or serve", True, id="unknown-mode"),
+        pytest.param("mi200", {"ACCESS": "public"}, "ACCESS must be tunnel or alps, got 'public'", True, id="access"),
+        pytest.param("mi200", {"LEGS": "tp4:0.80 tp3:0.80"}, "leg 'tp3:0.80'", False, id="malformed-leg"),
+        pytest.param(
+            "mi300",
+            {"LEGS": "tp8:0.306"},
+            "leg 'tp8:0.306' needs 8 GPUs; mi300 nodes have 4",
+            True,
+            id="leg-wider-than-the-gpus",
+        ),
+        # vLLM checks the key only under /v1, /v2, /inference and /cohere; an hsn0 bind would publish the rest.
+        pytest.param(
+            "mi200",
+            {"ACCESS": "alps"},
+            "ACCESS=alps: vllm serves /metrics and other routes without the key",
+            True,
+            id="vllm-alps",
+        ),
+        # ACCESS=alps names no interface to bind when the site leaves HPCAGENT_BENCH_BIND_IFACE empty.
+        pytest.param(
+            "mi300",
+            {"ACCESS": "alps", "HPCAGENT_BENCH_BIND_IFACE": ""},
+            "ACCESS=alps: set HPCAGENT_BENCH_BIND_IFACE",
+            True,
+            id="alps-no-interface",
+        ),
+        pytest.param(
+            "mi300",
+            {"ACCESS": "alps", "HSN0_LINE": "", "SLURMD_NODENAME": "nid002536"},
+            "ACCESS=alps: nid002536 has no hsn0 IPv4 address",
+            True,
+            id="alps-no-hsn0-address",
+        ),
+        pytest.param(
+            "mi300",
+            {"ACCESS": "alps", "MODE": "serve", "VLLM_SERVED_MODEL": 'qwen"38'},
+            "may not contain a quote or a backslash",
+            True,
+            id="alps-served-model-breaks-endpoint-json",
+        ),
+    ],
+)
+def test_the_launcher_refuses_to_start_without_a_preset(
+    tmp_path: pathlib.Path, preset: str | None, env: dict[str, str], message: str, untouched: bool
+) -> None:
+    """Every refusal exits 2 with its message; all but a malformed leg refuse before touching anything."""
+    done = launch(tmp_path, preset, **env)
     assert done.returncode == 2
-    assert "PRESET must be mi300 or mi200" in done.stderr
-    assert_untouched(tmp_path, done)
+    assert message in done.stderr
+    if untouched:
+        assert_untouched(tmp_path, done)
 
 
 @pytest.mark.parametrize(
@@ -129,13 +179,6 @@ def test_the_launcher_refuses_a_renamed_knob(tmp_path: pathlib.Path, old: str, n
     done = launch(tmp_path, "mi300", **{old: "x"})
     assert done.returncode == 2
     assert f"{old} is renamed {new}" in done.stderr
-    assert_untouched(tmp_path, done)
-
-
-def test_the_launcher_refuses_an_unknown_mode(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi300", MODE="public")
-    assert done.returncode == 2
-    assert "MODE must be smoke or serve" in done.stderr
     assert_untouched(tmp_path, done)
 
 
@@ -221,19 +264,6 @@ def test_the_launcher_refuses_extra_args_that_name_the_host_port_key_config_toke
     assert "EXTRA_ARGS may not set" in done.stderr
 
 
-def test_the_launcher_refuses_a_malformed_leg(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi200", LEGS="tp4:0.80 tp3:0.80")
-    assert done.returncode == 2
-    assert "leg 'tp3:0.80'" in done.stderr
-
-
-def test_the_mi300_preset_refuses_a_leg_wider_than_its_four_gpus(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi300", LEGS="tp8:0.306")
-    assert done.returncode == 2
-    assert "leg 'tp8:0.306' needs 8 GPUs; mi300 nodes have 4" in done.stderr
-    assert_untouched(tmp_path, done)
-
-
 def test_the_mi300_preset_serves_the_qwen38_experiment_flags_on_bf16_weights_with_aiter(tmp_path: pathlib.Path) -> None:
     done = launch(tmp_path, "mi300")
     assert done.returncode == 0, done.stderr
@@ -272,14 +302,6 @@ def test_the_mi200_preset_serves_bf16_weights_on_vllm_with_the_experiment_parser
     assert "engine:   vllm, env VLLM_ROCM_USE_AITER=0\n" in done.stdout
 
 
-def test_the_vllm_preset_refuses_alps_access_before_touching_anything(tmp_path: pathlib.Path) -> None:
-    """vLLM checks the key only under /v1, /v2, /inference and /cohere; an hsn0 bind would publish the rest."""
-    done = launch(tmp_path, "mi200", ACCESS="alps")
-    assert done.returncode == 2
-    assert "ACCESS=alps: vllm serves /metrics and other routes without the key" in done.stderr
-    assert_untouched(tmp_path, done)
-
-
 @pytest.mark.parametrize("preset", PRESETS)
 def test_serve_mode_starts_one_server_and_prints_a_loopback_tunnel_but_never_the_key(
     tmp_path: pathlib.Path, preset: str
@@ -306,13 +328,6 @@ def test_serve_mode_starts_one_server_and_prints_a_loopback_tunnel_but_never_the
     assert not (tmp_path / "stub-calls").exists()
 
 
-def test_the_launcher_refuses_an_unknown_access(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi200", ACCESS="public")
-    assert done.returncode == 2
-    assert "ACCESS must be tunnel or alps, got 'public'" in done.stderr
-    assert_untouched(tmp_path, done)
-
-
 @pytest.mark.parametrize("preset", ALPS_PRESETS)
 def test_alps_access_binds_every_leg_to_this_nodes_hsn0_address_last(tmp_path: pathlib.Path, preset: str) -> None:
     done = launch(tmp_path, preset, ACCESS="alps", LEGS="tp4:0.80 tp2:0.85")
@@ -322,31 +337,8 @@ def test_alps_access_binds_every_leg_to_this_nodes_hsn0_address_last(tmp_path: p
         ["--host", HSN0_ADDRESS, "--port", "30001"],
     ]
     assert f"access:   alps, --host {HSN0_ADDRESS}\n" in done.stdout
-
-
-@pytest.mark.parametrize("preset", ALPS_PRESETS)
-def test_alps_access_serves_no_metrics(tmp_path: pathlib.Path, preset: str) -> None:
-    """sglang answers /metrics without the key, and every Alps node can reach an hsn0 bind."""
-    done = launch(tmp_path, preset, ACCESS="alps", LEGS="tp4:0.80 tp2:0.85")
-    assert done.returncode == 0, done.stderr
-    argvs = argv_lines(done.stdout)
-    assert len(argvs) == 2
-    assert [argv for argv in argvs if "--enable-metrics" in argv.split()] == []
-
-
-def test_alps_access_refuses_without_a_site_bind_interface_before_touching_anything(tmp_path: pathlib.Path) -> None:
-    """``HPCAGENT_BENCH_BIND_IFACE`` empty: ACCESS=alps names no interface to bind, so the launcher refuses."""
-    done = launch(tmp_path, "mi300", ACCESS="alps", HPCAGENT_BENCH_BIND_IFACE="")
-    assert done.returncode == 2
-    assert "ACCESS=alps: set HPCAGENT_BENCH_BIND_IFACE" in done.stderr
-    assert_untouched(tmp_path, done)
-
-
-def test_alps_access_refuses_a_node_without_an_hsn0_address_before_touching_anything(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi300", ACCESS="alps", HSN0_LINE="", SLURMD_NODENAME="nid002536")
-    assert done.returncode == 2
-    assert "ACCESS=alps: nid002536 has no hsn0 IPv4 address" in done.stderr
-    assert_untouched(tmp_path, done)
+    # sglang answers /metrics without the key, and every Alps node can reach an hsn0 bind.
+    assert [argv for argv in argv_lines(done.stdout) if "--enable-metrics" in argv.split()] == []
 
 
 @pytest.mark.parametrize("preset", ALPS_PRESETS)
@@ -368,19 +360,6 @@ def test_alps_serve_mode_publishes_the_url_model_and_key_path_but_never_the_key(
     assert f"source {ROOT}/containers/inference/alps-endpoint.sh {run_dir}/endpoint.json" in done.stdout
     assert "ssh -N -J" not in done.stdout
     assert KEY not in done.stdout + done.stderr
-
-
-def test_alps_serve_mode_deletes_endpoint_json_with_the_secrets_when_the_job_exits(tmp_path: pathlib.Path) -> None:
-    """A Daint job that finds endpoint.json must be able to trust the server behind it is still there."""
-    done = launch(tmp_path, "mi300", ACCESS="alps", MODE="serve")
-    assert done.returncode == 0, done.stderr
-    assert "endpoint.json: {" in done.stdout
-    (run_dir,) = (tmp_path / "runs").iterdir()
+    # A Daint job that finds endpoint.json must be able to trust the server behind it is still there: the file
+    # goes with the secrets when the job exits.
     assert [path.name for path in run_dir.iterdir() if path.name in SECRETS | {"endpoint.json"}] == []
-
-
-def test_alps_serve_mode_refuses_a_served_model_that_would_break_endpoint_json(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi300", ACCESS="alps", MODE="serve", VLLM_SERVED_MODEL='qwen"38')
-    assert done.returncode == 2
-    assert "may not contain a quote or a backslash" in done.stderr
-    assert_untouched(tmp_path, done)

@@ -3,6 +3,10 @@
 """A float32 kernel compares against a float constant expression in double, as its references do (``1.0 - 1e-8``
 is exactly 1.0 in float)."""
 
+from collections.abc import Callable
+
+import pytest
+
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, apply_precision
 from hpcagent_bench.translators.numpyto_common.lowering import lower
@@ -24,12 +28,18 @@ def lowered(precision: str) -> KernelIR:
     return apply_precision(lower(parse_source(SOURCE, "f", ["za"], ["out"], SHAPES, {"N": 8})), precision)
 
 
-def test_a_float32_c_kernel_compares_against_the_folded_double_constant() -> None:
-    src = emit_c(lowered("float32"), fn_name="f")
-    assert "0.99999999" in src
-    assert "1e-08f" not in src
-
-
-def test_a_float32_fortran_kernel_compares_against_the_folded_double_constant() -> None:
-    src = emit_fortran(lowered("float32"), fn_name="f")
-    assert "0.99999999_c_double" in src
+@pytest.mark.parametrize(
+    ("emit", "present", "absent"),
+    [
+        (emit_c, "0.99999999", "1e-08f"),
+        (emit_fortran, "0.99999999_c_double", None),
+    ],
+    ids=["c", "fortran"],
+)
+def test_a_float32_kernel_compares_against_the_folded_double_constant(
+    emit: Callable[..., str], present: str, absent: str | None
+) -> None:
+    src = emit(lowered("float32"), fn_name="f")
+    assert present in src
+    if absent is not None:
+        assert absent not in src

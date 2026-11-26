@@ -31,22 +31,36 @@ def test_wins_ties_and_losses_count_against_a_given_band() -> None:
     assert kernels.set_index("kernel")["outcome"].to_dict() == {"k1": "win", "k2": "tie", "k3": "loss", "k4": "tie"}
 
 
-def test_without_a_band_the_cells_run_to_run_range_decides_the_tie() -> None:
-    """A cell spread over 10% covers an 8% slowdown; a 2% band calls the same kernel a loss."""
-    data = series({"a": {"k": [10.0, 11.0, 10.5]}, "b": {"k": [11.34]}})
-    _, spread = compare.compare(data, [("a", "b")])
-    assert spread.loc[0, "outcome"] == "tie"
-    assert spread.loc[0, "band"] == pytest.approx(1.0 / 10.5)
-    _, fixed = compare.compare(data, [("a", "b")], band=0.02)
-    assert fixed.loc[0, "outcome"] == "loss"
+SPREAD = {"a": {"k": [10.0, 11.0, 10.5]}, "b": {"k": [11.34]}}
 
 
-def test_a_single_run_falls_back_to_the_noise_floor() -> None:
-    """Two single-run cells have no spread: the band is the 1% floor, so 0.5% is a tie and 3% a loss."""
-    data = series({"a": {"k1": [100.0], "k2": [100.0]}, "b": {"k1": [100.5], "k2": [103.0]}})
-    _, kernels = compare.compare(data, [("a", "b")])
-    assert kernels["band"].tolist() == [compare.NOISE_FLOOR, compare.NOISE_FLOOR]
-    assert kernels["outcome"].tolist() == ["tie", "loss"]
+@pytest.mark.parametrize(
+    ("samples", "options", "bands", "outcomes"),
+    [
+        # A cell spread over 10% covers an 8% slowdown.
+        (SPREAD, {}, [1.0 / 10.5], ["tie"]),
+        # A 2% band calls the same kernel a loss.
+        (SPREAD, {"band": 0.02}, None, ["loss"]),
+        # Two single-run cells have no spread: the band is the 1% floor, so 0.5% is a tie and 3% a loss.
+        (
+            {"a": {"k1": [100.0], "k2": [100.0]}, "b": {"k1": [100.5], "k2": [103.0]}},
+            {},
+            [compare.NOISE_FLOOR, compare.NOISE_FLOOR],
+            ["tie", "loss"],
+        ),
+    ],
+    ids=["run-to-run-spread", "fixed-band", "single-run-noise-floor"],
+)
+def test_without_a_band_the_cells_run_to_run_range_decides_the_tie(
+    samples: dict[str, dict[str, list[float]]],
+    options: dict[str, float],
+    bands: list[float] | None,
+    outcomes: list[str],
+) -> None:
+    unused, kernels = compare.compare(series(samples), [("a", "b")], **options)
+    assert kernels["outcome"].tolist() == outcomes
+    if bands is not None:
+        assert kernels["band"].tolist() == pytest.approx(bands)
 
 
 def test_regret_and_hit_rate_are_against_the_per_kernel_best_of_a_set() -> None:
@@ -90,8 +104,7 @@ def test_each_sides_failures_are_reported_apart_and_left_out_of_the_pairing() ->
     assert (row.kernels, row.paired) == (3, 1)
     assert (row.failed_a, row.failed_b) == ("k3", "k2")
 
-
-def test_a_tag_kernel_neither_side_attempted_is_a_failure_of_both() -> None:
+    # A tag kernel neither side attempted is a failure of both.
     data = series({"a": {"k1": [1.0]}, "b": {"k1": [1.0]}})
     summary, _ = compare.compare(data, [("a", "b")], kernels=["k1", "k9"])
     assert (summary.iloc[0].failed_a, summary.iloc[0].failed_b) == ("k9", "k9")

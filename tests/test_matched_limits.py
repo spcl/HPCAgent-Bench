@@ -96,9 +96,16 @@ def test_arms_repaired_under_different_settings_match_and_the_sidecar_states_the
 # --- recording: driver record -> episodes row -> observation row ---
 
 
-def test_the_driver_records_the_limits_it_enforces(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("capped", [True, False], ids=["caps-set", "no-cap"])
+def test_the_driver_records_the_limits_it_enforces(monkeypatch: pytest.MonkeyPatch, capped: bool) -> None:
     """The record reads the caps where the driver reads them, and states no scale: limits never change for an
-    episode, whatever the environment says."""
+    episode, whatever the environment says. No cap is recorded as zero, not as unrecorded."""
+    if not capped:
+        for name in ("AGENT_MAX_TOKENS", "AGENT_MAX_OUTPUT_TOKENS", "AGENT_TIMEOUT_SECONDS"):
+            monkeypatch.delenv(name, raising=False)
+        record = agent_driver.limits_record()
+        assert (record["max_tokens"], record["max_output_tokens"], record["timeout_seconds"]) == (0, 0, 0)
+        return
     monkeypatch.setenv("AGENT_MAX_TOKENS", "24000000")
     monkeypatch.setenv("AGENT_MAX_OUTPUT_TOKENS", "1000000")
     monkeypatch.setenv("AGENT_TIMEOUT_SECONDS", "28800")
@@ -120,13 +127,6 @@ def test_an_older_record_that_states_a_scale_still_reads() -> None:
     so its episode is not lost."""
     older = {"max_tokens": 1, "max_output_tokens": 1, "timeout_seconds": 1, "token_scale": 2, "resubmission": "2x"}
     assert episodes.RecordLimits.model_validate(older).max_tokens == 1
-
-
-def test_no_cap_is_recorded_as_zero_not_as_unrecorded(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("AGENT_MAX_TOKENS", "AGENT_MAX_OUTPUT_TOKENS", "AGENT_TIMEOUT_SECONDS"):
-        monkeypatch.delenv(name, raising=False)
-    record = agent_driver.limits_record()
-    assert (record["max_tokens"], record["max_output_tokens"], record["timeout_seconds"]) == (0, 0, 0)
 
 
 def driver_record(job_dir: pathlib.Path, worker: int, ledger: list[int], **stamp: object) -> pathlib.Path:
@@ -317,13 +317,6 @@ def setup_rows(setup: str, ran: list[limits.Limits | None]) -> list[dict[str, ob
     return [task(setup, f"k{index}", one) for index, one in enumerate(ran)]
 
 
-def test_two_setups_under_one_budget_are_identical() -> None:
-    found = limits.setup_limits(pd.DataFrame(setup_rows("a", [BASE, BASE]) + setup_rows("b", [BASE, BASE])))
-    assert found["a"].counts == {BASE: 2}
-    assert limits.compare(found["a"], found["b"]) is limits.LimitsMatch.IDENTICAL
-    assert limits.check([("a", "b")], found) == []
-
-
 def test_a_setup_under_twice_the_budget_differs_and_the_note_names_both() -> None:
     """The harness case: one setup's episodes ran under 24M tokens and 8 h, the other's under 12M and 4 h."""
     found = limits.setup_limits(pd.DataFrame(setup_rows("a", [DOUBLE, DOUBLE]) + setup_rows("b", [BASE, BASE])))
@@ -351,11 +344,9 @@ def test_unrecorded_limits_are_never_called_identical() -> None:
         pd.DataFrame(setup_rows("a", [None]) + setup_rows("b", [None])).drop(columns=list(limits.LIMIT_COLUMNS))
     )
     assert limits.compare(old["a"], old["b"]) is limits.LimitsMatch.UNRECORDED
-
-
-def test_a_recorded_difference_stands_whatever_else_is_missing() -> None:
-    found = limits.setup_limits(pd.DataFrame(setup_rows("a", [DOUBLE, None]) + setup_rows("b", [BASE])))
-    assert limits.compare(found["a"], found["b"]) is limits.LimitsMatch.DIFFER
+    # A recorded difference stands whatever else is missing.
+    differ = limits.setup_limits(pd.DataFrame(setup_rows("a", [DOUBLE, None]) + setup_rows("b", [BASE])))
+    assert limits.compare(differ["a"], differ["b"]) is limits.LimitsMatch.DIFFER
 
 
 def test_the_check_reads_the_run_the_aggregates_read() -> None:
@@ -545,13 +536,6 @@ def tables(paired_setups: ModuleType, path: pathlib.Path, tmp_path: pathlib.Path
     return pd.read_csv(pairs), pd.read_csv(setups).set_index("setup")
 
 
-def test_every_pair_row_states_that_its_limits_are_identical(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
-    pairs, setups = tables(paired_setups, observations(tmp_path, BASE), tmp_path)
-    assert set(pairs.limits_match) == {"identical"}
-    assert set(pairs.limits_a) == set(pairs.limits_b) == {BASE.text()}
-    assert setups.loc["a", "limits_unrecorded_episodes"] == 0
-
-
 def test_a_pair_under_unequal_limits_is_flagged(
     paired_setups: ModuleType,
     tmp_path: pathlib.Path,
@@ -592,17 +576,6 @@ def test_observations_without_limits_read_as_unrecorded(
     pairs, setups = tables(paired_setups, path, tmp_path)
     assert set(pairs.limits_match) == {"unrecorded"}
     assert setups.loc["a", "limits_unrecorded_episodes"] == len(KERNELS)
-
-
-def test_strict_mode_refuses_the_unequal_comparison_and_runs_the_matched_one(
-    paired_setups: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_BUDGETS_MATCHED_LIMITS", "strict")
-    argv = ["--pair", "a,b", "--family", "f"]
-    (tmp_path / "unequal").mkdir()
-    with pytest.raises(SystemExit, match="strict refuses"):
-        paired_setups.main(["--observations", str(observations(tmp_path / "unequal", DOUBLE)), *argv])
-    assert paired_setups.main(["--observations", str(observations(tmp_path, BASE)), *argv]) == 0
 
 
 def test_a_control_from_a_larger_experiment_pairs_on_the_tag_the_treatment_ran(

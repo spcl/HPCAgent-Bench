@@ -7,6 +7,7 @@ it (``KV_GUARD=warn`` only reports). Kimi's configuration must pass at the measu
 import json
 import os
 import pathlib
+from collections.abc import Callable
 
 import pytest
 
@@ -20,22 +21,35 @@ SGLANG = (
 KIMI = env_spec.render("experiment:kimi27sglang")
 
 
-def test_the_pool_is_the_smallest_any_pipeline_states() -> None:
-    lines = SGLANG.format(pool=1_848_960, other=984_000).splitlines()
-    assert serve_guard.pool_tokens(lines) == 984_000
-    assert serve_guard.pool_tokens(["max_total_num_tokens=211200, chunked_prefill_size=4096"]) == 211_200
-    assert serve_guard.pool_tokens(["INFO GPU KV cache size: 1,234,567 tokens"]) == 1_234_567
-    assert serve_guard.pool_tokens(["nothing here"]) is None
+QWEN = {"KV_TOKENS_PER_AGENT": "100000", "AGENT_NODES": "1", "AGENTS_PER_NODE": "40"}
 
 
-def test_the_floor_is_the_pipelines_agents_times_the_per_agent_figure_and_a_model_without_one_has_none() -> None:
-    assert serve_guard.floor_tokens(KIMI) == 20 * 80_000
-    assert serve_guard.floor_tokens({"AGENTS_PER_PIPELINE": "20"}) is None
-
-
-def test_a_replicas_server_holds_every_agent_of_the_job() -> None:
-    qwen = {"KV_TOKENS_PER_AGENT": "100000", "AGENT_NODES": "1", "AGENTS_PER_NODE": "40"}
-    assert serve_guard.floor_tokens(qwen) == 40 * 100_000
+@pytest.mark.parametrize(
+    ("measure", "expected"),
+    [
+        # the pool is the smallest any pipeline states
+        (lambda: serve_guard.pool_tokens(SGLANG.format(pool=1_848_960, other=984_000).splitlines()), 984_000),
+        (lambda: serve_guard.pool_tokens(["max_total_num_tokens=211200, chunked_prefill_size=4096"]), 211_200),
+        (lambda: serve_guard.pool_tokens(["INFO GPU KV cache size: 1,234,567 tokens"]), 1_234_567),
+        (lambda: serve_guard.pool_tokens(["nothing here"]), None),
+        # the floor is the pipeline's agents times the per-agent figure, and a model without one has none
+        (lambda: serve_guard.floor_tokens(KIMI), 20 * 80_000),
+        (lambda: serve_guard.floor_tokens({"AGENTS_PER_PIPELINE": "20"}), None),
+        # a replicas server holds every agent of the job
+        (lambda: serve_guard.floor_tokens(QWEN), 40 * 100_000),
+    ],
+    ids=[
+        "sglang_smallest",
+        "max_total_num_tokens",
+        "vllm_kv_cache_size",
+        "no_pool",
+        "kimi_floor",
+        "no_floor",
+        "replicas",
+    ],
+)
+def test_the_pool_is_the_smallest_any_pipeline_states(measure: Callable[[], int | None], expected: int | None) -> None:
+    assert measure() == expected
 
 
 def test_kimi_at_fraction_052_passes_and_at_048_fails() -> None:

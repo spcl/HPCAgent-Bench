@@ -24,6 +24,15 @@ def test_a_large_array_is_spilled_and_rehydrated(tmp_path: pathlib.Path) -> None
     back = unspill_outputs(out)
     np.testing.assert_array_equal(np.asarray(back["big"]), big)
     assert back["small"] is small
+    # Small outputs take the queue path unchanged: nothing is spilled at the default threshold.
+    quiet = tmp_path / "quiet"
+    quiet.mkdir()
+    outputs = {"x": np.ones(4), "s": 3.5}
+    spilled = spill_outputs(outputs, str(quiet), "t")
+    assert spilled["x"] is outputs["x"]
+    assert spilled["s"] == 3.5
+    assert not any(quiet.iterdir())
+    assert SPILL_BYTES >= 1024**2  # the cliff sits in the GBs; spilling KB-sized outputs would be noise
 
 
 def test_a_rehydrated_array_survives_sandbox_cleanup(tmp_path: pathlib.Path) -> None:
@@ -34,15 +43,6 @@ def test_a_rehydrated_array_survives_sandbox_cleanup(tmp_path: pathlib.Path) -> 
     back = unspill_outputs(out)
     pathlib.Path(out["a"].path).unlink()
     np.testing.assert_array_equal(np.asarray(back["a"]), big)
-
-
-def test_small_outputs_take_the_queue_path_unchanged(tmp_path: pathlib.Path) -> None:
-    outputs = {"x": np.ones(4), "s": 3.5}
-    spilled = spill_outputs(outputs, str(tmp_path), "t")  # default threshold, far above these
-    assert spilled["x"] is outputs["x"]
-    assert spilled["s"] == 3.5
-    assert not any(tmp_path.iterdir())
-    assert SPILL_BYTES >= 1024**2  # the cliff sits in the GBs; spilling KB-sized outputs would be noise
 
 
 def test_a_second_spill_under_the_same_pid_and_tag_gets_its_own_file(tmp_path: pathlib.Path) -> None:

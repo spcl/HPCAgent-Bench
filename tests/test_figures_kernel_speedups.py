@@ -226,14 +226,11 @@ def test_two_setups_of_one_model_share_colour_and_differ_in_shape(llr40_observat
     assert cpf_tool.color == cpf_src.color == palette.model_color("qwen38")
     assert (cpf_tool.marker, cpf_src.marker) == (palette.packet_marker("cpf-tool"), palette.packet_marker("cpf-src"))
     assert cpf_tool.marker != cpf_src.marker
-
-
-def test_two_models_same_condition_share_shape_and_differ_in_colour(llr40_observations: pd.DataFrame) -> None:
-    qwen = kernel_speedups.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpf-src", "qwen38", "cpf-src", TAG40)
+    # Two models under one condition share the shape and differ in colour.
     oss = kernel_speedups.agent_kernel_row(llr40_observations, "llr40-oss120b-c-cpf-src", "oss120b", "cpf-src", TAG40)
-    assert qwen.marker == oss.marker == palette.packet_marker("cpf-src")
-    assert (qwen.color, oss.color) == (palette.model_color("qwen38"), palette.model_color("oss120b"))
-    assert qwen.filled and oss.filled
+    assert cpf_src.marker == oss.marker == palette.packet_marker("cpf-src")
+    assert (cpf_src.color, oss.color) == (palette.model_color("qwen38"), palette.model_color("oss120b"))
+    assert cpf_src.filled and oss.filled
 
 
 def test_the_no_packet_control_is_hollow_in_its_models_colour(llr40_observations: pd.DataFrame) -> None:
@@ -409,20 +406,18 @@ def test_the_1x_line_wears_the_baselines_own_colour(llr40_canon: pd.DataFrame) -
     assert colours == [palette.framework_color(kernel_speedups.BASELINE)], colours
 
 
-def test_figure_omits_the_tokens_panel_when_no_row_spends_tokens(llr40_canon: pd.DataFrame) -> None:
-    rows = kernel_rows(llr40_canon, None, TAG40)
-    fig = kernel_speedups.kernel_figure(rows, TAG40, "title")
-    assert len(fig.axes) == 1
-    assert fig.axes[0].get_ylabel() == "Speedup over Numba"
-
-
-def test_figure_keeps_the_tokens_panel_when_a_row_spends_tokens(
-    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
+@pytest.mark.parametrize(
+    ("with_tokens", "axes", "ylabel"),
+    [(False, 1, "Speedup over Numba"), (True, 2, "Billed Tokens")],
+    ids=["no_tokens", "tokens"],
+)
+def test_figure_omits_the_tokens_panel_when_no_row_spends_tokens(
+    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame, with_tokens: bool, axes: int, ylabel: str
 ) -> None:
-    rows = kernel_rows(llr40_canon, llr40_observations, TAG40)
+    rows = kernel_rows(llr40_canon, llr40_observations if with_tokens else None, TAG40)
     fig = kernel_speedups.kernel_figure(rows, TAG40, "title")
-    assert len(fig.axes) == 2
-    assert fig.axes[1].get_ylabel() == "Billed Tokens"
+    assert len(fig.axes) == axes
+    assert fig.axes[-1].get_ylabel() == ylabel
 
 
 def test_legend_names_each_optimizer_and_the_cross_only_when_one_is_drawn(llr40_canon: pd.DataFrame) -> None:
@@ -505,6 +500,10 @@ def test_mark_pending_splits_a_kernel_never_attempted_from_one_that_failed(pendi
     assert summary_row["excluded"] == "1 pending"
     assert summary_row["geomean"] == pytest.approx(10.0)
     assert set(kernel_speedups.table([row])["kernel"]) == {"k1", "k2"}
+    # A kernel the baseline never ran is pending too.
+    frame = pending_canon[~((pending_canon["column"] == "numba") & (pending_canon["kernel"] == "k1"))]
+    no_baseline = kernel_speedups.canon_kernel_row(frame, "dace_cpu_canon", TAG40, mark_pending=True)
+    assert no_baseline.pending == frozenset({"k1", "k3"})
 
 
 def test_a_failed_kernel_draws_at_one_and_enters_no_summary(pending_canon: pd.DataFrame) -> None:
@@ -518,12 +517,6 @@ def test_a_failed_kernel_draws_at_one_and_enters_no_summary(pending_canon: pd.Da
     assert summary_row["geomean"] == pytest.approx(10.0)
     assert summary_row["wins"] == 1
     assert summary_row["losses"] == 0
-
-
-def test_a_kernel_the_baseline_never_ran_is_pending_too(pending_canon: pd.DataFrame) -> None:
-    frame = pending_canon[~((pending_canon["column"] == "numba") & (pending_canon["kernel"] == "k1"))]
-    row = kernel_speedups.canon_kernel_row(frame, "dace_cpu_canon", TAG40, mark_pending=True)
-    assert row.pending == frozenset({"k1", "k3"})
 
 
 def test_mark_pending_keeps_a_setup_not_yet_served_every_kernel(

@@ -21,12 +21,9 @@ def test_optimizers_share_the_agent_contract_and_registry() -> None:
     for name, factory in reg.items():
         assert issubclass(optimizers.agent_class(factory), Agent), f"{name} must be an Agent (the plug-in contract)"
         assert callable(factory().solve)
-
-
-def test_non_ai_optimizers_are_in_the_cli_registry() -> None:
-    """`hpcagent-bench agent noop|pluto` resolves -- non-AI optimizers run
-    through the same 'optimize procedure' as an LLM agent, no separate code path."""
-    assert set(optimizers.optimizer_registry()) <= set(agent_registry())
+    # `hpcagent-bench agent noop|pluto` resolves: non-AI optimizers run through the same 'optimize procedure' as
+    # an LLM agent, no separate code path.
+    assert set(reg) <= set(agent_registry())
 
 
 def test_a_new_optimizer_class_is_registered_by_its_decorator(monkeypatch: pytest.MonkeyPatch) -> None:

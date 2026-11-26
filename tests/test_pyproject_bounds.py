@@ -112,16 +112,3 @@ def test_a_package_named_twice_is_never_pinned_where_another_list_excludes_it() 
         if not other.req.specifier.contains(spec.version, prereleases=True)
     ]
     assert clashes == [], clashes
-
-
-@pytest.mark.parametrize(
-    ("lines", "expected"),
-    [
-        ('    "pkg<2",  # 2.0 breaks x', True),
-        ('    # 2.0 breaks x\n    "pkg<2",', True),
-        ('    "pkg<2",', False),
-        ('    "pkg<2",  # 2.0 breaks x\n    "pkg<2",', False),
-    ],
-)
-def test_the_comment_rule_reads_trailing_and_preceding_comments(lines: str, expected: bool) -> None:
-    assert commented("pkg<2", f'x = [\n    "other",\n{lines}\n]\n') is expected

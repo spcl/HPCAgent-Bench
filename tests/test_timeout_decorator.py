@@ -46,34 +46,29 @@ def reset_fake_timer() -> Iterator[None]:
     _FakeTimer.instances.clear()
 
 
-def test_fast_call_returns_its_value_and_cancels_the_watchdog(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("fails", [False, True], ids=["returns", "raises"])
+def test_fast_call_returns_its_value_and_cancels_the_watchdog(monkeypatch: pytest.MonkeyPatch, fails: bool) -> None:
     # Rebind the NAME the module looks up, not an attribute on the real (process-wide, shared)
     # threading module -- mutating threading.Timer itself would leak into every other thread.
+    # The finally-cancel must run on the exception path too, or a raise inside the wrapped function would leak a
+    # live timer that fires later, into an unrelated caller.
     monkeypatch.setattr(timeout_decorator, "threading", types.SimpleNamespace(Timer=_FakeTimer))
 
     @timeout_decorator.exit_after(30)
-    def quick() -> int:
+    def call() -> int:
+        if fails:
+            raise ValueError("kernel blew up")
         return 42
 
-    assert quick() == 42
+    if fails:
+        with pytest.raises(ValueError, match="kernel blew up"):
+            call()
+    else:
+        assert call() == 42
     assert len(_FakeTimer.instances) == 1
     timer = _FakeTimer.instances[0]
     assert timer.started
     assert timer.cancelled
-
-
-def test_exception_from_the_wrapped_call_still_cancels_the_watchdog(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The finally-cancel must run on the exception path too, or a raise inside the wrapped
-    # function would leak a live timer that fires later, into an unrelated caller.
-    monkeypatch.setattr(timeout_decorator, "threading", types.SimpleNamespace(Timer=_FakeTimer))
-
-    @timeout_decorator.exit_after(30)
-    def boom() -> None:
-        raise ValueError("kernel blew up")
-
-    with pytest.raises(ValueError, match="kernel blew up"):
-        boom()
-    assert _FakeTimer.instances[0].cancelled
 
 
 def test_a_call_that_overruns_the_deadline_raises_keyboard_interrupt() -> None:

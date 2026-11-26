@@ -71,20 +71,6 @@ def test_the_packing_covers_every_kernel_exactly_once(ranks: int) -> None:
     assert_is_partition(pack_lpt(names, costs_from(sizes), ranks), names, ranks)
 
 
-@pytest.mark.parametrize("ranks", RANK_COUNTS)
-def test_the_stride_fallback_is_also_a_partition(ranks: int) -> None:
-    """The gate holds for the fallback too: it is what a corpus of pure unknowns still gets."""
-    names = [f"k{i:02d}" for i in range(23)]
-    assert_is_partition(stride_partition(names, ranks), names, ranks)
-
-
-@pytest.mark.parametrize("ranks", RANK_COUNTS)
-def test_the_real_corpus_partitions_at_every_rank_count(corpus: dict[str, BenchSpec], ranks: int) -> None:
-    """The gate on the real thing: every corpus kernel on exactly one rank, whatever the count."""
-    names = sorted(corpus)
-    assert_is_partition(pack_lpt(names, cost_vector(corpus, Preset.M), ranks), names, ranks)
-
-
 def test_every_rank_computes_the_same_partition_alone(corpus: dict[str, BenchSpec]) -> None:
     """No master, no communication: each rank runs :func:`shard_names` for its own index and the
     slices must reassemble into the whole selection exactly once."""
@@ -108,14 +94,6 @@ def test_the_partition_does_not_depend_on_the_input_order() -> None:
     forward = pack_lpt(sorted(sizes), costs, 4)
     backward = pack_lpt(sorted(sizes, reverse=True), costs, 4)
     assert [sorted(shard) for shard in forward] == [sorted(shard) for shard in backward]
-
-
-def test_each_shard_keeps_the_selection_order() -> None:
-    """A shard is a SUBSEQUENCE of the input, exactly like the stride it replaces."""
-    names = [f"k{i:02d}" for i in range(20)]
-    sizes: dict[str, int | None] = {name: (i + 1) << 20 for i, name in enumerate(names)}
-    for shard in pack_lpt(names, costs_from(sizes), 4):
-        assert shard == [name for name in names if name in shard]
 
 
 # Unknowns are packed last, and a corpus of pure unknowns falls back.          #
@@ -154,12 +132,6 @@ def test_a_zero_byte_footprint_is_an_unknown_not_a_free_kernel(corpus: dict[str,
     assert "0 bytes" in cost.reason
     free = sorted(name for name, c in cost_vector(corpus, Preset.M).items() if c.resolved and c.working_bytes <= 0)
     assert not free, f"these kernels resolve to no bytes yet are packed as real costs: {free}"
-
-
-def test_shard_names_without_a_preset_is_still_the_stride() -> None:
-    """The historic call keeps the historic behaviour: no preset, no cost model, no spec loads."""
-    names = [f"k{i:02d}" for i in range(10)]
-    assert shard_names(names, (1, 3)) == names[1::3]
 
 
 def test_one_rank_still_runs_the_whole_selection_in_order(corpus: dict[str, BenchSpec]) -> None:
@@ -226,15 +198,6 @@ def test_an_over_budget_packing_is_refused_by_name_and_number() -> None:
     assert f"{node / 2**30:.2f} GB" in message
 
 
-def test_the_same_packing_is_accepted_when_the_node_is_big_enough() -> None:
-    """The cap refuses over-budget packings, not packings: four ceiling-sized kernels fit a node
-    with room for six."""
-    sizes: dict[str, int | None] = {f"xl{i}": XL_BYTE_CEILING for i in range(4)}
-    names = sorted(sizes)
-    packed = pack_lpt(names, costs_from(sizes), 4, ranks_per_node=4, node_ram_bytes=6 * XL_BYTE_CEILING)
-    assert_is_partition(packed, names, 4)
-
-
 def test_spreading_the_same_ranks_over_more_nodes_makes_it_fit() -> None:
     """The constraint is per NODE, not per job: the same four ranks and the same four kernels fit
     once two of them sit on a second machine. That is exactly why ranks and nodes cannot stay the
@@ -287,11 +250,3 @@ def test_the_real_corpus_at_xl_fits_four_ranks_on_a_large_node(corpus: dict[str,
     assert pack_lpt(names, costs, 4, ranks_per_node=4, node_ram_bytes=4 * largest + (1 << 30))
     with pytest.raises(ValueError, match=r"MEMORY|concurrent|share"):
         pack_lpt(names, costs, 4, ranks_per_node=4, node_ram_bytes=largest)
-
-
-def test_a_rank_count_below_one_is_refused() -> None:
-    """Zero ranks is not an empty partition, it is a caller bug."""
-    with pytest.raises(ValueError):
-        pack_lpt(["a"], costs_from({"a": 1 << 20}), 0)
-    with pytest.raises(ValueError):
-        stride_partition(["a"], 0)

@@ -70,16 +70,10 @@ def test_a_rewritten_scop_is_retransformed_by_polycc_even_with_an_older_mtime(
     assert len(runs) == 2, "a changed scop reused the transform of its old bytes"
     assert out.read_text() == "/* transform 2 */\n"
 
-
-def test_changed_polycc_args_retransform(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    write_scop(tmp_path)
-    runs = counting_polycc(monkeypatch)
-    pluto_transform.transformed_sources(tmp_path, "mm")
-
     monkeypatch.setattr(pluto_transform, "POLYCC_ARGS", (*pluto_transform.POLYCC_ARGS, "--noprevector"))
     pluto_transform.transformed_sources(tmp_path, "mm")
 
-    assert len(runs) == 2, "a transform built under other polycc args was reused"
+    assert len(runs) == 3, "a transform built under other polycc args was reused"
 
 
 def test_a_rewritten_scop_is_retransformed_by_ppcg_even_with_an_older_mtime(

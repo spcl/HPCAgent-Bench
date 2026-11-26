@@ -124,22 +124,6 @@ def test_claude_bare_0_drops_bare_and_serves_the_measured_native_tools(
     assert not (named & (MEASURED_NATIVE_DEFAULT - {"Bash", "Edit", "NotebookEdit", "Read", "Skill", "Write"}))
 
 
-def test_the_only_argv_difference_between_modes_is_bare_and_the_tools_value(
-    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    """Everything else -- model, max-turns, permission mode, mcp-config, allowedTools, disallowed
-    list -- must stay exactly what a byte-identical setup already relies on."""
-    monkeypatch.setenv("CLAUDE_BARE", "1")
-    bare_argv = driver.claude_command(fake_context(tmp_path / "mcp.json"))
-    monkeypatch.setenv("CLAUDE_BARE", "0")
-    native_argv = driver.claude_command(fake_context(tmp_path / "mcp.json"))
-    stripped_bare = [word for word in bare_argv if word != "--bare"]
-    stripped_bare[flag_index(stripped_bare, "--tools") + 1] = "<tools>"
-    stripped_native = list(native_argv)
-    stripped_native[flag_index(stripped_native, "--tools") + 1] = "<tools>"
-    assert stripped_bare == stripped_native
-
-
 def frozen_argv(driver: ModuleType, monkeypatch: pytest.MonkeyPatch, mcp_config: pathlib.Path) -> list[str]:
     """``claude_command`` with what the CLI probe and the tool registry answer held fixed."""
     monkeypatch.setattr(driver, "claude_supports_flag", lambda binary, flag: True)
@@ -201,44 +185,36 @@ def test_a_setup_without_subagents_gets_the_command_it_always_got(
     ]
 
 
-def test_a_blank_subagent_list_is_no_subagents(
-    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    monkeypatch.delenv(subagents.PACKET_AGENTS_ENV, raising=False)
-    without = frozen_argv(driver, monkeypatch, tmp_path / "mcp.json")
-    monkeypatch.setenv(subagents.PACKET_AGENTS_ENV, " ")
-
-    assert frozen_argv(driver, monkeypatch, tmp_path / "mcp.json") == without
-
-
+@pytest.mark.parametrize(
+    ("narrowed", "tools_without", "tools_with"),
+    [("Read", "Read", "Read,Agent"), (None, "Read,Edit,Bash", "Read,Edit,Bash,Agent")],
+    ids=["narrowed", "default"],
+)
 def test_a_subagent_setup_keeps_the_delegate_tool_the_cli_offers_only_outside_bare(
-    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    driver: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    narrowed: str | None,
+    tools_without: str,
+    tools_with: str,
 ) -> None:
     """Measured on the pinned CLI: --bare offers neither the delegate tool nor the staged agents, whatever --tools
-    says, and a --disallowedTools naming Task or Agent removes the tool."""
+    says, and a --disallowedTools naming Task or Agent removes the tool. Nothing else of the command changes."""
+    if narrowed is None:
+        monkeypatch.delenv(driver.NATIVE_TOOLS_ENV, raising=False)
+    else:
+        monkeypatch.setenv(driver.NATIVE_TOOLS_ENV, narrowed)
+    monkeypatch.delenv(subagents.PACKET_AGENTS_ENV, raising=False)
+    without = frozen_argv(driver, monkeypatch, tmp_path / "mcp.json")
     monkeypatch.setenv(subagents.PACKET_AGENTS_ENV, "kernel-optimizer")
-    monkeypatch.setenv(driver.NATIVE_TOOLS_ENV, "Read")
 
     argv = frozen_argv(driver, monkeypatch, tmp_path / "mcp.json")
 
     assert "--bare" not in argv
-    assert argv[flag_index(argv, "--tools") + 1] == "Read,Agent"
+    assert argv[flag_index(argv, "--tools") + 1] == tools_with
     assert argv[-3:] == ["--disallowedTools", "WebFetch", "WebSearch"]
-
-
-def test_a_subagent_setup_changes_nothing_else_of_the_command(
-    driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    monkeypatch.delenv(driver.NATIVE_TOOLS_ENV, raising=False)
-    monkeypatch.delenv(subagents.PACKET_AGENTS_ENV, raising=False)
-    without = frozen_argv(driver, monkeypatch, tmp_path / "mcp.json")
-    monkeypatch.setenv(subagents.PACKET_AGENTS_ENV, "kernel-optimizer")
-
-    with_agents = frozen_argv(driver, monkeypatch, tmp_path / "mcp.json")
-
-    assert with_agents[flag_index(with_agents, "--tools") + 1] == "Read,Edit,Bash,Agent"
-    kept = [word for word in without if word not in ("--bare", "Task", "Agent", "Read,Edit,Bash")]
-    assert [word for word in with_agents if word != "Read,Edit,Bash,Agent"] == kept
+    kept = [word for word in without if word not in ("--bare", "Task", "Agent", tools_without)]
+    assert [word for word in argv if word != tools_with] == kept
 
 
 def run_dir_tree(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:

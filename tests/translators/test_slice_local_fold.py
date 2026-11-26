@@ -32,8 +32,13 @@ def fold_(src: str) -> str:
         ("def f(A, i, b):\n    lvl = slice(None)\n    return A[i, lvl, b]\n", "A[i, :, b]"),
         # slice(n) is ``:n`` -- the one argument is the STOP, not the start.
         ("def f(x, n):\n    w = slice(n)\n    return x[w]\n", "x[:n]"),
+        # a folded window shows in every index position
+        *[
+            (f"def f(A, i, b, nlev):\n    top = slice(0, nlev)\n    return {expr}\n", "0:nlev")
+            for expr in ("A[top]", "A[top, b]", "A[i, top, b]")
+        ],
     ],
-    ids=["slice_none_is_a_bare_colon", "single_argument_is_a_stop_bound"],
+    ids=["slice_none_is_a_bare_colon", "single_argument_is_a_stop_bound", "only_index", "first_index", "middle_index"],
 )
 def test_short_slice_spellings_fold_to_their_subscript(src: str, expected: str) -> None:
     out = fold_(src)
@@ -47,9 +52,3 @@ def test_two_different_windows_on_one_name_are_left_alone() -> None:
     out = fold_(src)
     assert "slice(0, nlev)" in out, out
     assert "slice(1, nlev)" in out, out
-
-
-@pytest.mark.parametrize("expr", ["A[top]", "A[top, b]", "A[i, top, b]"])
-def test_folds_in_every_index_position(expr: str) -> None:
-    out = fold_(f"def f(A, i, b, nlev):\n    top = slice(0, nlev)\n    return {expr}\n")
-    assert "0:nlev" in out, out

@@ -124,58 +124,88 @@ def test_int64_pow_and_lshift_are_not_wrapped() -> None:
 # the wrap must NOT fire where numpy promotes
 
 
-def test_mixed_narrow_and_wide_promotes_and_is_not_wrapped() -> None:
-    # numpy promotes int8 + int64 to int64, so the sum must NOT be truncated back to int8.
-    src = "import numpy as np\ndef f(a, w, out):\n    for i in range(a.shape[0]):\n        out[i] = a[i] + w[i]\n"
-    a = np.array([100, 100], dtype=np.int8)
-    w = np.array([100, 10**6], dtype=np.int64)
-    assert np.array_equal(a + w, np.array([200, 1000100], dtype=np.int64))  # promotes, no wrap
-    assert_all_ok(run_(src, {"a": a, "w": w}, ["out"], {"a": "int8", "w": "int64", "out": "int64"}, 2))
+def int_src(args: str, body: str) -> str:
+    """A one-loop kernel ``f(<args>, out)`` that stores ``body`` into ``out[i]``; the loop runs over ``a``."""
+    return f"import numpy as np\ndef f({args}, out):\n    for i in range(a.shape[0]):\n        out[i] = {body}\n"
 
 
-def test_logical_negation_is_not_wrapped() -> None:
-    # `not x` yields a LOGICAL, not an integer. Wrapping it is a hard type error in Fortran
-    # ("'a' argument of 'int' intrinsic must have a numeric type") and meaningless in C; masks are
-    # narrow-int-backed booleans (cloudsc).
-    src = (
-        "import numpy as np\n"
-        "def f(flag, x, out):\n"
-        "    for i in range(x.shape[0]):\n"
-        "        if not flag[i]:\n"
-        "            out[i] = x[i]\n"
-        "        else:\n"
-        "            out[i] = 0\n"
-    )
-    flag = np.array([0, 1, 0, 1], dtype=np.int32)
-    x = np.array([5, 6, 7, 8], dtype=np.int32)
-    assert_all_ok(run_(src, {"flag": flag, "x": x}, ["out"], {"flag": "int32", "x": "int32", "out": "int32"}, 4))
+INT8_PAIR = np.array([100, 100], dtype=np.int8)
+INT32_NUMERATORS = np.array([7, 9, 1, 5], dtype=np.int32)
+INT32_DENOMINATORS = np.array([2, 2, 2, 2], dtype=np.int32)
+INT8_TRIPLE = np.array([100, 50, -100], dtype=np.int8)
+INT64_WIDE = np.array([100, 10**6], dtype=np.int64)
 
 
-def test_integer_true_division_is_not_truncated() -> None:
-    """``/`` on ints is REAL division in numpy, and the wrap must not cast the quotient back.
-
-    Integer ``a / b`` is desugared to ``np.float64(a) / b``, whose subtree reads only int arrays: a wrap
-    oracle that sees int32 operands and no float would cast the double quotient to int32 (7 / 2 as 3
-    where numpy says 3.5), a wrong answer on every integer true division.
-    """
-    src = "import numpy as np\ndef f(a, b, out):\n    for i in range(a.shape[0]):\n        out[i] = a[i] / b[i]\n"
-    a = np.array([7, 9, 1, 5], dtype=np.int32)
-    b = np.array([2, 2, 2, 2], dtype=np.int32)
-    assert np.array_equal(a / b, np.array([3.5, 4.5, 0.5, 2.5]))  # numpy anchor: REAL division
-    assert_all_ok(run_(src, {"a": a, "b": b}, ["out"], {"a": "int32", "b": "int32", "out": "float64"}, 4))
-
-
-def test_call_result_is_not_wrapped() -> None:
-    """A call's result dtype is not derivable from the operand dtypes below it, so the wrap must
-    not fire through one. ``int(...)`` yields a Python int that numpy does NOT wrap at int8."""
-    src = "import numpy as np\ndef f(a, out):\n    for i in range(a.shape[0]):\n        out[i] = int(a[i]) * 3\n"
-    a = np.array([100, 50, -100], dtype=np.int8)
-    assert np.array_equal(np.array([int(x) * 3 for x in a]), np.array([300, 150, -300]))  # no wrap
-    assert_all_ok(run_(src, {"a": a}, ["out"], {"a": "int8", "out": "int64"}, 3))
-
-
-def test_float_operand_disables_the_int_wrap() -> None:
-    # An int8 array combined with a float must compute (and stay) in floating point.
-    src = "import numpy as np\ndef f(a, out):\n    for i in range(a.shape[0]):\n        out[i] = a[i] * 3.5\n"
-    a = np.array([100, 120], dtype=np.int8)
-    assert_all_ok(run_(src, {"a": a}, ["out"], {"a": "int8", "out": "float64"}, 2))
+# numpy promotes or leaves these results as non-integers, so the wrap must NOT fire: ``anchor`` is (what numpy
+# computes, the expected array) where the case has one.
+@pytest.mark.parametrize(
+    ("src", "ins", "dtypes", "n", "anchor"),
+    [
+        # numpy promotes int8 + int64 to int64, so the sum must NOT be truncated back to int8.
+        pytest.param(
+            int_src("a, w", "a[i] + w[i]"),
+            {"a": INT8_PAIR, "w": INT64_WIDE},
+            {"a": "int8", "w": "int64", "out": "int64"},
+            2,
+            (INT8_PAIR + INT64_WIDE, np.array([200, 1000100], dtype=np.int64)),
+            id="mixed-narrow-and-wide-promotes",
+        ),
+        # `not x` yields a LOGICAL, not an integer. Wrapping it is a hard type error in Fortran
+        # ("'a' argument of 'int' intrinsic must have a numeric type") and meaningless in C; masks are
+        # narrow-int-backed booleans (cloudsc).
+        pytest.param(
+            "import numpy as np\n"
+            "def f(flag, x, out):\n"
+            "    for i in range(x.shape[0]):\n"
+            "        if not flag[i]:\n"
+            "            out[i] = x[i]\n"
+            "        else:\n"
+            "            out[i] = 0\n",
+            {"flag": np.array([0, 1, 0, 1], dtype=np.int32), "x": np.array([5, 6, 7, 8], dtype=np.int32)},
+            {"flag": "int32", "x": "int32", "out": "int32"},
+            4,
+            None,
+            id="logical-negation",
+        ),
+        # ``/`` on ints is REAL division in numpy, and the wrap must not cast the quotient back. Integer ``a / b`` is
+        # desugared to ``np.float64(a) / b``, whose subtree reads only int arrays: a wrap oracle that sees int32
+        # operands and no float would cast the double quotient to int32 (7 / 2 as 3 where numpy says 3.5).
+        pytest.param(
+            int_src("a, b", "a[i] / b[i]"),
+            {"a": INT32_NUMERATORS, "b": INT32_DENOMINATORS},
+            {"a": "int32", "b": "int32", "out": "float64"},
+            4,
+            (INT32_NUMERATORS / INT32_DENOMINATORS, np.array([3.5, 4.5, 0.5, 2.5])),
+            id="integer-true-division",
+        ),
+        # A call's result dtype is not derivable from the operand dtypes below it, so the wrap must not fire through
+        # one. ``int(...)`` yields a Python int that numpy does NOT wrap at int8.
+        pytest.param(
+            int_src("a", "int(a[i]) * 3"),
+            {"a": INT8_TRIPLE},
+            {"a": "int8", "out": "int64"},
+            3,
+            (np.array([int(x) * 3 for x in INT8_TRIPLE]), np.array([300, 150, -300])),
+            id="call-result",
+        ),
+        # An int8 array combined with a float must compute (and stay) in floating point.
+        pytest.param(
+            int_src("a", "a[i] * 3.5"),
+            {"a": np.array([100, 120], dtype=np.int8)},
+            {"a": "int8", "out": "float64"},
+            2,
+            None,
+            id="float-operand",
+        ),
+    ],
+)
+def test_mixed_narrow_and_wide_promotes_and_is_not_wrapped(
+    src: str,
+    ins: dict[str, np.ndarray],
+    dtypes: dict[str, str],
+    n: int,
+    anchor: tuple[np.ndarray, np.ndarray] | None,
+) -> None:
+    if anchor is not None:
+        assert np.array_equal(*anchor)  # numpy anchor
+    assert_all_ok(run_(src, ins, ["out"], dtypes, n))

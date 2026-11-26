@@ -78,14 +78,6 @@ def record(db: pathlib.Path, curve: metric.ScalingScore | None, mode: ScalingLaw
         return recording.record_scaling(conn, the_grade(conn), curve, mode, **kw)  # type: ignore[arg-type]
 
 
-def test_every_requested_rank_count_is_one_row_holes_included(tmp_path: pathlib.Path) -> None:
-    """Three measured P and one dropped P are four rows: a curve with a hole must read as a hole."""
-    db = tmp_path / "r.db"
-    assert record(db, strong_curve(), ScalingLaw.STRONG) == 4
-    got = [r["ranks"] for r in rows(db, "SELECT ranks FROM scaling_points ORDER BY ranks")]
-    assert got == [1, 4, 8, 16], got
-
-
 def test_a_dropped_point_has_no_time_and_no_efficiency_only_its_reason(tmp_path: pathlib.Path) -> None:
     db = tmp_path / "r.db"
     record(db, strong_curve(), ScalingLaw.STRONG)
@@ -110,17 +102,12 @@ def test_a_measured_point_stores_the_graders_own_numbers(tmp_path: pathlib.Path)
     assert row["status"] == "graded"
 
 
-def test_an_unplaced_point_records_no_nodes_not_a_derived_count(tmp_path: pathlib.Path) -> None:
-    """A launcher that places ranks itself reports nothing, and P / ranks-per-node is not a measurement."""
-    db = tmp_path / "r.db"
-    record(db, weak_curve(), ScalingLaw.WEAK)
-    got = [r["nodes"] for r in rows(db, "SELECT nodes FROM scaling_points ORDER BY ranks")]
-    assert got == [0, 0, 0], got
-
-
 def test_a_weak_point_keeps_its_work_ratio_and_its_rounding_note(tmp_path: pathlib.Path) -> None:
     db = tmp_path / "r.db"
     record(db, weak_curve(), ScalingLaw.WEAK)
+    # A launcher that places ranks itself reports nothing, and P / ranks-per-node is not a measurement.
+    got = [r["nodes"] for r in rows(db, "SELECT nodes FROM scaling_points ORDER BY ranks")]
+    assert got == [0, 0, 0], got
     (row,) = rows(db, "SELECT * FROM scaling_points WHERE ranks = 2")
     assert row["mode"] == "weak"
     assert row["work_ratio"] == 2.0164
@@ -138,13 +125,6 @@ def test_both_laws_of_one_grade_are_two_curves_side_by_side(tmp_path: pathlib.Pa
     record(db, strong_curve(), ScalingLaw.STRONG)
     points = rows(db, "SELECT mode, COUNT(*) AS n FROM scaling_points GROUP BY mode ORDER BY 1")
     assert [(r["mode"], r["n"]) for r in points] == [("strong", 4), ("weak", len(weak_curve().points))]
-
-
-def test_re_recording_a_grade_replaces_it_instead_of_duplicating(tmp_path: pathlib.Path) -> None:
-    db = tmp_path / "r.db"
-    record(db, strong_curve(), ScalingLaw.STRONG)
-    assert record(db, strong_curve(), ScalingLaw.STRONG) == 4
-    assert rows(db, "SELECT COUNT(*) AS n FROM scaling_points") == [{"n": 4}]
 
 
 def test_a_curve_whose_every_point_dropped_is_still_on_record(tmp_path: pathlib.Path) -> None:

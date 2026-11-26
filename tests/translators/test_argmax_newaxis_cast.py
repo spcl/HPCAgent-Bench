@@ -67,12 +67,23 @@ def hoist(
 
 
 @pytest.mark.parametrize(
-    ("src", "shapes"),
-    [("np.argmax(scores, axis=0)", {"scores": ("K", "K")}), ("np.argmin(scores, axis=1)", {"scores": ("K", "M")})],
-    ids=["argmax", "argmin"],
+    ("src", "shapes", "kept"),
+    [
+        ("np.argmax(scores, axis=0)", {"scores": ("K", "K")}, True),
+        ("np.argmin(scores, axis=1)", {"scores": ("K", "M")}, True),
+        # Regression guard: full argmax (axis=None) is still a scalar temp.
+        ("np.argmax(V)", {"V": ("K",)}, False),
+    ],
+    ids=["argmax", "argmin", "argmax_no_axis"],
 )
-def test_an_axis_argmax_or_argmin_hoists_to_an_int64_array_temp(src: str, shapes: dict[str, tuple[str, ...]]) -> None:
+def test_an_axis_argmax_or_argmin_hoists_to_an_int64_array_temp(
+    src: str, shapes: dict[str, tuple[str, ...]], kept: bool
+) -> None:
     arr, scal, dts = hoist(src, shapes)
+    if not kept:
+        assert scal
+        assert not arr
+        return
     assert arr
     assert not scal
     ((name, shape),) = arr.items()
@@ -80,33 +91,22 @@ def test_an_axis_argmax_or_argmin_hoists_to_an_int64_array_temp(src: str, shapes
     assert dts[name] == "int64"  # index dtype, not double
 
 
-def test_argmax_no_axis_stays_scalar() -> None:
-    # Regression guard: full argmax (axis=None) is still a scalar temp.
-    arr, scal, dts = hoist("np.argmax(V)", {"V": ("K",)})
-    assert scal
-    assert not arr
-
-
 # C. Partial-subscript LHS row copy: ``back[t] = cb``                          #
 
 
-def test_partial_subscript_assign_expands_to_copy_loop() -> None:
+@pytest.mark.parametrize("expands", [True, False], ids=["partial_row", "full_subscript"])
+def test_partial_subscript_assign_expands_to_copy_loop(expands: bool) -> None:
     shapes = {"back": ("T", "K"), "cb": ("K",)}
     rw = WholeArrayAssignRewriter(shapes, real_arrays=set(shapes))
-    node = ast.parse("back[t] = cb").body[0]
+    # A fully-indexed scalar store is left alone (regression guard).
+    node = ast.parse("back[t] = cb" if expands else "back[t, k] = cb[k]").body[0]
     out = rw.visit(node)
+    if not expands:
+        assert not isinstance(out, list)  # untouched single Assign
+        return
     out = out if isinstance(out, list) else [out]
     mod = ast.fix_missing_locations(ast.Module(body=out, type_ignores=[]))
     fors = [s for s in ast.walk(mod) if isinstance(s, ast.For)]
     assert len(fors) == 1  # one loop over the K row
     src = ast.unparse(mod)
     assert "back[t, __w0] = cb[__w0]" in src  # element-wise row copy
-
-
-def test_full_subscript_assign_not_expanded() -> None:
-    # Regression guard: a fully-indexed scalar store is left alone.
-    shapes = {"back": ("T", "K"), "cb": ("K",)}
-    rw = WholeArrayAssignRewriter(shapes, real_arrays=set(shapes))
-    node = ast.parse("back[t, k] = cb[k]").body[0]
-    out = rw.visit(node)
-    assert not isinstance(out, list)  # untouched single Assign

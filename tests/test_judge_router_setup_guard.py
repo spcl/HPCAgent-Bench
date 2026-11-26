@@ -7,7 +7,7 @@ import json
 import pathlib
 import types
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -51,18 +51,20 @@ def router_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator["TestClient"]:
 
 
 @pytest.mark.parametrize("route", ROUTES)
-def test_a_body_from_another_setup_is_refused_before_the_judge_sees_it(router: "TestClient", route: str) -> None:
-    reply = router.post(route, json=body(f"{FOREIGN}.n0.p1.w0"))
-    assert reply.status_code == 403, reply.text
+@pytest.mark.parametrize(
+    ("setup", "status"), [pytest.param(FOREIGN, 403, id="other-setup"), pytest.param(SETUP, 200, id="this-setup")]
+)
+def test_a_body_from_another_setup_is_refused_before_the_judge_sees_it(
+    router: "TestClient", route: str, setup: str, status: int
+) -> None:
+    reply = router.post(route, json=body(f"{setup}.n0.p1.w0"))
+    assert reply.status_code == status, reply.text
+    if status == 200:
+        assert upstream_routes() == [route]
+        return
     assert FOREIGN in reply.json()["detail"]
     assert SETUP in reply.json()["detail"]
     assert StubJudge.calls == []
-
-
-@pytest.mark.parametrize("route", ROUTES)
-def test_a_body_of_this_setup_reaches_the_judge(router: "TestClient", route: str) -> None:
-    assert router.post(route, json=body(f"{SETUP}.n0.p1.w0")).status_code == 200
-    assert upstream_routes() == [route]
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -95,16 +97,27 @@ def test_a_setup_whose_name_merely_starts_with_this_one_is_another_setup(router:
     assert router.post("/score", json=body(f"{SETUP}-skills.n0.p1.w0")).status_code == 403
 
 
-def test_a_profile_without_a_episode_id_is_still_relayed(router: "TestClient") -> None:
-    """``tools/profile.md`` shows agents a curl ``/profile`` without one; a missing id is no other setup's."""
-    reply = router.post("/profile", json={"kernel": "dist_softmax", "language": "c", "source": "x", "rank": 0})
+@pytest.mark.parametrize(
+    ("method", "path", "payload", "upstream"),
+    [
+        # ``tools/profile.md`` shows agents a curl ``/profile`` without one; a missing id is no other setup's.
+        pytest.param(
+            "post",
+            "/profile",
+            {"kernel": "dist_softmax", "language": "c", "source": "x", "rank": 0},
+            "/profile",
+            id="profile",
+        ),
+        pytest.param("get", "/baseline/dist_softmax?rank=0", None, "/baseline/dist_softmax", id="read-route"),
+    ],
+)
+def test_a_profile_without_a_episode_id_is_still_relayed(
+    router: "TestClient", method: str, path: str, payload: dict[str, Any] | None, upstream: str
+) -> None:
+    """A route that carries no episode id (a read route, or a profile without one) is relayed."""
+    reply = router.post(path, json=payload) if method == "post" else router.get(path)
     assert reply.status_code == 200
-    assert upstream_routes() == ["/profile"]
-
-
-def test_a_read_route_carries_no_episode_id_and_is_relayed(router: "TestClient") -> None:
-    assert router.get("/baseline/dist_softmax?rank=0").status_code == 200
-    assert upstream_routes() == ["/baseline/dist_softmax"]
+    assert upstream_routes() == [upstream]
 
 
 def test_a_judge_that_serves_no_setup_checks_nothing(router: "TestClient", monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,9 +153,7 @@ def test_a_fused_judge_never_consults_the_jobs_experiment_setup(
 # every legitimate caller
 
 
-def test_the_agent_tools_score_submit_and_profile_are_accepted(
-    router: "TestClient", monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
+def agent_tools_call(router: "TestClient", monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     """The episode id the tools send is the one agent_driver.identity_env composes from SETUP."""
     monkeypatch.setattr(urllib.request, "urlopen", through_router(router))
     monkeypatch.setenv("HPCAGENT_BENCH_EPISODE_ID", f"{SETUP}.n0.p2.w1")
@@ -157,7 +168,7 @@ def test_the_agent_tools_score_submit_and_profile_are_accepted(
     assert {sent["episode_id"] for route, sent in StubJudge.calls} == {f"{SETUP}.n0.p2.w1"}
 
 
-def test_the_harness_judge_client_is_accepted(router: "TestClient", monkeypatch: pytest.MonkeyPatch) -> None:
+def judge_client_call(router: "TestClient", monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     """``JudgeClient``, the python path the prompt documents."""
     monkeypatch.setattr(urllib.request, "urlopen", through_router(router))
     monkeypatch.setenv("HPCAGENT_BENCH_EPISODE_ID", f"{SETUP}.n0.p2.w1")
@@ -170,7 +181,7 @@ def test_the_harness_judge_client_is_accepted(router: "TestClient", monkeypatch:
     assert upstream_routes() == ["/score", "/submit", "/profile"]
 
 
-def test_the_teardown_promotion_is_accepted(router: "TestClient", monkeypatch: pytest.MonkeyPatch) -> None:
+def teardown_promotion_call(router: "TestClient", monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     """``promote_unsubmitted`` resends the agent's own episode id, read off the judge's rows."""
     monkeypatch.setattr(urllib.request, "urlopen", through_router(router))
     promote = fresh("promote_unsubmitted")
@@ -179,6 +190,18 @@ def test_the_teardown_promotion_is_accepted(router: "TestClient", monkeypatch: p
     foreign = {**item, "episode_id": f"{FOREIGN}.n0.p2.w1"}
     assert promote.promote("http://judge.test:8800", foreign, dry_run=False, rank=0).startswith("refused 403")
     assert upstream_routes() == ["/submit"]
+
+
+@pytest.mark.parametrize("caller", [agent_tools_call, judge_client_call, teardown_promotion_call])
+def test_the_agent_tools_score_submit_and_profile_are_accepted(
+    router: "TestClient",
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    caller: Callable[["TestClient", pytest.MonkeyPatch, pathlib.Path], None],
+) -> None:
+    """Every legitimate caller (the agent tools, the harness judge client, the teardown promotion) sends a
+    well-formed episode id of this setup and is accepted through its real client code."""
+    caller(router, monkeypatch, tmp_path)
 
 
 def test_the_grade_job_lists_every_setup_whatever_setup_the_process_serves(
@@ -202,13 +225,7 @@ def test_the_grade_job_lists_every_setup_whatever_setup_the_process_serves(
         (test_scaling_grade.SETUP, f"{test_scaling_grade.SETUP}.n0.p0.w0")
     ]
 
-
-def test_the_regrade_replay_grades_whatever_setup_the_process_serves(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    """The regrade replay grades a recorded item in-process as ``POST /submit`` would, router-free."""
-    monkeypatch.setenv("SETUP", FOREIGN)
-    monkeypatch.setenv("AGENT_SUBMISSION_MODE", "single")
+    # The regrade replay grades a recorded item in-process as ``POST /submit`` would, router-free.
     monkeypatch.setattr(scoring, "sanitizer_check", lambda *_args: None)  # k1 has no manifest to sanitize
     verdict = types.SimpleNamespace(ok=True, reason="", ungradeable=False, harness_fault=False)
     item = test_grade_under.listed_item(tmp_path)

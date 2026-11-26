@@ -16,14 +16,10 @@ from hpcagent_bench.spec import KERNELS, BenchSpec
 # Strong scaling: fixed total, decomposed over the ranks (size unchanged)
 def test_strong_returns_size_unchanged() -> None:
     params = {"TSTEPS": 1000, "N": 16383}
-    assert mpi_sizing.strong(params) == params
-
-
-def test_strong_returns_a_fresh_dict() -> None:
-    params = {"N": 645}
     out = mpi_sizing.strong(params)
+    assert out == params
     out["N"] = 1
-    assert params["N"] == 645  # the caller's dict is not aliased
+    assert params["N"] == 16383  # the caller's dict is not aliased
 
 
 # Weak scaling: grow the decomposition-axis symbols by the integer m where P = m**k
@@ -71,24 +67,21 @@ def test_weak_at_p_equal_m_to_the_k_multiplies_each_axis_symbol_by_m(
 
 
 @pytest.mark.parametrize(
-    ("ranks", "work_exponent", "expected_n"),
+    ("base_n", "ranks", "work_exponent", "expected_n"),
     [
-        (8, 2, 283),  # 100 * 8**0.5 = 282.84... -> 283 (8 is not a perfect square)
-        (4, 3, 159),  # 100 * 4**(1/3) = 158.74... -> 159 (4 is not a perfect cube)
+        (100, 8, 2, 283),  # 100 * 8**0.5 = 282.84... -> 283 (8 is not a perfect square)
+        (100, 4, 3, 159),  # 100 * 4**(1/3) = 158.74... -> 159 (4 is not a perfect cube)
+        (1, 2, 3, 1),  # 1 * 2**(1/3) -> 1: rounding never drops a size below one
     ],
-    ids=["not-a-perfect-square", "not-a-perfect-cube"],
+    ids=["not-a-perfect-square", "not-a-perfect-cube", "never-below-one"],
 )
 def test_weak_at_a_non_perfect_kth_power_p_rounds_each_axis_symbol(
-    ranks: int, work_exponent: int, expected_n: int
+    base_n: int, ranks: int, work_exponent: int, expected_n: int
 ) -> None:
     """A rank count that is not P = m**k is still sized (pending a paper
     edit): each axis symbol is scaled by the real ``P**(1/k)`` and rounded to the nearest integer."""
-    out = mpi_sizing.weak({"N": 100}, ["N"], ranks=ranks, work_exponent=work_exponent)
+    out = mpi_sizing.weak({"N": base_n}, ["N"], ranks=ranks, work_exponent=work_exponent)
     assert out == {"N": expected_n}
-
-
-def test_weak_rounding_never_drops_a_size_below_one() -> None:
-    assert mpi_sizing.weak({"N": 1}, ["N"], ranks=2, work_exponent=3) == {"N": 1}  # 1 * 2**(1/3) -> 1
 
 
 def test_work_ratio_is_one_for_strong_scaling() -> None:

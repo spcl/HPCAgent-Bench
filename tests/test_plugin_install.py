@@ -56,24 +56,16 @@ def test_the_fingerprint_follows_the_plugin_sources(tmp_path: pathlib.Path) -> N
     ) == plugins.fingerprint(())
 
 
-def test_a_plugin_without_an_install_command_is_left_alone(tmp_path: pathlib.Path) -> None:
-    folder = plugin_folder(tmp_path, "plain", "")
-
-    assert plugins.install(agent_plugins.find([folder])) == []
-
-
 def test_a_failing_install_command_names_its_plugin(tmp_path: pathlib.Path) -> None:
     folder = plugin_folder(tmp_path, "broken", '\n[install]\ncommand = ["{python}", "-c", "raise SystemExit(3)"]\n')
 
     with pytest.raises(RuntimeError, match="plugin 'broken'"):
         plugins.install(agent_plugins.find([folder]))
 
-
-def test_an_install_block_without_a_command_is_refused_by_its_file(tmp_path: pathlib.Path) -> None:
-    folder = plugin_folder(tmp_path, "empty", "\n[install]\ncommand = []\n")
-
+    # an install block without a command is refused by its file
+    empty = plugin_folder(tmp_path, "empty", "\n[install]\ncommand = []\n")
     with pytest.raises(ValueError, match="plugin.toml"):
-        agent_plugins.find([folder])
+        agent_plugins.find([empty])
 
 
 def test_a_subpackage_named_build_is_installed_but_a_top_level_build_folder_is_not(tmp_path: pathlib.Path) -> None:

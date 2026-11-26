@@ -101,28 +101,32 @@ def test_an_unreadable_mask_is_not_fatal(driver: types.ModuleType) -> None:
     assert result == []
 
 
-def test_pinning_a_process_that_already_exited_is_survivable(driver: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """``pin`` runs on a child that may have died during startup. It logs and returns; an agent
-    that cannot be pinned is not an agent that must be abandoned."""
-    with subprocess.Popen([sys.executable, "-c", "pass"]) as dead:
-        dead.wait()
-    log_path = tmp_path / "claude.log"
-    with pathlib.Path(log_path).open("w") as log:
-        driver.pin(dead, [0, 1], 0, log)
-    assert "could not pin" in log_path.read_text()
-
-
-def test_no_cpus_means_no_syscall_and_no_log_noise(driver: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """The unpinned path is the normal one on a small machine; it must not write a warning per
-    agent into a transcript that readers parse."""
+@pytest.mark.parametrize(
+    ("exited", "cpus", "logged"),
+    [(True, [0, 1], "could not pin"), (False, [], "")],
+    ids=["process_already_exited", "no_cpus"],
+)
+def test_no_cpus_means_no_syscall_and_no_log_noise(
+    driver: types.ModuleType, tmp_path: pathlib.Path, exited: bool, cpus: list[int], logged: str
+) -> None:
+    """``pin`` runs on a child that may have died during startup: it logs and returns, since an agent that
+    cannot be pinned is not an agent that must be abandoned. The unpinned path is the normal one on a small
+    machine; it must not write a warning per agent into a transcript that readers parse."""
 
     class Dead:
         pid = -1
 
     log_path = tmp_path / "claude.log"
-    with pathlib.Path(log_path).open("w") as log:
-        driver.pin(Dead(), [], 0, log)
-    assert log_path.read_text() == ""
+    if exited:
+        with subprocess.Popen([sys.executable, "-c", "pass"]) as dead:
+            dead.wait()
+            with log_path.open("w") as log:
+                driver.pin(dead, cpus, 0, log)
+    else:
+        with log_path.open("w") as log:
+            driver.pin(Dead(), cpus, 0, log)
+    text = log_path.read_text()
+    assert logged in text if logged else text == ""
 
 
 def test_the_node_is_dealt_over_the_agents_it_runs_not_the_pool_it_declares() -> None:

@@ -79,12 +79,12 @@ def test_a_normal_or_dunder_binding_is_never_flagged(source: str) -> None:
     assert codes_for(source) == set(), source
 
 
-def test_a_bare_underscore_is_flagged_by_default() -> None:
-    assert "NAME003" in codes_for("_ = compute()")
-
-
-def test_a_bare_underscore_is_allowed_with_the_opt_out_flag() -> None:
-    assert codes_for("_ = compute()", allow_bare_underscore=True) == set()
+@pytest.mark.parametrize(("allow", "flagged"), [(False, True), (True, False)], ids=["default", "opt_out_flag"])
+def test_a_bare_underscore_is_flagged_by_default(allow: bool, flagged: bool) -> None:
+    codes = codes_for("_ = compute()", allow_bare_underscore=allow)
+    assert ("NAME003" in codes) is flagged
+    if not flagged:
+        assert codes == set()
 
 
 IMPORT_CASES = [
@@ -166,18 +166,6 @@ def test_diff_mode_flags_the_module_name_only_for_a_newly_added_file(git_repo: p
     )
     assert result.returncode == 1
     assert "NAME001" in result.stdout
-
-
-def test_diff_mode_passes_on_a_no_op_commit(git_repo: pathlib.Path) -> None:
-    result = subprocess.run(
-        [sys.executable, str(paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py"), "mod.py"],
-        cwd=git_repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0
-    assert result.stdout == ""
 
 
 def test_all_mode_catches_the_preexisting_leading_underscore_name(git_repo: pathlib.Path) -> None:

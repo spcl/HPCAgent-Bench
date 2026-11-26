@@ -169,19 +169,10 @@ def test_a_second_language_renders_from_the_cached_canonical_sdfg(spec: BenchSpe
     assert second.canonical == cpf_bridge.CanonicalOutcome(key=first.canonical.key, cached=True), second
     assert second.results is not None, second
     assert second.results["c++"].verdict is RenderVerdict.OK, second
-
-
-@pytest.mark.integration
-def test_a_form_rendered_again_from_the_stored_sdfg_is_the_first_render_byte_for_byte(
-    spec: BenchSpec, tmp_path: pathlib.Path
-) -> None:
-    """Every render reads the canonical SDFG back from its file, so a dropped form rendered again from the
-    cached SDFG must reproduce the published bytes under the same key."""
-    cache = tmp_path / "cache"
-    rendered = cpf_bridge.prerender_kernel(spec, cache, languages=["c"], **prerender_kwargs())
-    assert rendered.results is not None, rendered
-    first = rendered.results["c"]
-    entry = cpf_cache.entry_path(cache, str(first.key))
+    # A dropped form rendered again from the cached SDFG reproduces the published bytes under the same key.
+    assert first.results is not None, first
+    published = first.results["c"]
+    entry = cpf_cache.entry_path(cache, str(published.key))
     manifest = cpf_cache.Entry.model_validate_json((entry / cpf_cache.MANIFEST_NAME).read_bytes())
     text = (entry / manifest.artefacts[Role.SOURCE].name).read_text()
     shutil.rmtree(entry)
@@ -189,7 +180,7 @@ def test_a_form_rendered_again_from_the_stored_sdfg_is_the_first_render_byte_for
     assert again.canonical is not None, again
     assert again.results is not None, again
     assert again.canonical.cached is True, again
-    assert again.results["c"].key == first.key
+    assert again.results["c"].key == published.key
     assert (entry / manifest.artefacts[Role.SOURCE].name).read_text() == text
 
 
@@ -464,11 +455,6 @@ def test_the_returned_slots_name_what_the_entry_program_returns(
     assert cpf_bridge.returned_slots(impl, entry) == slots
 
 
-def test_an_impl_that_does_not_exist_names_no_return_slot(tmp_path: pathlib.Path) -> None:
-    """A spec whose SDFG came from elsewhere has no impl to read, and a guessed name could drop a result."""
-    assert cpf_bridge.returned_slots(tmp_path / "missing_dace.py", "returns_count") == ()
-
-
 @pytest.mark.parametrize(("graded", "kept"), [(("b",), set()), (("b", "count"), {"__return_0"})])
 def test_a_returned_value_is_dropped_only_when_the_manifest_does_not_grade_it(
     graded: tuple[str, ...], kept: set[str], tmp_path: pathlib.Path
@@ -529,17 +515,26 @@ def tasklet_labels(sdfg: "SDFG") -> set[str]:
     return {node.label for node, _ in sdfg.all_nodes_recursive() if isinstance(node, dace.nodes.Tasklet)}
 
 
-def test_an_ungraded_return_mirrored_to_the_host_is_dropped_with_its_mirror() -> None:
+@pytest.mark.parametrize(("graded", "dropped"), [(("b",), True), (("b", "count"), False)], ids=["ungraded", "graded"])
+def test_an_ungraded_return_mirrored_to_the_host_is_dropped_with_its_mirror(
+    graded: tuple[str, ...], dropped: bool
+) -> None:
     """The GPU offload copies cegterg's host-written iteration counts to and from a device mirror, and those
-    copies kept three ungraded ``__return`` slots in the entry: the hip render failed the ABI order."""
+    copies kept three ungraded ``__return`` slots in the entry: the hip render failed the ABI order. Only an
+    ungraded slot may take its mirror chain with it: a graded value stays for the ordered render to refuse."""
     sdfg = mirrored_count_program("")
 
-    dropped = cpf_bridge.drop_returned_arguments(sdfg, ["a", "b", "N"], ("b",), ("count",))
+    result = cpf_bridge.drop_returned_arguments(sdfg, ["a", "b", "N"], graded, ("count",))
 
-    assert dropped == ("__return_0",)
-    assert not {"__return_0", "count_host"} & set(sdfg.arrays), list(sdfg.arrays)
-    assert "count" not in tasklet_labels(sdfg)  # the code that only computed the count goes too
-    assert "double" in tasklet_labels(sdfg)
+    if dropped:
+        assert result == ("__return_0",)
+        assert not {"__return_0", "count_host"} & set(sdfg.arrays), list(sdfg.arrays)
+        assert "count" not in tasklet_labels(sdfg)  # the code that only computed the count goes too
+        assert "double" in tasklet_labels(sdfg)
+    else:
+        assert result == ()
+        assert {"__return_0", "count_host"} <= set(sdfg.arrays)
+        assert "count" in tasklet_labels(sdfg)
     sdfg.validate()
 
 
@@ -552,17 +547,6 @@ def test_an_ungraded_return_that_a_tasklet_reads_is_kept(reader: str) -> None:
     assert cpf_bridge.drop_returned_arguments(sdfg, ["a", "b", "N"], ("b",), ("count",)) == ()
     assert {"__return_0", "count_host"} <= set(sdfg.arrays)
     assert {"count", "use"} <= tasklet_labels(sdfg)
-    sdfg.validate()
-
-
-def test_a_graded_return_with_a_host_mirror_is_kept() -> None:
-    """Only an ungraded slot may take its mirror chain with it: a graded value stays for the ordered render to
-    refuse, exactly as before."""
-    sdfg = mirrored_count_program("")
-
-    assert cpf_bridge.drop_returned_arguments(sdfg, ["a", "b", "N"], ("b", "count"), ("count",)) == ()
-    assert {"__return_0", "count_host"} <= set(sdfg.arrays)
-    assert "count" in tasklet_labels(sdfg)
     sdfg.validate()
 
 
@@ -782,10 +766,7 @@ def test_a_dropin_of_a_renamed_argument_declares_the_manifest_name_in_abi_order(
         cpf_bridge.WORKSPACE_SIZE_NAME,
     ]
     assert declared_parameters(form.code, form.entry) == want
-
-
-def test_the_entry_is_respelled_as_the_stub_and_a_renamed_argument_takes_its_manifest_name() -> None:
-    """CPF's own spelling drops the scalar ``const`` and makes the workspace read-only; the stub is the contract."""
+    # CPF's own spelling drops the scalar ``const`` and makes the workspace read-only; the stub is the contract.
     rendered = (
         "static inline double helper(double x) { return x; }\n"
         "void k_fp64(const double * restrict __field, double * restrict out, int64_t N,"

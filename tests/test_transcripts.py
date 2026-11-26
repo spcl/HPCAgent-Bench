@@ -132,20 +132,16 @@ def test_the_extract_holds_every_reasoning_block_and_tool_call_in_order(harness:
         assert found[0] == want[0]
         assert found[1].startswith(want[1]) if want[0] != "tool_call" else found == want
     assert all(record.get("input") for record in records if record["kind"] == "tool_call")
-
-
-@pytest.mark.parametrize("harness", ["miniswe", "openhands", "tuner"])
-def test_a_runners_extract_usage_sums_to_its_usage_jsonl(harness: str, tmp_path: pathlib.Path) -> None:
-    """One usage record per model call, its four counts those the runner wrote to ``usage.jsonl``: the cost fold reads
-    the same numbers off the extract alone."""
-    worker = episode(harness, tmp_path)
-    usage = [record for record in extracted(worker) if record["kind"] == "usage"]
-    lines = (worker / harnesses.USAGE_FILE).read_text().splitlines()
-    assert sorted(json.dumps({f: u[f] for f in harnesses.CONSUMED_FIELDS}) for u in usage) == sorted(
-        json.dumps(json.loads(line)) for line in lines
-    )
-    as_lines = [json.dumps({f: u[f] for f in harnesses.CONSUMED_FIELDS}) for u in usage]
-    assert token_cost.usage_lines_cost(as_lines) == token_cost.usage_episode_cost(worker / harnesses.USAGE_FILE)
+    if harness in ("miniswe", "openhands", "tuner"):
+        # One usage record per model call, its four counts those the runner wrote to ``usage.jsonl``: the cost fold
+        # reads the same numbers off the extract alone.
+        usage = [record for record in records if record["kind"] == "usage"]
+        lines = (worker / harnesses.USAGE_FILE).read_text().splitlines()
+        assert sorted(json.dumps({f: u[f] for f in harnesses.CONSUMED_FIELDS}) for u in usage) == sorted(
+            json.dumps(json.loads(line)) for line in lines
+        )
+        as_lines = [json.dumps({f: u[f] for f in harnesses.CONSUMED_FIELDS}) for u in usage]
+        assert token_cost.usage_lines_cost(as_lines) == token_cost.usage_episode_cost(worker / harnesses.USAGE_FILE)
 
 
 def test_claude_token_accounting_runs_on_the_extract_alone(tmp_path: pathlib.Path) -> None:
@@ -166,19 +162,14 @@ def test_claude_token_accounting_runs_on_the_extract_alone(tmp_path: pathlib.Pat
     assert (totals.tokens_effective, totals.tokens_billed) == (recorded["tokens_effective"], recorded["tokens_billed"])
     for key in ("fresh_input", "cached_input", "output", "thinking_estimate", "turns", "output_source"):
         assert row[key] == recorded[key], key
-
-
-def test_claude_usage_records_fold_to_the_drivers_counts(tmp_path: pathlib.Path) -> None:
-    """One usage record per request: their prompts folded by the perfect-prefix model and their outputs summed give
-    the driver's ``tokens.json`` components."""
-    worker = episode("claude", tmp_path)
-    usage = [record for record in extracted(worker) if record["kind"] == "usage"]
+    # One usage record per request: their prompts folded by the perfect-prefix model and their outputs summed give
+    # the driver's ``tokens.json`` components.
+    usage = [record for record in records if record["kind"] == "usage"]
     fresh = cached = previous = 0
     for record in usage:
         prompt = int(record["input"]) + int(record["cached_input"])
         fold = token_cost.fold_prompt(prompt, previous)
         fresh, cached, previous = fresh + fold.fresh, cached + fold.cached, prompt
-    recorded = json.loads((worker / "tokens.json").read_text())
     assert (len(usage), fresh, cached) == (recorded["turns"], recorded["fresh_input"], recorded["cached_input"])
     assert sum(int(record["output"]) for record in usage) == recorded["output"]
 

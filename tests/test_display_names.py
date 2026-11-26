@@ -49,9 +49,10 @@ def test_the_registry_parses_and_every_section_a_figure_reads_is_populated() -> 
     assert [name for name, block in populated.items() if not block] == []
 
 
-@pytest.mark.parametrize("model", sorted(study_tags.registry().models))
+@pytest.mark.parametrize("model", sorted(set(study_tags.registry().models) | set(palette.order("models"))))
 def test_every_registered_model_has_a_name_and_a_checkpoint(model: str) -> None:
-    """A model entry with no checkpoint cannot be checked against reality, which is the point."""
+    """A model entry with no checkpoint cannot be checked against reality, which is the point. A model the palette
+    colours but nobody names would draw its raw tag on the axis beside properly named ones."""
     assert study_tags.model_name(model) != model, f"{model} maps to itself"
     assert "/" in study_tags.model_checkpoint(model), f"{model} names no checkpoint"
 
@@ -82,12 +83,6 @@ def test_the_registered_checkpoint_is_what_the_setups_served() -> None:
         elif checkpoints != {expected}:
             problems.append(f"{model}: registry says {expected!r}, setups served {sorted(checkpoints)}")
     assert not problems, "the registered vocabulary disagrees with the setups:\n  " + "\n  ".join(problems)
-
-
-def test_every_model_the_palette_colours_also_has_a_name() -> None:
-    """A model with a hue but no name gets its raw tag on the axis beside properly named ones."""
-    unnamed = [m for m in palette.order("models") if study_tags.model_name(m) == m]
-    assert not unnamed, f"models with a colour but no display name: {unnamed}"
 
 
 def test_an_unknown_tag_falls_back_instead_of_raising() -> None:
@@ -179,23 +174,26 @@ def test_a_kernel_tick_carries_the_manifest_name_and_falls_back_to_the_identifie
     assert drawn["heat_3d"] == study_tags.kernel_short_display_name("heat_3d") != "heat_3d"
     assert drawn["qe_addusxx_g"].replace("\n", " ") == study_tags.kernel_short_display_name("qe_addusxx_g")
     assert drawn["kernel_nobody_declared"].replace("\n", "") == "kernel_nobody_declared"
-
-
-def test_no_two_benchmarks_share_a_display_name() -> None:
-    """Two kernels under one tick is a figure that reads as one kernel measured twice. The names
-    are free-form prose in 679 separate files, so nothing but this check keeps them apart."""
-    by_name: dict[str, list[str]] = {}
-    for kernel, name in study_tags.kernel_names().items():
-        by_name.setdefault(name, []).append(kernel)
-    shared = {name: sorted(kernels) for name, kernels in by_name.items() if len(kernels) > 1}
-    assert not shared, "display names claimed by more than one manifest:\n  " + "\n  ".join(
-        f"{name!r}: {kernels}" for name, kernels in sorted(shared.items())
-    )
+    # A manifest that declares no ``short-name`` still draws: its ``name``, folded at the limit.
+    names, short_names = study_tags.manifest_names()
+    kernel = next(k for k in sorted(names) if k not in short_names and len(names[k]) > study_tags.SHORT_NAME_MAX)
+    assert study_tags.kernel_short_display_name(kernel) == names[kernel]
+    assert per_kernel.kernel_tick_label(kernel).replace("\n", " ") == names[kernel]
+    assert per_kernel.compact_tick_label(kernel).replace("\n", " ") == study_tags.kernel_compact_display_name(kernel)
 
 
 def test_every_short_name_fits_and_no_two_benchmarks_share_one() -> None:
     """A ``short-name`` exists to fit a text-width axis; one past the limit, or one shared by two
-    kernels, fails that axis the same way a long or shared ``name`` fails a wide one."""
+    kernels, fails that axis the same way a long or shared ``name`` fails a wide one. Two kernels under one tick
+    is a figure that reads as one kernel measured twice; the full names are free-form prose in 679 separate files,
+    so nothing but this check keeps them apart."""
+    by_name: dict[str, list[str]] = {}
+    for kernel, name in study_tags.kernel_names().items():
+        by_name.setdefault(name, []).append(kernel)
+    shared_names = {name: sorted(kernels) for name, kernels in by_name.items() if len(kernels) > 1}
+    assert not shared_names, "display names claimed by more than one manifest:\n  " + "\n  ".join(
+        f"{name!r}: {kernels}" for name, kernels in sorted(shared_names.items())
+    )
     names, short_names = study_tags.manifest_names()
     too_long = {kernel: short for kernel, short in short_names.items() if len(short) > study_tags.SHORT_NAME_MAX}
     assert not too_long, f"short-name over {study_tags.SHORT_NAME_MAX} characters: {too_long}"
@@ -217,17 +215,6 @@ def test_every_loop_and_scientific_kernel_has_a_short_label() -> None:
     assert kernels
     long = [k for k in kernels if len(study_tags.kernel_short_display_name(k)) > study_tags.SHORT_NAME_MAX]
     assert not long, f"kernels with no short label: {long}"
-
-
-def test_a_manifest_without_a_short_name_ticks_its_full_name() -> None:
-    """A manifest that declares no ``short-name`` still draws: its ``name``, folded at the limit."""
-    names, short_names = study_tags.manifest_names()
-    kernel = next(k for k in sorted(names) if k not in short_names and len(names[k]) > study_tags.SHORT_NAME_MAX)
-    from hpcagent_bench.stats.figures import per_kernel
-
-    assert study_tags.kernel_short_display_name(kernel) == names[kernel]
-    assert per_kernel.kernel_tick_label(kernel).replace("\n", " ") == names[kernel]
-    assert per_kernel.compact_tick_label(kernel).replace("\n", " ") == study_tags.kernel_compact_display_name(kernel)
 
 
 def test_llms_and_standalone_optimizers_never_share_a_shape() -> None:

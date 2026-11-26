@@ -134,6 +134,16 @@ def test_a_nest_between_two_others_splits_the_kernel_into_several_regions() -> N
     assert len(regions) == 2, f"expected one region per side of the allocation, got {len(regions)}:\n{text}"
     assert all("for (" in body for body in regions), regions
 
+    # Regions never nest, and emitting twice gives byte-identical C.
+    for src_fn, name in ((sized_zeros_kir, "sz"), (two_nests_kir, "tn"), (clamp_kir, "cl"), (while_kir, "wl")):
+        emitted = emit_pluto(src_fn(), fn_name=name)
+        assert emitted == emit_pluto(src_fn(), fn_name=name), name
+        depth = 0
+        for line in emitted.split("\n"):
+            depth += (line.strip() == "#pragma scop") - (line.strip() == "#pragma endscop")
+            assert 0 <= depth <= 1, f"{name}: unbalanced or nested scop markers"
+        assert depth == 0, f"{name}: unterminated scop"
+
 
 def test_an_unmodellable_nest_does_not_cost_its_scopable_neighbours() -> None:
     """Per-NEST, never per-program: the while nest is excluded, the nests around it are still scoped.
@@ -155,20 +165,6 @@ def test_a_value_dependent_clamp_is_if_converted_and_stays_scoped() -> None:
     assert len(regions) == 1, f"expected one region over the whole kernel:\n{text}"
     assert "if (" not in regions[0], regions
     assert " ? " in regions[0], regions
-
-
-def test_regions_never_nest() -> None:
-    for kir, name in ((sized_zeros_kir(), "sz"), (two_nests_kir(), "tn"), (clamp_kir(), "cl"), (while_kir(), "wl")):
-        depth = 0
-        for line in emit_pluto(kir, fn_name=name).split("\n"):
-            depth += (line.strip() == "#pragma scop") - (line.strip() == "#pragma endscop")
-            assert 0 <= depth <= 1, f"{name}: unbalanced or nested scop markers"
-        assert depth == 0, f"{name}: unterminated scop"
-
-
-def test_emitting_twice_gives_byte_identical_c() -> None:
-    for src_fn, name in ((sized_zeros_kir, "sz"), (two_nests_kir, "tn"), (clamp_kir, "cl"), (while_kir, "wl")):
-        assert emit_pluto(src_fn(), fn_name=name) == emit_pluto(src_fn(), fn_name=name), name
 
 
 def test_the_affine_detector_reads_every_region_not_just_the_first() -> None:

@@ -54,6 +54,25 @@ def test_whole_array_real_and_imag() -> None:
             run_op(src, "k", {"z": z_()}, {"out": (6,)}, {"N": 6}, shapes={"z": "(N,)", "out": "(N,)"}, backends=ALL)
         )
         assert ok, (accessor, res)
+    # The element dtype is read from the array, never hardcoded: complex64 stays single precision through the
+    # accessor (C ``crealf``/``cimagf`` path).
+    z = z_().astype(np.complex64)
+    src = "import numpy as np\ndef k(z, out):\n for i in range(z.shape[0]):\n  out[i] = z[i].real - z[i].imag\n"
+    ok, res = all_ok(
+        run_op(
+            src,
+            "k",
+            {"z": z},
+            {"out": (6,)},
+            {"N": 6},
+            shapes={"z": "(N,)", "out": "(N,)"},
+            dtypes={"out": "float32"},
+            rtol=1e-5,
+            atol=1e-5,
+            backends=ALL,
+        )
+    )
+    assert ok, res
 
 
 @pytest.mark.parametrize(
@@ -103,27 +122,32 @@ def test_conjugate_method_and_np_conj() -> None:
         )
         assert ok, (expr, res)
 
-
-def test_real_imag_preserve_complex64() -> None:
-    # The element dtype is read from the array, never hardcoded: complex64 stays
-    # single precision through the accessor (C ``crealf``/``cimagf`` path).
-    z = z_().astype(np.complex64)
-    src = "import numpy as np\ndef k(z, out):\n for i in range(z.shape[0]):\n  out[i] = z[i].real - z[i].imag\n"
-    ok, res = all_ok(
-        run_op(
+    # ``np.conj`` of a local taken off a complex PARAMETER must still conjugate. Sibling of the eigh view test above,
+    # and the same silent failure one step earlier: a copy's source must resolve through the kernel parameters'
+    # dtypes, not ``local_dtypes`` alone, after the whole-array pass rewrites ``exxbuff.copy()`` into
+    # ``np.empty_like(exxbuff)``. An UNTYPED local reads as real to ``RealConjDropper``, which deletes the
+    # conjugation -- vexx_k's exchange term then goes wrong on C, C++ and Fortran alike while jax and numpy stay
+    # right. Reshaping the copy before conjugating it is vexx_k's own spelling (``exxbuff_w[:, buf,
+    # ikq].reshape(npol, nrxxs)``): the receiver of a shape method carries the element type too.
+    native()
+    rng = np.random.default_rng(0)
+    a = (rng.standard_normal((6, 3)) + 1j * rng.standard_normal((6, 3))).astype(np.complex128)
+    b = (rng.standard_normal((3, 2)) + 1j * rng.standard_normal((3, 2))).astype(np.complex128)
+    sliced = "  out[:] = np.sum(np.conj(w[0:2, :]) * b.T, axis=0)\n"
+    reshaped = "  phi = w[:, 1].reshape(2, 3)\n  out[:] = np.sum(np.conj(phi) * b.T, axis=0)\n"
+    for body in (sliced, reshaped):
+        src = "import numpy as np\ndef k(a, b, out):\n  w = a.copy()\n" + body
+        res = run_op(
             src,
             "k",
-            {"z": z},
-            {"out": (6,)},
-            {"N": 6},
-            shapes={"z": "(N,)", "out": "(N,)"},
-            dtypes={"out": "float32"},
-            rtol=1e-5,
-            atol=1e-5,
-            backends=ALL,
+            {"a": a, "b": b},
+            {"out": (3,)},
+            {"M": 6, "N": 3, "P": 2},
+            shapes={"a": "(M, N)", "b": "(N, P)", "out": "(N,)"},
+            dtypes={"out": "complex128"},
+            backends=("c", "cpp", "fortran"),
         )
-    )
-    assert ok, res
+        assert set(res.values()) == {"ok"}, (body, res)
 
 
 @pytest.mark.parametrize("view", ["np.transpose(m)", "np.conjugate(m)", "np.where(m.real > -1e30, m, m)"])
@@ -159,36 +183,3 @@ def test_eigh_keeps_its_rotation_unitary_through_a_view(view: str) -> None:
         dtypes={"m": "complex128"},
     )
     assert set(res.values()) == {"ok"}, res
-
-
-def test_conj_survives_a_local_copied_off_a_complex_parameter() -> None:
-    """``np.conj`` of a local taken off a complex PARAMETER must still conjugate.
-
-    Sibling of the eigh view test above, and the same silent failure one step earlier: a copy's
-    source must resolve through the kernel parameters' dtypes, not ``local_dtypes`` alone, after the
-    whole-array pass rewrites ``exxbuff.copy()`` into ``np.empty_like(exxbuff)``. An UNTYPED local
-    reads as real to ``RealConjDropper``, which deletes the conjugation -- vexx_k's exchange term
-    then goes wrong on C, C++ and Fortran alike while jax and numpy stay right.
-
-    Reshaping the copy before conjugating it is vexx_k's own spelling (``exxbuff_w[:, buf,
-    ikq].reshape(npol, nrxxs)``): the receiver of a shape method carries the element type too.
-    """
-    native()
-    rng = np.random.default_rng(0)
-    a = (rng.standard_normal((6, 3)) + 1j * rng.standard_normal((6, 3))).astype(np.complex128)
-    b = (rng.standard_normal((3, 2)) + 1j * rng.standard_normal((3, 2))).astype(np.complex128)
-    sliced = "  out[:] = np.sum(np.conj(w[0:2, :]) * b.T, axis=0)\n"
-    reshaped = "  phi = w[:, 1].reshape(2, 3)\n  out[:] = np.sum(np.conj(phi) * b.T, axis=0)\n"
-    for body in (sliced, reshaped):
-        src = "import numpy as np\ndef k(a, b, out):\n  w = a.copy()\n" + body
-        res = run_op(
-            src,
-            "k",
-            {"a": a, "b": b},
-            {"out": (3,)},
-            {"M": 6, "N": 3, "P": 2},
-            shapes={"a": "(M, N)", "b": "(N, P)", "out": "(N,)"},
-            dtypes={"out": "complex128"},
-            backends=("c", "cpp", "fortran"),
-        )
-        assert set(res.values()) == {"ok"}, (body, res)

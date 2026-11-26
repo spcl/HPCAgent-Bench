@@ -25,29 +25,30 @@ def gate_text() -> str:
     return GATE.read_text()
 
 
-def test_the_gate_carries_pollys_real_flags(gate_text: str) -> None:
-    """Every token of POLLY_PAR must be in the Polly check, or it gates a different compiler."""
-    for token in flags.POLLY_PAR.split():
-        assert token in gate_text, f"POLLY_PAR token {token!r} is not in the gate"
-    assert flags.POLLY_OUTLINE_PATTERN in gate_text
-
-
-def test_the_gate_carries_gcc_autopars_real_flags(gate_text: str) -> None:
-    """GCC_AUTOPAR carries a ``{n}`` the gate fills with a literal; every other token must match."""
-    for token in flags.GCC_AUTOPAR.split():
+@pytest.mark.parametrize(
+    ("flag_string", "whole", "skipped"),
+    [
+        (flags.POLLY_PAR, (flags.POLLY_OUTLINE_PATTERN,), ()),
+        (flags.GCC_AUTOPAR, (flags.GCC_AUTOPAR_OUTLINE_PATTERN,), ()),
+        # the probe compiles an object, not a shared library
+        (flags.CPU_BASELINE_NVHPC, (flags.NVHPC_CONCUR,), ("-fPIC",)),
+    ],
+    ids=["polly", "gcc-autopar", "nvhpc"],
+)
+def test_the_gate_carries_each_compilers_real_flags(
+    gate_text: str, flag_string: str, whole: tuple[str, ...], skipped: tuple[str, ...]
+) -> None:
+    """Every token of a compiler's flags must be in its check, or the gate checks a different compiler. GCC_AUTOPAR
+    carries a ``{n}`` the gate fills with a literal; its flag name must match."""
+    for token in flag_string.split():
+        if token in skipped:
+            continue
         if "{n}" in token:
             assert token.split("=")[0] in gate_text, f"{token!r}'s flag name is not in the gate"
             continue
-        assert token in gate_text, f"GCC_AUTOPAR token {token!r} is not in the gate"
-    assert flags.GCC_AUTOPAR_OUTLINE_PATTERN in gate_text
-
-
-def test_the_gate_carries_nvhpcs_real_flags(gate_text: str) -> None:
-    assert flags.NVHPC_CONCUR in gate_text
-    for token in flags.CPU_BASELINE_NVHPC.split():
-        if token == "-fPIC":
-            continue  # the probe compiles an object, not a shared library
-        assert token in gate_text, f"CPU_BASELINE_NVHPC token {token!r} is not in the gate"
+        assert token in gate_text, f"token {token!r} is not in the gate"
+    for text in whole:
+        assert text in gate_text
 
 
 def test_the_gate_checks_the_runtime_pattern_the_probe_uses(gate_text: str) -> None:

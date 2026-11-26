@@ -65,26 +65,29 @@ def test_elemental_ufunc_rewrites_to_primitives(expr: str, rewritten: str) -> No
 # numerical: bit-close to numpy across every backend, whole array
 
 
-def run_(expr: str, a: np.ndarray = A, b: np.ndarray = B) -> dict[str, str]:
-    src = f"import numpy as np\ndef f(a, b, out):\n    out[:] = {expr}\n"
+def run_(src: str, a: np.ndarray = A, b: np.ndarray = B) -> dict[str, str]:
     return run_op(src, "f", {"a": a, "b": b}, {"out": (6,)}, SYMS, shapes=SHAPES, backends=ALL)
 
 
-@pytest.mark.parametrize("expr", ["np.mod(a, b)", "np.logaddexp(a, b)", "np.heaviside(a, b)"])
-def test_elemental_ufunc_matches_numpy_all_backends(expr: str) -> None:
-    ok, res = all_ok(run_(expr))
-    assert ok, res
+# The elemental form on a SLICE lowers to a loop over the slice extent.
+SLICE_SRC = (
+    "import numpy as np\n"
+    "def f(a, b, out):\n"
+    "    out[:] = 0.0\n"
+    "    out[1:5] = np.heaviside(a[1:5], b[1:5]) + np.mod(a[1:5], b[1:5])\n"
+)
 
 
-# numerical: elemental on a SLICE lowers to a loop over the slice extent
-
-
-def test_elemental_ufunc_on_slice_matches_numpy() -> None:
-    src = (
-        "import numpy as np\n"
-        "def f(a, b, out):\n"
-        "    out[:] = 0.0\n"
-        "    out[1:5] = np.heaviside(a[1:5], b[1:5]) + np.mod(a[1:5], b[1:5])\n"
-    )
-    ok, res = all_ok(run_op(src, "f", {"a": A, "b": B}, {"out": (6,)}, SYMS, shapes=SHAPES, backends=ALL))
+@pytest.mark.parametrize(
+    "src",
+    [
+        *[
+            pytest.param(f"import numpy as np\ndef f(a, b, out):\n    out[:] = {expr}\n", id=expr)
+            for expr in ("np.mod(a, b)", "np.logaddexp(a, b)", "np.heaviside(a, b)")
+        ],
+        pytest.param(SLICE_SRC, id="slice"),
+    ],
+)
+def test_elemental_ufunc_matches_numpy_all_backends(src: str) -> None:
+    ok, res = all_ok(run_(src))
     assert ok, res

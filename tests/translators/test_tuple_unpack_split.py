@@ -77,17 +77,21 @@ def test_a_self_copy_binds_plainly_after_the_latched_values() -> None:
     assert lines == ["__swap1_1 = b", "__swap1_2 = a", "a = __swap1_1", "b = __swap1_2", "c = c"]
 
 
-def test_the_emitter_split_projects_a_conditional_over_tuples() -> None:
-    source = "a, b = (p, q) if c else (r, s)"
+@pytest.mark.parametrize(
+    ("source", "projected"),
+    [
+        pytest.param("a, b = (p, q) if c else (r, s)", ["a = p if c else r", "b = q if c else s"], id="conditional"),
+        # A temp minted after the C / Fortran locals are harvested would reach the emitter undeclared.
+        pytest.param("a, b = (b, a) if c else (a, b)", None, id="racing-unpack-stays-whole"),
+    ],
+)
+def test_the_emitter_split_projects_a_conditional_over_tuples(source: str, projected: list[str] | None) -> None:
     out = split(TupleTargetSplitter(), source)
-    assert out.splitlines() == ["a = p if c else r", "b = q if c else s"]
+    if projected is None:
+        assert out == unchanged(source)
+        return
+    assert out.splitlines() == projected
     assert bound(out, p=1, q=2, r=3, s=4, c=False) == bound(source, p=1, q=2, r=3, s=4, c=False)
-
-
-def test_the_emitter_split_leaves_a_racing_unpack_whole() -> None:
-    """A temp minted after the C / Fortran locals are harvested would reach the emitter undeclared."""
-    source = "a, b = (b, a) if c else (a, b)"
-    assert split(TupleTargetSplitter(), source) == unchanged(source)
 
 
 def test_a_shape_unpack_onto_the_other_axes_symbols_reads_the_old_symbols() -> None:
@@ -100,16 +104,19 @@ def test_a_shape_unpack_onto_the_other_axes_symbols_reads_the_old_symbols() -> N
     assert splitter.int_locals == ["ny", "nx"]
 
 
-def test_a_shape_unpack_binds_the_declared_symbols_as_int_locals() -> None:
-    splitter = ShapeTableTupleSplit({"x": ["N", "M"]})
-    assert split(splitter, "n, M = x.shape").splitlines() == ["n = N", "M = M"]
-    assert splitter.int_locals == ["n"]
-
-
-def test_an_integer_tuple_binds_int_locals() -> None:
-    splitter = ShapeTableTupleSplit({})
-    assert split(splitter, "n, m = 3, 4").splitlines() == ["n = 3", "m = 4"]
-    assert splitter.int_locals == ["n", "m"]
+@pytest.mark.parametrize(
+    ("table", "source", "lines", "int_locals"),
+    [
+        pytest.param({"x": ["N", "M"]}, "n, M = x.shape", ["n = N", "M = M"], ["n"], id="shape-unpack"),
+        pytest.param({}, "n, m = 3, 4", ["n = 3", "m = 4"], ["n", "m"], id="integer-tuple"),
+    ],
+)
+def test_a_shape_unpack_binds_the_declared_symbols_as_int_locals(
+    table: dict[str, list[str]], source: str, lines: list[str], int_locals: list[str]
+) -> None:
+    splitter = ShapeTableTupleSplit(table)
+    assert split(splitter, source).splitlines() == lines
+    assert splitter.int_locals == int_locals
 
 
 def test_a_subscript_swap_through_the_lowering_split_matches_python() -> None:

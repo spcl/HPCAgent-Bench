@@ -4,7 +4,9 @@
 offence it names and pass its lookalikes, or the hook is green for nothing."""
 
 import pathlib
+import re
 import types
+from collections.abc import Callable
 
 import pytest
 
@@ -108,46 +110,69 @@ def test_the_site_scan_catches_every_kind_of_hit() -> None:
     assert hits["good.sh"] == []
 
 
-def test_the_storage_pattern_matches_only_real_mounts() -> None:
-    """Fires on the mounts even behind a $USER/${VAR} suffix; quiet on lookalikes."""
-    pattern = next(p for label, p in rules().SITE_PATTERNS.items() if label.startswith("literal storage mount"))
-    for text in (
-        'SCRATCH="/ritom/scratch/cscs/someone/$(uname -m)"',
-        'FAST_SCRATCH="${FAST_SCRATCH:-/iopsstor/scratch/cscs/${USER}}"',
-        '    echo "/capstor/scratch/cscs" >&2',
-        '"/ritom:/ritom"',
-        "BASE=/capstor/store/cscs/cscs/public",
-    ):
+def storage_pattern() -> re.Pattern[str]:
+    return next(p for label, p in rules().SITE_PATTERNS.items() if label.startswith("literal storage mount"))
+
+
+def user_pattern() -> re.Pattern[str]:
+    return rules().user_name_pattern("jdoe")
+
+
+def address_pattern() -> re.Pattern[str]:
+    (pattern,) = rules().NON_TEST_PATTERNS.values()
+    return pattern
+
+
+@pytest.mark.parametrize(
+    ("make_pattern", "hits", "misses"),
+    [
+        # fires on the mounts even behind a $USER/${VAR} suffix; quiet on lookalikes
+        (
+            storage_pattern,
+            (
+                'SCRATCH="/ritom/scratch/cscs/someone/$(uname -m)"',
+                'FAST_SCRATCH="${FAST_SCRATCH:-/iopsstor/scratch/cscs/${USER}}"',
+                '    echo "/capstor/scratch/cscs" >&2',
+                '"/ritom:/ritom"',
+                "BASE=/capstor/store/cscs/cscs/public",
+            ),
+            (
+                'FAST_SCRATCH="${FAST_SCRATCH:-${SCRATCH}}"',
+                'ALT="/iopsstorbackup/old"',
+                'NESTED="something/ritom/x"',
+                'FIXTURE="/scratchfs/runs/1"',
+            ),
+        ),
+        # ``user_name_pattern("jdoe")`` fires on ``/.../jdoe``, ``~jdoe`` and ``jdoe@``; quiet on the bare word
+        # and on longer names
+        (
+            user_pattern,
+            ("/scratch/cscs/jdoe/x", "cd /users/jdoe", "~jdoe/.edf", "ssh jdoe@login"),
+            ("ask jdoe about it", "/scratch/jdoex/y", "/scratch/jdoe.old", "xjdoe@login"),
+        ),
+        # a private IPv4 host address is flagged outside tests; a CIDR block, a dashed or assigned version and a
+        # documentation address (RFC 5737) are not
+        (
+            address_pattern,
+            ("http://172.28.9.16:30000/v1", "host 10.1.2.3 up", "192.168.0.7"),
+            ("172.28.0.0/16", "pkg-10.4.0.35", "v=10.4.0.35", "http://192.0.2.16:30000"),
+        ),
+    ],
+    ids=["storage_mount", "user_name", "private_address"],
+)
+def test_the_storage_pattern_matches_only_real_mounts(
+    make_pattern: Callable[[], re.Pattern[str]], hits: tuple[str, ...], misses: tuple[str, ...]
+) -> None:
+    pattern = make_pattern()
+    for text in hits:
         assert pattern.search(text), text
-    for text in (
-        'FAST_SCRATCH="${FAST_SCRATCH:-${SCRATCH}}"',
-        'ALT="/iopsstorbackup/old"',
-        'NESTED="something/ritom/x"',
-        'FIXTURE="/scratchfs/runs/1"',
-    ):
+    for text in misses:
         assert not pattern.search(text), text
 
 
-def test_the_user_pattern_matches_a_name_only_as_a_path_component_or_address() -> None:
-    """``user_name_pattern("jdoe")`` fires on ``/…/jdoe``, ``~jdoe`` and ``jdoe@``; quiet on the bare word and on
-    longer names."""
-    pattern = rules().user_name_pattern("jdoe")
-    for text in ("/scratch/cscs/jdoe/x", "cd /users/jdoe", "~jdoe/.edf", "ssh jdoe@login"):
-        assert pattern.search(text), text
-    for text in ("ask jdoe about it", "/scratch/jdoex/y", "/scratch/jdoe.old", "xjdoe@login"):
-        assert not pattern.search(text), text
-
-
-def test_the_private_address_and_prose_node_patterns() -> None:
-    """A private IPv4 host address is flagged outside tests; a CIDR block, a dashed or assigned version and a
-    documentation address (RFC 5737) are not; a lockfile is not scanned for them. Markdown naming a node is
-    flagged; a placeholder is not."""
+def test_the_prose_node_pattern_flags_markdown_naming_a_node() -> None:
+    """Markdown naming a node is flagged; a placeholder is not; a lockfile is not scanned for addresses."""
     module = rules()
-    (pattern,) = module.NON_TEST_PATTERNS.values()
-    for text in ("http://172.28.9.16:30000/v1", "host 10.1.2.3 up", "192.168.0.7"):
-        assert pattern.search(text), text
-    for text in ("172.28.0.0/16", "pkg-10.4.0.35", "v=10.4.0.35", "http://192.0.2.16:30000"):
-        assert not pattern.search(text), text
     md = "base URL: http://nid002968:8000/v1\nbase URL: http://<node>:8000/v1\n"
     assert [hit[1] for hit in module.site_hits("docs/x.md", md)] == ["nid002968"]
     assert module.site_hits("tests/x.md", md) == []

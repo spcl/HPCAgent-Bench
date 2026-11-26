@@ -40,14 +40,10 @@ def test_a_bound_size_agrees_with_the_array_it_sizes() -> None:
     edge_nodes = round(data["numElem"] ** (1 / 3)) + 1
     assert data["numNode"] == edge_nodes**3
     assert data["numSymm"] == edge_nodes**2
-
-
-def test_a_size_the_preset_carries_is_left_alone() -> None:
-    """A value the preset declares wins: the array is only read where nothing bound the symbol."""
-    bench = Benchmark("lulesh")
-    data: dict[str, object] = {"numNode": 5, "x": np.zeros(99)}
-    assert bind_shape_params(bench.spec, data) == []
-    assert data["numNode"] == 5
+    # A value the preset declares wins: the array is only read where nothing bound the symbol.
+    carried: dict[str, object] = {"numNode": 5, "x": np.zeros(99)}
+    assert bind_shape_params(bench.spec, carried) == []
+    assert carried["numNode"] == 5
 
 
 def test_a_shape_over_several_symbols_binds_none_of_them() -> None:
