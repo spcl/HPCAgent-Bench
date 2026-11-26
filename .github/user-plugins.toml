@@ -1,6 +1,7 @@
-# The first-class user plugins the user-plugins CI job installs and runs (tests/test_user_plugin_episodes.py): a
-# released PyPI distribution (package, version) and the plugin folder inside its sdist. CI and a study's launch
-# (`python helpers/scripts/user_plugins.py checkout DEST NAME`) unpack these releases;
+# The first-class user plugins a study launches with: a released PyPI distribution (package, version) and the plugin
+# folder inside its sdist. Each plugin's own repository tests its integration (tests/test_user_plugin_episodes.py,
+# -m user_plugins); the benchmark's CI does not. A study's launch
+# (`python helpers/scripts/user_plugins.py checkout DEST NAME`) unpacks these releases;
 # `python helpers/scripts/user_plugins.py bump` moves each to its distribution's newest PyPI release.
 # A plugin with no PyPI release yet is pinned to a commit of its repository until its first release.
 

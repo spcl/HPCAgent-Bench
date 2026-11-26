@@ -43,6 +43,10 @@ PPCG, numba and Triton columns do not compare with 1.0.3.
 
 - The tactics plugin is pinned to its first PyPI release, `dace-tactics` 0.1.2 (PyPI refused the name `tactics`;
   the import name stays `tactics`), in place of a repository commit.
+- The benchmark's CI no longer runs the outside user plugins (the `user-plugins` job is gone): tactics and Alloy
+  test their integration in their own repositories (`tests/test_user_plugin_episodes.py`, `-m user_plugins`).
+  `.github/user-plugins.toml` stays as the pins a study launches with. The in-repo plugins (Optimas, autokernel) and
+  the Gymnasium environment stay in the unit tests.
 
 ## 1.0.2 (2026-11-26)
 
