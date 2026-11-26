@@ -39,17 +39,19 @@ repos:
         files: '\.py$'
       # Static types: mypy and pyright on the package and the agent, under pyproject.toml's [tool.mypy] and
       # [tool.pyright]. The benchmark references are task text agents read, so neither checker edits them into
-      # another task; tests and scripts join the scope once they are clean.
+      # another task; tests and scripts join the scope once they are clean. Both run on the checkout's interpreter
+      # (run_hook.sh), at the locked versions: a mypy or pyright earlier on PATH (a user install on an older Python)
+      # parses the code under another grammar and reports syntax errors CI never sees.
       - id: hpcagent_bench-mypy
         name: mypy (package + agent)
-        entry: mypy
+        entry: bash helpers/scripts/checks/run_hook.sh -m mypy
         language: system
         require_serial: true
         files: '^(hpcagent_bench|agent)/.*\.py$'
         exclude: '^hpcagent_bench/benchmarks/'
       - id: hpcagent_bench-pyright
         name: pyright (package + agent)
-        entry: pyright
+        entry: bash helpers/scripts/checks/run_hook.sh -m pyright
         language: system
         require_serial: true
         files: '^(hpcagent_bench|agent)/.*\.py$'

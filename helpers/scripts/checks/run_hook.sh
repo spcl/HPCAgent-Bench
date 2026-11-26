@@ -5,4 +5,8 @@ set -euo pipefail
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 source "$(dirname "${BASH_SOURCE[0]}")/../../../hpcagent_bench/cluster/env.sh" >/dev/null
+# The interpreter's bin first: a tool the hook starts (pyright looks up `python`) finds the checkout's environment,
+# not an older install on PATH.
+PATH="$(dirname "${HPCAGENT_BENCH_HOST_PYTHON}"):${PATH}"
+export PATH
 exec "${HPCAGENT_BENCH_HOST_PYTHON}" "$@"
