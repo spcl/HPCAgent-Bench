@@ -746,14 +746,6 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=1800 tests/test_integration_sweep.py
 
-      # The KernelBench ratchet itself is integration-marked and runs in `integration`.
-      - name: Phase 5c -- kernelbench corpus size pin
-        if: ${{ !cancelled() }}
-        timeout-minutes: 2
-        run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=2400 -m "not integration" \
-            tests/test_kernelbench_translation.py
-
       - uses: ./.github/actions/finish
         if: always()
         with:
