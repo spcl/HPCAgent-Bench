@@ -1,0 +1,17 @@
+# The smallest plugin that exercises every user-facing seam a plugin repo uses: api pin, a packet, an agent tool,
+# its own MCP server.
+# tests/test_plugin_stability.py installs and checks it; it must keep working without any edit to this repository.
+name = "sample"
+description = "Stability fixture: one packet, one agent tool, one MCP server."
+api = 1
+
+[packets.sample]
+name = "Sample"
+tools = ["sample_echo"]
+overlays = ["sample:prompt/overlay.yaml"]
+mcp = ["sample"]
+
+# Its own MCP server, given to the agent beside the benchmark's (tools ``mcp__sample__<tool>``).
+[mcp.sample]
+command = "{python}"
+args = ["{root}/server/sample_server.py"]

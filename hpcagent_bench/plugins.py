@@ -584,6 +584,29 @@ def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
     return [f"plugin {plugin.name!r}: {failure}" for failure in failures if failure]
 
 
+def mcp_failures(found: tuple[Plugin, ...]) -> list[str]:
+    """What a plugin MCP server would fail on in a run: an ``[mcp.<name>]`` that takes the benchmark's own server
+    name or that two plugins declare, and a packet's ``mcp`` naming a server no plugin declares."""
+    from hpcagent_agent.driver.agent_driver import MCP_SERVER_NAME  # deferred: only the check reads the driver
+
+    owners: dict[str, str] = {}
+    failures: list[str] = []
+    for plugin in found:
+        for name in plugin.manifest.mcp:
+            if name == MCP_SERVER_NAME:
+                failures.append(f"plugin {plugin.name!r}: [mcp.{name}] takes the benchmark's own server name")
+            elif owners.setdefault(name, plugin.name) != plugin.name:
+                failures.append(f"plugins {owners[name]!r} and {plugin.name!r} both declare [mcp.{name}]")
+    for plugin in found:
+        for key in plugin.manifest.packets:
+            failures += [
+                f"plugin {plugin.name!r}: packet {key!r}: no MCP server {name!r}"
+                for name in PACKETS[key].mcp
+                if name not in owners
+            ]
+    return failures
+
+
 def check() -> int:
     """Load every plugin the way a run does and report what would fail later: a bad manifest, a collision or an unknown
     column stops at the first; a module that does not import stops at its plugin; every wrong name is reported.
@@ -610,7 +633,7 @@ def check() -> int:
     pages = skill_packets.shipped_pages() | {
         path.parent.name for plugin in found for path in (plugin.root / "skills").glob("*/SKILL.md")
     }
-    failures = [failure for plugin in found for failure in name_failures(plugin, pages)]
+    failures = [failure for plugin in found for failure in name_failures(plugin, pages)] + mcp_failures(found)
     if not failures:  # a bad flavor fails the table's import: reported above instead
         try:
             print(f"tuners: {', '.join(sorted(tuners.registry()))}")

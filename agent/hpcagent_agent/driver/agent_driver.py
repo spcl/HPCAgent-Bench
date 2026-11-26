@@ -1092,6 +1092,11 @@ def tool_registry() -> dict[str, Any]:
     return mcp_server.describe(os.environ)
 
 
+def plugin_mcp_names(environ: Mapping[str, str] = os.environ) -> tuple[str, ...]:
+    """The plugin MCP servers the setup's packet carries (:data:`hpcagent_agent.plugins.PACKET_MCP_ENV`), in order."""
+    return tuple(name.strip() for name in environ.get(plugins.PACKET_MCP_ENV, "").split(",") if name.strip())
+
+
 def agent_tools() -> tuple[str, ...]:
     """Claude Code's ``--allowedTools``. A served tool left out is invisible to the model and nothing fails."""
     return tuple(str(name) for name in tool_registry()["allowed_tools"])
@@ -2811,6 +2816,8 @@ def claude_command(context: Context) -> list[str]:
         *(["Bash"] if "Bash" in native_tools.split(",") else []),
         # A plugin's tools are among them when the setup's packet carries them.
         *[f"mcp__{MCP_SERVER_NAME}__{name}" for name in agent_tools()],
+        # A plugin's own MCP servers, every tool of each (``[mcp.<name>]``).
+        *[f"mcp__{name}" for name in plugin_mcp_names()],
         "--disallowedTools",
         *network_policy.WEB_NATIVE_TOOLS,
         *([] if delegates else ["Task", CLAUDE_DELEGATE_TOOL]),
@@ -3042,7 +3049,8 @@ def mcp_setup_env(workdir: pathlib.Path) -> dict[str, str]:
 def write_mcp_config(
     workdir: pathlib.Path, runtime: pathlib.Path, problem: Problem, problem_index: int, worker_index: int
 ) -> pathlib.Path:
-    """Write the agent's ``mcp.json`` and return its path.
+    """Write the agent's ``mcp.json`` and return its path: the benchmark's server, then the plugin servers the packet
+    carries (:func:`hpcagent_agent.plugins.mcp_launches`).
 
     ``env`` is DECLARED, not inherited (the client does not forward it reliably); the submission marker is named
     absolutely."""
@@ -3064,7 +3072,8 @@ def write_mcp_config(
                             "AGENT_SUBMISSION_MARKER": str((workdir / SUBMISSION_MARKER).absolute()),
                             **mcp_setup_env(workdir),
                         },
-                    }
+                    },
+                    **plugins.mcp_launches(plugin_mcp_names(), sys.executable),
                 }
             },
             indent=2,

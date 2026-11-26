@@ -43,6 +43,7 @@ __all__ = [
     "MANIFEST",
     "PACKAGE",
     "PACKET_AGENTS_ENV",
+    "PACKET_MCP_ENV",
     "PLUGIN_DIRS_ENV",
     "SHIPPED",
     "USER_PLUGIN_DIRS_ENV",
@@ -50,6 +51,7 @@ __all__ = [
     "HarnessName",
     "Hooks",
     "Manifest",
+    "McpServer",
     "Plugin",
     "checked_run",
     "copied_files",
@@ -64,6 +66,7 @@ __all__ = [
     "install_harnesses",
     "install_root",
     "job_init_context",
+    "mcp_launches",
     "plugin_dirs",
     "plugin_file",
     "read",
@@ -170,6 +173,40 @@ class Hooks(pydantic.BaseModel):
     job_init_required: bool = False
 
 
+#: The env a launcher exports the resolved packet's plugin MCP servers under, comma-separated
+#: (``hpcagent_bench.packets``).
+PACKET_MCP_ENV = "HPCAGENT_BENCH_PACKET_MCP"
+#: An ``[mcp.<name>]`` key: an IDENTIFIER, since the agent sees its tools as ``mcp__<name>__<tool>``.
+McpName = Annotated[str, pydantic.Field(pattern=r"^[a-z][a-z0-9_]*$")]
+
+
+class McpServer(pydantic.BaseModel):
+    """A plugin's ``[mcp.<name>]``: a stdio MCP server of its own, which the agent is given beside the benchmark's for
+    the setups whose packet names it (``[packets.<key>] mcp``). The agent sees its tools as ``mcp__<name>__<tool>``.
+    ``command`` and ``args`` are an argv; ``{python}`` in them is the agent's interpreter (where ``[install]`` with
+    role ``agent`` put the plugin's package) and ``{root}`` the plugin folder. ``env`` is the server's own
+    environment on top of the agent's, with the same two placeholders. The server runs where the agent's commands
+    run, inside the agent's sandbox and network policy."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    command: str = pydantic.Field(min_length=1)
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = pydantic.Field(default_factory=dict[str, str])
+
+    def launch(self, root: pathlib.Path, python: str) -> dict[str, object]:
+        """The ``mcpServers`` entry of an mcp.json: the argv and env with ``{python}`` and ``{root}`` filled."""
+
+        def filled(text: str) -> str:
+            return text.replace("{python}", python).replace("{root}", str(root))
+
+        return {
+            "command": filled(self.command),
+            "args": [filled(arg) for arg in self.args],
+            "env": {key: filled(value) for key, value in self.env.items()},
+        }
+
+
 #: A harness name: what ``HARNESS`` names and the ``harness`` column records.
 HarnessName = Annotated[str, pydantic.Field(pattern=r"^[a-z][a-z0-9_]*$")]
 
@@ -224,6 +261,8 @@ class Manifest(pydantic.BaseModel):
     ci: Checks | None = None
     hooks: Hooks | None = None
     openmp: Literal["libgomp", "libomp"] = "libgomp"
+    #: ``[mcp.<name>]``: the MCP servers it ships (:class:`McpServer`).
+    mcp: dict[McpName, McpServer] = pydantic.Field(default_factory=dict[McpName, McpServer])
 
     @pydantic.model_validator(mode="after")
     def gates_name_check_symbols(self) -> "Manifest":
@@ -345,6 +384,23 @@ def find(dirs: Iterable[pathlib.Path]) -> tuple[Plugin, ...]:
                 if owner.setdefault(name, plugin.name) != plugin.name:
                     raise ValueError(f"plugins {owner[name]!r} and {plugin.name!r} both ship the {what} {name!r}")
     return tuple(found.values())
+
+
+def mcp_launches(names: Iterable[str], python: str, environ: Mapping[str, str] = os.environ) -> dict[str, object]:
+    """The ``mcpServers`` entries of the plugin MCP servers ``names`` (:class:`McpServer`), by name.
+
+    :raises ValueError: a name no plugin declares, or one two plugins declare.
+    """
+    owners: dict[str, Plugin] = {}
+    for plugin in find(roots(environ)):
+        for name in plugin.manifest.mcp:
+            if name in owners:
+                raise ValueError(f"plugins {owners[name].name!r} and {plugin.name!r} both declare [mcp.{name}]")
+            owners[name] = plugin
+    wanted = tuple(dict.fromkeys(names))
+    if missing := [name for name in wanted if name not in owners]:
+        raise ValueError(f"{PACKET_MCP_ENV} names MCP servers {missing}, which no plugin declares under [mcp.<name>]")
+    return {name: owners[name].manifest.mcp[name].launch(owners[name].root, python) for name in wanted}
 
 
 def plugin_file(reference: str, environ: Mapping[str, str] = os.environ) -> pathlib.Path:

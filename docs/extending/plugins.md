@@ -214,6 +214,28 @@ image carries no `hpcagent_bench` and no plugin dependencies, so an agent-side t
 `Spec(..., hints=registry.Hints(read_only=True, idempotent=True))` lists the tool with those MCP annotations
 (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`); a hint left `None` is not sent.
 
+### A plugin's own MCP server
+
+A plugin can ship an MCP server of its own instead of, or beside, `@tool` modules. The agent then gets it next to the
+benchmark's server, in the setups whose packet names it, and sees its tools as `mcp__<name>__<tool>`:
+
+```toml
+[packets.my_packet]
+name = "My packet"
+mcp = ["my_server"]
+
+[mcp.my_server]
+command = "{python}"                       # the agent's interpreter; [install] with role "agent" puts the package there
+args = ["{root}/mcp/server.py"]            # {root}: the plugin folder
+env = { MY_SERVER_MODE = "fast" }          # on top of the agent's environment
+```
+
+The server is a stdio MCP server and needs nothing from the benchmark (`tests/sample_plugin/server/sample_server.py` is
+a 30-line one). It runs where the agent's commands run, inside the agent's sandbox and network policy, and its calls
+are in the episode's transcript like any other tool call. A name is an identifier; `hpcagent_bench` (the benchmark's
+own server) and a name two plugins declare are refused by `plugins check`, as is a packet naming a server no plugin
+declares.
+
 ### Replacing `submit`, `score` or `profile`
 
 A plugin whose agent writes no code (tactics: the program is what the moves made of it) replaces the core tools
@@ -539,6 +561,18 @@ steps:
   - run: python -m hpcagent_bench.plugins install && python -m hpcagent_bench.plugins check
   - run: cd hpcagent-bench && python -m pytest -rfEs -m user_plugins tests/test_user_plugin_episodes.py
 ```
+
+## Stability
+
+A plugin works without any edit to this repository, so what a plugin touches is pinned by
+`tests/test_plugin_stability.py`: the exported names of `hpcagent_bench.plugin_api` and of the agent-side tool API a
+plugin's `tools/` imports (`hpcagent_agent.tools.registry`, `http_json`, `coded`), each with its signature
+(`tests/plugin_surface.json`); the `plugin.toml` schema (`tests/plugin_manifest_schema.json`), which only grows; and a
+sample plugin (`tests/sample_plugin`) that must install, check, serve its tool and answer a call on its own MCP
+server. A name that is removed or changes
+signature moves `API_VERSION` (and a plugin's `api` with it); a new optional manifest field or a new exported name
+does not, and is recorded with `python -m tests.test_plugin_stability --update`. A removed or renamed manifest field,
+a field made required or a narrowed type moves the `Literal` of `Manifest.api`.
 
 ## Pinning a plugin for a study
 

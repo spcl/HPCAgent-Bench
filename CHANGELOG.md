@@ -24,6 +24,13 @@ PPCG, numba and Triton columns do not compare with 1.0.3.
 - Polly's autopar probe, run once per process, is in no phase (`phase_clock.unmeasured`).
 - A pre-rendered CPF form records its render seconds (`cpf.cache.render_times`).
 
+### Cluster jobs
+
+- A hung capstor (Lustre) call froze all six nodes of a test job (762794) until its time limit, and the uninterruptible
+  processes got the nodes drained. `run_tests.sh` now keeps the test TMPDIR and DaCe build folders on the node, stops
+  pytest 10 min before the job's end, and sets `faulthandler_timeout`; job steps run Python unbuffered
+  (`cluster/job_guard.sh`).
+
 ### Releases
 
 - One release script, `helpers/scripts/release.sh`, for this repository's two packages: it builds, smoke-tests and
@@ -47,6 +54,12 @@ PPCG, numba and Triton columns do not compare with 1.0.3.
   file, which `helpers/scripts/user_plugins.py --pins FILE` (or `HPCAGENT_BENCH_USER_PLUGIN_PINS`) checks out and
   bumps. `pins.sh --bump` moves only dace-extended and dace-relayout.
   The in-repo plugins (Optimas, autokernel) and the Gymnasium environment stay in the unit tests.
+- A plugin can ship its own MCP server: `[mcp.<name>]` (command, args, env; `{python}` and `{root}` filled) in
+  `plugin.toml`, and `mcp = ["<name>"]` in a packet. The agent's mcp.json then lists it beside the benchmark's server
+  (`HPCAGENT_BENCH_PACKET_MCP`), and Claude Code allows its tools as `mcp__<name>__*`.
+- The plugin surface is pinned by `tests/test_plugin_stability.py`: the exported names and signatures of
+  `hpcagent_bench.plugin_api` and the agent tool API, the `plugin.toml` schema (it may only grow), and a sample plugin
+  outside the package that installs, checks, serves its tool and answers on its own MCP server.
 
 ## 1.0.2 (2026-11-26)
 

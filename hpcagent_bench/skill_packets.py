@@ -34,6 +34,7 @@ class PacketTable(pydantic.BaseModel):
     skills: tuple[str, ...] = ()
     packets: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
+    mcp: tuple[str, ...] = ()
     agents: tuple[str, ...] = ()
     env: dict[str, str] = pydantic.Field(default_factory=dict[str, str])
     overlays: tuple[str, ...] = ()
@@ -107,6 +108,7 @@ def definition(
         env=tuple(table.env.items()),
         prompt_overlays=table.overlays,
         tools=table.tools if tools is None else tools,
+        mcp=table.mcp,
         agents=table.agents,
         device=table.device,
         frozen=table.frozen,

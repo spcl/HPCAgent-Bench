@@ -15,7 +15,7 @@ from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
 from hpcagent_agent.driver import harnesses
-from hpcagent_agent.plugins import PACKET_AGENTS_ENV
+from hpcagent_agent.plugins import PACKET_AGENTS_ENV, PACKET_MCP_ENV
 
 from hpcagent_bench import config, paths, plugins
 from hpcagent_bench import study_tags as tags
@@ -122,6 +122,8 @@ class Packet:
     pages: tuple[str, ...] = ()
     #: The non-core MCP tools the packet carries, sorted (``hpcagent_agent.tools.registry.PACKET_TOOLS_ENV``).
     tools: tuple[str, ...] = ()
+    #: The plugin MCP servers the packet carries, sorted (``hpcagent_agent.plugins.PACKET_MCP_ENV``).
+    mcp: tuple[str, ...] = ()
     #: The subagents the packet offers, sorted (``hpcagent_agent.plugins.PACKET_AGENTS_ENV``).
     agents: tuple[str, ...] = ()
     #: The harness its setups run on, "" for any (``hpcagent_agent.driver.harnesses.PACKET_HARNESS_ENV``).
@@ -325,7 +327,7 @@ def leaves(token: str, definitions: Mapping[str, PacketDef]) -> frozenset[str]:
     definition = definitions.get(token)
     if definition is None:
         return frozenset({token})
-    acts = definition.env or definition.tools or definition.agents or definition.prompt_overlays
+    acts = definition.env or definition.tools or definition.mcp or definition.agents or definition.prompt_overlays
     own = frozenset({token}) if acts else frozenset[str]()
     return own.union(definition.skills, *(leaves(sub, definitions) for sub in definition.packets))
 
@@ -372,6 +374,16 @@ def resolve(
                     for token in tokens
                     for key in reached_keys(token, definitions)
                     for tool in definitions[key].tools
+                }
+            )
+        ),
+        mcp=tuple(
+            sorted(
+                {
+                    server
+                    for token in tokens
+                    for key in reached_keys(token, definitions)
+                    for server in definitions[key].mcp
                 }
             )
         ),
@@ -497,6 +509,8 @@ def packet_lines(resolved: Packet, allow: str | None, requests_allow: str | None
     lines = [f"{key}={value}" for key, value in resolved.env]
     if resolved.tools:
         lines.append(f"{PACKET_TOOLS_ENV}={','.join(resolved.tools)}")
+    if resolved.mcp:
+        lines.append(f"{PACKET_MCP_ENV}={','.join(resolved.mcp)}")
     if resolved.agents:
         lines.append(f"{PACKET_AGENTS_ENV}={','.join(resolved.agents)}")
     if resolved.harness:
