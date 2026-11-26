@@ -10,6 +10,7 @@ packet settings the block's ``meta`` names. The answer's ``structuredContent`` i
 blind mode and the network policy stay the benchmark's: they act on the registered names as on any plugin tool. The
 plugin validates a call's arguments itself, against the schema it listed."""
 
+import dataclasses
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -18,7 +19,18 @@ import pydantic
 
 from hpcagent_agent.tools import http_json, registry
 
-__all__ = ["TOOL_NAME", "JudgeMcp", "answer_of", "call_meta", "call_timeout", "forwarder", "listed", "register", "rpc"]
+__all__ = [
+    "TOOL_NAME",
+    "Forward",
+    "JudgeMcp",
+    "answer_of",
+    "call_meta",
+    "call_timeout",
+    "forwarder",
+    "listed",
+    "register",
+    "rpc",
+]
 
 #: A proxied tool's name: the prompt's bullets and the CLI address a tool by this spelling.
 TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -98,14 +110,23 @@ def answer_of(result: dict[str, Any]) -> dict[str, Any]:
     return {"ok": False, "error": text} if result.get("isError") else {"ok": True, "text": text}
 
 
-def forwarder(block: JudgeMcp, name: str, environ: Mapping[str, str]) -> registry.Run:
+@dataclasses.dataclass(frozen=True, slots=True)
+class Forward:
+    """The body of the proxied tool ``name``: its call forwarded to ``block``'s route. The route it names tells two
+    plugins' tools of one name apart, which the registry's module check cannot: every proxied tool's code is here."""
+
+    block: JudgeMcp
+    name: str
+    environ: Mapping[str, str]
+
+    def __call__(self, payload: dict[str, Any]) -> dict[str, Any]:
+        params = {"name": self.name, "arguments": payload, "_meta": call_meta(self.block, payload, self.environ)}
+        return answer_of(rpc(self.block.route, "tools/call", params, call_timeout(self.block, self.environ)))
+
+
+def forwarder(block: JudgeMcp, name: str, environ: Mapping[str, str]) -> Forward:
     """The body of the proxied tool ``name``: its call forwarded to the route."""
-
-    def run(payload: dict[str, Any]) -> dict[str, Any]:
-        params = {"name": name, "arguments": payload, "_meta": call_meta(block, payload, environ)}
-        return answer_of(rpc(block.route, "tools/call", params, call_timeout(block, environ)))
-
-    return run
+    return Forward(block, name, environ)
 
 
 def register(block: JudgeMcp, environ: Mapping[str, str]) -> None:
@@ -122,6 +143,11 @@ def register(block: JudgeMcp, environ: Mapping[str, str]) -> None:
             idempotent=notes.get("idempotentHint"),
             open_world=notes.get("openWorldHint"),
         )
+        existing = registry.REGISTRY.get(name)
+        if existing is not None and isinstance(existing.run, Forward) and existing.run.block.route != block.route:
+            raise ValueError(
+                f"[judge_mcp] {block.route} lists the tool {name!r}, which {existing.run.block.route} serves"
+            )
         schema = entry.get("inputSchema") or {"type": "object", "properties": {}}
         spec = registry.Spec(description, schema, f"- `{name}` -- {description.splitlines()[0]}", hints)
         registry.tool(spec=spec, core=False, preview=name in block.preview, name=name)(forwarder(block, name, environ))

@@ -165,6 +165,17 @@ def test_a_listed_tool_named_against_the_cli_spelling_is_refused(monkeypatch: py
         judge_mcp.register(judge_mcp.JudgeMcp(route="sample/mcp"), {})
 
 
+def test_two_routes_listing_one_tool_name_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every proxied tool's code lives in one module, so the registry's own duplicate check passes two plugins' tools
+    of one name; the route each forwards to tells them apart."""
+    monkeypatch.setattr(judge_mcp.registry, "REGISTRY", {})
+    monkeypatch.setattr(judge_mcp, "listed", lambda _route: [TOOLS[0]])
+    judge_mcp.register(judge_mcp.JudgeMcp(route="sample/mcp"), {})
+    judge_mcp.register(judge_mcp.JudgeMcp(route="sample/mcp"), {})  # the same route again: served as before
+    with pytest.raises(ValueError, match="other/mcp lists the tool 'sample_count', which sample/mcp serves"):
+        judge_mcp.register(judge_mcp.JudgeMcp(route="other/mcp"), {})
+
+
 def test_the_model_reads_structured_content_else_the_text_and_an_error_as_not_ok() -> None:
     text = [{"type": "text", "text": "line one"}, {"type": "image", "data": ""}, {"type": "text", "text": "line two"}]
     assert judge_mcp.answer_of({"structuredContent": {"count": 4}, "content": text}) == {"count": 4}
