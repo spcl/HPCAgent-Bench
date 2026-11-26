@@ -38,6 +38,13 @@
   by the commit (`tests/per_push.py`); a dispatched run tests all of them.
 - The mypy and pyright hooks run on the checkout's interpreter (`helpers/scripts/checks/run_hook.sh`), so an older
   user install on `PATH` no longer decides what they parse.
+- Per push, the slow test families run fixed subsets chosen by the CI failure history of 2026-10-14 to 11-26 (the
+  cases that failed, and the hardest of cases that drive the same code); a dispatched run sweeps all of them
+  (`tests.per_push.kept`): e2e numba, cegterg, bf16 C references, qe_vexx_k configurations, secret seeds, jax
+  references (plus every one the commit edits) and the C reference compile (the coverage set).
+- A compiled reference that no candidate compiler builds or runs in budget is no longer dropped in silence: the judge
+  log names each compiler's reason, as it does for numba (`test_scripted_tool_session_scores_then_submits` lost its C
+  time to beat on 3 CI days with nothing to show why).
 
 ## 1.0.3 (2026-11-26)
 
