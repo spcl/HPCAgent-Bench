@@ -59,6 +59,7 @@
   "optional_choice": "callable(values:tuple[str, ...])",
   "post_json": "callable(url:<class 'str'>,payload:dict[str, typing.Any],timeout:float | None=)",
   "post_judge": "callable(path:<class 'str'>,body:dict[str, typing.Any])",
+  "post_judge_waiting": "callable(path:<class 'str'>,body:dict[str, typing.Any],timeout:<class 'float'>)",
   "request_actions": "callable(environ:collections.abc.Mapping[str, str]=)",
   "request_language": "callable(payload:dict[str, typing.Any])",
   "requests_property": "callable(actions:<class 'hpcagent_agent.tools.http_json.RequestActions'>)",

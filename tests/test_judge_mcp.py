@@ -18,7 +18,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
+from hpcagent_agent import judge_mcp
 from hpcagent_agent import plugins as agent_plugins
+from hpcagent_agent.tools import http_json
 
 #: The stub route's tools: one it answers, one blind mode withholds.
 TOOLS = [
@@ -136,3 +138,66 @@ def test_blind_mode_withholds_the_preview_tools_a_judge_route_lists(
 ) -> None:
     assert set(served(judge, tmp_path, "single")["listing"]) == {"sample_count", "sample_peek"}
     assert set(served(judge, tmp_path, "blind")["listing"]) == {"sample_count"}
+
+
+def test_a_listing_follows_next_cursor_and_a_failed_one_stops_the_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every page is read until the route sends no ``nextCursor``; an error answer raises, since no packet tool of
+    the route could be served."""
+    pages = {"": {"tools": [TOOLS[0]], "nextCursor": "2"}, "2": {"tools": [TOOLS[1]]}}
+    cursors: list[str] = []
+
+    def paged(route: str, method: str, params: dict[str, Any], timeout: float | None = None) -> dict[str, Any]:
+        cursors.append(str(params.get("cursor", "")))
+        return pages[cursors[-1]]
+
+    monkeypatch.setattr(judge_mcp, "rpc", paged)
+    assert [tool["name"] for tool in judge_mcp.listed("sample/mcp")] == ["sample_count", "sample_peek"]
+    assert cursors == ["", "2"]
+    monkeypatch.setattr(judge_mcp, "rpc", lambda *_: {"error": "sample/mcp tools/list: no route"})
+    with pytest.raises(RuntimeError, match=r"\[judge_mcp\] sample/mcp tools/list: no route"):
+        judge_mcp.listed("sample/mcp")
+
+
+def test_a_listed_tool_named_against_the_cli_spelling_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A name the prompt and ``hpcagent-bench-tool`` cannot address fails the setup before any tool registers."""
+    monkeypatch.setattr(judge_mcp, "listed", lambda _route: [{"name": "Sample-Count"}])
+    with pytest.raises(ValueError, match="Sample-Count"):
+        judge_mcp.register(judge_mcp.JudgeMcp(route="sample/mcp"), {})
+
+
+def test_the_model_reads_structured_content_else_the_text_and_an_error_as_not_ok() -> None:
+    text = [{"type": "text", "text": "line one"}, {"type": "image", "data": ""}, {"type": "text", "text": "line two"}]
+    assert judge_mcp.answer_of({"structuredContent": {"count": 4}, "content": text}) == {"count": 4}
+    assert judge_mcp.answer_of({"content": text}) == {"ok": True, "text": "line one\nline two"}
+    assert judge_mcp.answer_of({"structuredContent": {"count": 4}, "content": text, "isError": True}) == {
+        "ok": False,
+        "error": "line one\nline two",
+    }
+    assert judge_mcp.answer_of({"error": "sample/mcp tools/call: down"}) == {
+        "ok": False,
+        "error": "sample/mcp tools/call: down",
+    }
+
+
+def test_a_call_waits_its_timeout_a_judge_calls_wait_by_default_and_never_past_a_terminal_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``timeout_s`` is optional: without it a call waits as every judge call does, so a manifest from before it
+    behaves as before; a longer wait stops at the terminal route's, past which the router has already answered."""
+    monkeypatch.setenv("HPCAGENT_BENCH_TIMEOUTS_JUDGE_S", "300")
+    environ = {http_json.UPSTREAM_TIMEOUT_ENV: "5400"}
+    ceiling = 5400 + http_json.TERMINAL_MARGIN_S
+    assert judge_mcp.call_timeout(judge_mcp.JudgeMcp(route="sample/mcp"), environ) == 300
+    assert judge_mcp.call_timeout(judge_mcp.JudgeMcp(route="sample/mcp", timeout_s=1800), environ) == 1800
+    assert judge_mcp.call_timeout(judge_mcp.JudgeMcp(route="sample/mcp", timeout_s=14400), environ) == ceiling
+    waits: list[float] = []
+
+    def waiting(path: str, body: dict[str, Any], timeout: float) -> dict[str, Any]:
+        waits.append(timeout)
+        return {"result": {"structuredContent": {"path": path, "method": body["method"]}}}
+
+    monkeypatch.setattr(http_json, "post_judge_waiting", waiting)
+    monkeypatch.setattr(http_json, "transcript_tokens", lambda: 0)
+    run = judge_mcp.forwarder(judge_mcp.JudgeMcp(route="sample/mcp", timeout_s=1800), "sample_count", environ)
+    assert run({"text": "four"}) == {"path": "/sample/mcp", "method": "tools/call"}
+    assert waits == [1800]
