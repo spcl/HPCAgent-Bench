@@ -96,7 +96,7 @@ def environment(root: pathlib.Path, **extra: str) -> dict[str, str]:
         key: value
         for key, value in os.environ.items()
         if key not in {"HPCAGENT_BENCH_CACHE", "HPCAGENT_BENCH_RUNS_ROOT", "HPCAGENT_BENCH_RESULTS_DIR"}
-        and key not in {"HPCAGENT_BENCH_RECORD_DB_PATH", "HPCAGENT_BENCH_RECORD_BUILD", "SLURM_PROCID", "SLURM_NTASKS"}
+        and key not in {"HPCAGENT_BENCH_RECORD_DB_PATH", "HPCAGENT_BENCH_RECORD_BUILD", "SLURM_PROCID", "SLURM_NTASKS", "SLURM_JOB_ID"}
     }
     env.update(JIT_CACHE_ROOT=str(root / "jitcache"), HPCAGENT_BENCH_IMAGE_PYTHON=str(root / "image-python"))
     env.update(CANON_OPT_REPORTS="0", SLURM_CPUS_PER_TASK="2", **extra)
@@ -380,6 +380,21 @@ def test_the_jit_caches_start_empty_in_the_sweep_and_go_with_its_build_tree(tmp_
     assert all((cache / "entry").is_file() and cache.parent == sweep.out_root for cache in caches)
     assert baseline.finish(sweep) == 0
     assert not any(cache.exists() for cache in caches)
+
+
+def test_in_a_job_the_build_trees_are_node_local_and_the_rank_clears_them(tmp_path: pathlib.Path) -> None:
+    """Inside a Slurm job no compile writes to the shared file system (job 762794): the trees go to $TMPDIR."""
+    opt = stub_checkout(tmp_path, JIT_CACHE_CLI)
+    sweep = sweep_of(tmp_path, opt, ("fakekernel",), SLURM_JOB_ID="42", TMPDIR=str(tmp_path / "node"))
+    local = baseline.build_root(sweep, jobs.Rank(0, 1))
+    assert local.is_relative_to(tmp_path / "node" / "hpcagent-bench-42")
+    env = baseline.rank_environment(sweep, jobs.Rank(0, 1), set())
+    assert pathlib.Path(env["DACE_default_build_folder"]).parent == local
+    assert pathlib.Path(env["TRITON_CACHE_DIR"]).parent == local
+    assert baseline.run(sweep, jobs.Rank(0, 1)) == 0
+    assert not local.exists()
+    assert not (sweep.out_root / "dacecache-fakecol").exists()
+    assert set(canon_rows(sweep)) == {"fakekernel"}
 
 
 def test_a_column_that_recorded_no_row_still_finishes(

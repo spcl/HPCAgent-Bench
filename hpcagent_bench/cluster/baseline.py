@@ -37,6 +37,7 @@ __all__ = [
     "Phase",
     "Sweep",
     "begin",
+    "build_root",
     "cache_environment",
     "check_column",
     "configure",
@@ -279,9 +280,21 @@ def positive_knob(environ: Mapping[str, str], name: str, default: int) -> int:
     return int(value)
 
 
-def jit_cache(sweep: Sweep, tool: str) -> pathlib.Path:
-    """The column's ``tool`` JIT cache (``triton``, ``numba``) in this sweep's work directory."""
-    return sweep.out_root / f"{tool}cache-{sweep.column}"
+def jit_cache(sweep: Sweep, tool: str, root: pathlib.Path | None = None) -> pathlib.Path:
+    """The column's ``tool`` JIT cache (``triton``, ``numba``) under ``root`` (default: the sweep's work directory)."""
+    return (sweep.out_root if root is None else root) / f"{tool}cache-{sweep.column}"
+
+
+def build_root(sweep: Sweep, rank: jobs.Rank) -> pathlib.Path:
+    """Where this rank's build trees (DaCe build folder, Triton and numba caches) go. Inside a Slurm job that is the
+    node's ``$TMPDIR`` (``/tmp`` when unset), one directory per job, run, column and rank: a compile that writes to
+    a stalled shared file system blocks in the kernel, cannot be killed, and drains the node ("Kill task failed",
+    job 762794). Outside a job it is the work directory, as before."""
+    job = sweep.environ.get("SLURM_JOB_ID", "")
+    if not job:
+        return sweep.out_root
+    tmp = pathlib.Path(sweep.environ.get("TMPDIR") or "/tmp")
+    return tmp / f"hpcagent-bench-{job}" / f"{sweep.run_label}-{sweep.column}-rank{rank.index}"
 
 
 def rank_environment(sweep: Sweep, rank: jobs.Rank, cpus: set[int]) -> dict[str, str]:
@@ -302,13 +315,14 @@ def rank_environment(sweep: Sweep, rank: jobs.Rank, cpus: set[int]) -> dict[str,
     harness = paths.git_head(sweep.opt, short=True)
     print(f"canon {sweep.column} rank {rank.index}: dace @{sha} harness {harness or 'notree'}")
     env["DACE_BUILD_CACHE_DIR"] = str(pathlib.Path(env["JIT_CACHE_ROOT"]) / f"dace_bc_{sweep.column}_{sha}")
-    build = sweep.out_root / f"dacecache-{sweep.column}"
+    local = build_root(sweep, rank)
+    build = local / f"dacecache-{sweep.column}"
     env["DACE_default_build_folder"] = str(build)
     build.mkdir(parents=True, exist_ok=True)
     # Triton's and numba's JIT caches start empty in every sweep: one kept across sweeps would make the build
     # phases a cache load, and neither records what the cached build took.
-    env["TRITON_CACHE_DIR"] = str(jit_cache(sweep, "triton"))
-    env["NUMBA_CACHE_DIR"] = str(jit_cache(sweep, "numba"))
+    env["TRITON_CACHE_DIR"] = str(jit_cache(sweep, "triton", local))
+    env["NUMBA_CACHE_DIR"] = str(jit_cache(sweep, "numba", local))
     device = hip_device(env, rank.index)
     if device is None:
         print(f"canon {sweep.column} rank {rank.index}: no device list inherited, leaving the step's binding alone")
@@ -391,6 +405,10 @@ def run(sweep: Sweep, rank: jobs.Rank) -> int:
             else:
                 print(f"  FAILED {kernel}")
         rows = [row for row in canon_db.read(ranked.canon(), sweep.run_label, sweep.column) if row["kernel"] in mine]
+        local = build_root(sweep, rank)
+        if local != sweep.out_root:
+            # A node-local tree is this rank's alone, and finish runs on one node only: the rank clears its own.
+            shutil.rmtree(local, ignore_errors=True)
     print(summary_line(sweep.column, rank.index, rows, failed))
     return 0
 
