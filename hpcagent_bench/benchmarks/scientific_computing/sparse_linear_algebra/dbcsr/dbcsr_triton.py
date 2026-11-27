@@ -98,13 +98,19 @@ def dbcsr(
     n_block_cols,
     n_block_inner,
 ):
+    block_size = int(block_size)
+    n_block_rows = int(n_block_rows)
+    n_block_cols = int(n_block_cols)
+    n_block_inner = int(n_block_inner)
+
     a_index_dev = torch.as_tensor(a_index, device="cuda", dtype=torch.int32)
     b_index_dev = torch.as_tensor(b_index, device="cuda", dtype=torch.int32)
     a_blocks_dev = torch.as_tensor(a_blocks, device="cuda", dtype=torch.float64)
     b_blocks_dev = torch.as_tensor(b_blocks, device="cuda", dtype=torch.float64)
     m_sizes_dev = torch.as_tensor(m_sizes, device="cuda", dtype=torch.int32)
     n_sizes_dev = torch.as_tensor(n_sizes, device="cuda", dtype=torch.int32)
-    C_dev = torch.as_tensor(C, device="cuda", dtype=torch.float64)
+    c_is_direct_dev = isinstance(C, torch.Tensor) and C.is_cuda and C.dtype == torch.float64 and C.is_contiguous()
+    C_dev = C if c_is_direct_dev else torch.zeros(C.shape, device="cuda", dtype=torch.float64)
     C_dev.zero_()
 
     valid_a = a_index_dev[:, 2] >= 0
@@ -140,7 +146,7 @@ def dbcsr(
     torch.cumsum(m_sizes_dev, dim=0, out=row_offsets[1:])
     torch.cumsum(n_sizes_dev, dim=0, out=col_offsets[1:])
 
-    TILE_SIZE = 16 if block_size <= 16 else 32
+    TILE_SIZE = max(16, triton.next_power_of_2(block_size))
     grid = (n_block_rows, n_block_cols)
 
     _dbcsr_kernel[grid](
@@ -164,7 +170,10 @@ def dbcsr(
         TILE_SIZE=TILE_SIZE,
     )
 
-    if isinstance(C, np.ndarray):
+    if isinstance(C, torch.Tensor):
+        if not c_is_direct_dev:
+            C.copy_(C_dev)
+    elif isinstance(C, np.ndarray):
         C[:] = C_dev.cpu().numpy()
 
     return C
