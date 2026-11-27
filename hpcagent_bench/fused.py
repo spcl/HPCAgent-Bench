@@ -37,6 +37,8 @@ from hpcagent_agent.driver.agent_driver import (
 )
 from hpcagent_agent.tools.http_json import WORKER_TOKEN_ENV, WORKER_TOKEN_HEADER
 
+from hpcagent_bench import problem_file
+
 __all__ = [
     "DEFER_HEADER",
     "JUDGE_SCOPED_PREFIX",
@@ -52,8 +54,10 @@ __all__ = [
     "fused",
     "judge_overlay",
     "parse_resolved",
+    "problem_defaults",
     "read_overlay",
     "setup_overlay",
+    "setup_problem_defaults",
     "setups_dir",
     "token_digest",
     "token_setup",
@@ -103,6 +107,29 @@ def read_overlay(directory: str, setup: str) -> tuple[tuple[str, str | None], ..
     except OSError as exc:
         raise FusedRefusal(HTTPStatus.FORBIDDEN, f"no setup {setup!r} in this fused job") from exc
     return tuple(parse_resolved(text).items())
+
+
+@functools.lru_cache(maxsize=None, typed=True)
+def setup_problem_defaults(directory: str, setup: str) -> dict[str, tuple[tuple[str, ...], str | None]]:
+    """Kernel -> (``default_load``, ``default_workspace_bytes``) of ``setup``'s problems file (``<setup>.jsonl``
+    beside its overlay, :mod:`hpcagent_bench.cluster.fused_split`), read once; empty when the setup has none."""
+    path = pathlib.Path(directory) / f"{setup}.jsonl"
+    if not SETUP_ID.match(setup) or not path.is_file():
+        return {}
+    return {
+        line.kernel: (tuple(line.default_load or ()), line.default_workspace_bytes)
+        for line in problem_file.read_lines(path)
+    }
+
+
+def problem_defaults(setup: str, kernel: str) -> tuple[tuple[str, ...], str | None]:
+    """What a submission of ``kernel`` in ``setup`` loads and requests as scratch when it names none: the same
+    defaults the agent tools add (``http_json.with_default_load`` / ``with_default_workspace``), applied by the
+    judge so a hand-sent request gets them too. Nothing outside a fused job or for an unknown setup."""
+    directory = setups_dir()
+    if directory is None or not setup:
+        return (), None
+    return setup_problem_defaults(str(directory), setup).get(kernel, ((), None))
 
 
 def setup_overlay(setup: str) -> dict[str, str | None]:
