@@ -679,6 +679,7 @@ def test_a_refused_seal_is_a_judge_fault_not_a_crash(monkeypatch: pytest.MonkeyP
     # The refusal is patched into this process, so the child must fork from it: a worker that mapped a GPU runtime
     # would fork the child from the forkserver, which never saw the patch.
     monkeypatch.setattr(native_call, "mapped_device_runtimes", lambda exclude=(): ())
+    monkeypatch.setattr(native_call, "fork_child_threads", lambda: 1)
     with pytest.raises(native_call.NativeCallSealFailed):
         native_call.call_isolated(
             write_kernel("def kern(x):\n    return x\n"),
@@ -689,6 +690,26 @@ def test_a_refused_seal_is_a_judge_fault_not_a_crash(monkeypatch: pytest.MonkeyP
             timeout=30,
             py_meta=PY_META,
         )
+
+
+# Reproducer: 12 SC40 CPU kernels (fft_1d, gemm, qe_cegterg, ...) failed "seal: cannot enter new namespaces: [Errno 22]
+# Invalid argument (4 threads: python, ...)": scipy.fft's pocketfft pool restarts its threads in every fork child.
+@pytest.mark.sealed
+def test_a_grade_seals_after_scipy_fft_started_its_pool() -> None:
+    """A worker that used scipy.fft forks its grading child from the forkserver, so the child seals."""
+    scipy_fft = pytest.importorskip("scipy.fft")
+    scipy_fft.fft(np.ones(64), workers=2)
+    assert native_call.fork_child_threads() > 1
+    outputs, _samples, _mem, _extras, _timed = native_call.call_isolated(
+        write_kernel("def kern(x):\n    return x + 1.0\n"),
+        BINDING,
+        {"x": np.zeros(1)},
+        Language.PYTHON,
+        device=False,
+        timeout=60,
+        py_meta=PY_META,
+    )
+    assert outputs["y"].tolist() == [1.0]
 
 
 def test_the_profile_child_argv_runs_sealed(tmp_path: pathlib.Path) -> None:
