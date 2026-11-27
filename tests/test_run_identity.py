@@ -6,7 +6,9 @@ after it moved; a row from before results schema 40 reads as uid '0' until ``run
 import contextlib
 import json
 import pathlib
+import shutil
 import sqlite3
+import tarfile
 
 import pytest
 
@@ -38,7 +40,11 @@ def test_ensure_writes_one_record_and_a_second_job_in_the_folder_keeps_it(tmp_pa
     again = run_identity.ensure(folder, {"SLURM_JOB_ID": "765800"})
     assert again == first
     assert (first.experiment, first.run_id, first.slurm_job_id, first.created_s) == (
-        "cpf-llr40-20261127", "765700", "765700", 1795700000)
+        "cpf-llr40-20261127",
+        "765700",
+        "765700",
+        1795700000,
+    )
     assert run_identity.read(folder) == first
     assert first.run_uid not in ("", run_identity.UNKNOWN_UID)
 
@@ -60,8 +66,20 @@ def test_rows_carry_the_uid_the_job_exports_and_0_outside_a_run(
     results_seed.score(db, "setup.n0.p1.w1", "gemm", 1, 2.0)
     monkeypatch.setenv(run_identity.UID_ENV, "f00d")
     results_seed.score(db, "setup.n0.p2.w1", "gemm", 2, 3.0)
-    canon_db.record(db, [{"run": "e1", "column": "numba", "kernel": "gemm", "preset": "S", "datatype": "float64",
-                          "median_ms": 1.0, "status": "ok"}])
+    canon_db.record(
+        db,
+        [
+            {
+                "run": "e1",
+                "column": "numba",
+                "kernel": "gemm",
+                "preset": "S",
+                "datatype": "float64",
+                "median_ms": 1.0,
+                "status": "ok",
+            }
+        ],
+    )
     assert sorted(uids(db, "episodes")) == ["0", "f00d"]
     assert sorted(uids(db, "grades")) == ["0", "f00d"]
     assert uids(db, "canon") == ["f00d"]
@@ -106,10 +124,29 @@ def test_adopt_gives_old_runs_a_uid_and_fills_their_rows_and_a_pooled_db(tmp_pat
     own = folder / run_layout.MERGED_DB_NAME
     results_seed.score(own, "setup.n0.p1.w1", "gemm", 1, 2.0)
     pooled = tmp_path / "canon.db"
-    canon_db.record(pooled, [{"run": root.name, "column": "numba", "kernel": "gemm", "preset": "S",
-                              "datatype": "float64", "median_ms": 1.0, "status": "ok"},
-                             {"run": "another", "column": "numba", "kernel": "gemm", "preset": "S",
-                              "datatype": "float64", "median_ms": 1.0, "status": "ok"}])
+    canon_db.record(
+        pooled,
+        [
+            {
+                "run": root.name,
+                "column": "numba",
+                "kernel": "gemm",
+                "preset": "S",
+                "datatype": "float64",
+                "median_ms": 1.0,
+                "status": "ok",
+            },
+            {
+                "run": "another",
+                "column": "numba",
+                "kernel": "gemm",
+                "preset": "S",
+                "datatype": "float64",
+                "median_ms": 1.0,
+                "status": "ok",
+            },
+        ],
+    )
     results_seed.as_version(own, 39)
     [(found, record, filled)] = run_identity.adopt([root], [pooled])
     assert found == folder and record.adopted and filled == 3
@@ -129,3 +166,19 @@ def test_the_cli_prints_the_folder_of_a_uid_and_refuses_one_it_cannot_find(
     assert run_identity.main(["locate", uid, "--root", str(tmp_path)]) == 0
     assert capsys.readouterr().out.strip() == str(folder)
     assert run_identity.main(["locate", "missing", "--root", str(tmp_path)]) == 1
+
+
+def test_a_packed_run_is_found_through_the_index_beside_its_tar(tmp_path: pathlib.Path) -> None:
+    folder = run_folder(tmp_path / "runs", "llr40-blind-20261114", "748000")
+    record = run_identity.ensure(folder, {})
+    packed = tmp_path / "runs" / "llr40-blind-20261114.tar.xz"
+    with tarfile.open(packed, "w:xz") as tar:
+        tar.add(folder.parent, arcname=folder.parent.name)
+    shutil.rmtree(folder.parent)
+    assert run_identity.locate(record.run_uid, roots=[tmp_path]) is None
+    assert run_identity.locate_archived(record.run_uid, roots=[tmp_path]) is None
+    [entry] = run_identity.index_archive(packed)
+    assert (entry.run_uid, entry.member) == (record.run_uid, "llr40-blind-20261114/748000")
+    assert run_identity.locate_archived(record.run_uid, roots=[tmp_path]) == (packed, entry.member)
+    assert run_identity.index_archive(packed) == [entry]
+    assert len(run_identity.read_index(packed.parent)) == 1
