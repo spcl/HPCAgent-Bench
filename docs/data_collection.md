@@ -57,8 +57,9 @@ had this one run.
 
 A run packed into a tar is found through `archives.jsonl` beside the tar: one line per run it holds (uid, tar name,
 the folder inside it). `collect archive` writes it; `runs index` writes it for a tar made by hand. `locate` prints
-`<tar>:<folder>` for such a run. A tar of runs from before schema 40 holds no `RUN.json`, so nothing indexes them:
-adopt a run root before packing it.
+`<tar>:<folder>` for such a run. A run packed before schema 40 holds no `RUN.json`; `runs index` gives it a uid in
+the index (a run folder is one with a `results.db`, a launch stamp or judge shards), and indexing the tar again
+keeps that uid. Its rows inside the tar still read `0`.
 
 ### Episode archives
 

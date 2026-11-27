@@ -229,10 +229,13 @@ def locate(
     return None
 
 
-def archived_records(archive: pathlib.Path) -> Iterator[tuple[str, RunRecord]]:
-    """Each run folder (its path inside the tar) and record that ``archive`` holds, in one streaming read: a tar,
-    a gzip, bzip2 or xz one, or a zstd one through ``zstd -dc``."""
-    name = run_layout.RUN_RECORD_NAME
+def archived_records(archive: pathlib.Path) -> Iterator[tuple[str, RunRecord | None]]:
+    """Each run folder (its path inside the tar) that ``archive`` holds and its record, in one streaming read of a
+    tar, a gzip, bzip2 or xz one, or a zstd one through ``zstd -dc``. A run folder from before the record (one with a
+    merged database, a launch stamp or judge shards) comes last, with None."""
+    markers = {run_layout.MERGED_DB_NAME, run_layout.LAUNCH_STAMP_NAME}
+    unrecorded: dict[str, None] = {}
+    recorded: set[str] = set()
     with contextlib.ExitStack() as stack:
         if archive.name.endswith((".zst", ".zstd")):
             unzstd = stack.enter_context(subprocess.Popen(["zstd", "-dc", str(archive)], stdout=subprocess.PIPE))
@@ -240,12 +243,22 @@ def archived_records(archive: pathlib.Path) -> Iterator[tuple[str, RunRecord]]:
         else:
             tar = stack.enter_context(tarfile.open(archive, mode="r|*"))
         for member in tar:
-            if member.isfile() and pathlib.PurePosixPath(member.name).name == name:
-                handle = tar.extractfile(member)
-                if handle is None:
-                    continue
-                with contextlib.suppress(pydantic.ValidationError):
-                    yield str(pathlib.PurePosixPath(member.name).parent), RunRecord.model_validate_json(handle.read())
+            path = pathlib.PurePosixPath(member.name)
+            folder = str(path.parent)
+            if member.isdir() and path.name == run_layout.JUDGE_DIRNAME or member.isfile() and path.name in markers:
+                unrecorded[folder] = None
+            if not member.isfile() or path.name != run_layout.RUN_RECORD_NAME:
+                continue
+            handle = tar.extractfile(member)
+            if handle is None:
+                continue
+            with contextlib.suppress(pydantic.ValidationError):
+                record = RunRecord.model_validate_json(handle.read())
+                recorded.add(folder)
+                yield folder, record
+    for folder in unrecorded:
+        if folder not in recorded:
+            yield folder, None
 
 
 def read_index(folder: pathlib.Path) -> list[ArchivedRun]:
@@ -263,12 +276,18 @@ def read_index(folder: pathlib.Path) -> list[ArchivedRun]:
 
 def index_archive(archive: pathlib.Path) -> list[ArchivedRun]:
     """Record the runs ``archive`` holds in the :data:`ARCHIVE_INDEX` beside it, replacing that tar's earlier lines;
-    the runs it found."""
+    the runs it found. A run folder without a record gets a uid here, the one an earlier index of the tar gave it."""
+    earlier = read_index(archive.parent)
+    given = {entry.member: entry.run_uid for entry in earlier if entry.archive == archive.name}
     found = [
-        ArchivedRun(run_uid=record.run_uid, archive=archive.name, member=member)
+        ArchivedRun(
+            run_uid=record.run_uid if record is not None else given.get(member) or uuid.uuid4().hex,
+            archive=archive.name,
+            member=member,
+        )
         for member, record in archived_records(archive)
     ]
-    kept = [entry for entry in read_index(archive.parent) if entry.archive != archive.name]
+    kept = [entry for entry in earlier if entry.archive != archive.name]
     target = archive.parent / ARCHIVE_INDEX
     staged = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     staged.write_text("".join(entry.model_dump_json() + "\n" for entry in (*kept, *found)), encoding="utf-8")

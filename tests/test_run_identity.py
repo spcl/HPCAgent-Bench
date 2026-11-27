@@ -169,16 +169,23 @@ def test_the_cli_prints_the_folder_of_a_uid_and_refuses_one_it_cannot_find(
 
 
 def test_a_packed_run_is_found_through_the_index_beside_its_tar(tmp_path: pathlib.Path) -> None:
+    """A run packed with its record keeps that uid; one packed before the record existed gets a uid from the index,
+    and indexing the tar again keeps it."""
     folder = run_folder(tmp_path / "runs", "llr40-blind-20261114", "748000")
     record = run_identity.ensure(folder, {})
+    older = folder.parent / "747000"
+    results_seed.score(older / run_layout.MERGED_DB_NAME, "setup.n0.p1.w1", "gemm", 1, 2.0)
     packed = tmp_path / "runs" / "llr40-blind-20261114.tar.xz"
     with tarfile.open(packed, "w:xz") as tar:
         tar.add(folder.parent, arcname=folder.parent.name)
     shutil.rmtree(folder.parent)
     assert run_identity.locate(record.run_uid, roots=[tmp_path]) is None
     assert run_identity.locate_archived(record.run_uid, roots=[tmp_path]) is None
-    [entry] = run_identity.index_archive(packed)
-    assert (entry.run_uid, entry.member) == (record.run_uid, "llr40-blind-20261114/748000")
-    assert run_identity.locate_archived(record.run_uid, roots=[tmp_path]) == (packed, entry.member)
-    assert run_identity.index_archive(packed) == [entry]
-    assert len(run_identity.read_index(packed.parent)) == 1
+    entries = run_identity.index_archive(packed)
+    assert [(entry.run_uid, entry.member) for entry in entries][0] == (record.run_uid, "llr40-blind-20261114/748000")
+    [adopted] = [entry for entry in entries if entry.member == "llr40-blind-20261114/747000"]
+    assert adopted.run_uid not in (record.run_uid, run_identity.UNKNOWN_UID) and len(entries) == 2
+    assert run_identity.locate_archived(record.run_uid, roots=[tmp_path]) == (packed, entries[0].member)
+    assert run_identity.locate_archived(adopted.run_uid, roots=[tmp_path]) == (packed, adopted.member)
+    assert run_identity.index_archive(packed) == entries
+    assert len(run_identity.read_index(packed.parent)) == 2

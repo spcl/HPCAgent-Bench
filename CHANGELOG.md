@@ -56,7 +56,7 @@
 - `hpcagent-bench runs locate <uid> [--hint PATH]` prints a run's folder wherever it moved: the hint when its record
   matches, else the first matching record under the runs root, `$HPCAGENT_BENCH_RUN_ROOTS`, `$SCRATCH` and `$HOME`
   (four levels deep, environments and caches skipped), else the tar that holds it through the `archives.jsonl`
-  beside the tar (`collect archive` writes it, `runs index <tar>` for a tar made by hand). `runs ensure <run dir>`
+  beside the tar (`collect archive` writes it, `runs index <tar>` for a tar made by hand; a run packed before its record gets a uid in the index). `runs ensure <run dir>`
   prints a folder's uid.
 - `hpcagent-bench runs adopt <root>... [--db DB]` gives runs from before schema 40 a record and fills the uid into the
   rows of their own databases, and of each pooled or canon `--db` that names their Slurm job or (single-run)
