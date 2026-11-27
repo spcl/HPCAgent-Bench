@@ -90,6 +90,7 @@ __all__ = [
     "CRASH_RESUME_PROMPT",
     "DEFAULT_CLAUDE_MAX_TURNS",
     "DRIVER_KILLS",
+    "DRIVER_STARTED_ENV",
     "ENGINE_SERIES",
     "FUSED_PROBLEM_FLAG",
     "FUSED_PROBLEM_KEYS",
@@ -659,10 +660,14 @@ METRICS_TIMEOUT_SECONDS = 10.0
 #: Intervals shorter than this are dropped: tokens over nearly no time look like a real tok/s figure.
 AGGREGATE_MIN_INTERVAL_SECONDS = 1.0
 
-#: Seconds of delay per worker index before an agent starts (jitter only; START_GATE is the real limit).
+#: Seconds of delay per worker index before an agent starts, counted from the node driver's start: the first wave
+#: of agents spreads out (their MCP servers, and their first grades, do not all arrive at once), and an episode a
+#: worker picks up later starts at once.
 AGENT_START_STAGGER_SECONDS = float(os.environ.get("AGENT_START_STAGGER_SECONDS", "0.5"))
-#: Cap on that delay, so a wide node does not push its last agent minutes past the first.
+#: Cap on that delay: the last agent of the first wave starts at most this long after the driver.
 AGENT_START_STAGGER_MAX_SECONDS = float(os.environ.get("AGENT_START_STAGGER_MAX_SECONDS", "60"))
+#: When the node driver started (epoch seconds), set by :func:`main` and inherited by every fused child.
+DRIVER_STARTED_ENV = "HPCAGENT_AGENT_DRIVER_STARTED_S"
 
 #: How many agents may be INSIDE MCP startup at once (a semaphore, so it drains at the real startup rate).
 AGENT_START_CONCURRENCY = int(os.environ.get("AGENT_START_CONCURRENCY", "8"))
@@ -3234,10 +3239,12 @@ def ended_reason(returncode: int, timeout_s: float, max_tokens: int, state: Agen
     return ""
 
 
-def stagger_start(worker_index: int) -> None:
-    """Delay this worker's start by its slot, so the node's MCP servers do not all initialize at once."""
+def stagger_start(worker_index: int, environ: Mapping[str, str] = os.environ) -> None:
+    """Hold this worker until its slot after the driver's start (:data:`DRIVER_STARTED_ENV`; now when unset)."""
     if AGENT_START_STAGGER_SECONDS > 0:
-        time.sleep(min(worker_index * AGENT_START_STAGGER_SECONDS, AGENT_START_STAGGER_MAX_SECONDS))
+        delay = min(worker_index * AGENT_START_STAGGER_SECONDS, AGENT_START_STAGGER_MAX_SECONDS)
+        started = float(environ.get(DRIVER_STARTED_ENV, "") or time.time())
+        time.sleep(max(0.0, started + delay - time.time()))
 
 
 def wait_for_agent(process: subprocess.Popen[bytes], deadline: float, log: TextIO, timeout_s: float) -> int:
@@ -3854,6 +3861,7 @@ def main() -> int:
     rcs: list[int] = []
     fused = fused_problems(problems)
     ranks = judge_ranks(problems, len(judges))
+    os.environ[DRIVER_STARTED_ENV] = str(time.time())
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             # len(local_problems), NOT workers: the pool is sized for the biggest setup.

@@ -81,3 +81,19 @@ def test_the_fused_job_takes_its_own_setup_name_and_each_overlay_keeps_its_setup
     }
     with pytest.raises(SystemExit, match="distinct from its setups"):
         fuse_setups.fuse(tmp_path / "again", [a, b], experiments, name="s-a")
+
+
+def test_a_fused_job_gets_one_judge_node_per_forty_agents_it_runs_at_once(tmp_path: pathlib.Path) -> None:
+    """Three setups of 40 kernels on two 60-agent nodes run 120 agents at once: three judge nodes, not the setups'
+    one, so their first grades do not queue past the agents' judge wait. Scaling judges keep their own count."""
+    experiments = tmp_path / "experiments"
+    sizing = ["AGENT_NODES=2", "AGENTS_PER_NODE=60", "JUDGE_AGENTS_PER_NODE=40"]
+    kernels = [f"k{i}" for i in range(40)]
+    envs = [rendered(experiments, f"s-{arm}", [*sizing, f"PACKET={arm}"], kernels) for arm in ("a", "b", "c")]
+    assert fuse_setups.fuse(tmp_path / "fused", envs, experiments) == 120
+    job = (tmp_path / "fused" / "job.env").read_text().splitlines()
+    assert [line for line in job if line.startswith("JUDGE_NODES=")] == ["JUDGE_NODES=3"]
+    assert fuse_setups.judge_nodes({"JUDGE_NODES": "1", "JUDGE_AGENTS_PER_NODE": "40"}, 30) == 1
+    assert fuse_setups.judge_nodes({"JUDGE_NODES": "4", "JUDGE_AGENTS_PER_NODE": "40"}, 41) == 4
+    gang = {"JUDGE_NODES": "2", "JUDGE_AGENTS_PER_NODE": "40", "JUDGE_GANG_NODES": "2"}
+    assert fuse_setups.judge_nodes(gang, 120) == 2

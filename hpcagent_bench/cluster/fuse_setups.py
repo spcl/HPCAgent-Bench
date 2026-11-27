@@ -30,7 +30,7 @@ from hpcagent_bench import paths
 from hpcagent_bench.cluster.fused_split import ENV_LINE, JOB_FILE_KEYS, SETUP_ID, SetupsFile, SetupSpec, line_key
 from hpcagent_bench.problem_file import ProblemLine, dump_line
 
-__all__ = ["JOB_LEVEL", "SetupEnv", "fuse", "main", "read_setup"]
+__all__ = ["JOB_LEVEL", "SetupEnv", "fuse", "judge_nodes", "main", "read_setup"]
 
 #: Keys one fused job holds one value of: the served model and its server, the judge and the service it runs, the
 #: allocation's shape, the run root, the limits every episode of the job runs under, and the keys a judge reads once
@@ -95,6 +95,25 @@ def shared_keys(setups: Sequence[SetupEnv]) -> set[str]:
         shared -= named
 
 
+def env_int(values: dict[str, str], key: str) -> int:
+    """``key``'s integer value in ``values``; 0 when it is unset or no integer."""
+    text = values.get(key, "").strip().strip("'\"")
+    return int(text) if text.isdigit() else 0
+
+
+def judge_nodes(values: dict[str, str], problems: int) -> int:
+    """The judge nodes a fused job of ``problems`` episodes needs: its ``JUDGE_NODES``, raised to one node per
+    ``JUDGE_AGENTS_PER_NODE`` of the agents that run at once (``AGENT_NODES`` x ``AGENTS_PER_NODE``, at most
+    ``problems``). Scaling judges (``JUDGE_GANG_NODES``) and a setup without the ratio keep their own count."""
+    configured = env_int(values, "JUDGE_NODES")
+    per_node = env_int(values, "JUDGE_AGENTS_PER_NODE")
+    if per_node == 0 or env_int(values, "JUDGE_GANG_NODES") > 0:
+        return configured
+    slots = env_int(values, "AGENT_NODES") * env_int(values, "AGENTS_PER_NODE")
+    agents = min(problems, slots) if slots else problems
+    return max(configured, -(-agents // per_node))
+
+
 def fuse(
     out: pathlib.Path,
     env_paths: Sequence[pathlib.Path],
@@ -134,10 +153,24 @@ def fuse(
                 rows.append(dump_line(fused))
     if not rows:
         raise SystemExit("fuse_setups: the setups' problems files hold no problem")
+    values = {key: line.split("=", 1)[1] for key, line in first.values.items()}
+    judges = judge_nodes(values, len(rows))
+    if judges != env_int(values, "JUDGE_NODES"):
+        job_lines = [line for line in job_lines if line_key(line) != "JUDGE_NODES"] + [f"JUDGE_NODES={judges}"]
     (out / "job.env").write_text("\n".join(job_lines) + "\n", encoding="utf-8")
     problems_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
     setups_path.write_text(SetupsFile(setups=overlays).model_dump_json(indent=1) + "\n", encoding="utf-8")
-    print(json.dumps({"job_env": str(out / "job.env"), "setup": job_name, "problems": len(rows), "setups": names}))
+    print(
+        json.dumps(
+            {
+                "job_env": str(out / "job.env"),
+                "setup": job_name,
+                "problems": len(rows),
+                "setups": names,
+                "judge_nodes": judges,
+            }
+        )
+    )
     return len(rows)
 
 

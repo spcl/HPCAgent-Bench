@@ -61,6 +61,12 @@ AGENT_NODES = 1
 
 # judge nodes of the allocation (an experiment overrides it)
 JUDGE_NODES = 1
+# A fused job (JOINT=1, cluster/fuse_setups.py) gets at least one judge node per this many of its agents.
+JUDGE_AGENTS_PER_NODE = 40
+# The agents of a node start one per AGENT_START_STAGGER_SECONDS after the node driver, the last of the first wave
+# at most AGENT_START_STAGGER_MAX_SECONDS after it: their first grades spread out instead of queueing at once.
+AGENT_START_STAGGER_SECONDS = 10
+AGENT_START_STAGGER_MAX_SECONDS = 600
 # The hardware the EDF names and model layers below carry; submit_common.sh's apply_hardware renames them for
 # any other. GPUS_PER_NODE is not here: the submitter pins the job's --gpus-per-node.
 HPCAGENT_BENCH_BASE_HARDWARE = 'mi300'
@@ -74,8 +80,10 @@ JUDGE_READY_TIMEOUT_SECONDS = 300
 JUDGE_UPSTREAM_READY_TIMEOUT_SECONDS = 300
 JUDGE_UPSTREAM_TIMEOUT_SECONDS = 5400
 
-# too low abandons a device slot the judge still holds for an agent that already walked away
-HPCAGENT_BENCH_TIMEOUTS_JUDGE_S = 1800
+# An agent's wait on one judge call: the router's JUDGE_UPSTREAM_TIMEOUT_SECONDS plus 300 s, so the router answers
+# first. Shorter abandons a grade still queued or running when the agent gives up, and its retry queues it again: at
+# 1800 s, 120 agents' first scores on 8 judge slots timed out and fed back on themselves (LLR40 job 765401).
+HPCAGENT_BENCH_TIMEOUTS_JUDGE_S = 5700
 HPCAGENT_BENCH_SERVICE_INPUT_MODE = 'source'
 
 # judge.gpus_per_node / judge.cpu_slots_per_node (config.yaml): concurrent grades per judge node. One grade
