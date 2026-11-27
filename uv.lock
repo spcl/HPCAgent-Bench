@@ -1354,7 +1354,7 @@ wheels = [
 
 [[package]]
 name = "dace-extended"
-version = "1.0.4"
+version = "1.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "astunparse" },
@@ -1377,9 +1377,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "z3-solver" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/27/f0/c33ad4dad2a484494860845bc516bb5974f20a12b134f91fb3c21c4c8072/dace_extended-1.0.4.tar.gz", hash = "sha256:1d050f204a47a860865f48c04814ac689621586b5b7b47aedfa067cc573d7a72", size = 9358707, upload-time = "2026-11-26T21:24:26.89Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/0c/d48057d1aa5d07acd41320685a0a98606877fff6dfb9e3f029050f8a1d57/dace_extended-1.0.5.tar.gz", hash = "sha256:92414339eee929057545ccf3577f011f2a43eae70a2829677d87d24f25a6fa78", size = 9378021, upload-time = "2026-11-27T16:23:21.699Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/0c/0f019b22215b345c7119527f868181e1ccbb3932f9539c21efa06b52d7a1/dace_extended-1.0.4-py3-none-any.whl", hash = "sha256:d0657a7f911ac29a294162093cba51096b7608f520b63f25c1e126b36f13fc16", size = 10264747, upload-time = "2026-11-26T21:24:23.762Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/25/1d5cc2fae5af5147d5bddd9341052c26e770f90c8dfbcebe9f939381d81b/dace_extended-1.0.5-py3-none-any.whl", hash = "sha256:7af3c8bccc569ddf3883be890157584dbec6ef240addea95738bfd2e496258a4", size = 10283774, upload-time = "2026-11-27T16:23:19.188Z" },
 ]
 
 [[package]]
@@ -2436,7 +2436,7 @@ requires-dist = [
     { name = "cuda-tile", marker = "extra == 'nvgpu'" },
     { name = "cupy", marker = "platform_machine == 'x86_64' and extra == 'amdgpu'" },
     { name = "cupy-cuda13x", marker = "extra == 'nvgpu'" },
-    { name = "dace-extended", specifier = ">=1.0.4" },
+    { name = "dace-extended", specifier = ">=1.0.5" },
     { name = "dace-relayout", specifier = ">=0.1.2" },
     { name = "datasets", specifier = ">=2.17" },
     { name = "einops" },
