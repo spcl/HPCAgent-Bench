@@ -3,6 +3,7 @@
 """The CPF hint detail (``proofs`` or ``none``) is the setup's, flows packet -> prerender -> cache -> render, and
 a form of one detail is never served for the other (dace's ``render`` faked where the detail reaches it)."""
 
+import inspect
 import json
 import pathlib
 import re
@@ -149,8 +150,10 @@ def test_the_detail_reaches_the_render_child(monkeypatch: pytest.MonkeyPatch, tm
 
     handed: list[object] = []
 
-    def fake_prerender_sdfg(*args: object) -> cpf_bridge.RenderRecord:
-        handed.append(args[-1])
+    signature = inspect.signature(cpf_bridge.prerender_sdfg)
+
+    def fake_prerender_sdfg(*args: object, **kwargs: object) -> cpf_bridge.RenderRecord:
+        handed.append(signature.bind(*args, **kwargs).arguments["hints"])
         return cpf_bridge.RenderRecord(kernel=KERNEL, verdict=RenderVerdict.OK)
 
     monkeypatch.setattr(cpf_bridge, "prerender_sdfg", fake_prerender_sdfg)
