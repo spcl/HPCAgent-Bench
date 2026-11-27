@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.4 (unreleased)
+## 1.0.4 (2026-11-27)
 
 ### Plugins
 
