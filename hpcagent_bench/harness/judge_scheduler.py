@@ -51,11 +51,20 @@ def numa_domains(cpus: set[int]) -> list[list[int]]:
 
 
 def node_numa_domains() -> int:
-    """The NUMA domains this process's affinity spans; 1 when it cannot be read."""
+    """The NUMA domains this process's affinity spans; 1 when it cannot be read. Raises when the domains hold unequal
+    CPU counts (a 48-core Slurm allocation split 40 + 8 over two sockets): the slots would time at unequal widths."""
     try:
-        return max(1, len(numa_domains(os.sched_getaffinity(0))))
+        domains = numa_domains(os.sched_getaffinity(0))
     except (AttributeError, OSError):
         return 1
+    sizes = [len(domain) for domain in domains]
+    if len(set(sizes)) > 1:
+        raise RuntimeError(
+            f"this process's CPUs span NUMA domains of unequal size ({', '.join(map(str, sizes))} CPUs), so grading "
+            "slots would differ in width: ask Slurm for cores of one socket, or grade on one slot over all of them "
+            "(HPCAGENT_BENCH_JUDGE_CPU_SLOTS_PER_NODE=1)"
+        )
+    return max(1, len(domains))
 
 
 def slot_shares(nslots: int, domains: int) -> int:
