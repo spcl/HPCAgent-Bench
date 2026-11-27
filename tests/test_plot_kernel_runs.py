@@ -173,7 +173,7 @@ def test_the_script_writes_the_figure_and_the_runs_behind_it(tmp_path: pathlib.P
     [
         pytest.param("temperature3-qwen38-c-t1.5", "t1.5", id="temperature"),
         pytest.param("temperature3-qwen38-c", "", id="default"),
-        pytest.param("llr40-qwen38-c-cpf-cpu-src", "cpf-cpu-src", id="packet"),
+        pytest.param("llr40-qwen38-c-cpf-cpu", "cpf-cpu", id="packet"),
     ],
 )
 def test_the_condition_is_read_off_the_setup_name(setup: str, want: str) -> None:

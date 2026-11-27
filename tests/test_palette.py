@@ -44,7 +44,7 @@ def test_colour_does_not_depend_on_the_other_series() -> None:
 
 def test_a_combination_keeps_its_lead_packets_family() -> None:
     """`cpf-src+lang-skills` is a CPF setup carrying a second packet, and reads as one."""
-    assert packets.lead(packets.spec_parts("cpf-src+lang-skills")) == "cpf-cpu-src"
+    assert packets.lead(packets.spec_parts("cpf-src+lang-skills")) == "cpf-cpu"
     assert palette.color("cpf-src+lang-skills") != palette.color("cpf-src")
     assert palette.color("cpf-src+lang-skills") != palette.color("lang-skills")
 
@@ -114,9 +114,9 @@ PUBLISHED_PACKET_COLORS = {
     "": "#4d4d4d",
     "cpf-src": "#ff7f0e",
     "cpf-tool": "#d62728",
-    "cpf-cpu-src": "#ff7f0e",
+    "cpf-cpu": "#ff7f0e",
     "cpf-tool-cpu": "#d62728",
-    "cpf-gpu-src": "#2ca02c",
+    "cpf-gpu": "#2ca02c",
     "cpf-tool-gpu": "#9467bd",
     "lang-skills": "#aec7e8",
     "divide-and-conquer": "#8c564b",
@@ -129,8 +129,8 @@ PUBLISHED_PACKET_COLORS = {
     "divide-and-conquer+profiling": "#af766a",
     "caveman": "#1f77b4",
     "cpf-src-bare": "#e7ba52",
-    "cpf-cpu-src-bare": "#e7ba52",
-    "cpf-gpu-src-bare": "#d6616b",
+    "cpf-cpu-bare": "#e7ba52",
+    "cpf-gpu-bare": "#d6616b",
 }
 
 #: Models are assigned from the front of `markers`, standalone optimizers from the back, so a new

@@ -36,3 +36,19 @@ def test_registry_order_decides_when_a_setup_names_two_models() -> None:
     first, second = order[0], order[1]
     assert study_tags.model_of(f"x-{second}-{first}-c") == first
     assert study_tags.model_of(f"x-{first}-{second}-c") == first
+
+
+@pytest.mark.parametrize(
+    ("setup", "expected"),
+    [
+        ("llr40-qwen38-c-cpf-src", "cpf-cpu"),
+        ("cpf-llr40-hip-qwen38-hip-cpf-src", "cpf-gpu"),
+        ("llr40-qwen38-hip-cpf-src-bare", "cpf-gpu-bare"),
+        ("llr40-qwen38-hip-cpf-tool", "cpf-tool-gpu"),
+        ("llr40-qwen38-hip-cpf-gpu-src", "cpf-gpu"),
+        ("llr40-qwen38-hip-cpf-gpu-lean", "cpf-gpu-lean"),
+    ],
+)
+def test_a_setup_name_before_the_cpf_rename_reads_as_the_packet_it_ran(setup: str, expected: str) -> None:
+    """A device-neutral spelling (``cpf-src``) ran the GPU packet on a device language and the CPU one elsewhere."""
+    assert study_tags.packet_of(setup) == expected

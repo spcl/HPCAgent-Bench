@@ -107,6 +107,7 @@ def keys_of(
     precision: str,
     hints: cpf_cache.HintDetail,
     languages: tuple[str, ...] = (),
+    form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
 ) -> "cpf_bridge.FormKeys | cpf_canonical.RenderFailure":
     """Every key a render of ``spec`` at the installed dace publishes under, at the datatype it is graded in;
     ``languages`` narrows them to those dialects (all of :func:`target_languages` when empty)."""
@@ -117,6 +118,7 @@ def keys_of(
         target,
         hints,
         cpf_canonical.dace_commit(),
+        form,
     )
 
 
@@ -127,15 +129,16 @@ def lookup(
     precision: str,
     hints: cpf_cache.HintDetail,
     target: cpf_cache.Target,
+    form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
 ) -> cpf_cache.Form:
-    """The form served for one exact (kernel, language, precision, hint detail, target); :class:`CacheMiss` when it
-    was never rendered or failed to."""
+    """The form served for one exact (kernel, language, precision, hint detail, target, shape); :class:`CacheMiss`
+    when it was never rendered or failed to."""
     try:
         spec = BenchSpec.load(kernel)
     except Exception as exc:  # noqa: BLE001 -- an agent's unknown name is a miss
         raise cpf_cache.CacheMiss(f"no kernel {kernel!r} ({type(exc).__name__})") from exc
     dialect = cpf_cache.served_dialect(target, language)
-    keys = keys_of(spec, target, precision, hints, (dialect,))
+    keys = keys_of(spec, target, precision, hints, (dialect,), form)
     if isinstance(keys, cpf_canonical.RenderFailure):
         raise cpf_cache.CacheMiss(f"{spec.short_name}: no dace program ({keys.verdict.text}): {keys.error}")
     return cpf_cache.form(cache, keys.forms[dialect][0])
@@ -148,6 +151,7 @@ def render_kernel(
     target: cpf_cache.Target,
     precision: str,
     hints: cpf_cache.HintDetail,
+    form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
     package: pathlib.Path,
     before: str,
     timeout: float | None,
@@ -172,6 +176,7 @@ def render_kernel(
         precision=precision,
         target=target,
         hints=hints,
+        form=form,
         dace_package_root=package.parent,
         dace_commit=before,
         timeout=timeout,
@@ -264,14 +269,15 @@ def missing(
     hints: cpf_cache.HintDetail,
     verified: bool = False,
     rendered: bool = False,
+    form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
 ) -> list[str]:
     """One line per kernel the cache cannot serve, naming why (``verified`` also refuses forms never graded
     correct). ``rendered`` asks only for a render attempt: a failed render passes, a kernel never rendered does not."""
     misses: list[str] = []
     for kernel in kernels:
         try:
-            form = lookup(cache, kernel, language, precision, hints, target)
-            reason = cpf_cache.unverified(cache, form.key) if verified else ""
+            found = lookup(cache, kernel, language, precision, hints, target, form)
+            reason = cpf_cache.unverified(cache, found.key) if verified else ""
         except cpf_cache.NeverRendered as exc:
             reason = str(exc)
         except cpf_cache.CacheMiss as exc:
@@ -299,16 +305,18 @@ def stage(
     dest: pathlib.Path,
     target: cpf_cache.Target,
     name: str = "",
+    form_kind: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
 ) -> pathlib.Path:
-    """Copy the form for ``kernel`` to ``dest/<name>.<ext>`` (on gpu its device unit beside it, ``<name>.cu`` or ``<name>.hip``);
-    ``name`` defaults to the kernel's short name. Returns the staged source.
+    """Copy the form for ``kernel`` to ``dest/<name>.<ext>`` (on gpu its device unit beside it, ``<name>.cu`` or
+    ``<name>.hip``; a lean form is that one unit, ``.hip`` or ``.cu``); ``name`` defaults to the kernel's short name.
+    Returns the staged source.
 
     :raises NotVerified: ``cpf.verified_only`` holds and no form was graded correct (a failed or missing render
         included); nothing is staged.
     """
     verified_only = config.current().cpf.verified_only
     try:
-        form = lookup(cache, kernel, language, precision, hints, target)
+        form = lookup(cache, kernel, language, precision, hints, target, form_kind)
     except cpf_cache.CacheMiss as exc:
         if verified_only:
             raise NotVerified(str(exc)) from exc
@@ -334,6 +342,7 @@ def prerender(
     scratch: pathlib.Path,
     target: cpf_cache.Target,
     hints: cpf_cache.HintDetail,
+    form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
 ) -> int:
     """Render this rank's shard of ``args.kernels``; returns the exit status."""
     kernels = shard([k.strip() for k in args.kernels.split(",") if k.strip()], args.rank, args.ranks)
@@ -347,6 +356,7 @@ def prerender(
             target=target,
             precision=args.precision,
             hints=hints,
+            form=form,
             package=package,
             before=before,
             timeout=args.timeout,
@@ -375,6 +385,7 @@ def prerender(
 def render_command(args: argparse.Namespace) -> int:
     """Render the requested kernels into the cache in a scratch directory removed afterwards."""
     target, hints = cpf_cache.Target.parse(args.target), cpf_cache.HintDetail.parse(args.hints)
+    form = cpf_cache.FormKind.parse(args.form)
     require_toolchain()
     package = dace_package()
     require_submodules(package)
@@ -384,7 +395,7 @@ def render_command(args: argparse.Namespace) -> int:
     # SIGTERM (scancel, the wall clock) becomes SystemExit, so the scratch directory still goes.
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
     try:
-        return prerender(args, package, before, scratch, target, hints)
+        return prerender(args, package, before, scratch, target, hints, form)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -428,23 +439,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             choices=cpf_cache.HintDetail.texts(),
             help="the hint detail the setup serves",
         )
+        command.add_argument(
+            "--form",
+            default=cpf_cache.DEFAULT_FORM.text,
+            choices=cpf_cache.FormKind.texts(),
+            help="the shape of the gpu form the setup serves",
+        )
     args = parser.parse_args(argv)
     if args.command == "render":
         return render_command(args)
     target, hints = cpf_cache.Target.parse(args.target), cpf_cache.HintDetail.parse(args.hints)
+    form = cpf_cache.FormKind.parse(args.form)
     if args.command == "check":
         # Stripped like the render and verify commands: a space after a comma is a spelling of the same
         # list, not a kernel whose name starts with one.
         kernels = [k.strip() for k in args.kernels.split(",") if k.strip()]
         misses = missing(
-            args.cache, kernels, args.language, args.precision, target, hints, args.verified, args.rendered
+            args.cache, kernels, args.language, args.precision, target, hints, args.verified, args.rendered, form
         )
         for line in misses:
             print(line)
         return 1 if misses else 0
     try:
         print(
-            stage(args.cache, args.kernel.strip(), args.language, args.precision, hints, args.dest, target, args.name)
+            stage(
+                args.cache,
+                args.kernel.strip(),
+                args.language,
+                args.precision,
+                hints,
+                args.dest,
+                target,
+                args.name,
+                form,
+            )
         )
     except cpf_cache.CacheMiss as exc:
         print(f"cpf_prerender: {exc}", file=sys.stderr)

@@ -851,7 +851,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help=
-        "packet naming a TREATED side (skills, cpf, cpf-src, ...); repeatable -- each is read "
+        "packet naming a TREATED side (skills, cpf-cpu, cpf-tool-cpu, ...); repeatable -- each is read "
         "against the SAME no-packet control, one at a time. Default: skills. Two or more join as "
         "columns of one row",
     )  # fmt: skip

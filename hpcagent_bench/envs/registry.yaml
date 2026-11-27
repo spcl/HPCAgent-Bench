@@ -1,3 +1,5 @@
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
 # The POOLS: the neutral colour, the marker shapes and the lightness step every figure draws from.
 #
 # WHO TAKES WHICH SLOT is not here. An LLM, a standalone optimizer, a harness, a language, a device
@@ -81,7 +83,7 @@ shapes:
   - [12, 1, 0]
   - [12, 2, 0]
 
-# How much lighter each packet BEYOND the lead makes the colour, so `cpf-src` and
-# `cpf-src+lang-skills` read as one treatment family at two strengths. Large enough to read as a
+# How much lighter each packet BEYOND the lead makes the colour, so `cpf-cpu` and
+# `cpf-cpu+lang-skills` read as one treatment family at two strengths. Large enough to read as a
 # step, small enough that three steps stay clearly the lead's hue.
 lightness_step: 0.13

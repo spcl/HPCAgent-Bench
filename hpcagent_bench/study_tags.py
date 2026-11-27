@@ -7,6 +7,8 @@ rather than raising (``tests/test_display_names.py`` guards that)."""
 import dataclasses
 import functools
 import re
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Annotated
 
 import pydantic
@@ -30,6 +32,9 @@ __all__ = [
     "KEYED_FIELDS",
     "OFFLOAD_DELIVERY_NAME",
     "OFFLOAD_SETUP_TOKEN",
+    "OLD_GPU_LANGUAGES",
+    "OLD_GPU_SPELLINGS",
+    "OLD_PACKET_KEYS",
     "REGISTRY",
     "SHORT_NAME_MAX",
     "STUDIES",
@@ -211,6 +216,29 @@ def registered(kind: str) -> Names:
     return {key: entry_name(block.entries[key]) for key in block}
 
 
+#: The packet keys (and setup-name spellings) of rows recorded before the CPF packets were renamed, to the key each
+#: reads as now, so a report groups old and new rows of one treatment. Not a registered alias: a new launch names the
+#: current key, and the device-neutral spellings (``cpf-src``) were read as the CPU packet.
+OLD_PACKET_KEYS: Mapping[str, str] = MappingProxyType(
+    {
+        "cpf-cpu-src": "cpf-cpu",
+        "cpf-gpu-src": "cpf-gpu",
+        "cpf-cpu-src-bare": "cpf-cpu-bare",
+        "cpf-gpu-src-bare": "cpf-gpu-bare",
+        "cpf-src": "cpf-cpu",
+        "cpf-src-bare": "cpf-cpu-bare",
+        "cpf-tool": "cpf-tool-cpu",
+    }
+)
+#: The device-neutral spellings above, which a setup name of a device language spelled for the GPU packet
+#: (``...-hip-cpf-src`` ran ``cpf-gpu-src``): :func:`packet_of` reads them as this key there.
+OLD_GPU_SPELLINGS: Mapping[str, str] = MappingProxyType(
+    {"cpf-src": "cpf-gpu", "cpf-src-bare": "cpf-gpu-bare", "cpf-tool": "cpf-tool-gpu"}
+)
+#: The languages whose setups took the GPU packet of a device-neutral spelling (``packets.DEVICE_LANGUAGES``).
+OLD_GPU_LANGUAGES: frozenset[str] = frozenset({"hip", "cuda"})
+
+
 @functools.lru_cache(maxsize=1, typed=True)
 def registry() -> Registry:
     """The code-registered vocabulary plus the two yaml files' pools and run-level data (cached); the plugins' packets
@@ -253,9 +281,18 @@ def slot(kind: str, tag: str) -> int | None:
     return known.index(resolved) if resolved in known else None
 
 
-def canonical(kind: str, tag: str) -> str:
-    """``tag`` with an alias resolved (so a spelling never gets its own colour or legend entry); unregistered passes."""
-    return registry().aliases.get(kind, {}).get(str(tag), str(tag))
+def aliases_of(kind: str, historical: bool = True) -> Mapping[str, str]:
+    """``{spelling: tag}`` of a kind's aliases; ``historical`` adds the packet keys retired by a rename
+    (:data:`OLD_PACKET_KEYS`), which only a report of past rows reads."""
+    found = registry().aliases.get(kind, {})
+    return {**OLD_PACKET_KEYS, **found} if historical and kind == "packets" else found
+
+
+def canonical(kind: str, tag: str, historical: bool = True) -> str:
+    """``tag`` with an alias resolved (so a spelling never gets its own colour or legend entry); unregistered passes.
+    A retired packet key reads as its current one unless ``historical`` is False; a launch refuses it
+    (:func:`hpcagent_bench.packets.resolve`)."""
+    return aliases_of(kind, historical).get(str(tag), str(tag))
 
 
 #: Entity kind -> the registry field holding its names; an unknown kind gets an empty block (figures keep drawing).
@@ -329,7 +366,7 @@ def packet_parts(packet: str) -> tuple[str, ...]:
 @functools.lru_cache(maxsize=None, typed=True)
 def dash_spellings(kind: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """``(tag, its dash-bounded spellings)`` of every ``kind`` entry in registry order, aliases included."""
-    aliases = registry().aliases.get(kind, {})
+    aliases = aliases_of(kind)
     return tuple(
         (tag, tuple(f"-{name}-" for name in (tag, *(a for a, target in aliases.items() if target == tag))))
         for tag in order(kind)
@@ -368,7 +405,7 @@ def setup_suffix(setup: str) -> str:
 @functools.lru_cache(maxsize=1, typed=True)
 def packet_spellings() -> tuple[tuple[str, str], ...]:
     """``(packet, dash-bounded spelling)`` for every packet and packet alias, longest spelling first."""
-    aliases = registry().aliases.get("packets", {})
+    aliases = aliases_of("packets")
     rows = [(alias, target) for alias, target in aliases.items() if target]
     rows += [(packet, packet) for packet in order("packets") if packet]
     return tuple((target, f"-{spelling}-") for spelling, target in sorted(rows, key=lambda row: -len(row[0])))
@@ -380,6 +417,9 @@ def packet_of(setup: str, unknown: str = "") -> str:
     suffix = setup_suffix(setup)
     for packet, spelling in packet_spellings():
         if spelling in suffix:
+            neutral = spelling.strip("-")
+            if neutral in OLD_GPU_SPELLINGS and language_of(setup) in OLD_GPU_LANGUAGES:
+                return OLD_GPU_SPELLINGS[neutral]
             return packet
     return unknown
 

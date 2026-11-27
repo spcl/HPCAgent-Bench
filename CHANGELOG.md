@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.5 (unreleased)
+
+### Breaking
+
+- The canonical-parallel-form packets are renamed. Old to new: `cpf-cpu-src` to `cpf-cpu`, `cpf-gpu-src` to `cpf-gpu`,
+  `cpf-cpu-src-bare` to `cpf-cpu-bare`, `cpf-gpu-src-bare` to `cpf-gpu-bare`; the tool keys `cpf-tool-cpu` and
+  `cpf-tool-gpu` keep their names. Their pages, env and task notes are unchanged apart from the name (the skill pages
+  moved to `skills/cpf-cpu`, `cpf-gpu`, `cpf-cpu-bare`, `cpf-gpu-bare`).
+- The device-neutral aliases are removed: `cpf-src`, `cpf-src-bare`, `cpf-tool` and `packets.by_device` with its
+  `GPU_ALIASES` table. A launch names the device key (`PACKETS="cpf-tool-cpu cpf-cpu"` on C, `cpf-tool-gpu cpf-gpu` on
+  HIP); `packets.resolve` refuses a retired key naming its replacement. Rows recorded under the old keys stay in
+  their databases, and `study_tags.OLD_PACKET_KEYS` maps them to the new keys wherever a report reads a packet, so old
+  and new rows group together. A setup name spelling a device-neutral key reads as the packet it ran: `...-hip-cpf-src` as `cpf-gpu`,
+  `...-c-cpf-src` as `cpf-cpu` (`study_tags.OLD_GPU_SPELLINGS`).
+
+### CPF
+
+- New packets `cpf-gpu-lean` and `cpf-cpu-lean` serve the lean form (`HPCAGENT_BENCH_CPF_FORM=lean`, `cpf.form`): one
+  unit with no DaCe state or runtime, every stream the default stream, device temporaries carved from the
+  `workspace` argument (dace-extended 1.0.5, `render(no_boilerplate=True)`; a GPU form only, `cpf-cpu-lean` is
+  refused at render time until dace-extended renders it). The unit is staged directly under the file name "Sending
+  code" names, with no `_reference` file, and the task note states the speedup the judge measured for it. The form
+  enters a cache key only when it is `lean`: every other key is unchanged. `--form` on the render, check, stage and
+  verify commands and `--cpf-form` on the prepare job select it. `skills/cpf-gpu-lean` is the page of the GPU packet.
+
 ## 1.0.4 (2026-11-27)
 
 ### Plugins

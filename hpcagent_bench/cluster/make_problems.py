@@ -42,6 +42,7 @@ __all__ = [
     "build_parser",
     "in_scope",
     "main",
+    "packet_form",
     "packet_hints",
     "packet_note",
     "packet_pages",
@@ -84,7 +85,7 @@ PROVEN_LINE = re.compile(
 #: The form header's guard line (dace-extended >= 1.0.1), only when the form versions a loop: the file-unique
 #: iterators of the parallel arms whose legality a runtime check establishes.
 GUARDED_LINE = re.compile(r"^[ \t]*//[ \t]*cpf:[ \t]*guarded:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
-#: The note of a ``cpf-src`` packet (hint detail ``proofs``), sentence by sentence. It states only facts the agent acts on: the form was
+#: The note of a ``CPF-as-source`` packet (hint detail ``proofs``), sentence by sentence. It states only facts the agent acts on: the form was
 #: graded correct, what its proof line says, which file to edit; the pipeline that made it belongs in the paper.
 #: ``{files}`` names the staged unit(s), ``{verb}`` agrees with them.
 CPFSRC_V2_FORM = (
@@ -121,6 +122,27 @@ CPFSRC_V2_TUNING = (
     " Score {it} unchanged first. What remains is scheduling and tuning: thread count and schedule, loop order, "
     "blocking, fusion, vectorization and data layout."
 )
+#: The note of a ``cpf-gpu-lean`` packet (form ``lean``, hint detail ``proofs``): one file, staged under the name "Sending
+#: code" gives, so there is no copy step. ``{file}`` names it, ``{speedup}`` is the judge's measurement (or nothing).
+CPFSRC_LEAN_FORM = (
+    "Your source `{file}` is this kernel's Canonical Parallel Form (CPF), one file holding the entry and all the code "
+    "it runs, and a judge graded it correct against the reference{speedup}. "
+)
+#: The measured clause of :data:`CPFSRC_LEAN_FORM`, from the form's grade (``Verification.speedup``).
+CPFSRC_LEAN_SPEEDUP = " and measured it at {speedup:.1f}x the reference"
+#: Where the agent starts: the staged file is the one to edit.
+CPFSRC_LEAN_FILE = (
+    "Edit `{file}` in place and send it as it is: it is the only compiled source of this kernel (no hand-written "
+    "port is staged), and `*_numpy.py` stays the semantics. A loop the form runs in parallel is marked by "
+    "{mark}."
+)
+#: What is left to do, after the facts the libraries and workspace sentences add: ``{tuning}`` is the dialect's.
+CPFSRC_LEAN_TUNING = " What remains is scheduling and tuning: {tuning}."
+#: The tuning list of a lean form, by whether its dialect is a device one.
+CPFSRC_LEAN_TUNING_LIST = {
+    True: "block size, launch fusion, shared-memory staging, coalescing and data layout",
+    False: "thread count and schedule, loop order, blocking, fusion, vectorization and data layout",
+}
 #: The note's last sentence: last, so it does not invite stopping before any tuning was tried.
 CPFSRC_CLOSING = " Submitting this form unchanged is a valid result."
 
@@ -214,8 +236,8 @@ def packet_note(spec: str, language: str, stem: str, module: str) -> str:
     env = dict(packets.resolve(spec, language, fill=False).env)
     if "CPF_DROPIN_DIR" not in env:
         return ""
-    hints = packet_hints(env)
-    if stem and not dropin_staged(spec, language, stem, env, hints):
+    hints, form = packet_hints(env), packet_form(env)
+    if stem and not dropin_staged(spec, language, stem, env, hints, form):
         return ""
     dialect = cpf_cache.DIALECT.get(language or DROPIN_DEFAULT_LANGUAGE)
     if dialect is None:
@@ -223,6 +245,8 @@ def packet_note(spec: str, language: str, stem: str, module: str) -> str:
             f"--packet {spec!r} stages a canonical parallel form drop-in, which is rendered for "
             f"{sorted(cpf_cache.DIALECT)} and not for {language!r}"
         )
+    if form is cpf_cache.FormKind.LEAN:
+        return lean_note(stem, dialect, hints)
     if dialect in cpf_cache.DEVICE_DIALECTS:
         # The GPU form is the two units a GPU submission is (cpf_prerender.stage copies both).
         device = cpf_cache.LANGUAGE_EXT[dialect]
@@ -247,6 +271,34 @@ def packet_note(spec: str, language: str, stem: str, module: str) -> str:
     )
 
 
+def lean_note(stem: str, dialect: str, hints: cpf_cache.HintDetail) -> str:
+    """The task-text note of a lean form: the file is named as "Sending code" names it, edited in place.
+
+    :raises ValueError: a hint detail other than ``proofs`` (the lean packets serve the commented form).
+    """
+    if hints is not cpf_cache.DEFAULT_HINTS:
+        raise ValueError(f"the lean form is served with the {cpf_cache.DEFAULT_HINTS.text!r} hint detail only")
+    device = dialect in cpf_cache.DEVICE_DIALECTS
+    form = cpf_cache.FormKind.LEAN
+    served = setup_form(stem, dialect, hints, True, form)
+    measured = cpf_cache.verification(pathlib.Path(os.environ[cpf_cache.CACHE_ENV]), served.key) if served else None
+    speedup = CPFSRC_LEAN_SPEEDUP.format(speedup=measured.speedup) if measured and measured.speedup > 0 else ""
+    words = {
+        "file": f"{stem}.{cpf_cache.LANGUAGE_EXT[dialect]}" if stem else "<kernel>",
+        "mark": "a `__global__` kernel launch" if device else "an OpenMP pragma",
+    }
+    facts = form_libraries_note(stem, dialect, hints, form) + form_workspace_note(stem, dialect, hints, form)
+    proof = proven_sentence(stem, dialect, hints, form) if stem else ""
+    return (
+        CPFSRC_LEAN_FORM.format(**words, speedup=speedup)
+        + proof
+        + CPFSRC_LEAN_FILE.format(**words)
+        + facts
+        + CPFSRC_LEAN_TUNING.format(tuning=CPFSRC_LEAN_TUNING_LIST[device])
+        + CPFSRC_CLOSING
+    )
+
+
 def packet_verified_only(env: Mapping[str, str]) -> bool:
     """Whether ``cpf.verified_only`` holds for a setup: its packet's resolved ``env``, else this process's
     configuration."""
@@ -256,7 +308,14 @@ def packet_verified_only(env: Mapping[str, str]) -> bool:
     )
 
 
-def dropin_staged(spec: str, language: str, stem: str, env: Mapping[str, str], hints: cpf_cache.HintDetail) -> bool:
+def dropin_staged(
+    spec: str,
+    language: str,
+    stem: str,
+    env: Mapping[str, str],
+    hints: cpf_cache.HintDetail,
+    form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
+) -> bool:
     """Whether ``stem`` gets the CPF drop-in: always, unless ``cpf.verified_only`` holds for the setup and the form
     was never graded correct, in which case materialize_shared.sh starts it from the reference and the task text
     must not announce a form.
@@ -271,7 +330,7 @@ def dropin_staged(spec: str, language: str, stem: str, env: Mapping[str, str], h
     dialect = cpf_cache.DIALECT.get(language or DROPIN_DEFAULT_LANGUAGE, "")
     target = cpf_cache.Target.GPU if dialect in cpf_cache.DEVICE_DIALECTS else cpf_cache.Target.CPU
     return not cpf_prerender.missing(
-        cache, [stem], language or DROPIN_DEFAULT_LANGUAGE, "", target, hints, verified=True
+        cache, [stem], language or DROPIN_DEFAULT_LANGUAGE, "", target, hints, verified=True, form=form
     )
 
 
@@ -286,8 +345,23 @@ def packet_hints(env: Mapping[str, str]) -> cpf_cache.HintDetail:
         raise ValueError(f"{cpf_cache.HINTS_ENV}: {exc}") from exc
 
 
+def packet_form(env: Mapping[str, str]) -> cpf_cache.FormKind:
+    """The form shape a packet's resolved ``env`` serves (its ``FORM_ENV``, else ``standard``)."""
+    named = env.get(cpf_cache.FORM_ENV)
+    if named is None:
+        return cpf_cache.DEFAULT_FORM
+    try:
+        return cpf_cache.FormKind.parse(named)
+    except ValueError as exc:
+        raise ValueError(f"{cpf_cache.FORM_ENV}: {exc}") from exc
+
+
 def setup_form(
-    stem: str, dialect: str, hints: cpf_cache.HintDetail, verified_only: bool = False
+    stem: str,
+    dialect: str,
+    hints: cpf_cache.HintDetail,
+    verified_only: bool = False,
+    form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
 ) -> cpf_cache.Form | None:
     """The canonical parallel form of ``stem`` in ``dialect`` the setup's CPF cache (``$HPCAGENT_BENCH_CPF_CACHE``)
     serves; None when none, or when ``verified_only`` and no judge graded it correct."""
@@ -299,30 +373,32 @@ def setup_form(
 
     target = cpf_cache.Target.GPU if dialect in cpf_cache.DEVICE_DIALECTS else cpf_cache.Target.CPU
     try:
-        form = cpf_prerender.lookup(
-            pathlib.Path(cache), stem, dialect, config.current().service.datatype, hints, target
+        found = cpf_prerender.lookup(
+            pathlib.Path(cache), stem, dialect, config.current().service.datatype, hints, target, form
         )
     except cpf_cache.CacheMiss:
         return None
-    return None if verified_only and cpf_cache.unverified(pathlib.Path(cache), form.key) else form
+    return None if verified_only and cpf_cache.unverified(pathlib.Path(cache), found.key) else found
 
 
-def proven_sentence(stem: str, dialect: str, hints: cpf_cache.HintDetail) -> str:
-    """The cpf-src note's proof sentence for the verified form of ``stem``, read from its header's ``// cpf: proven:``
+def proven_sentence(
+    stem: str, dialect: str, hints: cpf_cache.HintDetail, form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM
+) -> str:
+    """The CPF-as-source note's proof sentence for the verified form of ``stem``, read from its header's ``// cpf: proven:``
     line; "" when the setup serves no form.
 
     :raises ValueError: the form has no proof line (rendered by a dace-extended older than 1.0.1: re-render it).
     """
-    form = setup_form(stem, dialect, hints, verified_only=True)
-    if form is None:
+    served = setup_form(stem, dialect, hints, True, form)
+    if served is None:
         return ""
-    units = (form.source,) if form.device is None else (form.source, form.device)
+    units = (served.source,) if served.device is None else (served.source, served.device)
     text = "\n".join(unit.read_text(encoding="utf-8") for unit in units)
     match = PROVEN_LINE.search(text)
     if match is None:
         raise ValueError(
-            f"the canonical parallel form of {stem} ({form.key}) has no `// cpf: proven:` header line: it was "
-            "rendered by a dace-extended older than 1.0.1; re-render the CPF cache before running a cpf-src setup"
+            f"the canonical parallel form of {stem} ({served.key}) has no `// cpf: proven:` header line: it was "
+            "rendered by a dace-extended older than 1.0.1; re-render the CPF cache before running a CPF-as-source setup"
         )
     if match.group(1) == "all":
         proof = CPFSRC_V2_PROOF_ALL
@@ -343,24 +419,34 @@ def proven_sentence(stem: str, dialect: str, hints: cpf_cache.HintDetail) -> str
 
 
 def form_libraries(
-    stem: str, dialect: str, hints: cpf_cache.HintDetail, verified_only: bool = False
+    stem: str,
+    dialect: str,
+    hints: cpf_cache.HintDetail,
+    verified_only: bool = False,
+    form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
 ) -> tuple[str, ...]:
     """The catalog libraries the canonical parallel form of ``stem`` in ``dialect`` calls; none without a form."""
-    form = setup_form(stem, dialect, hints, verified_only)
-    return form.libraries if form else ()
+    served = setup_form(stem, dialect, hints, verified_only, form)
+    return served.libraries if served else ()
 
 
 def form_workspace_bytes(
-    stem: str, dialect: str, hints: cpf_cache.HintDetail, verified_only: bool = False
+    stem: str,
+    dialect: str,
+    hints: cpf_cache.HintDetail,
+    verified_only: bool = False,
+    form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM,
 ) -> str | None:
     """The ``workspace_bytes`` the canonical parallel form of ``stem`` in ``dialect`` needs; None when none."""
-    form = setup_form(stem, dialect, hints, verified_only)
-    return form.workspace_bytes if form and form.workspace_bytes != "0" else None
+    served = setup_form(stem, dialect, hints, verified_only, form)
+    return served.workspace_bytes if served and served.workspace_bytes != "0" else None
 
 
-def form_libraries_note(stem: str, dialect: str, hints: cpf_cache.HintDetail) -> str:
-    """The cpf-src note's line on the drop-in's libraries (loaded from the start); "" when it calls none."""
-    libraries = form_libraries(stem, dialect, hints)
+def form_libraries_note(
+    stem: str, dialect: str, hints: cpf_cache.HintDetail, form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM
+) -> str:
+    """The CPF-as-source note's line on the drop-in's libraries (loaded from the start); "" when it calls none."""
+    libraries = form_libraries(stem, dialect, hints, form=form)
     if not libraries:
         return ""
     return (
@@ -369,9 +455,11 @@ def form_libraries_note(stem: str, dialect: str, hints: cpf_cache.HintDetail) ->
     )
 
 
-def form_workspace_note(stem: str, dialect: str, hints: cpf_cache.HintDetail) -> str:
-    """The cpf-src note's line on the drop-in's workspace (requested from the start); "" when it needs none."""
-    needed = form_workspace_bytes(stem, dialect, hints)
+def form_workspace_note(
+    stem: str, dialect: str, hints: cpf_cache.HintDetail, form: cpf_cache.FormKind = cpf_cache.DEFAULT_FORM
+) -> str:
+    """The CPF-as-source note's line on the drop-in's workspace (requested from the start); "" when it needs none."""
+    needed = form_workspace_bytes(stem, dialect, hints, form=form)
     if needed is None:
         return ""
     return (
@@ -380,8 +468,8 @@ def form_workspace_note(stem: str, dialect: str, hints: cpf_cache.HintDetail) ->
     )
 
 
-def cpf_dialect(spec: str, language: str) -> tuple[str, cpf_cache.HintDetail, bool] | None:
-    """The dialect, hint detail, and ``cpf.verified_only`` of the form a CPF packet serves (``packets.CPF_ENV_KEYS``);
+def cpf_dialect(spec: str, language: str) -> tuple[str, cpf_cache.HintDetail, bool, cpf_cache.FormKind] | None:
+    """The dialect, hint detail, ``cpf.verified_only`` and form shape of the form a CPF packet serves (``packets.CPF_ENV_KEYS``);
     None otherwise."""
     env = dict(packets.resolve(spec, language, fill=False).env) if spec else {}
     if not packets.CPF_ENV_KEYS & env.keys():
@@ -389,7 +477,7 @@ def cpf_dialect(spec: str, language: str) -> tuple[str, cpf_cache.HintDetail, bo
     dialect = cpf_cache.DIALECT.get(language or DROPIN_DEFAULT_LANGUAGE)
     if dialect is None:
         return None
-    return dialect, packet_hints(env), packet_verified_only(env)
+    return dialect, packet_hints(env), packet_verified_only(env), packet_form(env)
 
 
 def default_workspace_bytes(spec: str, language: str, stem: str) -> str | None:

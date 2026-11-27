@@ -37,12 +37,10 @@ def test_resolve_control_is_empty() -> None:
     [
         ("cpf-tool-cpu", "c", "cpf-tool-cpu", "Canonical Parallel Form Tool, CPU"),
         ("cpf-tool-gpu", "hip", "cpf-tool-gpu", "Canonical Parallel Form Tool, GPU"),
-        ("cpf-tool", "c", "cpf-tool-cpu", "Canonical Parallel Form Tool, CPU"),
-        ("cpf-tool", "hip", "cpf-tool-gpu", "Canonical Parallel Form Tool, GPU"),
     ],
 )
 def test_resolve_cpf_stages_the_page_and_the_dir_env(spec: str, language: str, key: str, label: str) -> None:
-    """The device-neutral ``cpf-tool`` of the first setups names the packet of the run's device."""
+    """A tool packet names its device: there is no device-neutral spelling."""
     resolved = packets.resolve(spec, language, environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/cpf"})
     assert resolved.key == key
     assert resolved.label == label
@@ -56,10 +54,10 @@ def test_resolve_cpf_stages_the_page_and_the_dir_env(spec: str, language: str, k
 @pytest.mark.parametrize(
     ("spec", "language", "key"),
     [
-        ("cpf-cpu-src", "c", "cpf-cpu-src"),
-        ("cpf-gpu-src", "hip", "cpf-gpu-src"),
-        ("cpf-src", "c", "cpf-cpu-src"),
-        ("cpf-src", "hip", "cpf-gpu-src"),
+        ("cpf-cpu", "c", "cpf-cpu"),
+        ("cpf-gpu", "hip", "cpf-gpu"),
+        ("cpf-cpu-lean", "c", "cpf-cpu-lean"),
+        ("cpf-gpu-lean", "hip", "cpf-gpu-lean"),
     ],
 )
 def test_resolve_cpf_src_stages_its_own_page_and_sets_the_dropin_env(spec: str, language: str, key: str) -> None:
@@ -68,8 +66,13 @@ def test_resolve_cpf_src_stages_its_own_page_and_sets_the_dropin_env(spec: str, 
     skill page, so the packet's only page is the one explaining what sits in that file."""
     resolved = packets.resolve(spec, language, environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/dropin"})
     assert resolved.key == key
-    assert resolved.skills == (key,)
-    assert resolved.env == (("CPF_DROPIN_DIR", "/views/dropin"), ("HPCAGENT_BENCH_CPF_VERIFIED_ONLY", "true"))
+    assert resolved.skills == ((key,) if key != "cpf-cpu-lean" else ())
+    lean = (("HPCAGENT_BENCH_CPF_FORM", "lean"),) if key.endswith("-lean") else ()
+    assert resolved.env == (
+        ("CPF_DROPIN_DIR", "/views/dropin"),
+        *lean,
+        ("HPCAGENT_BENCH_CPF_VERIFIED_ONLY", "true"),
+    )
 
 
 def test_resolve_lang_expands_language_and_openmp_pages_for_c() -> None:
@@ -111,10 +114,12 @@ def test_resolve_lang_skills_stages_every_shipped_page_but_a_packet_tools_own_or
     assert list(resolved.skills) == [page for page in applicable if page not in packets.tool_pages()]
     assert set(shipped) - set(resolved.skills) == packets.tool_pages() | {
         "caveman",
-        "cpf-cpu-src",
-        "cpf-gpu-src",
-        "cpf-cpu-src-bare",
-        "cpf-gpu-src-bare",
+        "cpf-cpu",
+        "cpf-gpu",
+        "cpf-cpu-bare",
+        "cpf-gpu-bare",
+        "cpf-cpu-lean",
+        "cpf-gpu-lean",
     }
     assert resolved.env == (), "no skill content may ride in the main prompt: the packet sets no hints file"
 
@@ -156,7 +161,7 @@ def test_a_device_packet_refuses_a_language_its_device_does_not_run(spec: str, l
 
 @pytest.mark.parametrize(
     ("device", "language", "cpf"),
-    [("cpu", "c", "cpf-cpu-src"), ("amd", "hip", "cpf-gpu-src"), ("nvidia", "cuda", "cpf-gpu-src")],
+    [("cpu", "c", "cpf-cpu"), ("amd", "hip", "cpf-gpu"), ("nvidia", "cuda", "cpf-gpu")],
 )
 def test_all_in_for_a_device_is_cpf_src_its_perf_playbook_and_the_language_pages(
     device: str, language: str, cpf: str
@@ -208,7 +213,7 @@ def test_resolve_an_unknown_token_raises_naming_it() -> None:
     with pytest.raises(ValueError, match="nosuchpacket"):
         packets.resolve("nosuchpacket", "c")
     with pytest.raises(ValueError, match="HPCAGENT_BENCH_CPF_CACHE"):
-        packets.resolve("cpf-tool", "c", environ={})
+        packets.resolve("cpf-tool-cpu", "c", environ={})
 
 
 def test_resolve_conflicting_env_between_two_packets_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -224,27 +229,30 @@ def test_resolve_conflicting_env_between_two_packets_raises(monkeypatch: pytest.
 
 @pytest.mark.parametrize(
     "spec",
-    ["lang-skills", "no-score-tool", "cpf-tool-cpu", "cpf-gpu-src", "repo", "lang", "perf-playbook-cpu", "all-in-amd"],
+    ["lang-skills", "no-score-tool", "cpf-tool-cpu", "cpf-gpu", "repo", "lang", "perf-playbook-cpu", "all-in-amd"],
 )
 def test_canonical_of_a_registered_key_is_itself(spec: str) -> None:
     assert packets.canonical(spec) == spec
 
 
-@pytest.mark.parametrize(("alias", "key"), [("cpf-src", "cpf-cpu-src"), ("cpf-tool", "cpf-tool-cpu")])
-def test_a_recorded_device_neutral_cpf_key_reads_as_the_cpu_packet(alias: str, key: str) -> None:
-    """Every setup recorded under the first CPF keys ran a CPU form, so a database row keeps its series."""
-    assert packets.canonical(alias) == key
-    assert packets.canonical(f"{alias}+lang-skills") == packets.canonical(f"{key}+lang-skills")
+@pytest.mark.parametrize(("old", "key"), sorted(tags.OLD_PACKET_KEYS.items()))
+def test_a_retired_cpf_key_reads_as_its_current_one_but_no_launch_takes_it(old: str, key: str) -> None:
+    """A database row keeps its series under the renamed key; a new launch must name the current key."""
+    assert packets.canonical(old) == key
+    assert packets.canonical(f"{old}+lang-skills") == packets.canonical(f"{key}+lang-skills")
+    assert key in tags.registry().packet_defs
+    with pytest.raises(ValueError, match=f"was renamed {key!r}"):
+        packets.resolve(old, "c", environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/cpf"})
 
 
 def test_has_part_matches_a_bare_packet() -> None:
     assert packets.has_part("lang-skills", "lang-skills")
-    assert not packets.has_part("cpf-tool", "lang-skills")
+    assert not packets.has_part("cpf-tool-cpu", "lang-skills")
     assert not packets.has_part("", "lang-skills")
     # ``llrsingle`` records ``lang-skills+no-score-tool``: a reader finds a part inside the composite.
     assert packets.has_part("lang-skills+no-score-tool", "lang-skills")
     assert packets.has_part("lang-skills+no-score-tool", "no-score-tool")
-    assert not packets.has_part("lang-skills+no-score-tool", "cpf-tool")
+    assert not packets.has_part("lang-skills+no-score-tool", "cpf-tool-cpu")
     assert not packets.has_part("no-score-tool", "lang-skills")
 
 
@@ -266,7 +274,7 @@ def test_the_colour_of_an_ad_hoc_combination_is_deterministic() -> None:
 def test_an_unfilled_resolve_keeps_the_placeholder_templates_the_db_records() -> None:
     """fill=False is the packet's definition, not one launch: no environment is needed and every
     ${VAR} survives verbatim, including through a composition."""
-    assert packets.resolve("cpf-src", "c", environ={}, fill=False).env == (
+    assert packets.resolve("cpf-cpu", "c", environ={}, fill=False).env == (
         ("CPF_DROPIN_DIR", "${HPCAGENT_BENCH_CPF_CACHE}"),
         ("HPCAGENT_BENCH_CPF_VERIFIED_ONLY", "true"),
     )

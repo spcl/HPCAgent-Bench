@@ -42,10 +42,10 @@ def view_with_libraries(tmp_path: pathlib.Path, libraries: list[str], dialect: s
 @pytest.mark.parametrize(
     ("spec", "language", "allow", "expected"),
     [
-        ("cpf-src", "c", "", "load"),
-        ("cpf-tool", "c", "", "load"),
-        ("cpf-src", "hip", "cast", "cast,load"),
-        ("cpf-tool", "hip", "load,distribute", "load,distribute"),
+        ("cpf-cpu", "c", "", "load"),
+        ("cpf-tool-cpu", "c", "", "load"),
+        ("cpf-gpu", "hip", "cast", "cast,load"),
+        ("cpf-tool-gpu", "hip", "load,distribute", "load,distribute"),
         ("", "c", "", ""),
         ("perf-playbook-cpu", "c", "cast", "cast"),
     ],
@@ -92,9 +92,9 @@ def test_the_load_a_cpf_packet_adds_is_never_advertised_in_the_build_page(monkey
 @pytest.mark.parametrize(
     ("spec", "libraries", "expected"),
     [
-        pytest.param("cpf-src", LIBRARIES, LIBRARIES, id="cpf-src"),
-        pytest.param("cpf-tool", LIBRARIES, LIBRARIES, id="cpf-tool"),
-        pytest.param("cpf-src", [], None, id="a-form-calling-no-library"),
+        pytest.param("cpf-cpu", LIBRARIES, LIBRARIES, id="cpf-cpu"),
+        pytest.param("cpf-tool-cpu", LIBRARIES, LIBRARIES, id="cpf-tool-cpu"),
+        pytest.param("cpf-cpu", [], None, id="a-form-calling-no-library"),
         pytest.param("", [], None, id="a-setup-without-cpf"),
         pytest.param("perf-playbook-cpu", [], None, id="a-playbook-setup"),
     ],

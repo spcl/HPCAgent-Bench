@@ -266,10 +266,9 @@ def traced_layers(
 
 
 def env_layers(environ: Mapping[str, str]) -> tuple[list[str], str, list[str]]:
-    """A setup's launcher layers, packet (its device form for the setup's language) and the user's
-    ``prompt.overlays``."""
+    """A setup's launcher layers, packet and the user's ``prompt.overlays``."""
     layers = split(environ.get(LAYERS_ENV, ""))
-    packet = packets.by_device(environ.get("HPCAGENT_BENCH_RECORD_PACKET", ""), environ.get("LANGUAGE", ""))
+    packet = environ.get("HPCAGENT_BENCH_RECORD_PACKET", "")
     return layers, packet, list(config.current().prompt.overlays)
 
 

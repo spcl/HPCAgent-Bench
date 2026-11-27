@@ -477,7 +477,7 @@ def kernel_rows(
         LOG.warning(
             "dropping %s (%d/%d tag kernels); --include-incomplete keeps it", setup, dropped[setup], len(tag_kernels)
         )
-    # A condition may be spelled with a packet alias (``cpf-src``); the setups carry the canonical key.
+    # A condition may be spelled with a retired packet key (``cpf-src``); the setups carry the current key.
     wanted = None if conditions is None else {packets.canonical(condition) for condition in conditions}
     kept = [setup for setup in kept if wanted is None or candidates[setup][1] in wanted]
     treatments = sorted({candidates[setup][1] for setup in kept} - {""})

@@ -41,7 +41,6 @@ __all__ = [
     "SkillFrontmatter",
     "advertised_allowance",
     "applies_to",
-    "by_device",
     "canonical",
     "companion_language_pages",
     "control_label",
@@ -89,23 +88,6 @@ def spec_parts(spec: str) -> tuple[str, ...]:
     """``spec``'s top-level tokens: split on ``;``/``+``, stripped, aliases resolved, empties and duplicates dropped."""
     resolved = (tags.canonical("packets", token.strip()) for token in re.split(r"[+;]+", spec))
     return tuple(dict.fromkeys(token for token in resolved if token))
-
-
-#: The device-neutral CPF keys a GPU language names differently (aliased to their CPU packets).
-GPU_ALIASES: Mapping[str, str] = MappingProxyType(
-    {
-        "cpf-src": "cpf-gpu-src",
-        "cpf-tool": "cpf-tool-gpu",
-        "cpf-src-bare": "cpf-gpu-src-bare",
-    }
-)
-
-
-def by_device(spec: str, language: str) -> str:
-    """``spec`` with each device-neutral CPF key renamed to the GPU packet when ``language`` is a device language."""
-    if language not in DEVICE_ONLY_LANGUAGES:
-        return spec
-    return "+".join(GPU_ALIASES.get(token.strip(), token) for token in re.split(r"[+;]+", spec))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -346,7 +328,9 @@ def resolve(
     ``fill=False`` keeps ``${VAR}`` templates (the recorded definition); ``image``/``multinode`` narrow ``*``.
     Unknown tokens, a missing ``${VAR}`` or conflicting env keys raise ``ValueError``."""
     env_source = environ if environ is not None else os.environ
-    spec = by_device(spec, language)
+    for token in re.split(r"[+;]+", spec):
+        if token.strip() in tags.OLD_PACKET_KEYS:
+            raise ValueError(f"packet {token.strip()!r} was renamed {tags.OLD_PACKET_KEYS[token.strip()]!r}")
     tokens = spec_parts(spec)
     definitions = tags.registry().packet_defs
     for token in tokens:
@@ -441,7 +425,7 @@ def libraries_enabled(spec: str) -> bool:
 #: The env a launcher exports the resolved packet's tools under (the agent's registry spells the same name).
 PACKET_TOOLS_ENV = "HPCAGENT_BENCH_PACKET_TOOLS"
 
-#: The env keys of a packet that serves a canonical parallel form: the cpf-src drop-in and the cpf-tool view.
+#: The env keys of a packet that serves a canonical parallel form: the CPF-as-source drop-in and the CPF tool view.
 CPF_ENV_KEYS: frozenset[str] = frozenset({"CPF_DROPIN_DIR", "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR"})
 #: The ``requests.allow`` capability a CPF packet adds: its form calls vendor libraries.
 CPF_REQUEST_CAPABILITY = RequestCapability.LOAD
