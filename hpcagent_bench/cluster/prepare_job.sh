@@ -65,8 +65,13 @@ case "${PROBLEMS}" in
 esac
 [[ -s "${PROBLEMS}" ]] || { echo "FATAL: no problems file at ${PROBLEMS}" >&2; exit 2; }
 # Host steps run the batch shell's interpreter (run_cluster.sh exports it); container steps (container_step)
-# run the image's.
-host_python="${HPCAGENT_BENCH_HOST_PYTHON:?prepare_job.sh: HPCAGENT_BENCH_HOST_PYTHON is not set}"
+# run the image's. HPCAGENT_BENCH_PLUGIN_DIRS names the plugins at their container paths, which do not exist on the
+# host: importing hpcagent_bench there would fail on the first plugin manifest (767511: the CPF drop-in gate's check
+# crashed with exit 1, which the gate reads as "kernels without a verified form"), so the host steps drop it.
+: "${HPCAGENT_BENCH_HOST_PYTHON:?prepare_job.sh: HPCAGENT_BENCH_HOST_PYTHON is not set}"
+host_python() {
+    env -u HPCAGENT_BENCH_PLUGIN_DIRS "${HPCAGENT_BENCH_HOST_PYTHON}" "$@"
+}
 
 # 0. fused owed wave: every setup is its own setup
 # A fused wave names a SETUPS_FILE. Each setup is split out into the env and
@@ -82,7 +87,7 @@ if [[ -n "${SETUPS_FILE:-}" ]]; then
     esac
     [[ -s "${SETUPS_FILE}" ]] || { echo "FATAL: no setups file at ${SETUPS_FILE}" >&2; exit 2; }
     FUSED_DIR="${FUSED_SETUPS_OUT:-${RUN_DIR:?a fused wave is prepared inside its job (RUN_DIR)}/setups}"
-    "${host_python}" "${PWD}/fused_split.py" "${ENV_FILE}" "${PROBLEMS}" "${SETUPS_FILE}" "${FUSED_DIR}"
+    host_python "${PWD}/fused_split.py" "${ENV_FILE}" "${PROBLEMS}" "${SETUPS_FILE}" "${FUSED_DIR}"
     n_setups=0
     for setup_env in "${FUSED_DIR}"/*.env; do
         setup="$(basename -- "${setup_env}" .env)"
@@ -178,7 +183,7 @@ MANIFEST="${PACK}/manifest.json"
 
 step() { printf '\n===== prepare: %s =====\n' "$*"; }
 
-kernels_of() { "${host_python}" -c '
+kernels_of() { host_python -c '
 import pathlib, sys
 from hpcagent_bench.problem_file import read_lines
 print(",".join(problem.kernel for problem in read_lines(pathlib.Path(sys.argv[1]))))' "$1"; }
@@ -290,11 +295,12 @@ fi
 # setup's hint detail (HPCAGENT_BENCH_CPF_HINTS, set by a -kinds packet; unset = the default).
 cpf_dropin_gate() {  # cpf_dropin_gate <cache> <language>
     local absent rc=0
-    absent="$("${host_python}" -m hpcagent_bench.cpf.prerender check --cache "$1" \
+    absent="$(host_python -m hpcagent_bench.cpf.prerender check --cache "$1" \
         --target "${CPF_TARGET}" --language "$2" --kernels "$(kernels_of "${PROBLEMS}")" \
         ${HPCAGENT_BENCH_CPF_HINTS:+--hints "${HPCAGENT_BENCH_CPF_HINTS}"} \
         ${HPCAGENT_BENCH_CPF_FORM:+--form "${HPCAGENT_BENCH_CPF_FORM}"} --verified)" || rc=$?
-    if (( rc == 1 )) && [[ "$("${host_python}" -c 'from hpcagent_bench import config; print(config.current().cpf.verified_only)')" == True ]]; then
+    # Exit 1 with no kernel named is a crash, not a miss: it stops the launch below.
+    if (( rc == 1 )) && [[ -n "${absent}" ]] && [[ "$(host_python -c 'from hpcagent_bench import config; print(config.current().cpf.verified_only)')" == True ]]; then
         # cpf.verified_only: these kernels start from the reference (materialize_shared.sh), and the run records it.
         echo "  CPF-as-source: $(grep -c . <<<"${absent}") of ${n_kernels} kernels have no verified form and start from the reference (${2}):"
         sed 's/^/    /' <<<"${absent}"
@@ -322,7 +328,7 @@ fi
 # 5. manifest
 step "manifest"
 mkdir -p "${PACK}"
-"${host_python}" - "$MANIFEST" "$SETUP" "$PROBLEMS" "$LANG_" "$CPF_DIR" "$n_kernels" <<'PY'
+host_python - "$MANIFEST" "$SETUP" "$PROBLEMS" "$LANG_" "$CPF_DIR" "$n_kernels" <<'PY'
 import json, pathlib, sys
 manifest, setup, problems, language, cpf_dir, n = sys.argv[1:7]
 pathlib.Path(manifest).write_text(json.dumps({
