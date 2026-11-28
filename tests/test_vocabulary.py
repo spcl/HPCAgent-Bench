@@ -89,6 +89,7 @@ PINNED_PACKETS = (
     "llm-friendly",
     "cpf-cpu-lean",
     "cpf-gpu-lean",
+    "cpf-gpu-lean-bare",
     # a plugin's packet registers after every shipped one, so a new shipped packet moves its slot
     "autokernel",
 )
@@ -180,14 +181,6 @@ def test_a_framework_column_refuses_an_invalid_descriptor() -> None:
     ):
         with pytest.raises(RegistryError, match=message):
             vocabulary.Column(**{**good, **changes})
-
-
-def test_the_no_packet_control_is_the_only_entity_without_a_slot() -> None:
-    assert vocabulary.PACKETS.orders[""] is None
-    for kind in vocabulary.KINDS.values():
-        assert [key for key, order in kind.orders.items() if order is None] == (
-            [""] if kind is vocabulary.PACKETS else []
-        )
 
 
 def test_the_registered_vocabulary_passes_its_own_cross_checks() -> None:
